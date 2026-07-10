@@ -69,7 +69,13 @@ describe("configuration preflight", () => {
   it("resolves dotenv-backed credentials for named upstreams before startup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-named-upstream-"));
     const configPath = join(directory, "miftah.json");
-    await writeFile(join(directory, ".env"), "ACCOUNT=named-upstream\nAUTHORIZATION=Bearer named-upstream\n");
+    const secretSuffix = `${process.pid}_${Date.now()}`;
+    const accountKey = `MIFTAH_TEST_ACCOUNT_${secretSuffix}`;
+    const authorizationKey = `MIFTAH_TEST_AUTHORIZATION_${secretSuffix}`;
+    await writeFile(
+      join(directory, ".env"),
+      `${accountKey}=named-upstream\n${authorizationKey}=Bearer named-upstream\n`
+    );
     await writeFile(
       configPath,
       JSON.stringify({
@@ -81,8 +87,8 @@ describe("configuration preflight", () => {
             transport: "stdio",
             command: process.execPath,
             args: [fixture],
-            env: { TEST_ACCOUNT_NAME: "secretref:dotenv://ACCOUNT" },
-            headers: { Authorization: "secretref:dotenv://AUTHORIZATION" }
+            env: { TEST_ACCOUNT_NAME: `secretref:dotenv://${accountKey}` },
+            headers: { Authorization: `secretref:dotenv://${authorizationKey}` }
           }
         },
         profiles: { default: {} },
