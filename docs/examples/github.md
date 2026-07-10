@@ -33,7 +33,8 @@ Use the generic wrapper to run GitHub MCP with separate work and personal tokens
     },
     "safe-write": {
       "allowRisk": ["read", "write"],
-      "denyRisk": ["destructive"]
+      "denyRisk": ["destructive"],
+      "requireConfirmation": ["write"]
     }
   }
 }
