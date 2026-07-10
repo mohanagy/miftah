@@ -41,47 +41,54 @@ void invalidAuditConfig;
 interface SchemaNode {
   const?: boolean | string;
   properties?: Record<string, SchemaNode>;
+  items?: SchemaNode;
+  additionalProperties?: boolean | SchemaNode;
 }
 
 interface ConfigSchema extends SchemaNode {
-  $defs: Record<string, SchemaNode>;
+  $schema?: string;
+  title?: string;
 }
 
-function schemaNode(schema: ConfigSchema, name: string): SchemaNode {
-  const node = schema.$defs[name];
-  if (!node) {
-    throw new Error(`Expected schema definition '${name}'`);
+function mapValue(node: SchemaNode | undefined, name: string): SchemaNode {
+  if (!node || typeof node.additionalProperties !== "object") {
+    throw new Error(`Expected an object map for '${name}'.`);
   }
-  return node;
+  return node.additionalProperties;
 }
 
 describe("published config schema", () => {
   it("advertises only the runtime-supported configuration surface", () => {
     const schema = generateConfigSchema() as unknown as ConfigSchema;
     const root = schema.properties;
-    const routing = schemaNode(schema, "routing").properties;
-    const profile = schemaNode(schema, "profile").properties;
-    const profileUpstreamOverride = schemaNode(schema, "profileUpstreamOverride").properties;
-    const process = schemaNode(schema, "process").properties;
-    const security = schemaNode(schema, "security").properties;
-    const audit = schemaNode(schema, "audit").properties;
-    const tooling = schemaNode(schema, "tooling").properties;
+    const routing = root?.routing?.properties;
+    const profile = mapValue(root?.profiles, "profiles");
+    const profileUpstreamOverride = mapValue(profile.properties?.upstreams, "profile upstreams");
+    const process = root?.process?.properties;
+    const security = root?.security?.properties;
+    const audit = root?.audit?.properties;
+    const tooling = root?.tooling?.properties;
 
+    expect(schema).toMatchObject({
+      $schema: "https://json-schema.org/draft/2019-09/schema#",
+      title: "Miftah configuration",
+      additionalProperties: false
+    });
     expect(root).not.toHaveProperty("state");
     expect(root).not.toHaveProperty("ui");
     expect(routing).toMatchObject({ mode: { const: "hybrid" } });
     expect(routing).not.toHaveProperty("plugins");
-    expect(profile).toHaveProperty("headers");
-    expect(profile).toHaveProperty("upstreams");
-    expect(profile).not.toHaveProperty("metadata");
-    expect(profile).not.toHaveProperty("routing");
-    expect(profileUpstreamOverride).toHaveProperty("args");
-    expect(profileUpstreamOverride).toHaveProperty("env");
-    expect(profileUpstreamOverride).toHaveProperty("cwd");
-    expect(profileUpstreamOverride).toHaveProperty("headers");
-    expect(profileUpstreamOverride).not.toHaveProperty("transport");
-    expect(profileUpstreamOverride).not.toHaveProperty("command");
-    expect(profileUpstreamOverride).not.toHaveProperty("url");
+    expect(profile.properties).toHaveProperty("headers");
+    expect(profile.properties).toHaveProperty("upstreams");
+    expect(profile.properties).not.toHaveProperty("metadata");
+    expect(profile.properties).not.toHaveProperty("routing");
+    expect(profileUpstreamOverride.properties).toHaveProperty("args");
+    expect(profileUpstreamOverride.properties).toHaveProperty("env");
+    expect(profileUpstreamOverride.properties).toHaveProperty("cwd");
+    expect(profileUpstreamOverride.properties).toHaveProperty("headers");
+    expect(profileUpstreamOverride.properties).not.toHaveProperty("transport");
+    expect(profileUpstreamOverride.properties).not.toHaveProperty("command");
+    expect(profileUpstreamOverride.properties).not.toHaveProperty("url");
     expect(Object.keys(process ?? {})).toEqual(["startupTimeoutMs"]);
     expect(security).toMatchObject({ redactSecrets: { const: true } });
     expect(security).not.toHaveProperty("requireProfileSwitchConfirmation");
@@ -89,5 +96,9 @@ describe("published config schema", () => {
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
     expect(tooling).not.toHaveProperty("toolDiscoveryMode");
+    expect(root?.routing?.additionalProperties).toBe(false);
+    expect(profile.additionalProperties).toBe(false);
+    expect(profileUpstreamOverride.additionalProperties).toBe(false);
+    expect(root?.routing?.properties?.rules?.items?.properties?.when?.additionalProperties).toEqual({});
   });
 });

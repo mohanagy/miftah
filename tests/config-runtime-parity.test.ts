@@ -54,30 +54,6 @@ describe("config runtime parity", () => {
     ["profiles.default.metadata", { profiles: { default: { metadata: "team" } } }],
     ["profiles.default.routing.match", { profiles: { default: { routing: { match: { repo: "acme/miftah" } } } } }],
     ["profiles.default.routing.match", { profiles: { default: { routing: { match: "acme/miftah" } } } }],
-    [
-      "profiles.default.upstreams.primary.transport",
-      { profiles: { default: { upstreams: { primary: { transport: "stdio" } } } } }
-    ],
-    [
-      "profiles.default.upstreams.primary.transport",
-      { profiles: { default: { upstreams: { primary: { transport: true } } } } }
-    ],
-    [
-      "profiles.default.upstreams.primary.command",
-      { profiles: { default: { upstreams: { primary: { command: "node" } } } } }
-    ],
-    [
-      "profiles.default.upstreams.primary.command",
-      { profiles: { default: { upstreams: { primary: { command: 1 } } } } }
-    ],
-    [
-      "profiles.default.upstreams.primary.url",
-      { profiles: { default: { upstreams: { primary: { url: "https://example.com/mcp" } } } } }
-    ],
-    [
-      "profiles.default.upstreams.primary.url",
-      { profiles: { default: { upstreams: { primary: { url: false } } } } }
-    ],
     ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: true } }],
     ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: "true" } }],
     ["security.redactSecrets", { security: { redactSecrets: false } }],
@@ -101,13 +77,33 @@ describe("config runtime parity", () => {
     expect(error.message).toContain(path);
   });
 
+  it.each([
+    ["transport", "stdio"],
+    ["transport", true],
+    ["command", "node"],
+    ["command", 1],
+    ["url", "https://example.com/mcp"],
+    ["url", false]
+  ])("rejects unsupported per-upstream %s overrides", (option, value) => {
+    const error = validationError({
+      version: "1",
+      name: "test",
+      defaultProfile: "default",
+      upstreams: { primary: { transport: "stdio", command: "node" } },
+      profiles: { default: { upstreams: { primary: { [option]: value } } } }
+    });
+
+    expect(error.code).toBe(unsupportedConfigOption);
+    expect(error.message).toContain(`profiles.default.upstreams.primary.${option}`);
+  });
+
   it("accepts implemented options and compatible declarations", () => {
     const config = validateConfig({
       version: "1",
       name: "test",
       description: "Human-readable wrapper metadata",
       defaultProfile: "default",
-      upstream: { transport: "stdio", command: "node" },
+      upstreams: { primary: { transport: "stdio", command: "node" } },
       profiles: {
         default: {
           description: "Default profile",
