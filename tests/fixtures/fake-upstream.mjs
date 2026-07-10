@@ -71,9 +71,14 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(ReadResourceRequestSchema, async () => ({
-  contents: [{ uri: "account://current", text: account, mimeType: "text/plain" }]
-}));
+server.setRequestHandler(ReadResourceRequestSchema, async () => {
+  if (process.env.TEST_FAIL_READ_RESOURCE === "true") {
+    throw new Error(`test resource read failure: ${process.env.API_TOKEN}`);
+  }
+  return {
+    contents: [{ uri: "account://current", text: account, mimeType: "text/plain" }]
+  };
+});
 
 server.setRequestHandler(ListPromptsRequestSchema, async () => {
   if (process.env.TEST_FAIL_LIST_PROMPTS === "true") {
@@ -92,9 +97,14 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(GetPromptRequestSchema, async () => ({
-  description: "Account prompt",
-  messages: [{ role: "user", content: { type: "text", text: account } }]
-}));
+server.setRequestHandler(GetPromptRequestSchema, async () => {
+  if (process.env.TEST_FAIL_GET_PROMPT === "true") {
+    throw new Error(`test prompt get failure: ${process.env.API_TOKEN}`);
+  }
+  return {
+    description: "Account prompt",
+    messages: [{ role: "user", content: { type: "text", text: account } }]
+  };
+});
 
 await server.connect(new StdioServerTransport());

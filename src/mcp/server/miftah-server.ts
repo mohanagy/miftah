@@ -18,6 +18,7 @@ import { PolicyEngine } from "../../policy/policy-engine.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
+import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 
 const managementTools: Tool[] = [
@@ -150,51 +151,19 @@ export class MiftahServer {
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
       this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-        try {
-          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return redactSecrets(await session.listResources(), this.upstreams.getSecretValues());
-        } catch (error) {
-          throw new Error(
-            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-            { cause: error }
-          );
-        }
+        return this.proxyResourcePrompt(upstreamName, (session) => session.listResources());
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-        try {
-          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return redactSecrets(await session.readResource(request.params), this.upstreams.getSecretValues());
-        } catch (error) {
-          throw new Error(
-            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-            { cause: error }
-          );
-        }
+        return this.proxyResourcePrompt(upstreamName, (session) => session.readResource(request.params));
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
-        try {
-          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return redactSecrets(await session.listPrompts(), this.upstreams.getSecretValues());
-        } catch (error) {
-          throw new Error(
-            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-            { cause: error }
-          );
-        }
+        return this.proxyResourcePrompt(upstreamName, (session) => session.listPrompts());
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-        try {
-          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return redactSecrets(await session.getPrompt(request.params), this.upstreams.getSecretValues());
-        } catch (error) {
-          throw new Error(
-            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-            { cause: error }
-          );
-        }
+        return this.proxyResourcePrompt(upstreamName, (session) => session.getPrompt(request.params));
       });
     }
   }
@@ -351,6 +320,22 @@ export class MiftahServer {
       available: false,
       reason: "Resource and prompt proxying is unavailable for multi-upstream bundles until namespaced aggregation is available."
     };
+  }
+
+  private async proxyResourcePrompt<Result>(
+    upstreamName: string | undefined,
+    operation: (session: UpstreamSession) => Promise<Result>
+  ): Promise<Result> {
+    try {
+      const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
+      return redactSecrets(await operation(session), this.upstreams.getSecretValues());
+    } catch (error) {
+      const safeMessage = redactSecrets(
+        error instanceof Error ? error.message : String(error),
+        this.upstreams.getSecretValues()
+      );
+      throw new Error(safeMessage, { cause: error });
+    }
   }
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
