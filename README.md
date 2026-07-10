@@ -100,7 +100,7 @@ Profiles are named credential environments. Keep secret values outside JSON when
 }
 ```
 
-The GitHub preset pins `ghcr.io/github/github-mcp-server:v1.5.0`. To upgrade safely, read that release notes first, update the tag in your config, run `miftah validate`, then smoke-test both profiles before rollout.
+The GitHub preset pins `ghcr.io/github/github-mcp-server:v1.5.0`. To upgrade safely, read the release notes first, update the tag in your config, run `miftah validate`, then smoke-test both profiles before rollout.
 
 Claude can call `miftah_list_profiles`, `miftah_current_profile`, `miftah_use_profile`, `miftah_profile_info`, `miftah_health`, `miftah_validate_config`, `miftah_list_upstream_tools`, `miftah_restart_profile`, and `miftah_route_preview`. Upstream tools are exposed unchanged unless they collide with a reserved `miftah_` name.
 
