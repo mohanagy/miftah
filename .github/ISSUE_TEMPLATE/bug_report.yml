@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible defect without including credentials or private data
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include secrets here. Use the private reporting link in SECURITY.md and redact logs, paths, account names, and environment values.
+  - type: input
+    id: version
+    attributes:
+      label: Miftah version
+      description: Use a package version or commit SHA.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      description: Include Node.js, npm, and operating-system versions.
+      placeholder: "Node.js 20.x, npm 10.x, macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use synthetic credentials and a minimal redacted configuration.
+      placeholder: List exact steps and commands.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include only sanitized output. Never paste tokens, process environments, or private audit data.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Describe the MCP client, upstream transport, and relevant policy without identifying private systems.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I removed credentials, personal data, and private system details.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true
