@@ -8,18 +8,29 @@ function readRepositoryFile(path: string): string {
 }
 
 function releaseNotes(changelog: string, version: string): string {
-  const heading = `## [${version}] - `;
-  const start = changelog.indexOf(heading);
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const match = changelog.match(
+    new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu")
+  );
 
-  if (start < 0) {
+  if (!match || match.index === undefined) {
     throw new Error(`Unable to find the ${version} changelog entry.`);
   }
 
-  const end = changelog.indexOf("\n## ", start + heading.length);
-  return changelog.slice(start, end < 0 ? undefined : end);
+  const end = changelog.indexOf("\n## ", match.index + match[0].length);
+  return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
 describe("v0.1.1 release artifacts", () => {
+  it.each([
+    "## [0.1.1] - 2026-7-11\n\n### Fixed\n",
+    "Release candidate: ## [0.1.1] - 2026-07-11\n\n### Fixed\n"
+  ])("requires a dated release heading at the start of a line", (changelog) => {
+    expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
+      "Unable to find the 0.1.1 changelog entry."
+    );
+  });
+
   it("aligns package and MCP handshake versions", () => {
     const manifest = JSON.parse(readRepositoryFile("package.json")) as { version: string };
 
