@@ -2,6 +2,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ProfileConfig } from "../config/types.js";
 import { UpstreamProcessManager, type UpstreamHealth, type UpstreamManagerOptions } from "./upstream-process-manager.js";
 import { UpstreamSession } from "./upstream-session.js";
+import { MiftahError } from "../utils/errors.js";
 
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
@@ -44,7 +45,14 @@ export class MultiUpstreamProcessManager {
   }
 
   private manager(name?: string): UpstreamProcessManager {
-    const selected = name ? this.managers[name] : Object.values(this.managers)[0];
+    const configured = Object.values(this.managers);
+    if (!name && configured.length > 1) {
+      throw new MiftahError(
+        "UPSTREAM_SELECTION_AMBIGUOUS",
+        "UPSTREAM_SELECTION_AMBIGUOUS: select an upstream by name when multiple upstreams are configured"
+      );
+    }
+    const selected = name ? this.managers[name] : configured[0];
     if (!selected) throw new Error(`No upstream configured${name ? ` named '${name}'` : ""}`);
     return selected;
   }
