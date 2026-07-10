@@ -52,11 +52,17 @@ function textResult(text: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
-interface ResourcePromptProxyAvailability {
-  available: boolean;
+interface ResourcePromptProxyAvailable {
+  available: true;
   upstreamName?: string;
-  reason?: string;
 }
+
+interface ResourcePromptProxyUnavailable {
+  available: false;
+  reason: string;
+}
+
+type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePromptProxyUnavailable;
 
 export class MiftahServer {
   readonly server: Server;
@@ -83,7 +89,7 @@ export class MiftahServer {
           "Miftah wraps an upstream MCP and routes requests through local credential profiles.",
           ...(this.resourcePromptProxy.available
             ? []
-            : ["Resource and prompt proxying is temporarily unavailable for multi-upstream bundles until namespaced aggregation is available."])
+            : [this.resourcePromptProxy.reason])
         ].join(" ")
       }
     );
@@ -324,6 +330,9 @@ export class MiftahServer {
     if (!(this.upstreams instanceof MultiUpstreamProcessManager)) return { available: true };
     const upstreamNames = this.upstreams.listUpstreams();
     if (upstreamNames.length === 1) return { available: true, upstreamName: upstreamNames[0] };
+    if (upstreamNames.length === 0) {
+      return { available: false, reason: "No upstream is configured, so resource and prompt proxying is unavailable." };
+    }
     return {
       available: false,
       reason: "Resource and prompt proxying is unavailable for multi-upstream bundles until namespaced aggregation is available."

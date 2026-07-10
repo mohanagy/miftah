@@ -19,6 +19,61 @@ import { MiftahError } from "../src/utils/errors.js";
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
 describe("multi-upstream wrapper", () => {
+  it("does not proxy resources or prompts when no upstream is configured", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {},
+      profiles: { work: {} }
+    });
+    const manager = new MultiUpstreamProcessManager(config);
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()).not.toHaveProperty("resources");
+      expect(client.getServerCapabilities()).not.toHaveProperty("prompts");
+      expect(client.getInstructions()).toContain("No upstream is configured");
+      expect(client.getInstructions()).not.toContain("multi-upstream");
+
+      for (const { request, resultSchema } of [
+        { request: { method: "resources/list", params: {} }, resultSchema: ListResourcesResultSchema },
+        {
+          request: { method: "resources/read", params: { uri: "account://current" } },
+          resultSchema: ReadResourceResultSchema
+        },
+        { request: { method: "prompts/list", params: {} }, resultSchema: ListPromptsResultSchema },
+        {
+          request: { method: "prompts/get", params: { name: "account_prompt" } },
+          resultSchema: GetPromptResultSchema
+        }
+      ]) {
+        await expect(client.request(request, resultSchema)).rejects.toMatchObject({ code: -32601 });
+      }
+
+      const health = await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema);
+      const text = CallToolResultSchema.parse(health).content[0];
+      expect(text?.type).toBe("text");
+      if (text?.type !== "text") throw new Error("Expected a text health result");
+      const status = JSON.parse(text.text);
+      expect(status).toMatchObject({
+        resourcePromptProxy: {
+          available: false,
+          reason: expect.stringContaining("No upstream is configured")
+        },
+        upstreams: []
+      });
+      expect(client.getInstructions()).toContain(status.resourcePromptProxy.reason);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("does not proxy resources or prompts from an ambiguous multi-upstream bundle", async () => {
     const config = validateConfig({
       version: "1",
