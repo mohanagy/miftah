@@ -5,6 +5,11 @@ import { miftahPublicConfigSchema } from "./schema.js";
 export function generateConfigSchema(): Record<string, unknown> {
   return {
     ...zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }),
+    allOf: [
+      {
+        oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]
+      }
+    ],
     title: "Miftah configuration"
   };
 }

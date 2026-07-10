@@ -123,6 +123,34 @@ describe("configuration diagnostics", () => {
 
   it.each([
     [
+      "missing upstream declaration",
+      baseConfig({ upstream: undefined }),
+      "CONFIG_SCHEMA_INVALID",
+      "upstream",
+      "Configure either `upstream` or `upstreams`."
+    ],
+    [
+      "conflicting upstream declarations",
+      baseConfig({ upstreams: { primary: { transport: "stdio", command: "node" } } }),
+      "CONFIG_SCHEMA_INVALID",
+      "upstream",
+      "Configure either `upstream` or `upstreams`, not both."
+    ],
+    [
+      "default profile",
+      baseConfig({ defaultProfile: "missing" }),
+      "DEFAULT_PROFILE_NOT_FOUND",
+      "defaultProfile",
+      "Choose a profile name defined under `profiles`."
+    ],
+    [
+      "profile policy",
+      baseConfig({ profiles: { default: { policy: "missing" } } }),
+      "POLICY_NOT_FOUND",
+      "profiles.default.policy",
+      "Choose a policy name defined under `policies`."
+    ],
+    [
       "routing rule profile",
       baseConfig({ routing: { rules: [{ when: {}, profile: "missing" }] } }),
       "ROUTING_PROFILE_NOT_FOUND",

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { generateConfigSchema } from "../src/config/generate-json-schema.js";
 import type { MiftahConfig } from "../src/config/types.js";
@@ -43,6 +44,9 @@ interface SchemaNode {
   properties?: Record<string, SchemaNode>;
   items?: SchemaNode;
   additionalProperties?: boolean | SchemaNode;
+  required?: string[];
+  oneOf?: SchemaNode[];
+  allOf?: SchemaNode[];
 }
 
 interface ConfigSchema extends SchemaNode {
@@ -58,6 +62,14 @@ function mapValue(node: SchemaNode | undefined, name: string): SchemaNode {
 }
 
 describe("published config schema", () => {
+  it("pins the schema generator to its reviewed output version", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+
+    expect(manifest.dependencies["zod-to-json-schema"]).toBe("3.25.2");
+  });
+
   it("advertises only the runtime-supported configuration surface", () => {
     const schema = generateConfigSchema() as unknown as ConfigSchema;
     const root = schema.properties;
@@ -100,5 +112,13 @@ describe("published config schema", () => {
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);
     expect(root?.routing?.properties?.rules?.items?.properties?.when?.additionalProperties).toEqual({});
+  });
+
+  it("requires exactly one upstream declaration in generated JSON Schema", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+
+    expect(schema.allOf).toContainEqual({
+      oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]
+    });
   });
 });

@@ -10,6 +10,8 @@ miftah schema > miftah.schema.json
 
 Miftah accepts config version `"1"` only and does not silently migrate config files. A future migration must be explicit and documented; an unsupported version returns `UNSUPPORTED_CONFIG_VERSION` with remediation.
 
+The generated JSON Schema enforces static structure, including exactly one of `upstream` or `upstreams`. References to names declared in dynamic maps cannot be represented by JSON Schema alone; run `miftah validate` in addition to editor validation to verify profile, policy, routing, lock, and per-profile upstream references.
+
 With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` under a named upstream. Miftah namespaces discovered tools as `<upstream>__<tool>` so one wrapper can safely expose several providers. Resources and prompts are proxied only when `upstreams` contains exactly one entry; zero-entry and multi-entry bundles omit those capabilities and their handlers rather than choosing an upstream. Use tools or a wrapper with a single upstream for resources and prompts while namespaced aggregation is deferred.
 
 Before loading secret sources or starting an upstream, Miftah validates that `defaultProfile`, profile policy names, routing-rule profiles, `security.lockToProfile`, and per-profile upstream override names all exist. Validation errors are human-readable and expose `MiftahError.details.diagnostics` for programs; each diagnostic includes a stable `code`, dotted `path`, `severity`, `message`, and remediation.
