@@ -85,14 +85,10 @@ async function createRuntime(configPath: string) {
     : undefined;
   const manager = resolvedConfig.upstreams
     ? new MultiUpstreamProcessManager(resolvedConfig, {
-        startupTimeoutMs: config.process?.startupTimeoutMs,
-        restartOnCrash: config.process?.restartOnCrash,
-        maxRestarts: config.process?.maxRestarts
+        startupTimeoutMs: config.process?.startupTimeoutMs
       })
     : new UpstreamProcessManager(upstream!, profiles, {
-    startupTimeoutMs: config.process?.startupTimeoutMs,
-    restartOnCrash: config.process?.restartOnCrash,
-    maxRestarts: config.process?.maxRestarts
+        startupTimeoutMs: config.process?.startupTimeoutMs
       });
   const profileManager = new ProfileManager(resolvedConfig, resolvedConfig.security);
   return { config: resolvedConfig, manager, profileManager };

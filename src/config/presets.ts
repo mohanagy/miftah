@@ -16,7 +16,7 @@ function buildSharedDefaults(): SharedDefaults {
       allowProfileSwitchingFromMcp: true,
       requireExplicitProfileForDestructive: true
     },
-    process: { startMode: "lazy", cache: true, restartOnCrash: true, startupTimeoutMs: 30_000 },
+    process: { startupTimeoutMs: 30_000 },
     audit: {
       enabled: true,
       path: "~/.local/state/miftah/audit.jsonl",
@@ -24,7 +24,7 @@ function buildSharedDefaults(): SharedDefaults {
       includeArguments: false,
       redact: true
     },
-    tooling: { managementToolPrefix: "miftah_", collisionStrategy: "prefix-upstream" }
+    tooling: { collisionStrategy: "prefix-upstream" }
   };
 }
 

@@ -163,7 +163,7 @@ Use `miftah doctor` to inspect config and upstream readiness without printing pr
 
 ## Current boundaries
 
-The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching, routing rules, policies, tools/resources/prompts proxying, process/session caching, redacted audit logging, and a packageable CLI. The configuration model reserves interfaces for multi-upstream account bundles, persisted state, and optional UI.
+The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching, hybrid routing rules, policies, tools/resources/prompts proxying, in-memory process/session caching, redacted JSONL audit logging, and a packageable CLI. Unsupported lifecycle tuning, persisted state, UI, routing plugins, profile matchers, and configurable tool namespaces are rejected with `UNSUPPORTED_CONFIG_OPTION` rather than silently ignored.
 
 ## License
 

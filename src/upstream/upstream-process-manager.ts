@@ -13,8 +13,6 @@ import { UpstreamSession } from "./upstream-session.js";
 
 export interface UpstreamManagerOptions {
   startupTimeoutMs?: number;
-  restartOnCrash?: boolean;
-  maxRestarts?: number;
   secretValues?: readonly string[];
   onStderr?: (profile: string, message: string) => void;
 }
@@ -31,8 +29,8 @@ export class UpstreamProcessManager {
   private readonly health = new Map<string, UpstreamHealth>();
   private readonly starts = new Map<string, Promise<UpstreamSession>>();
   private readonly secretValuesSet = new Set<string>();
-  private readonly options: Required<Pick<UpstreamManagerOptions, "startupTimeoutMs" | "restartOnCrash" | "maxRestarts">> &
-    Omit<UpstreamManagerOptions, "startupTimeoutMs" | "restartOnCrash" | "maxRestarts">;
+  private readonly options: Required<Pick<UpstreamManagerOptions, "startupTimeoutMs">> &
+    Omit<UpstreamManagerOptions, "startupTimeoutMs">;
 
   constructor(
     private readonly upstream: UpstreamConfig,
@@ -41,8 +39,6 @@ export class UpstreamProcessManager {
   ) {
     this.options = {
       startupTimeoutMs: options.startupTimeoutMs ?? 30_000,
-      restartOnCrash: options.restartOnCrash ?? true,
-      maxRestarts: options.maxRestarts ?? 3,
       ...options
     };
   }
