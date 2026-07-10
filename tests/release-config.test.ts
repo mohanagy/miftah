@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const checkoutPin = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
@@ -10,6 +11,14 @@ function readRepositoryFile(path: string): string {
 
 function actionReferences(workflow: string): string[] {
   return [...workflow.matchAll(/^\s*uses:\s*(\S+)\s*$/gmu)].map((match) => match[1]!);
+}
+
+function npmVersionComparison(workflow: string): string {
+  const match = workflow.match(/const npmIsCurrentEnough =\s*([\s\S]*?);\n\n\s+if \(Number/u);
+  if (!match?.[1]) {
+    throw new Error("Unable to find the npm version comparison.");
+  }
+  return match[1];
 }
 
 describe("continuous integration workflow contract", () => {
@@ -82,6 +91,26 @@ describe("trusted publishing workflow contract", () => {
     ]) {
       expect(workflow).toContain(`run: ${command}`);
     }
+  });
+
+  it.each([
+    ["10.9.9", false],
+    ["11.4.9", false],
+    ["11.5.0", false],
+    ["11.5.1", true],
+    ["11.6.0", true],
+    ["12.0.0", true]
+  ])("compares npm %s against the minimum version as an auditable tuple", (version, expected) => {
+    const workflow = readRepositoryFile(".github/workflows/publish.yml");
+    const comparison = npmVersionComparison(workflow);
+
+    expect(comparison).not.toMatch(/\.(?:every|some|findIndex)\(/u);
+    expect(
+      runInNewContext(comparison, {
+        minimumNpm: [11, 5, 1],
+        npmParts: version.split(".").map(Number)
+      })
+    ).toBe(expected);
   });
 });
 

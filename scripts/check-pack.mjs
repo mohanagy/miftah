@@ -26,10 +26,22 @@ const ALLOWED_PATH_PATTERNS = [
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = dirname(dirname(scriptPath));
 
+/**
+ * Formats package paths as an indented list for actionable verification errors.
+ *
+ * @param {readonly string[]} paths package-relative paths
+ * @returns {string} newline-delimited diagnostic text
+ */
 function formatPaths(paths) {
   return paths.map((path) => `  - ${path}`).join("\n");
 }
 
+/**
+ * Checks that a package-relative path is normalized and matches an intentional publish allowlist.
+ *
+ * @param {string} path package-relative path reported by npm
+ * @returns {boolean} whether the path is safe and expected
+ */
 function isAllowedPath(path) {
   if (path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => part === "." || part === "..")) {
     return false;
@@ -37,6 +49,14 @@ function isAllowedPath(path) {
   return ALLOWED_ROOT_PATHS.has(path) || ALLOWED_PATH_PATTERNS.some((pattern) => pattern.test(path));
 }
 
+/**
+ * Enforces the package path contract, including required entries, allowed patterns, and uniqueness.
+ *
+ * @param {readonly string[]} paths package-relative paths reported by npm
+ * @returns {string[]} a copy of the verified paths
+ * @throws {TypeError} when the input is not an array of strings
+ * @throws {Error} when paths are missing, duplicated, unsafe, or unexpected
+ */
 export function verifyPackPaths(paths) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) {
     throw new TypeError("Package paths must be an array of strings.");
@@ -64,6 +84,13 @@ export function verifyPackPaths(paths) {
   return [...paths];
 }
 
+/**
+ * Parses one `npm pack --dry-run --json` result and extracts its package-relative paths.
+ *
+ * @param {string} output JSON emitted by npm pack
+ * @returns {string[]} package-relative paths from the single packed artifact
+ * @throws {Error} when npm emits invalid JSON or an unexpected result shape
+ */
 export function parsePackOutput(output) {
   let results;
   try {
@@ -84,6 +111,12 @@ export function parsePackOutput(output) {
   });
 }
 
+/**
+ * Runs a real npm pack dry run from the repository root and verifies every reported path.
+ *
+ * @returns {string[]} verified package-relative paths
+ * @throws {Error} when npm cannot run, packing fails, or the package contract is violated
+ */
 export function checkPack() {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const packed = spawnSync(npmCommand, ["pack", "--dry-run", "--json"], {

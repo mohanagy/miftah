@@ -42,12 +42,11 @@ jobs:
           const nodeVersion = process.versions.node;
           const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
           const npmParts = npmVersion.split(".").map(Number);
-          const npmIsCurrentEnough = minimumNpm.every(
-            (part, index) =>
-              npmParts[index] === part ||
-              npmParts[index] > part ||
-              npmParts.slice(0, index).some((value, priorIndex) => value > minimumNpm[priorIndex])
-          );
+          const npmIsCurrentEnough =
+            npmParts[0] > minimumNpm[0] ||
+            (npmParts[0] === minimumNpm[0] &&
+              (npmParts[1] > minimumNpm[1] ||
+                (npmParts[1] === minimumNpm[1] && npmParts[2] >= minimumNpm[2])));
 
           if (Number(nodeVersion.split(".")[0]) < minimumNode) {
             throw new Error(`Node.js ${minimumNode}+ is required; found ${nodeVersion}.`);
