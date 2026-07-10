@@ -77,6 +77,13 @@ describe("config runtime parity", () => {
     expect(error.message).toContain(path);
   });
 
+  it("rejects an empty state declaration as an unsupported option", () => {
+    const error = validationError(baseConfig({ state: {} }));
+
+    expect(error.code).toBe(unsupportedConfigOption);
+    expect(error.message).toContain("state");
+  });
+
   it.each([
     ["transport", "stdio"],
     ["transport", true],

@@ -436,9 +436,14 @@ export const miftahConfigSchema = z
       }
     }
 
-    for (const option of ["persistActiveProfile", "path"] as const) {
-      if (value.state?.[option] !== undefined) {
-        rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
+    const stateOptions = ["persistActiveProfile", "path"] as const;
+    if (value.state !== undefined && stateOptions.every((option) => value.state?.[option] === undefined)) {
+      rejectUnsupportedOption(["state"], "persistent profile state is not implemented");
+    } else {
+      for (const option of stateOptions) {
+        if (value.state?.[option] !== undefined) {
+          rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
+        }
       }
     }
     if (value.ui !== undefined) {
