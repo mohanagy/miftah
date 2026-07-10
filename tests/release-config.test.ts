@@ -1,0 +1,121 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const checkoutPin = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
+const setupNodePin = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+
+function readRepositoryFile(path: string): string {
+  return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+function actionReferences(workflow: string): string[] {
+  return [...workflow.matchAll(/^\s*uses:\s*(\S+)\s*$/gmu)].map((match) => match[1]!);
+}
+
+describe("continuous integration workflow contract", () => {
+  it("uses least privilege, immutable official actions, and safe concurrency", () => {
+    const workflow = readRepositoryFile(".github/workflows/ci.yml");
+
+    expect(workflow).toMatch(/pull_request:\s*\n\s+branches: \[development, main\]/u);
+    expect(workflow).toMatch(/push:\s*\n\s+branches: \[development, main\]/u);
+    expect(workflow).toContain("permissions:\n  contents: read");
+    expect(workflow).toContain("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}");
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+    expect(actionReferences(workflow)).toEqual([checkoutPin, setupNodePin]);
+    expect(actionReferences(workflow).every((action) => /@[0-9a-f]{40}$/u.test(action))).toBe(true);
+  });
+
+  it("runs the complete verification sequence including CLI and package smoke checks", () => {
+    const workflow = readRepositoryFile(".github/workflows/ci.yml");
+
+    for (const command of [
+      "npm ci",
+      "npm run lint",
+      "npm run typecheck",
+      "npm test",
+      "npm run build",
+      "node dist/cli/main.js schema",
+      "npm run check:pack"
+    ]) {
+      expect(workflow).toContain(`run: ${command}`);
+    }
+  });
+});
+
+describe("trusted publishing workflow contract", () => {
+  it("runs only for published releases with minimal OIDC permissions and the npm environment", () => {
+    const workflow = readRepositoryFile(".github/workflows/publish.yml");
+
+    expect(workflow).toMatch(/release:\s*\n\s+types: \[published\]/u);
+    expect(workflow).toContain("permissions:\n  contents: read\n  id-token: write");
+    expect(workflow).toMatch(/^\s*environment: npm$/mu);
+    expect(workflow).toContain("group: publish-npm");
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./u);
+  });
+
+  it("pins actions, checks out the tag, and verifies the release ancestry and version", () => {
+    const workflow = readRepositoryFile(".github/workflows/publish.yml");
+
+    expect(actionReferences(workflow)).toEqual([checkoutPin, setupNodePin]);
+    expect(actionReferences(workflow).every((action) => /@[0-9a-f]{40}$/u.test(action))).toBe(true);
+    expect(workflow).toContain("ref: ${{ github.event.release.tag_name }}");
+    expect(workflow).toContain('test "$RELEASE_TAG" = "v$PACKAGE_VERSION"');
+    expect(workflow).toContain("git merge-base --is-ancestor HEAD origin/main");
+  });
+
+  it("checks the trusted-publishing toolchain and verifies before publishing with provenance", () => {
+    const workflow = readRepositoryFile(".github/workflows/publish.yml");
+
+    expect(workflow).toContain('node-version: "24"');
+    expect(workflow).toContain("const minimumNode = 24;");
+    expect(workflow).toContain("const minimumNpm = [11, 5, 1];");
+    for (const command of [
+      "npm ci",
+      "npm run lint",
+      "npm run typecheck",
+      "npm test",
+      "npm run build",
+      "node dist/cli/main.js schema",
+      "npm run check:pack",
+      "npm publish --access public --provenance"
+    ]) {
+      expect(workflow).toContain(`run: ${command}`);
+    }
+  });
+});
+
+describe("dependency update policy contract", () => {
+  it("uses a monthly, grouped, low-noise npm update policy", () => {
+    const config = readRepositoryFile(".github/dependabot.yml");
+
+    expect(config).toContain('package-ecosystem: "npm"');
+    expect(config).toContain('interval: "monthly"');
+    expect(config).toContain("open-pull-requests-limit: 5");
+    expect(config).toContain("dependency-type: \"production\"");
+    expect(config).toContain("dependency-type: \"development\"");
+    expect(config).toContain('update-types: ["minor", "patch"]');
+  });
+});
+
+describe("repository security and release policy contract", () => {
+  it("routes vulnerability reports away from public issues", () => {
+    const issueConfig = readRepositoryFile(".github/ISSUE_TEMPLATE/config.yml");
+    const securityPolicy = readRepositoryFile("SECURITY.md");
+
+    expect(issueConfig).toContain("blank_issues_enabled: false");
+    expect(issueConfig).toContain("https://github.com/mohanagy/miftah/security/advisories/new");
+    expect(securityPolicy).toContain("https://github.com/mohanagy/miftah/security/advisories/new");
+    expect(securityPolicy).toMatch(/do not (?:open|report).*public issue/iu);
+  });
+
+  it("documents external one-time controls without treating them as repository secrets", () => {
+    const contributing = readRepositoryFile("CONTRIBUTING.md");
+
+    expect(contributing).toContain("One-time dashboard configuration");
+    expect(contributing).toContain("npm trusted publisher");
+    expect(contributing).toContain("GitHub `npm` environment");
+    expect(contributing).toContain("Branch protection");
+    expect(contributing).toMatch(/never commit.*NPM_TOKEN/iu);
+  });
+});
