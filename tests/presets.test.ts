@@ -13,7 +13,7 @@ describe("preset config", () => {
       "--rm",
       "-e",
       "GITHUB_PERSONAL_ACCESS_TOKEN",
-      "ghcr.io/github/github-mcp-server:v1.1.0"
+      "ghcr.io/github/github-mcp-server:v1.5.0"
     ]);
 
     expect(config.defaultProfile).toBe("work");

@@ -4,6 +4,7 @@ const providerTokenPatterns = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g
 ];
 const camelCaseBoundaryPattern = /([a-z0-9])([A-Z])/g;
+const nonAlphanumericPattern = /[^a-z0-9]+/;
 const secretKeyTerms = new Set([
   "token",
   "tokens",
@@ -22,7 +23,7 @@ const secretKeyTerms = new Set([
 /** Identifies structured-data keys whose values must be redacted in full. */
 function isSecretKey(key: string): boolean {
   const normalized = key.replace(camelCaseBoundaryPattern, "$1_$2").toLowerCase();
-  const parts = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+  const parts = normalized.split(nonAlphanumericPattern).filter(Boolean);
   if (parts.some((part) => secretKeyTerms.has(part))) {
     return true;
   }

@@ -1,7 +1,7 @@
 import type { MiftahConfig, UpstreamConfig } from "./types.js";
 
 /** Pinned GitHub MCP server image used by the GitHub preset. */
-export const GITHUB_MCP_IMAGE = "ghcr.io/github/github-mcp-server:v1.1.0";
+export const GITHUB_MCP_IMAGE = "ghcr.io/github/github-mcp-server:v1.5.0";
 
 type SharedDefaults = Pick<MiftahConfig, "routing" | "security" | "process" | "audit" | "tooling">;
 type PresetBuilder = (name: string) => MiftahConfig;

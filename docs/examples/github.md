@@ -10,7 +10,7 @@ Use the generic wrapper to run GitHub MCP with separate work and personal tokens
   "upstream": {
     "transport": "stdio",
     "command": "docker",
-    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.1.0"]
+    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.5.0"]
   },
   "profiles": {
     "work": {
