@@ -1,3 +1,4 @@
+/** Stable error codes exposed to Miftah callers and command-line consumers. */
 export type MiftahErrorCode =
   | "CONFIG_NOT_FOUND"
   | "CONFIG_INVALID_JSON"
@@ -17,10 +18,12 @@ export type MiftahErrorCode =
   | "POLICY_BLOCKED"
   | "TOOL_COLLISION";
 
+/** Error carrying a machine-readable Miftah code and optional structured context. */
 export class MiftahError extends Error {
   readonly code: MiftahErrorCode;
   readonly details?: Record<string, unknown>;
 
+  /** Creates a Miftah error with a stable code, message, and optional diagnostic details. */
   constructor(code: MiftahErrorCode, message: string, details?: Record<string, unknown>) {
     super(message);
     this.name = "MiftahError";
