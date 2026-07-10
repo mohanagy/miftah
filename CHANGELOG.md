@@ -4,16 +4,21 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-11
+
 ### Added
 
 - Package metadata and a verified npm pack-content contract.
 - Least-privilege CI and OIDC trusted-publishing workflows.
 - Dependency update, contribution, vulnerability-reporting, and repository templates.
 
-### Changed
+### Fixed
 
-- Configuration now rejects unsupported lifecycle controls, state/UI settings, routing plugins and non-hybrid modes, profile metadata and matchers, per-profile upstream `transport`/`command`/`url` overrides, and configurable tool namespaces with `UNSUPPORTED_CONFIG_OPTION` instead of silently ignoring them. Remove those settings from existing configs; only `process.startupTimeoutMs` currently controls process lifecycle behavior.
-- Secret and audit redaction remain force-on protections. Existing configs may retain `security.redactSecrets: true` and `audit.redact: true`, but setting either to `false` is now rejected.
+- [#1](https://github.com/mohanagy/miftah/issues/1) Policy lookup now fails closed and configuration rejects unknown profile policy references instead of allowing a policy fail-open.
+- [#2](https://github.com/mohanagy/miftah/issues/2) Secret redaction preserves ordinary identifiers while still removing configured credentials from logs, errors, and discovery results.
+- [#3](https://github.com/mohanagy/miftah/issues/3) The GitHub Docker preset injects profile credentials correctly and pins the upstream image tag.
+- [#4](https://github.com/mohanagy/miftah/issues/4) Configuration now rejects unsupported lifecycle controls, state/UI settings, routing plugins and non-hybrid modes, profile metadata and matchers, per-profile upstream `transport`/`command`/`url` overrides, and configurable tool namespaces with `UNSUPPORTED_CONFIG_OPTION` instead of silently ignoring them. Secret and audit redaction remain force-on protections.
+- [#5](https://github.com/mohanagy/miftah/issues/5) Resource and prompt proxying no longer silently selects the first configured upstream: zero- and multi-upstream bundles fail closed, and one-entry bundles select their upstream explicitly.
 
 ## Release policy
 
