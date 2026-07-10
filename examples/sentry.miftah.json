@@ -1,0 +1,45 @@
+{
+  "version": "1",
+  "name": "sentry",
+  "description": "Sentry MCP wrapped by Miftah",
+  "defaultProfile": "work",
+  "upstream": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@sentry/mcp-server"
+    ]
+  },
+  "profiles": {
+    "work": {
+      "env": {
+        "SENTRY_AUTH_TOKEN": "${SENTRY_WORK_TOKEN}",
+        "SENTRY_ORG": "work-org"
+      }
+    },
+    "client-a": {
+      "env": {
+        "SENTRY_AUTH_TOKEN": "${SENTRY_CLIENT_A_TOKEN}",
+        "SENTRY_ORG": "client-a"
+      },
+      "policy": "readonly"
+    }
+  },
+  "policies": {
+    "readonly": {
+      "allowRisk": [
+        "read"
+      ],
+      "denyRisk": [
+        "write",
+        "destructive"
+      ]
+    }
+  },
+  "security": {
+    "allowPlaintextSecrets": false,
+    "redactSecrets": true,
+    "allowProfileSwitchingFromMcp": true
+  }
+}

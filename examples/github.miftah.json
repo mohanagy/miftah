@@ -1,0 +1,92 @@
+{
+  "version": "1",
+  "name": "github",
+  "description": "GitHub MCP wrapped by Miftah",
+  "defaultProfile": "work",
+  "upstream": {
+    "transport": "stdio",
+    "command": "docker",
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "ghcr.io/github/github-mcp-server"
+    ]
+  },
+  "profiles": {
+    "work": {
+      "description": "Work GitHub account",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_WORK_TOKEN}"
+      },
+      "policy": "safe-write"
+    },
+    "personal": {
+      "description": "Personal GitHub account",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_TOKEN}"
+      },
+      "policy": "readonly"
+    }
+  },
+  "routing": {
+    "mode": "hybrid",
+    "fallback": "activeProfile",
+    "rules": [
+      {
+        "name": "work-repository",
+        "when": {
+          "args.repo": "my-org/work"
+        },
+        "profile": "work"
+      }
+    ]
+  },
+  "policies": {
+    "readonly": {
+      "allowRisk": [
+        "read"
+      ],
+      "denyRisk": [
+        "write",
+        "destructive"
+      ]
+    },
+    "safe-write": {
+      "allowRisk": [
+        "read",
+        "write"
+      ],
+      "denyRisk": [
+        "destructive"
+      ],
+      "requireConfirmation": [
+        "write"
+      ]
+    }
+  },
+  "security": {
+    "allowPlaintextSecrets": false,
+    "redactSecrets": true,
+    "allowProfileSwitchingFromMcp": true,
+    "requireExplicitProfileForDestructive": true
+  },
+  "process": {
+    "startMode": "lazy",
+    "cache": true,
+    "restartOnCrash": true,
+    "startupTimeoutMs": 30000
+  },
+  "audit": {
+    "enabled": true,
+    "path": "~/.local/state/miftah/github.audit.jsonl",
+    "format": "jsonl",
+    "includeArguments": false,
+    "redact": true
+  },
+  "tooling": {
+    "managementToolPrefix": "miftah_",
+    "collisionStrategy": "prefix-upstream",
+    "toolDiscoveryMode": "defaultProfile"
+  }
+}

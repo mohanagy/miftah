@@ -1,0 +1,66 @@
+{
+  "version": "1",
+  "name": "dev-tools",
+  "description": "Multiple MCPs behind one Miftah instance",
+  "defaultProfile": "work",
+  "upstreams": {
+    "github": {
+      "transport": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+    },
+    "sentry": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server"]
+    }
+  },
+  "profiles": {
+    "work": {
+      "upstreams": {
+        "github": {
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_WORK_TOKEN}"
+          }
+        },
+        "sentry": {
+          "env": {
+            "SENTRY_AUTH_TOKEN": "${SENTRY_WORK_TOKEN}",
+            "SENTRY_ORG": "work-org"
+          }
+        }
+      }
+    },
+    "client-a": {
+      "upstreams": {
+        "github": {
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_CLIENT_A_TOKEN}"
+          }
+        },
+        "sentry": {
+          "env": {
+            "SENTRY_AUTH_TOKEN": "${SENTRY_CLIENT_A_TOKEN}",
+            "SENTRY_ORG": "client-a"
+          }
+        }
+      }
+    }
+  },
+  "security": {
+    "allowPlaintextSecrets": false,
+    "redactSecrets": true,
+    "allowProfileSwitchingFromMcp": true
+  },
+  "audit": {
+    "enabled": true,
+    "path": "~/.local/state/miftah/dev-tools.audit.jsonl",
+    "format": "jsonl",
+    "includeArguments": false,
+    "redact": true
+  },
+  "tooling": {
+    "upstreamToolNamespace": "upstreamName",
+    "collisionStrategy": "prefix-upstream"
+  }
+}
