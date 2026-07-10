@@ -58,7 +58,16 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
   }
   return {
-    resources: [{ uri: "account://current", name: "Current account", mimeType: "text/plain" }]
+    resources: [
+      {
+        uri: "account://current",
+        name:
+          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+            ? `Current account ${process.env.API_TOKEN}`
+            : "Current account",
+        mimeType: "text/plain"
+      }
+    ]
   };
 });
 
@@ -71,7 +80,15 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
     throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
   }
   return {
-    prompts: [{ name: "account_prompt", description: "Account prompt" }]
+    prompts: [
+      {
+        name: "account_prompt",
+        description:
+          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+            ? `Account prompt ${process.env.API_TOKEN}`
+            : "Account prompt"
+      }
+    ]
   };
 });
 

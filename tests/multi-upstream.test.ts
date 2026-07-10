@@ -179,6 +179,49 @@ describe("multi-upstream wrapper", () => {
     }
   });
 
+  it("redacts secrets from successful upstream resource and prompt discovery", async () => {
+    const secret = "discovery-success-secret";
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                API_TOKEN: secret,
+                TEST_INCLUDE_DISCOVERY_TOKEN: "true"
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const resources = await client.listResources();
+      const prompts = await client.listPrompts();
+      const discovery = JSON.stringify({ resources, prompts });
+
+      expect(resources.resources[0]?.name).toContain("[REDACTED]");
+      expect(prompts.prompts[0]?.description).toContain("[REDACTED]");
+      expect(discovery).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("redacts secrets from upstream resource and prompt discovery failures", async () => {
     const secret = "resource-list-secret";
     const config = validateConfig({

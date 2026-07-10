@@ -152,7 +152,7 @@ export class MiftahServer {
       this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
         try {
           const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return await session.listResources();
+          return redactSecrets(await session.listResources(), this.upstreams.getSecretValues());
         } catch (error) {
           throw new Error(
             redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
@@ -176,7 +176,7 @@ export class MiftahServer {
       this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
         try {
           const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-          return await session.listPrompts();
+          return redactSecrets(await session.listPrompts(), this.upstreams.getSecretValues());
         } catch (error) {
           throw new Error(
             redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
