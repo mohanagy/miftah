@@ -24,6 +24,22 @@ describe("secret redaction", () => {
     });
   });
 
+  it("redacts plural secret-key variants", () => {
+    expect(
+      redactSecrets({
+        tokens: ["token-value"],
+        clientSecrets: ["secret-value"],
+        user_passwords: ["password-value"],
+        GOOGLE_APPLICATION_CREDENTIALS: "credential-value"
+      })
+    ).toEqual({
+      tokens: "[REDACTED]",
+      clientSecrets: "[REDACTED]",
+      user_passwords: "[REDACTED]",
+      GOOGLE_APPLICATION_CREDENTIALS: "[REDACTED]"
+    });
+  });
+
   it("redacts bearer credentials and known provider token formats", () => {
     const bearerToken = ["Bearer", "not-a-real-token-value"].join(" ");
     const cases = [
