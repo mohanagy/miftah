@@ -3,6 +3,8 @@ import { validateConfig } from "../src/config/validate-config.js";
 import { expandEnvironmentReferences } from "../src/config/env-expand.js";
 import { MiftahError } from "../src/utils/errors.js";
 
+const policyNotFoundPattern = /POLICY_NOT_FOUND/u;
+
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
     const config = validateConfig({
@@ -55,7 +57,7 @@ describe("config foundation", () => {
           work: { policy: "missing-policy" }
         }
       })
-    ).toThrow(/POLICY_NOT_FOUND/);
+    ).toThrow(policyNotFoundPattern);
   });
 
   it("rejects profiles whose empty policy reference is not defined", () => {
@@ -69,7 +71,7 @@ describe("config foundation", () => {
           work: { policy: "" }
         }
       })
-    ).toThrow(/POLICY_NOT_FOUND/);
+    ).toThrow(policyNotFoundPattern);
   });
 
   it("does not derive the error code from user-controlled policy names", () => {
