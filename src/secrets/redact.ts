@@ -1,6 +1,18 @@
-const secretKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|authorization)/i;
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
-const tokenPattern = /\b[A-Za-z0-9_-]{32,}\b/g;
+const providerTokenPatterns = [
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g
+];
+const secretKeyTerms = new Set(["token", "secret", "password", "credential", "authorization", "auth", "apikey", "privatekey"]);
+
+function isSecretKey(key: string): boolean {
+  const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  const parts = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+  if (parts.some((part) => secretKeyTerms.has(part))) {
+    return true;
+  }
+  return (parts.includes("api") && parts.includes("key")) || (parts.includes("private") && parts.includes("key"));
+}
 
 function redactString(value: string, secretValues: readonly string[]): string {
   let result = value;
@@ -9,11 +21,15 @@ function redactString(value: string, secretValues: readonly string[]): string {
       result = result.split(secret).join("[REDACTED]");
     }
   }
-  return result.replace(bearerPattern, "$1[REDACTED]").replace(tokenPattern, "[REDACTED]");
+  result = result.replace(bearerPattern, "$1[REDACTED]");
+  for (const pattern of providerTokenPatterns) {
+    result = result.replace(pattern, "[REDACTED]");
+  }
+  return result;
 }
 
 function redactValue(value: unknown, secretValues: readonly string[], key?: string): unknown {
-  if (key && secretKeyPattern.test(key)) {
+  if (key && isSecretKey(key)) {
     return "[REDACTED]";
   }
   if (typeof value === "string") {

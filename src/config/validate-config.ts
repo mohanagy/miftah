@@ -10,7 +10,9 @@ export function validateConfig(input: unknown): MiftahConfig {
       .join("; ");
     const code = message.includes("DEFAULT_PROFILE_NOT_FOUND")
       ? "DEFAULT_PROFILE_NOT_FOUND"
-      : "CONFIG_SCHEMA_INVALID";
+      : message.includes("POLICY_NOT_FOUND")
+        ? "POLICY_NOT_FOUND"
+        : "CONFIG_SCHEMA_INVALID";
     throw new MiftahError(code, `${code}: ${message}`);
   }
   return result.data;

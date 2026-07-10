@@ -20,6 +20,7 @@ export class PolicyEngine {
   evaluate(policyName: string | undefined, toolName: string): PolicyDecision {
     const risk = classifyRisk(toolName, this.riskOverrides);
     const policy = policyName ? this.policies[policyName] : undefined;
+    if (policyName && !policy) return { action: "deny", risk };
     if (!policy) return { action: "allow", risk };
     if (policy.deny?.some((pattern) => matchesPattern(toolName, pattern))) {
       return { action: "deny", risk };

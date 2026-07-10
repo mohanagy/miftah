@@ -123,6 +123,16 @@ export const miftahConfigSchema = z
         message: `DEFAULT_PROFILE_NOT_FOUND: profile '${value.defaultProfile}' does not exist`
       });
     }
+    const policyNames = new Set(Object.keys(value.policies ?? {}));
+    for (const [profileName, profile] of Object.entries(value.profiles)) {
+      if (profile.policy && !policyNames.has(profile.policy)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileName, "policy"],
+          message: `POLICY_NOT_FOUND: policy '${profile.policy}' does not exist`
+        });
+      }
+    }
   });
 
 export type MiftahConfigInput = z.input<typeof miftahConfigSchema>;

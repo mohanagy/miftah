@@ -39,4 +39,21 @@ describe("config foundation", () => {
       expandEnvironmentReferences({ API_TOKEN: "${MISSING_TOKEN}" }, {})
     ).toThrow(/MISSING_TOKEN/);
   });
+
+  it("rejects profiles that reference unknown named policies", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node" },
+        policies: {
+          readonly: { allowRisk: ["read"] }
+        },
+        profiles: {
+          work: { policy: "missing-policy" }
+        }
+      })
+    ).toThrow(/POLICY_NOT_FOUND/);
+  });
 });
