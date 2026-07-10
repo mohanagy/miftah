@@ -8,7 +8,7 @@ miftah schema > miftah.schema.json
 
 Required fields are `version: "1"`, `name`, `defaultProfile`, `profiles`, and either `upstream` or `upstreams`. A local STDIO upstream has `transport`, `command`, optional `args`, `env`, and `cwd`.
 
-With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` under a named upstream. Miftah namespaces discovered tools as `<upstream>__<tool>` so one wrapper can safely expose several providers.
+With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` under a named upstream. Miftah namespaces discovered tools as `<upstream>__<tool>` so one wrapper can safely expose several providers. Resources and prompts are proxied only when `upstreams` contains exactly one entry; zero-entry and multi-entry bundles omit those capabilities and their handlers rather than choosing an upstream. Use tools or a wrapper with a single upstream for resources and prompts while namespaced aggregation is deferred.
 
 Profile `env` values can reference `${ENV_NAME}` or `secretref:env://ENV_NAME`. Put dotenv paths in `secrets.envFiles`; paths are resolved relative to the config file. Profile descriptions, tags, policy names, and upstream-specific `args` and `cwd` overrides are non-secret. Per-upstream `env` and `headers` values may contain credentials and use the same secret-resolution and redaction safeguards as profile-level values.
 
