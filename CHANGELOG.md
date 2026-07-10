@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
-- Configuration now rejects unsupported lifecycle controls, state/UI settings, routing plugins and non-hybrid modes, profile matchers, and configurable tool namespaces with `UNSUPPORTED_CONFIG_OPTION` instead of silently ignoring them. Remove those settings from existing configs; only `process.startupTimeoutMs` currently controls process lifecycle behavior.
+- Configuration now rejects unsupported lifecycle controls, state/UI settings, routing plugins and non-hybrid modes, profile metadata and matchers, per-profile upstream `transport`/`command`/`url` overrides, and configurable tool namespaces with `UNSUPPORTED_CONFIG_OPTION` instead of silently ignoring them. Remove those settings from existing configs; only `process.startupTimeoutMs` currently controls process lifecycle behavior.
 - Secret and audit redaction remain force-on protections. Existing configs may retain `security.redactSecrets: true` and `audit.redact: true`, but setting either to `false` is now rejected.
 
 ## Release policy

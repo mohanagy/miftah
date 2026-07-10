@@ -38,8 +38,8 @@ export class UpstreamProcessManager {
     options: UpstreamManagerOptions = {}
   ) {
     this.options = {
-      startupTimeoutMs: options.startupTimeoutMs ?? 30_000,
-      ...options
+      ...options,
+      startupTimeoutMs: options.startupTimeoutMs ?? 30_000
     };
   }
 

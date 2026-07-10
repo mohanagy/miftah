@@ -76,14 +76,14 @@ export const miftahConfigSchema = z
       .optional(),
     process: z
       .object({
-        startMode: z.enum(["lazy", "eager"]).optional(),
-        cache: z.boolean().optional(),
-        idleTimeoutMs: z.number().int().nonnegative().optional(),
-        restartOnCrash: z.boolean().optional(),
-        maxRestarts: z.number().int().nonnegative().optional(),
+        startMode: z.unknown().optional(),
+        cache: z.unknown().optional(),
+        idleTimeoutMs: z.unknown().optional(),
+        restartOnCrash: z.unknown().optional(),
+        maxRestarts: z.unknown().optional(),
         startupTimeoutMs: z.number().int().positive().optional(),
-        shutdownTimeoutMs: z.number().int().positive().optional(),
-        maxConcurrentProfiles: z.number().int().positive().optional()
+        shutdownTimeoutMs: z.unknown().optional(),
+        maxConcurrentProfiles: z.unknown().optional()
       })
       .optional(),
     audit: z

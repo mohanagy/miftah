@@ -41,6 +41,7 @@ describe("config runtime parity", () => {
     ["process.cache", { process: { cache: true } }],
     ["process.idleTimeoutMs", { process: { idleTimeoutMs: 1 } }],
     ["process.restartOnCrash", { process: { restartOnCrash: true } }],
+    ["process.restartOnCrash", { process: { restartOnCrash: "true" } }],
     ["process.maxRestarts", { process: { maxRestarts: 1 } }],
     ["process.shutdownTimeoutMs", { process: { shutdownTimeoutMs: 1 } }],
     ["process.maxConcurrentProfiles", { process: { maxConcurrentProfiles: 1 } }],

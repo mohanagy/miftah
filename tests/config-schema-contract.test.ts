@@ -84,6 +84,7 @@ describe("published config schema", () => {
     expect(profileUpstreamOverride).not.toHaveProperty("url");
     expect(Object.keys(process ?? {})).toEqual(["startupTimeoutMs"]);
     expect(security).toMatchObject({ redactSecrets: { const: true } });
+    expect(security).not.toHaveProperty("requireProfileSwitchConfirmation");
     expect(audit).toMatchObject({ format: { const: "jsonl" }, redact: { const: true } });
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
