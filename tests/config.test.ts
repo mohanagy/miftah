@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
 import { expandEnvironmentReferences } from "../src/config/env-expand.js";
+import { MiftahError } from "../src/utils/errors.js";
+
+const policyNotFoundPattern = /POLICY_NOT_FOUND/u;
 
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
@@ -38,5 +41,57 @@ describe("config foundation", () => {
     expect(() =>
       expandEnvironmentReferences({ API_TOKEN: "${MISSING_TOKEN}" }, {})
     ).toThrow(/MISSING_TOKEN/);
+  });
+
+  it.each([
+    ["missing-policy", { readonly: { allowRisk: ["read"] } }],
+    ["", undefined]
+  ])("rejects an undefined policy reference with contextual diagnostics", (policy, policies) => {
+    let thrown: unknown;
+
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node" },
+        policies,
+        profiles: {
+          work: { policy }
+        }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    if (!(thrown instanceof MiftahError)) {
+      throw new Error("Expected a MiftahError for an undefined policy reference");
+    }
+    expect(thrown.code).toBe("POLICY_NOT_FOUND");
+    expect(thrown.message).toMatch(policyNotFoundPattern);
+    expect(thrown.message).toContain("profiles.work.policy");
+    expect(thrown.message).toContain(`policy '${policy}'`);
+  });
+
+  it("does not derive the error code from user-controlled policy names", () => {
+    let thrown: unknown;
+
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node" },
+        profiles: {
+          work: { policy: "DEFAULT_PROFILE_NOT_FOUND" }
+        }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    expect(thrown).toMatchObject({ code: "POLICY_NOT_FOUND" });
   });
 });

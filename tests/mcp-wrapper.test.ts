@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
+import type { MiftahConfig } from "../src/config/types.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
@@ -59,6 +60,35 @@ describe("Miftah MCP wrapper", () => {
     await client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } });
     const blocked = await client.callTool({ name: "create_item", arguments: { name: "x" } });
     expect(blocked).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }] });
+
+    await client.close();
+    await wrapper.close();
+  });
+
+  it("blocks destructive calls when runtime policy lookup misses an explicitly named policy", async () => {
+    const config: MiftahConfig = {
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", API_TOKEN: "hidden-token" }, policy: "missing-policy" }
+      },
+      audit: { enabled: false }
+    };
+
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+    const blocked = await client.callTool({ name: "create_item", arguments: { name: "x" } });
+    expect(blocked).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+    });
 
     await client.close();
     await wrapper.close();

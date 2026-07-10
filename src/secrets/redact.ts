@@ -1,7 +1,36 @@
-const secretKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|authorization)/i;
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
-const tokenPattern = /\b[A-Za-z0-9_-]{32,}\b/g;
+const providerTokenPatterns = [
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g
+];
+const camelCaseBoundaryPattern = /([a-z0-9])([A-Z])/g;
+const nonAlphanumericPattern = /[^a-z0-9]+/;
+const secretKeyTerms = new Set([
+  "token",
+  "tokens",
+  "secret",
+  "secrets",
+  "password",
+  "passwords",
+  "credential",
+  "credentials",
+  "authorization",
+  "auth",
+  "apikey",
+  "privatekey"
+]);
 
+/** Identifies structured-data keys whose values must be redacted in full. */
+function isSecretKey(key: string): boolean {
+  const normalized = key.replace(camelCaseBoundaryPattern, "$1_$2").toLowerCase();
+  const parts = normalized.split(nonAlphanumericPattern).filter(Boolean);
+  if (parts.some((part) => secretKeyTerms.has(part))) {
+    return true;
+  }
+  return (parts.includes("api") && parts.includes("key")) || (parts.includes("private") && parts.includes("key"));
+}
+
+/** Redacts configured values and recognized credential formats from text. */
 function redactString(value: string, secretValues: readonly string[]): string {
   let result = value;
   for (const secret of secretValues) {
@@ -9,11 +38,16 @@ function redactString(value: string, secretValues: readonly string[]): string {
       result = result.split(secret).join("[REDACTED]");
     }
   }
-  return result.replace(bearerPattern, "$1[REDACTED]").replace(tokenPattern, "[REDACTED]");
+  result = result.replace(bearerPattern, "$1[REDACTED]");
+  for (const pattern of providerTokenPatterns) {
+    result = result.replace(pattern, "[REDACTED]");
+  }
+  return result;
 }
 
+/** Recursively redacts secrets while preserving the input's data shape. */
 function redactValue(value: unknown, secretValues: readonly string[], key?: string): unknown {
-  if (key && secretKeyPattern.test(key)) {
+  if (key && isSecretKey(key)) {
     return "[REDACTED]";
   }
   if (typeof value === "string") {
@@ -33,10 +67,12 @@ function redactValue(value: unknown, secretValues: readonly string[], key?: stri
   return value;
 }
 
+/** Creates a reusable deep redactor for a fixed collection of secret values. */
 export function createRedactor(secretValues: readonly string[] = []): <T>(value: T) => T {
   return <T>(value: T) => redactValue(value, secretValues) as T;
 }
 
+/** Redacts secret values and secret-bearing keys from an arbitrary value. */
 export function redactSecrets<T>(value: T, secretValues: readonly string[] = []): T {
   return createRedactor(secretValues)(value);
 }

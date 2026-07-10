@@ -43,6 +43,7 @@ const policySchema = z.object({
   requireConfirmation: z.array(z.string()).optional()
 });
 
+/** Zod schema for validating the complete Miftah configuration format. */
 export const miftahConfigSchema = z
   .object({
     version: z.literal("1"),
@@ -120,9 +121,22 @@ export const miftahConfigSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["defaultProfile"],
+        params: { miftahCode: "DEFAULT_PROFILE_NOT_FOUND" },
         message: `DEFAULT_PROFILE_NOT_FOUND: profile '${value.defaultProfile}' does not exist`
       });
     }
+    const policyNames = new Set(Object.keys(value.policies ?? {}));
+    for (const [profileName, profile] of Object.entries(value.profiles)) {
+      if (profile.policy !== undefined && !policyNames.has(profile.policy)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileName, "policy"],
+          params: { miftahCode: "POLICY_NOT_FOUND" },
+          message: `POLICY_NOT_FOUND: policy '${profile.policy}' does not exist`
+        });
+      }
+    }
   });
 
+/** Input accepted by {@link miftahConfigSchema} before validation. */
 export type MiftahConfigInput = z.input<typeof miftahConfigSchema>;

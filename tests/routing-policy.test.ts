@@ -59,4 +59,27 @@ describe("routing and policy", () => {
     });
     expect(engine.evaluate("safe", "get_item")).toEqual({ action: "allow", risk: "read" });
   });
+
+  it("fails closed when a profile references a missing named policy", () => {
+    const engine = new PolicyEngine(
+      {
+        readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] }
+      },
+      { create_item: "write" }
+    );
+
+    expect(engine.evaluate("missing-policy", "create_item")).toEqual({ action: "deny", risk: "write" });
+  });
+
+  it("fails closed when a policy name resolves to an inherited object property", () => {
+    const engine = new PolicyEngine();
+
+    expect(engine.evaluate("toString", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
+  });
+
+  it("fails closed when a policy name is explicitly empty", () => {
+    const engine = new PolicyEngine();
+
+    expect(engine.evaluate("", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
+  });
 });

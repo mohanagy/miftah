@@ -10,7 +10,7 @@ Use the generic wrapper to run GitHub MCP with separate work and personal tokens
   "upstream": {
     "transport": "stdio",
     "command": "docker",
-    "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.5.0"]
   },
   "profiles": {
     "work": {
@@ -33,10 +33,13 @@ Use the generic wrapper to run GitHub MCP with separate work and personal tokens
     },
     "safe-write": {
       "allowRisk": ["read", "write"],
-      "denyRisk": ["destructive"]
+      "denyRisk": ["destructive"],
+      "requireConfirmation": ["write"]
     }
   }
 }
 ```
 
 This config contains references only. Set the variables in the shell that launches Claude Desktop.
+
+When upgrading the pinned image tag, review upstream release notes first, then run `miftah validate --config <file>` and test both profiles before adopting the new tag.

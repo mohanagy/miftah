@@ -64,7 +64,7 @@ Profiles are named credential environments. Keep secret values outside JSON when
   "upstream": {
     "transport": "stdio",
     "command": "docker",
-    "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.5.0"]
   },
   "profiles": {
     "work": {
@@ -100,6 +100,8 @@ Profiles are named credential environments. Keep secret values outside JSON when
 }
 ```
 
+The GitHub preset pins `ghcr.io/github/github-mcp-server:v1.5.0`. To upgrade safely, read the release notes first, update the tag in your config, run `miftah validate`, then smoke-test both profiles before rollout.
+
 Claude can call `miftah_list_profiles`, `miftah_current_profile`, `miftah_use_profile`, `miftah_profile_info`, `miftah_health`, `miftah_validate_config`, `miftah_list_upstream_tools`, `miftah_restart_profile`, and `miftah_route_preview`. Upstream tools are exposed unchanged unless they collide with a reserved `miftah_` name.
 
 For account bundles, define `upstreams` instead of `upstream`. Tools are exposed as `<upstream>__<tool>` (for example `github__search_issues`) and each profile can provide per-upstream environment or header overrides. See `examples/multi-upstream.miftah.json`.
@@ -124,7 +126,7 @@ Routing can use the active profile or rules matching tool arguments:
 }
 ```
 
-When several profiles match, Miftah refuses to guess. Use explicit profile switching for write and destructive actions. Local policies can deny risky tools or return a confirmation-needed result. Provider token scopes still matter: local policy cannot make a write-capable provider token read-only.
+When several profiles match, Miftah refuses to guess. Use explicit profile switching for write and destructive actions. Local policies can deny risky tools or return a confirmation-needed result. Provider token scopes still matter: local policy cannot make a write-capable provider token read-only. Profiles that set a policy name must reference an existing entry in `policies`, while profiles with no `policy` field keep the default allow behavior.
 
 ## Secret handling
 
