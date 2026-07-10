@@ -24,8 +24,8 @@ export class PolicyEngine {
   /** Returns whether a tool call is allowed, denied, or requires confirmation. */
   evaluate(policyName: string | undefined, toolName: string): PolicyDecision {
     const risk = classifyRisk(toolName, this.riskOverrides);
-    if (policyName && !Object.hasOwn(this.policies, policyName)) return { action: "deny", risk };
-    const policy = policyName ? this.policies[policyName] : undefined;
+    if (policyName !== undefined && !Object.hasOwn(this.policies, policyName)) return { action: "deny", risk };
+    const policy = policyName !== undefined ? this.policies[policyName] : undefined;
     if (!policy) return { action: "allow", risk };
     if (policy.deny?.some((pattern) => matchesPattern(toolName, pattern))) {
       return { action: "deny", risk };

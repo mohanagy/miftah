@@ -58,6 +58,20 @@ describe("config foundation", () => {
     ).toThrow(/POLICY_NOT_FOUND/);
   });
 
+  it("rejects profiles whose empty policy reference is not defined", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node" },
+        profiles: {
+          work: { policy: "" }
+        }
+      })
+    ).toThrow(/POLICY_NOT_FOUND/);
+  });
+
   it("does not derive the error code from user-controlled policy names", () => {
     let thrown: unknown;
 

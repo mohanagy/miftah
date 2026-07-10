@@ -127,7 +127,7 @@ export const miftahConfigSchema = z
     }
     const policyNames = new Set(Object.keys(value.policies ?? {}));
     for (const [profileName, profile] of Object.entries(value.profiles)) {
-      if (profile.policy && !policyNames.has(profile.policy)) {
+      if (profile.policy !== undefined && !policyNames.has(profile.policy)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["profiles", profileName, "policy"],

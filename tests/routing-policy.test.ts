@@ -76,4 +76,10 @@ describe("routing and policy", () => {
 
     expect(engine.evaluate("toString", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
   });
+
+  it("fails closed when a policy name is explicitly empty", () => {
+    const engine = new PolicyEngine();
+
+    expect(engine.evaluate("", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
+  });
 });
