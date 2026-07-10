@@ -161,7 +161,7 @@ export class UpstreamProcessManager {
         this.health.set(profile, { profile, status: "failed", error: "upstream process closed" });
       }
     };
-    const client = new Client({ name: "miftah", version: "0.1.0" });
+    const client = new Client({ name: "miftah", version: "0.1.1" });
     const startPromise = client.connect(transport).then(
       () => new UpstreamSession(profile, client, () => client.close()),
       async (error: unknown) => {

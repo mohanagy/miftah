@@ -80,7 +80,7 @@ export class MiftahServer {
   ) {
     this.resourcePromptProxy = this.resourcePromptProxyAvailability();
     this.server = new Server(
-      { name: `miftah-${config.name}`, version: "0.1.0" },
+      { name: `miftah-${config.name}`, version: "0.1.1" },
       {
         capabilities: {
           tools: {},

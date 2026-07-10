@@ -1,6 +1,6 @@
 {
   "name": "@lubab/miftah",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Wrap any MCP. Use the right account without reconnecting.",
   "keywords": [
     "mcp",
