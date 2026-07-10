@@ -14,7 +14,7 @@ MCP client
 
 The public server is built with the official `@modelcontextprotocol/sdk` `Server` and `StdioServerTransport`. Each profile gets an SDK `Client` and `StdioClientTransport` on first use. A single-flight start map prevents concurrent calls from launching duplicate processes. The wrapper captures the profile at routing time, so a later profile switch cannot change an in-flight call.
 
-The server advertises management tools plus tools discovered from the active profile. Resources and prompts are proxied through the same profile. Reserved management tool names are protected; the default collision strategy prefixes a conflicting upstream name with `upstream_`.
+The server advertises management tools plus tools discovered from the active profile. A standard `upstream` and a named `upstreams` map with exactly one entry proxy resources and prompts through that sole upstream. A zero-entry map and a map with two or more entries omit the MCP `resources` and `prompts` capabilities and do not register their handlers; direct resource or prompt requests then receive the standard `-32601` method-not-found response. This prevents Miftah from accidentally selecting the first upstream when aggregation and namespacing are unavailable. `miftah_health` reports `resourcePromptProxy` availability and its reason, which is also included in the server instructions when disabled. Reserved management tool names are protected; the default collision strategy prefixes a conflicting upstream name with `upstream_`.
 
 Configuration and runtime concerns are intentionally separate:
 

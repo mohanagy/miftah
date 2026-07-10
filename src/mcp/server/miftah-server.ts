@@ -18,6 +18,7 @@ import { PolicyEngine } from "../../policy/policy-engine.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
+import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 
 const managementTools: Tool[] = [
@@ -52,11 +53,24 @@ function textResult(text: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
+interface ResourcePromptProxyAvailable {
+  available: true;
+  upstreamName?: string;
+}
+
+interface ResourcePromptProxyUnavailable {
+  available: false;
+  reason: string;
+}
+
+type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePromptProxyUnavailable;
+
 export class MiftahServer {
   readonly server: Server;
   private readonly routing: RoutingEngine;
   private readonly policy: PolicyEngine;
   private readonly audit?: AuditLogger;
+  private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private toolMap = new Map<string, { name: string; upstreamName?: string }>();
 
   constructor(
@@ -64,15 +78,20 @@ export class MiftahServer {
     private readonly profiles: ProfileManager,
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager
   ) {
+    this.resourcePromptProxy = this.resourcePromptProxyAvailability();
     this.server = new Server(
       { name: `miftah-${config.name}`, version: "0.1.0" },
       {
         capabilities: {
           tools: {},
-          resources: {},
-          prompts: {}
+          ...(this.resourcePromptProxy.available ? { resources: {}, prompts: {} } : {})
         },
-        instructions: "Miftah wraps an upstream MCP and routes requests through local credential profiles."
+        instructions: [
+          "Miftah wraps an upstream MCP and routes requests through local credential profiles.",
+          ...(this.resourcePromptProxy.available
+            ? []
+            : [this.resourcePromptProxy.reason])
+        ].join(" ")
       }
     );
     this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile);
@@ -129,39 +148,24 @@ export class MiftahServer {
       return this.handleUpstreamTool(name, args);
     });
 
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      const session = await this.upstreams.get(this.profiles.current().activeProfile);
-      return session.listResources();
-    });
+    if (this.resourcePromptProxy.available) {
+      const upstreamName = this.resourcePromptProxy.upstreamName;
+      this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+        return this.proxyResourcePrompt(upstreamName, (session) => session.listResources());
+      });
 
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      try {
-        const session = await this.upstreams.get(this.profiles.current().activeProfile);
-        return redactSecrets(await session.readResource(request.params), this.upstreams.getSecretValues());
-      } catch (error) {
-        throw new Error(
-          redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-          { cause: error }
-        );
-      }
-    });
+      this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+        return this.proxyResourcePrompt(upstreamName, (session) => session.readResource(request.params));
+      });
 
-    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
-      const session = await this.upstreams.get(this.profiles.current().activeProfile);
-      return session.listPrompts();
-    });
+      this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+        return this.proxyResourcePrompt(upstreamName, (session) => session.listPrompts());
+      });
 
-    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-      try {
-        const session = await this.upstreams.get(this.profiles.current().activeProfile);
-        return redactSecrets(await session.getPrompt(request.params), this.upstreams.getSecretValues());
-      } catch (error) {
-        throw new Error(
-          redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
-          { cause: error }
-        );
-      }
-    });
+      this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+        return this.proxyResourcePrompt(upstreamName, (session) => session.getPrompt(request.params));
+      });
+    }
   }
 
   private async handleUpstreamTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -258,6 +262,9 @@ export class MiftahServer {
           JSON.stringify({
             configValid: true,
             activeProfile: this.profiles.current().activeProfile,
+            resourcePromptProxy: this.resourcePromptProxy.available
+              ? { available: true }
+              : { available: false, reason: this.resourcePromptProxy.reason },
             upstreams: this.upstreams.listHealth()
           })
         );
@@ -300,6 +307,35 @@ export class MiftahServer {
   private upstreamNames(): (string | undefined)[] {
     if (this.upstreams instanceof MultiUpstreamProcessManager) return this.upstreams.listUpstreams();
     return [undefined];
+  }
+
+  private resourcePromptProxyAvailability(): ResourcePromptProxyAvailability {
+    if (!(this.upstreams instanceof MultiUpstreamProcessManager)) return { available: true };
+    const upstreamNames = this.upstreams.listUpstreams();
+    if (upstreamNames.length === 1) return { available: true, upstreamName: upstreamNames[0] };
+    if (upstreamNames.length === 0) {
+      return { available: false, reason: "No upstream is configured, so resource and prompt proxying is unavailable." };
+    }
+    return {
+      available: false,
+      reason: "Resource and prompt proxying is unavailable for multi-upstream bundles until namespaced aggregation is available."
+    };
+  }
+
+  private async proxyResourcePrompt<Result>(
+    upstreamName: string | undefined,
+    operation: (session: UpstreamSession) => Promise<Result>
+  ): Promise<Result> {
+    try {
+      const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
+      return redactSecrets(await operation(session), this.upstreams.getSecretValues());
+    } catch (error) {
+      const safeMessage = redactSecrets(
+        error instanceof Error ? error.message : String(error),
+        this.upstreams.getSecretValues()
+      );
+      throw new Error(safeMessage, { cause: error });
+    }
   }
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
