@@ -3,13 +3,10 @@ import { dirname, resolve } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { presetConfig } from "../config/presets.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
-import { SecretResolver } from "../secrets/secret-resolver.js";
-import { ProfileManager } from "../profiles/profile-manager.js";
-import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
-import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { MiftahServer } from "../mcp/server/miftah-server.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { redactSecrets } from "../secrets/redact.js";
+import { createRuntime } from "./create-runtime.js";
 
 interface CliArgs {
   command?: string;
@@ -44,54 +41,6 @@ function parseArgs(argv: string[]): CliArgs {
     }
   }
   return result;
-}
-
-async function createRuntime(configPath: string) {
-  const config = await loadConfig(configPath);
-  const resolver = new SecretResolver({
-    envFiles: config.secrets?.envFiles,
-    allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets
-  });
-  await resolver.load();
-  const profiles = Object.fromEntries(
-    Object.entries(config.profiles).map(([name, profile]) => [
-      name,
-      {
-        ...profile,
-        env: profile.env ? resolver.resolveMap(profile.env) : profile.env,
-        headers: profile.headers ? resolver.resolveMap(profile.headers) : profile.headers,
-        upstreams: profile.upstreams
-          ? Object.fromEntries(
-              Object.entries(profile.upstreams).map(([upstreamName, override]) => [
-                upstreamName,
-                {
-                  ...override,
-                  env: override.env ? resolver.resolveMap(override.env) : override.env,
-                  headers: override.headers ? resolver.resolveMap(override.headers) : override.headers
-                }
-              ])
-            )
-          : profile.upstreams
-      }
-    ])
-  );
-  const resolvedConfig = { ...config, profiles };
-  const upstream = resolvedConfig.upstream
-    ? {
-        ...resolvedConfig.upstream,
-        env: resolvedConfig.upstream.env ? resolver.resolveMap(resolvedConfig.upstream.env) : undefined,
-        headers: resolvedConfig.upstream.headers ? resolver.resolveMap(resolvedConfig.upstream.headers) : undefined
-      }
-    : undefined;
-  const manager = resolvedConfig.upstreams
-    ? new MultiUpstreamProcessManager(resolvedConfig, {
-        startupTimeoutMs: config.process?.startupTimeoutMs
-      })
-    : new UpstreamProcessManager(upstream!, profiles, {
-        startupTimeoutMs: config.process?.startupTimeoutMs
-      });
-  const profileManager = new ProfileManager(resolvedConfig, resolvedConfig.security);
-  return { config: resolvedConfig, manager, profileManager };
 }
 
 async function serve(configPath: string): Promise<void> {

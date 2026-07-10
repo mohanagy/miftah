@@ -3,7 +3,20 @@ import { z } from "zod";
 const recordSchema = z.record(z.string(), z.unknown());
 const unsupportedOptionSchema = z.unknown().optional();
 
-const upstreamBaseSchema = z.object({
+const configVersionSchema = z.string().superRefine((value, context) => {
+  if (value !== "1") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: {
+        miftahCode: "UNSUPPORTED_CONFIG_VERSION",
+        remediation: 'Set version to "1"; automatic config migrations are not supported.'
+      },
+      message: "UNSUPPORTED_CONFIG_VERSION: only config version '1' is supported"
+    });
+  }
+});
+
+const upstreamBaseShape = {
   transport: z.enum(["stdio", "http", "sse", "streamable-http"]),
   command: z.string().min(1).optional(),
   args: z.array(z.string()).optional(),
@@ -11,51 +24,293 @@ const upstreamBaseSchema = z.object({
   cwd: z.string().optional(),
   url: z.string().url().optional(),
   headers: z.record(z.string(), z.string()).optional()
+};
+
+const upstreamSchema = z.object(upstreamBaseShape).strict().superRefine((value, context) => {
+  if (value.transport === "stdio" && !value.command) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["command"], message: "stdio upstream requires command" });
+  }
+  if (value.transport !== "stdio" && !value.url) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["url"], message: "remote upstream requires url" });
+  }
 });
 
-const upstreamSchema = upstreamBaseSchema
-  .superRefine((value, context) => {
-    if (value.transport === "stdio" && !value.command) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["command"], message: "stdio upstream requires command" });
-    }
-    if (value.transport !== "stdio" && !value.url) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["url"], message: "remote upstream requires url" });
-    }
-  });
-
-const profileUpstreamOverrideSchema = z.object({
-  transport: unsupportedOptionSchema,
-  command: unsupportedOptionSchema,
+const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().optional(),
-  url: unsupportedOptionSchema,
   headers: z.record(z.string(), z.string()).optional()
-});
+};
 
-const profileSchema = z.object({
+const publicProfileUpstreamOverrideSchema = z.object(publicProfileUpstreamOverrideShape).strict();
+const profileUpstreamOverrideSchema = z
+  .object({
+    ...publicProfileUpstreamOverrideShape,
+    transport: unsupportedOptionSchema,
+    command: unsupportedOptionSchema,
+    url: unsupportedOptionSchema
+  })
+  .strict();
+
+const publicProfileShape = {
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  metadata: unsupportedOptionSchema,
   policy: z.string().optional(),
-  routing: z.object({ match: unsupportedOptionSchema }).optional(),
-  upstreams: z.record(z.string(), profileUpstreamOverrideSchema).optional()
-});
+  upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
+};
 
-const policySchema = z.object({
-  allow: z.array(z.enum(["read", "write", "destructive"])).optional(),
-  allowRisk: z.array(z.enum(["read", "write", "destructive"])).optional(),
-  deny: z.array(z.string()).optional(),
-  denyRisk: z.array(z.enum(["read", "write", "destructive"])).optional(),
-  requireConfirmation: z.array(z.string()).optional()
-});
+const publicProfileSchema = z.object(publicProfileShape).strict();
+const profileSchema = z
+  .object({
+    ...publicProfileShape,
+    metadata: unsupportedOptionSchema,
+    routing: z.object({ match: unsupportedOptionSchema }).strict().optional(),
+    upstreams: z.record(z.string(), profileUpstreamOverrideSchema).optional()
+  })
+  .strict();
 
-/** Zod schema for validating the complete Miftah configuration format. */
-export const miftahConfigSchema = z
+const policySchema = z
+  .object({
+    allow: z.array(z.enum(["read", "write", "destructive"])).optional(),
+    allowRisk: z.array(z.enum(["read", "write", "destructive"])).optional(),
+    deny: z.array(z.string()).optional(),
+    denyRisk: z.array(z.enum(["read", "write", "destructive"])).optional(),
+    requireConfirmation: z.array(z.string()).optional()
+  })
+  .strict();
+
+const routingRuleSchema = z
+  .object({
+    name: z.string().optional(),
+    when: recordSchema,
+    profile: z.string().min(1)
+  })
+  .strict();
+
+const publicRoutingSchema = z
+  .object({
+    mode: z.literal("hybrid").optional(),
+    fallback: z.enum(["default", "activeProfile", "ask", "block"]).optional(),
+    rules: z.array(routingRuleSchema).optional()
+  })
+  .strict();
+
+const routingSchema = z
+  .object({
+    mode: unsupportedOptionSchema,
+    fallback: z.enum(["default", "activeProfile", "ask", "block"]).optional(),
+    rules: z.array(routingRuleSchema).optional(),
+    plugins: unsupportedOptionSchema
+  })
+  .strict();
+
+const publicSecuritySchema = z
+  .object({
+    allowPlaintextSecrets: z.boolean().optional(),
+    redactSecrets: z.literal(true).optional(),
+    allowProfileSwitchingFromMcp: z.boolean().optional(),
+    requireExplicitProfileForDestructive: z.boolean().optional(),
+    lockToProfile: z.string().nullable().optional()
+  })
+  .strict();
+
+const securitySchema = z
+  .object({
+    allowPlaintextSecrets: z.boolean().optional(),
+    redactSecrets: z.boolean().optional(),
+    allowProfileSwitchingFromMcp: z.boolean().optional(),
+    requireProfileSwitchConfirmation: unsupportedOptionSchema,
+    requireExplicitProfileForDestructive: z.boolean().optional(),
+    lockToProfile: z.string().nullable().optional()
+  })
+  .strict();
+
+const publicProcessSchema = z.object({ startupTimeoutMs: z.number().int().positive().optional() }).strict();
+const processSchema = z
+  .object({
+    startMode: unsupportedOptionSchema,
+    cache: unsupportedOptionSchema,
+    idleTimeoutMs: unsupportedOptionSchema,
+    restartOnCrash: unsupportedOptionSchema,
+    maxRestarts: unsupportedOptionSchema,
+    startupTimeoutMs: z.number().int().positive().optional(),
+    shutdownTimeoutMs: unsupportedOptionSchema,
+    maxConcurrentProfiles: unsupportedOptionSchema
+  })
+  .strict();
+
+const publicAuditSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    path: z.string().optional(),
+    format: z.literal("jsonl").optional(),
+    includeArguments: z.boolean().optional(),
+    redact: z.literal(true).optional()
+  })
+  .strict();
+
+const auditSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    path: z.string().optional(),
+    format: z.literal("jsonl").optional(),
+    includeArguments: z.boolean().optional(),
+    redact: z.boolean().optional()
+  })
+  .strict();
+
+const publicToolingSchema = z
+  .object({
+    collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
+    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
+  })
+  .strict();
+
+const toolingSchema = z
+  .object({
+    managementToolPrefix: unsupportedOptionSchema,
+    upstreamToolNamespace: unsupportedOptionSchema,
+    collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
+    toolDiscoveryMode: unsupportedOptionSchema,
+    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
+  })
+  .strict();
+
+const secretsSchema = z
+  .object({
+    envFiles: z.array(z.string()).optional(),
+    allowPlaintextSecrets: z.boolean().optional()
+  })
+  .strict();
+
+const stateSchema = z
+  .object({
+    persistActiveProfile: unsupportedOptionSchema,
+    path: unsupportedOptionSchema
+  })
+  .strict();
+
+type ConfigReferenceInput = {
+  defaultProfile: string;
+  upstream?: unknown;
+  upstreams?: Record<string, unknown>;
+  profiles: Record<string, { policy?: string; upstreams?: Record<string, unknown> }>;
+  routing?: { rules?: { profile: string }[] };
+  policies?: Record<string, unknown>;
+  security?: { lockToProfile?: string | null };
+};
+
+type ConfigIssueCode =
+  | "CONFIG_SCHEMA_INVALID"
+  | "DEFAULT_PROFILE_NOT_FOUND"
+  | "POLICY_NOT_FOUND"
+  | "ROUTING_PROFILE_NOT_FOUND"
+  | "LOCK_PROFILE_NOT_FOUND"
+  | "UPSTREAM_NOT_FOUND"
+  | "UNSUPPORTED_CONFIG_OPTION";
+
+function addConfigIssue(
+  context: z.RefinementCtx,
+  code: ConfigIssueCode,
+  path: (string | number)[],
+  explanation: string,
+  remediation: string
+): void {
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path,
+    params: { miftahCode: code, remediation },
+    message: `${code}: ${explanation}`
+  });
+}
+
+function validateConfigReferences(value: ConfigReferenceInput, context: z.RefinementCtx): void {
+  if (!value.upstream && !value.upstreams) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["upstream"],
+      "config requires upstream or upstreams",
+      "Configure either `upstream` or `upstreams`."
+    );
+  }
+  if (value.upstream && value.upstreams) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["upstream"],
+      "choose upstream or upstreams, not both",
+      "Configure either `upstream` or `upstreams`, not both."
+    );
+  }
+
+  const profileNames = new Set(Object.keys(value.profiles));
+  const policyNames = new Set(Object.keys(value.policies ?? {}));
+  const upstreamNames = new Set(Object.keys(value.upstreams ?? {}));
+  if (!profileNames.has(value.defaultProfile)) {
+    addConfigIssue(
+      context,
+      "DEFAULT_PROFILE_NOT_FOUND",
+      ["defaultProfile"],
+      `profile '${value.defaultProfile}' does not exist`,
+      "Choose a profile name defined under `profiles`."
+    );
+  }
+
+  for (const [profileName, profile] of Object.entries(value.profiles)) {
+    if (profile.policy !== undefined && !policyNames.has(profile.policy)) {
+      addConfigIssue(
+        context,
+        "POLICY_NOT_FOUND",
+        ["profiles", profileName, "policy"],
+        `policy '${profile.policy}' does not exist`,
+        "Choose a policy name defined under `policies`."
+      );
+    }
+    for (const upstreamName of Object.keys(profile.upstreams ?? {})) {
+      if (!upstreamNames.has(upstreamName)) {
+        addConfigIssue(
+          context,
+          "UPSTREAM_NOT_FOUND",
+          ["profiles", profileName, "upstreams", upstreamName],
+          `upstream '${upstreamName}' does not exist`,
+          "Choose an upstream name defined under `upstreams` or remove the override."
+        );
+      }
+    }
+  }
+
+  for (const [ruleIndex, rule] of (value.routing?.rules ?? []).entries()) {
+    if (!profileNames.has(rule.profile)) {
+      addConfigIssue(
+        context,
+        "ROUTING_PROFILE_NOT_FOUND",
+        ["routing", "rules", ruleIndex, "profile"],
+        `profile '${rule.profile}' does not exist`,
+        "Choose a profile name defined under `profiles`."
+      );
+    }
+  }
+
+  if (value.security?.lockToProfile !== undefined && value.security.lockToProfile !== null) {
+    if (!profileNames.has(value.security.lockToProfile)) {
+      addConfigIssue(
+        context,
+        "LOCK_PROFILE_NOT_FOUND",
+        ["security", "lockToProfile"],
+        `profile '${value.security.lockToProfile}' does not exist`,
+        "Choose a profile name defined under `profiles`."
+      );
+    }
+  }
+}
+
+/** The strict, supported configuration surface used for runtime output and JSON Schema generation. */
+export const miftahPublicConfigSchema = z
   .object({
     version: z.literal("1"),
     name: z.string().min(1),
@@ -63,96 +318,53 @@ export const miftahConfigSchema = z
     defaultProfile: z.string().min(1),
     upstream: upstreamSchema.optional(),
     upstreams: z.record(z.string(), upstreamSchema).optional(),
-    profiles: z.record(z.string(), profileSchema),
-    routing: z
-      .object({
-        mode: unsupportedOptionSchema,
-        fallback: z.enum(["default", "activeProfile", "ask", "block"]).optional(),
-        rules: z
-          .array(z.object({ name: z.string().optional(), when: recordSchema, profile: z.string().min(1) }))
-          .optional(),
-        plugins: unsupportedOptionSchema
-      })
-      .optional(),
+    profiles: z.record(z.string(), publicProfileSchema),
+    routing: publicRoutingSchema.optional(),
     policies: z.record(z.string(), policySchema).optional(),
-    security: z
-      .object({
-        allowPlaintextSecrets: z.boolean().optional(),
-        redactSecrets: z.boolean().optional(),
-        allowProfileSwitchingFromMcp: z.boolean().optional(),
-        requireProfileSwitchConfirmation: unsupportedOptionSchema,
-        requireExplicitProfileForDestructive: z.boolean().optional(),
-        lockToProfile: z.string().nullable().optional()
-      })
-      .optional(),
-    process: z
-      .object({
-        startMode: z.unknown().optional(),
-        cache: z.unknown().optional(),
-        idleTimeoutMs: z.unknown().optional(),
-        restartOnCrash: z.unknown().optional(),
-        maxRestarts: z.unknown().optional(),
-        startupTimeoutMs: z.number().int().positive().optional(),
-        shutdownTimeoutMs: z.unknown().optional(),
-        maxConcurrentProfiles: z.unknown().optional()
-      })
-      .optional(),
-    audit: z
-      .object({
-        enabled: z.boolean().optional(),
-        path: z.string().optional(),
-        format: z.literal("jsonl").optional(),
-        includeArguments: z.boolean().optional(),
-        redact: z.boolean().optional()
-      })
-      .optional(),
-    tooling: z
-      .object({
-        managementToolPrefix: unsupportedOptionSchema,
-        upstreamToolNamespace: unsupportedOptionSchema,
-        collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
-        toolDiscoveryMode: unsupportedOptionSchema,
-        toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
-      })
-      .optional(),
-    secrets: z.object({ envFiles: z.array(z.string()).optional(), allowPlaintextSecrets: z.boolean().optional() }).optional(),
-    state: z.object({ persistActiveProfile: unsupportedOptionSchema, path: unsupportedOptionSchema }).optional(),
+    security: publicSecuritySchema.optional(),
+    process: publicProcessSchema.optional(),
+    audit: publicAuditSchema.optional(),
+    tooling: publicToolingSchema.optional(),
+    secrets: secretsSchema.optional()
+  })
+  .strict()
+  .superRefine(validateConfigReferences);
+
+/** Zod schema for validating accepted compatibility declarations before normalizing to the public contract. */
+export const miftahConfigSchema = z
+  .object({
+    version: configVersionSchema,
+    name: z.string().min(1),
+    description: z.string().optional(),
+    defaultProfile: z.string().min(1),
+    upstream: upstreamSchema.optional(),
+    upstreams: z.record(z.string(), upstreamSchema).optional(),
+    profiles: z.record(z.string(), profileSchema),
+    routing: routingSchema.optional(),
+    policies: z.record(z.string(), policySchema).optional(),
+    security: securitySchema.optional(),
+    process: processSchema.optional(),
+    audit: auditSchema.optional(),
+    tooling: toolingSchema.optional(),
+    secrets: secretsSchema.optional(),
+    state: stateSchema.optional(),
     ui: unsupportedOptionSchema
   })
+  .strict()
   .superRefine((value, context) => {
+    validateConfigReferences(value, context);
+
     const rejectUnsupportedOption = (path: (string | number)[], explanation: string): void => {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
+      addConfigIssue(
+        context,
+        "UNSUPPORTED_CONFIG_OPTION",
         path,
-        params: { miftahCode: "UNSUPPORTED_CONFIG_OPTION" },
-        message: `UNSUPPORTED_CONFIG_OPTION: ${explanation}`
-      });
+        explanation,
+        "Remove this option or use a supported alternative from `miftah schema`."
+      );
     };
 
-    if (!value.upstream && !value.upstreams) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["upstream"], message: "config requires upstream or upstreams" });
-    }
-    if (value.upstream && value.upstreams) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["upstream"], message: "choose upstream or upstreams, not both" });
-    }
-    if (!value.profiles[value.defaultProfile]) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["defaultProfile"],
-        params: { miftahCode: "DEFAULT_PROFILE_NOT_FOUND" },
-        message: `DEFAULT_PROFILE_NOT_FOUND: profile '${value.defaultProfile}' does not exist`
-      });
-    }
-    const policyNames = new Set(Object.keys(value.policies ?? {}));
     for (const [profileName, profile] of Object.entries(value.profiles)) {
-      if (profile.policy !== undefined && !policyNames.has(profile.policy)) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileName, "policy"],
-          params: { miftahCode: "POLICY_NOT_FOUND" },
-          message: `POLICY_NOT_FOUND: policy '${profile.policy}' does not exist`
-        });
-      }
       if (profile.metadata !== undefined) {
         rejectUnsupportedOption(
           ["profiles", profileName, "metadata"],
@@ -224,9 +436,14 @@ export const miftahConfigSchema = z
       }
     }
 
-    for (const option of ["persistActiveProfile", "path"] as const) {
-      if (value.state?.[option] !== undefined) {
-        rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
+    const stateOptions = ["persistActiveProfile", "path"] as const;
+    if (value.state !== undefined && stateOptions.every((option) => value.state?.[option] === undefined)) {
+      rejectUnsupportedOption(["state"], "persistent profile state is not implemented");
+    } else {
+      for (const option of stateOptions) {
+        if (value.state?.[option] !== undefined) {
+          rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
+        }
       }
     }
     if (value.ui !== undefined) {

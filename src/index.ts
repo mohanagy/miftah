@@ -1,4 +1,5 @@
 export * from "./config/types.js";
+export type { ConfigDiagnostic } from "./config/diagnostics.js";
 export { loadConfig } from "./config/load-config.js";
 export { validateConfig } from "./config/validate-config.js";
 export { generateConfigSchema } from "./config/generate-json-schema.js";
@@ -12,3 +13,4 @@ export { UpstreamProcessManager } from "./upstream/upstream-process-manager.js";
 export { UpstreamSession } from "./upstream/upstream-session.js";
 export { MiftahServer } from "./mcp/server/miftah-server.js";
 export { MiftahError } from "./utils/errors.js";
+export type { MiftahErrorDetails } from "./utils/errors.js";
