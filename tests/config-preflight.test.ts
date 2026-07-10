@@ -65,4 +65,40 @@ describe("configuration preflight", () => {
       await runtime.manager.close();
     }
   });
+
+  it("resolves dotenv-backed credentials for named upstreams before startup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-named-upstream-"));
+    const configPath = join(directory, "miftah.json");
+    await writeFile(join(directory, ".env"), "ACCOUNT=named-upstream\nAUTHORIZATION=Bearer named-upstream\n");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "1",
+        name: "named-upstream",
+        defaultProfile: "default",
+        upstreams: {
+          primary: {
+            transport: "stdio",
+            command: process.execPath,
+            args: [fixture],
+            env: { TEST_ACCOUNT_NAME: "secretref:dotenv://ACCOUNT" },
+            headers: { Authorization: "secretref:dotenv://AUTHORIZATION" }
+          }
+        },
+        profiles: { default: {} },
+        secrets: { envFiles: [".env"] }
+      })
+    );
+
+    const runtime = await createRuntime(configPath);
+    try {
+      expect(runtime.config.upstreams?.primary?.headers).toEqual({ Authorization: "Bearer named-upstream" });
+      const session = await runtime.manager.get("default", "primary");
+      await expect(session.callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: "named-upstream" }]
+      });
+    } finally {
+      await runtime.manager.close();
+    }
+  });
 });

@@ -34,7 +34,19 @@ export async function createRuntime(configPath: string) {
       }
     ])
   );
-  const resolvedConfig = { ...config, profiles };
+  const upstreams = config.upstreams
+    ? Object.fromEntries(
+        Object.entries(config.upstreams).map(([name, upstream]) => [
+          name,
+          {
+            ...upstream,
+            env: upstream.env ? resolver.resolveMap(upstream.env) : undefined,
+            headers: upstream.headers ? resolver.resolveMap(upstream.headers) : undefined
+          }
+        ])
+      )
+    : config.upstreams;
+  const resolvedConfig = { ...config, profiles, upstreams };
   const upstream = resolvedConfig.upstream
     ? {
         ...resolvedConfig.upstream,
