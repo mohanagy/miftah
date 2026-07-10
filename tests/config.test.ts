@@ -43,35 +43,35 @@ describe("config foundation", () => {
     ).toThrow(/MISSING_TOKEN/);
   });
 
-  it("rejects profiles that reference unknown named policies", () => {
-    expect(() =>
-      validateConfig({
-        version: "1",
-        name: "github",
-        defaultProfile: "work",
-        upstream: { transport: "stdio", command: "node" },
-        policies: {
-          readonly: { allowRisk: ["read"] }
-        },
-        profiles: {
-          work: { policy: "missing-policy" }
-        }
-      })
-    ).toThrow(policyNotFoundPattern);
-  });
+  it.each([
+    ["missing-policy", { readonly: { allowRisk: ["read"] } }],
+    ["", undefined]
+  ])("rejects an undefined policy reference with contextual diagnostics", (policy, policies) => {
+    let thrown: unknown;
 
-  it("rejects profiles whose empty policy reference is not defined", () => {
-    expect(() =>
+    try {
       validateConfig({
         version: "1",
         name: "github",
         defaultProfile: "work",
         upstream: { transport: "stdio", command: "node" },
+        policies,
         profiles: {
-          work: { policy: "" }
+          work: { policy }
         }
-      })
-    ).toThrow(policyNotFoundPattern);
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    if (!(thrown instanceof MiftahError)) {
+      throw new Error("Expected a MiftahError for an undefined policy reference");
+    }
+    expect(thrown.code).toBe("POLICY_NOT_FOUND");
+    expect(thrown.message).toMatch(policyNotFoundPattern);
+    expect(thrown.message).toContain("profiles.work.policy");
+    expect(thrown.message).toContain(`policy '${policy}'`);
   });
 
   it("does not derive the error code from user-controlled policy names", () => {
