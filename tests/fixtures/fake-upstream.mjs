@@ -53,17 +53,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return { content: [{ type: "text", text: `created:${String(request.params.arguments?.name ?? "")}` }] };
 });
 
-server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-  resources: [{ uri: "account://current", name: "Current account", mimeType: "text/plain" }]
-}));
+server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  if (process.env.TEST_FAIL_LIST_RESOURCES === "true") {
+    throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
+  }
+  return {
+    resources: [{ uri: "account://current", name: "Current account", mimeType: "text/plain" }]
+  };
+});
 
 server.setRequestHandler(ReadResourceRequestSchema, async () => ({
   contents: [{ uri: "account://current", text: account, mimeType: "text/plain" }]
 }));
 
-server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-  prompts: [{ name: "account_prompt", description: "Account prompt" }]
-}));
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  if (process.env.TEST_FAIL_LIST_PROMPTS === "true") {
+    throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
+  }
+  return {
+    prompts: [{ name: "account_prompt", description: "Account prompt" }]
+  };
+});
 
 server.setRequestHandler(GetPromptRequestSchema, async () => ({
   description: "Account prompt",

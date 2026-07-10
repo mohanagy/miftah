@@ -150,8 +150,15 @@ export class MiftahServer {
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
       this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-        const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-        return session.listResources();
+        try {
+          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
+          return await session.listResources();
+        } catch (error) {
+          throw new Error(
+            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
+            { cause: error }
+          );
+        }
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
@@ -167,8 +174,15 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
-        const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-        return session.listPrompts();
+        try {
+          const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
+          return await session.listPrompts();
+        } catch (error) {
+          throw new Error(
+            redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues()),
+            { cause: error }
+          );
+        }
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {

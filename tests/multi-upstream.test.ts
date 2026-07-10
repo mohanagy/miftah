@@ -179,6 +179,52 @@ describe("multi-upstream wrapper", () => {
     }
   });
 
+  it("redacts secrets from upstream resource and prompt discovery failures", async () => {
+    const secret = "resource-list-secret";
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                API_TOKEN: secret,
+                TEST_FAIL_LIST_RESOURCES: "true",
+                TEST_FAIL_LIST_PROMPTS: "true"
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const errors = await Promise.all(
+        [() => client.listResources(), () => client.listPrompts()].map((list) => list().catch((error: unknown) => error))
+      );
+      const messages = errors.map((error) => {
+        expect(error).toBeInstanceOf(Error);
+        return (error as Error).message;
+      });
+      expect(messages).toEqual([expect.stringContaining("[REDACTED]"), expect.stringContaining("[REDACTED]")]);
+      expect(messages).toEqual([expect.not.stringContaining(secret), expect.not.stringContaining(secret)]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("rejects omitted upstream selection when multiple upstreams are configured", () => {
     const config = validateConfig({
       version: "1",
