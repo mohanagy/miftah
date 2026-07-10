@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const recordSchema = z.record(z.string(), z.unknown());
+const unsupportedOptionSchema = z.unknown().optional();
 
 const upstreamBaseSchema = z.object({
   transport: z.enum(["stdio", "http", "sse", "streamable-http"]),
@@ -22,6 +23,16 @@ const upstreamSchema = upstreamBaseSchema
     }
   });
 
+const profileUpstreamOverrideSchema = z.object({
+  transport: unsupportedOptionSchema,
+  command: unsupportedOptionSchema,
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  cwd: z.string().optional(),
+  url: unsupportedOptionSchema,
+  headers: z.record(z.string(), z.string()).optional()
+});
+
 const profileSchema = z.object({
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -29,10 +40,10 @@ const profileSchema = z.object({
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  metadata: recordSchema.optional(),
+  metadata: unsupportedOptionSchema,
   policy: z.string().optional(),
-  routing: z.object({ match: recordSchema.optional() }).optional(),
-  upstreams: z.record(z.string(), upstreamBaseSchema.partial()).optional()
+  routing: z.object({ match: unsupportedOptionSchema }).optional(),
+  upstreams: z.record(z.string(), profileUpstreamOverrideSchema).optional()
 });
 
 const policySchema = z.object({
@@ -55,12 +66,12 @@ export const miftahConfigSchema = z
     profiles: z.record(z.string(), profileSchema),
     routing: z
       .object({
-        mode: z.enum(["active", "rules", "hybrid"]).optional(),
+        mode: unsupportedOptionSchema,
         fallback: z.enum(["default", "activeProfile", "ask", "block"]).optional(),
         rules: z
           .array(z.object({ name: z.string().optional(), when: recordSchema, profile: z.string().min(1) }))
           .optional(),
-        plugins: z.array(z.string()).optional()
+        plugins: unsupportedOptionSchema
       })
       .optional(),
     policies: z.record(z.string(), policySchema).optional(),
@@ -69,21 +80,21 @@ export const miftahConfigSchema = z
         allowPlaintextSecrets: z.boolean().optional(),
         redactSecrets: z.boolean().optional(),
         allowProfileSwitchingFromMcp: z.boolean().optional(),
-        requireProfileSwitchConfirmation: z.boolean().optional(),
+        requireProfileSwitchConfirmation: unsupportedOptionSchema,
         requireExplicitProfileForDestructive: z.boolean().optional(),
         lockToProfile: z.string().nullable().optional()
       })
       .optional(),
     process: z
       .object({
-        startMode: z.enum(["lazy", "eager"]).optional(),
-        cache: z.boolean().optional(),
-        idleTimeoutMs: z.number().int().nonnegative().optional(),
-        restartOnCrash: z.boolean().optional(),
-        maxRestarts: z.number().int().nonnegative().optional(),
+        startMode: z.unknown().optional(),
+        cache: z.unknown().optional(),
+        idleTimeoutMs: z.unknown().optional(),
+        restartOnCrash: z.unknown().optional(),
+        maxRestarts: z.unknown().optional(),
         startupTimeoutMs: z.number().int().positive().optional(),
-        shutdownTimeoutMs: z.number().int().positive().optional(),
-        maxConcurrentProfiles: z.number().int().positive().optional()
+        shutdownTimeoutMs: z.unknown().optional(),
+        maxConcurrentProfiles: z.unknown().optional()
       })
       .optional(),
     audit: z
@@ -97,20 +108,27 @@ export const miftahConfigSchema = z
       .optional(),
     tooling: z
       .object({
-        managementToolPrefix: z.string().optional(),
-        upstreamToolNamespace: z.enum(["none", "wrapperName", "profile", "both", "upstreamName"]).optional(),
+        managementToolPrefix: unsupportedOptionSchema,
+        upstreamToolNamespace: unsupportedOptionSchema,
         collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
-        toolDiscoveryMode: z
-          .enum(["defaultProfile", "allProfilesStrict", "allProfilesUnion", "allProfilesIntersection"])
-          .optional(),
+        toolDiscoveryMode: unsupportedOptionSchema,
         toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
       })
       .optional(),
     secrets: z.object({ envFiles: z.array(z.string()).optional(), allowPlaintextSecrets: z.boolean().optional() }).optional(),
-    state: z.object({ persistActiveProfile: z.boolean().optional(), path: z.string().optional() }).optional(),
-    ui: recordSchema.optional()
+    state: z.object({ persistActiveProfile: unsupportedOptionSchema, path: unsupportedOptionSchema }).optional(),
+    ui: unsupportedOptionSchema
   })
   .superRefine((value, context) => {
+    const rejectUnsupportedOption = (path: (string | number)[], explanation: string): void => {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        params: { miftahCode: "UNSUPPORTED_CONFIG_OPTION" },
+        message: `UNSUPPORTED_CONFIG_OPTION: ${explanation}`
+      });
+    };
+
     if (!value.upstream && !value.upstreams) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["upstream"], message: "config requires upstream or upstreams" });
     }
@@ -135,6 +153,84 @@ export const miftahConfigSchema = z
           message: `POLICY_NOT_FOUND: policy '${profile.policy}' does not exist`
         });
       }
+      if (profile.metadata !== undefined) {
+        rejectUnsupportedOption(
+          ["profiles", profileName, "metadata"],
+          "profile metadata has no runtime consumer; remove it or store it outside the Miftah config"
+        );
+      }
+      if (profile.routing?.match !== undefined) {
+        rejectUnsupportedOption(
+          ["profiles", profileName, "routing", "match"],
+          "profile routing matchers are not implemented; use routing.rules instead"
+        );
+      }
+      for (const [upstreamName, override] of Object.entries(profile.upstreams ?? {})) {
+        for (const option of ["transport", "command", "url"] as const) {
+          if (override[option] !== undefined) {
+            rejectUnsupportedOption(
+              ["profiles", profileName, "upstreams", upstreamName, option],
+              `per-profile upstream '${option}' overrides are not implemented; only args, env, cwd, and headers may vary by profile`
+            );
+          }
+        }
+      }
+    }
+
+    if (value.routing?.mode !== undefined && value.routing.mode !== "hybrid") {
+      rejectUnsupportedOption(
+        ["routing", "mode"],
+        "only the existing hybrid routing behavior is supported; active and rules modes are not implemented"
+      );
+    }
+    if (value.routing?.plugins !== undefined) {
+      rejectUnsupportedOption(["routing", "plugins"], "routing plugins are not implemented");
+    }
+
+    for (const option of [
+      "startMode",
+      "cache",
+      "idleTimeoutMs",
+      "restartOnCrash",
+      "maxRestarts",
+      "shutdownTimeoutMs",
+      "maxConcurrentProfiles"
+    ] as const) {
+      if (value.process?.[option] !== undefined) {
+        rejectUnsupportedOption(
+          ["process", option],
+          `${option} is not implemented; only process.startupTimeoutMs currently changes runtime behavior`
+        );
+      }
+    }
+
+    if (value.security?.requireProfileSwitchConfirmation !== undefined) {
+      rejectUnsupportedOption(
+        ["security", "requireProfileSwitchConfirmation"],
+        "profile switch confirmation is not implemented; use allowProfileSwitchingFromMcp or lockToProfile"
+      );
+    }
+    if (value.security?.redactSecrets === false) {
+      rejectUnsupportedOption(["security", "redactSecrets"], "secret redaction is always enabled and cannot be disabled");
+    }
+
+    if (value.audit?.redact === false) {
+      rejectUnsupportedOption(["audit", "redact"], "audit redaction is always enabled and cannot be disabled");
+    }
+
+    for (const option of ["managementToolPrefix", "upstreamToolNamespace", "toolDiscoveryMode"] as const) {
+      if (value.tooling?.[option] !== undefined) {
+        rejectUnsupportedOption(["tooling", option], `${option} is not implemented`);
+      }
+    }
+
+    for (const option of ["persistActiveProfile", "path"] as const) {
+      if (value.state?.[option] !== undefined) {
+        rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
+      }
+    }
+    if (value.ui !== undefined) {
+      rejectUnsupportedOption(["ui"], "a Miftah UI is not implemented");
     }
   });
 

@@ -32,4 +32,24 @@ describe("upstream process manager", () => {
 
     await manager.close();
   });
+
+  it("keeps the default startup timeout when an undefined option is supplied", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } }
+      },
+      { startupTimeoutMs: undefined }
+    );
+
+    try {
+      expect((await (await manager.get("work")).listTools()).tools.map((tool) => tool.name)).toContain("whoami");
+    } finally {
+      await manager.close();
+    }
+  });
 });

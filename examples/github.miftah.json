@@ -74,9 +74,6 @@
     "requireExplicitProfileForDestructive": true
   },
   "process": {
-    "startMode": "lazy",
-    "cache": true,
-    "restartOnCrash": true,
     "startupTimeoutMs": 30000
   },
   "audit": {
@@ -87,8 +84,6 @@
     "redact": true
   },
   "tooling": {
-    "managementToolPrefix": "miftah_",
-    "collisionStrategy": "prefix-upstream",
-    "toolDiscoveryMode": "defaultProfile"
+    "collisionStrategy": "prefix-upstream"
   }
 }
