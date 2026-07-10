@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const recordSchema = z.record(z.string(), z.unknown());
+const unsupportedOptionSchema = z.unknown().optional();
 
 const upstreamBaseSchema = z.object({
   transport: z.enum(["stdio", "http", "sse", "streamable-http"]),
@@ -22,6 +23,16 @@ const upstreamSchema = upstreamBaseSchema
     }
   });
 
+const profileUpstreamOverrideSchema = z.object({
+  transport: unsupportedOptionSchema,
+  command: unsupportedOptionSchema,
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  cwd: z.string().optional(),
+  url: unsupportedOptionSchema,
+  headers: z.record(z.string(), z.string()).optional()
+});
+
 const profileSchema = z.object({
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -29,10 +40,10 @@ const profileSchema = z.object({
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  metadata: recordSchema.optional(),
+  metadata: unsupportedOptionSchema,
   policy: z.string().optional(),
-  routing: z.object({ match: recordSchema.optional() }).optional(),
-  upstreams: z.record(z.string(), upstreamBaseSchema.partial()).optional()
+  routing: z.object({ match: unsupportedOptionSchema }).optional(),
+  upstreams: z.record(z.string(), profileUpstreamOverrideSchema).optional()
 });
 
 const policySchema = z.object({
@@ -55,12 +66,12 @@ export const miftahConfigSchema = z
     profiles: z.record(z.string(), profileSchema),
     routing: z
       .object({
-        mode: z.enum(["active", "rules", "hybrid"]).optional(),
+        mode: unsupportedOptionSchema,
         fallback: z.enum(["default", "activeProfile", "ask", "block"]).optional(),
         rules: z
           .array(z.object({ name: z.string().optional(), when: recordSchema, profile: z.string().min(1) }))
           .optional(),
-        plugins: z.array(z.string()).optional()
+        plugins: unsupportedOptionSchema
       })
       .optional(),
     policies: z.record(z.string(), policySchema).optional(),
@@ -69,7 +80,7 @@ export const miftahConfigSchema = z
         allowPlaintextSecrets: z.boolean().optional(),
         redactSecrets: z.boolean().optional(),
         allowProfileSwitchingFromMcp: z.boolean().optional(),
-        requireProfileSwitchConfirmation: z.boolean().optional(),
+        requireProfileSwitchConfirmation: unsupportedOptionSchema,
         requireExplicitProfileForDestructive: z.boolean().optional(),
         lockToProfile: z.string().nullable().optional()
       })
@@ -97,18 +108,16 @@ export const miftahConfigSchema = z
       .optional(),
     tooling: z
       .object({
-        managementToolPrefix: z.string().optional(),
-        upstreamToolNamespace: z.enum(["none", "wrapperName", "profile", "both", "upstreamName"]).optional(),
+        managementToolPrefix: unsupportedOptionSchema,
+        upstreamToolNamespace: unsupportedOptionSchema,
         collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
-        toolDiscoveryMode: z
-          .enum(["defaultProfile", "allProfilesStrict", "allProfilesUnion", "allProfilesIntersection"])
-          .optional(),
+        toolDiscoveryMode: unsupportedOptionSchema,
         toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
       })
       .optional(),
     secrets: z.object({ envFiles: z.array(z.string()).optional(), allowPlaintextSecrets: z.boolean().optional() }).optional(),
-    state: z.object({ persistActiveProfile: z.boolean().optional(), path: z.string().optional() }).optional(),
-    ui: recordSchema.optional()
+    state: z.object({ persistActiveProfile: unsupportedOptionSchema, path: unsupportedOptionSchema }).optional(),
+    ui: unsupportedOptionSchema
   })
   .superRefine((value, context) => {
     const rejectUnsupportedOption = (path: (string | number)[], explanation: string): void => {

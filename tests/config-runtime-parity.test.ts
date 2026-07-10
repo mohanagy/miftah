@@ -47,30 +47,53 @@ describe("config runtime parity", () => {
     ["process.maxConcurrentProfiles", { process: { maxConcurrentProfiles: 1 } }],
     ["routing.mode", { routing: { mode: "active" } }],
     ["routing.mode", { routing: { mode: "rules" } }],
+    ["routing.mode", { routing: { mode: true } }],
     ["routing.plugins", { routing: { plugins: [] } }],
+    ["routing.plugins", { routing: { plugins: {} } }],
     ["profiles.default.metadata", { profiles: { default: { metadata: { owner: "team" } } } }],
+    ["profiles.default.metadata", { profiles: { default: { metadata: "team" } } }],
     ["profiles.default.routing.match", { profiles: { default: { routing: { match: { repo: "acme/miftah" } } } } }],
+    ["profiles.default.routing.match", { profiles: { default: { routing: { match: "acme/miftah" } } } }],
     [
       "profiles.default.upstreams.primary.transport",
       { profiles: { default: { upstreams: { primary: { transport: "stdio" } } } } }
+    ],
+    [
+      "profiles.default.upstreams.primary.transport",
+      { profiles: { default: { upstreams: { primary: { transport: true } } } } }
     ],
     [
       "profiles.default.upstreams.primary.command",
       { profiles: { default: { upstreams: { primary: { command: "node" } } } } }
     ],
     [
+      "profiles.default.upstreams.primary.command",
+      { profiles: { default: { upstreams: { primary: { command: 1 } } } } }
+    ],
+    [
       "profiles.default.upstreams.primary.url",
       { profiles: { default: { upstreams: { primary: { url: "https://example.com/mcp" } } } } }
     ],
+    [
+      "profiles.default.upstreams.primary.url",
+      { profiles: { default: { upstreams: { primary: { url: false } } } } }
+    ],
     ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: true } }],
+    ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: "true" } }],
     ["security.redactSecrets", { security: { redactSecrets: false } }],
     ["audit.redact", { audit: { redact: false } }],
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: "safe_" } }],
+    ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: 1 } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: "profile" } }],
+    ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: true } }],
     ["tooling.toolDiscoveryMode", { tooling: { toolDiscoveryMode: "allProfilesUnion" } }],
+    ["tooling.toolDiscoveryMode", { tooling: { toolDiscoveryMode: {} } }],
     ["state.persistActiveProfile", { state: { persistActiveProfile: true } }],
+    ["state.persistActiveProfile", { state: { persistActiveProfile: "true" } }],
     ["state.path", { state: { path: ".miftah-state.json" } }],
-    ["ui", { ui: { enabled: true } }]
+    ["state.path", { state: { path: 1 } }],
+    ["ui", { ui: { enabled: true } }],
+    ["ui", { ui: "enabled" }]
   ])("rejects unsupported $0", (path, overrides) => {
     const error = validationError(baseConfig(overrides));
 
