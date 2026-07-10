@@ -41,6 +41,7 @@ describe("v0.1.1 release artifacts", () => {
     expect(notes).toMatch(/policy.*fails?\s+closed|fails?\s+closed.*policy/iu);
     expect(notes).toMatch(/redact/iu);
     expect(notes).toMatch(/GitHub.*preset|preset.*GitHub/iu);
+    expect(notes).toMatch(/configuration.*UNSUPPORTED_CONFIG_OPTION/iu);
     expect(notes).toMatch(/multi.upstream/iu);
     expect(readRepositoryFile("README.md")).toContain("experimental and pre-1.0");
   });
