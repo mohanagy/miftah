@@ -6,7 +6,11 @@ Miftah (`@lubab/miftah`) is a local MCP auth wrapper and credential broker for m
 
 Miftah is **not** a replacement for GitHub MCP, Sentry MCP, PostHog MCP, or any other provider MCP. It wraps them. The upstream server remains responsible for provider behavior; Miftah handles profile selection, secret injection, lifecycle, routing, policy, and redaction.
 
+> **Status:** Miftah is experimental and pre-1.0. Interfaces and security behavior may change between minor versions. See the [release policy](CHANGELOG.md#release-policy) and use the [private disclosure process](SECURITY.md) for vulnerabilities.
+
 ## Install
+
+For a published release:
 
 ```bash
 npm install -g @lubab/miftah
@@ -149,14 +153,17 @@ Use `miftah doctor` to inspect config and upstream readiness without printing pr
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/config.md)
 - [Security](docs/security.md)
+- [Security reporting](SECURITY.md)
 - [CLI](docs/cli.md)
 - [Claude Desktop](docs/claude-desktop.md)
 - [GitHub example](docs/examples/github.md)
 - [Sentry example](docs/examples/sentry.md)
+- [Changelog and release policy](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Current boundaries
 
-The current release implements local STDIO and remote HTTP/SSE upstream clients, profile switching, routing rules, policies, tools/resources/prompts proxying, process/session caching, redacted audit logging, and a publishable CLI. The configuration model reserves interfaces for multi-upstream account bundles, persisted state, and optional UI.
+The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching, routing rules, policies, tools/resources/prompts proxying, process/session caching, redacted audit logging, and a packageable CLI. The configuration model reserves interfaces for multi-upstream account bundles, persisted state, and optional UI.
 
 ## License
 

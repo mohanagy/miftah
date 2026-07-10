@@ -2,6 +2,22 @@
   "name": "@lubab/miftah",
   "version": "0.1.0",
   "description": "Wrap any MCP. Use the right account without reconnecting.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "credential-broker",
+    "multi-account",
+    "security",
+    "cli"
+  ],
+  "homepage": "https://github.com/mohanagy/miftah#readme",
+  "bugs": {
+    "url": "https://github.com/mohanagy/miftah/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohanagy/miftah.git"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +43,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -46,5 +63,9 @@
     "typescript-eslint": "^8.63.0",
     "vitest": "^3.2.4"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

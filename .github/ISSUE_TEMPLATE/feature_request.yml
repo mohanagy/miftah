@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a focused improvement and its security implications
+title: "feat: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep examples synthetic. Report vulnerabilities through the private path in SECURITY.md, not this form.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user need without embedding credentials or private infrastructure details.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful interface or workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy impact
+      description: Consider credential scope, redaction, routing ambiguity, audit data, and failure behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: This request contains no secrets or undisclosed vulnerability details.
+          required: true
