@@ -3,6 +3,8 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const checkoutPin = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
+const npmVersionComparisonPattern = /const npmIsCurrentEnough =\s*([\s\S]*?);\n\n\s+if \(Number/u;
+const reflectiveArrayMethodPattern = /\.(?:every|some|findIndex)\(/u;
 const setupNodePin = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
 
 function readRepositoryFile(path: string): string {
@@ -14,7 +16,7 @@ function actionReferences(workflow: string): string[] {
 }
 
 function npmVersionComparison(workflow: string): string {
-  const match = workflow.match(/const npmIsCurrentEnough =\s*([\s\S]*?);\n\n\s+if \(Number/u);
+  const match = workflow.match(npmVersionComparisonPattern);
   if (!match?.[1]) {
     throw new Error("Unable to find the npm version comparison.");
   }
@@ -104,7 +106,7 @@ describe("trusted publishing workflow contract", () => {
     const workflow = readRepositoryFile(".github/workflows/publish.yml");
     const comparison = npmVersionComparison(workflow);
 
-    expect(comparison).not.toMatch(/\.(?:every|some|findIndex)\(/u);
+    expect(comparison).not.toMatch(reflectiveArrayMethodPattern);
     expect(
       runInNewContext(comparison, {
         minimumNpm: [11, 5, 1],
