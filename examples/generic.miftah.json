@@ -1,23 +1,46 @@
 {
   "version": "1",
   "name": "generic",
-  "description": "Generic MCP wrapped by Miftah",
+  "description": "generic wrapped by Miftah",
   "defaultProfile": "default",
   "upstream": {
     "transport": "stdio",
     "command": "npx",
     "args": [
-      "-y",
-      "your-mcp-server"
+      "--yes",
+      "@modelcontextprotocol/server-everything@2026.7.4",
+      "stdio"
     ]
   },
   "profiles": {
     "default": {
+      "description": "Default account",
       "env": {}
     }
   },
+  "routing": {
+    "mode": "hybrid",
+    "fallback": "activeProfile",
+    "rules": []
+  },
   "security": {
     "allowPlaintextSecrets": false,
-    "redactSecrets": true
+    "redactSecrets": true,
+    "allowProfileSwitchingFromMcp": true,
+    "requireExplicitProfileForDestructive": true
+  },
+  "process": {
+    "startupTimeoutMs": 30000
+  },
+  "audit": {
+    "enabled": true,
+    "path": "~/.local/state/miftah/audit.jsonl",
+    "format": "jsonl",
+    "includeArguments": false,
+    "redact": true,
+    "failureMode": "fail-closed"
+  },
+  "tooling": {
+    "collisionStrategy": "prefix-upstream"
   }
 }
