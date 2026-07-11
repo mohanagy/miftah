@@ -2,7 +2,14 @@ import { MiftahError } from "../utils/errors.js";
 
 const environmentReference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-/** Expands references and returns the values sourced from the environment for diagnostic redaction. */
+/**
+ * Expands environment variable references in configuration values and collects their resolved values.
+ *
+ * @param values - Configuration values that may contain `${NAME}` references
+ * @param environment - Environment variables used to resolve references
+ * @returns The expanded values and the unique resolved environment values
+ * @throws `MiftahError` if a referenced environment variable is undefined
+ */
 export function expandEnvironmentReferencesWithSecretValues(
   values: Record<string, string>,
   environment: NodeJS.ProcessEnv = process.env
@@ -27,7 +34,13 @@ export function expandEnvironmentReferencesWithSecretValues(
   return { values: expandedValues, secretValues: [...secretValues] };
 }
 
-/** Expands environment references while retaining the established value-only public result. */
+/**
+ * Expands environment variable references in string values.
+ *
+ * @param values - Key-value pairs whose values may contain `${NAME}` references.
+ * @param environment - Environment variables used to resolve references.
+ * @returns The values with environment variable references replaced by their resolved values.
+ */
 export function expandEnvironmentReferences(
   values: Record<string, string>,
   environment: NodeJS.ProcessEnv = process.env
