@@ -71,12 +71,13 @@ describe("continuous integration workflow contract", () => {
     expect(workflow).toMatch(/verify:\s*\n\s+name: Verify[\s\S]*?needs: \[linux-quality, compatibility\]/u);
   });
 
-  it("defines portable core, CLI, and coverage verification scripts", () => {
+  it("defines portable core, package, CLI, and coverage verification scripts", () => {
     const scripts = readPackageScripts();
 
     expect(scripts["test:core"]).toContain("vitest run");
+    expect(scripts["test:package"]).toBe("vitest run tests/package-contract.test.ts");
     expect(scripts["smoke:cli"]).toBe("node dist/cli/main.js schema");
-    expect(scripts["test:cli"]).toContain("npm run build");
+    expect(scripts["test:cli"]).toContain("npm run test:package");
     expect(scripts["test:cli"]).toContain("npm run smoke:cli");
     expect(scripts["test:coverage"]).toContain("vitest run --coverage");
   });

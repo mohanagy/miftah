@@ -120,6 +120,12 @@ function runInstalledBinaryThroughPosixShell(binary: string, args: readonly stri
   });
 }
 
+function runInstalledBinaryThroughShell(binary: string, args: readonly string[], cwd: string) {
+  return process.platform === "win32"
+    ? runInstalledBinary(binary, args, cwd)
+    : runInstalledBinaryThroughPosixShell(binary, args, cwd);
+}
+
 async function loadPackVerifier(): Promise<PackVerifier> {
   // @ts-expect-error The production verifier is intentionally plain Node ESM.
   return import("../scripts/check-pack.mjs") as Promise<PackVerifier>;
@@ -472,23 +478,20 @@ describe("packed artifact contract", () => {
         }
 
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
-        const initialized =
-          process.platform === "win32"
-            ? runInstalledBinary(
-                binary,
-                ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
-                cliContractDirectory
-              )
-            : runInstalledBinaryThroughPosixShell(
-                binary,
-                ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
-                cliContractDirectory
-              );
+        const initialized = runInstalledBinaryThroughShell(
+          binary,
+          ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
+          cliContractDirectory
+        );
         expect(initialized.status, initialized.stderr || initialized.stdout).toBe(0);
         expect(initialized.stderr).toBe("");
         expect(initialized.stdout).toContain(initOutputPath);
         expect(JSON.parse(await readFile(initOutputPath, "utf8"))).toMatchObject({ name: "starter config with spaces" });
-        const validatedInit = runInstalledBinary(binary, ["validate", "--config", initOutputPath], cliContractDirectory);
+        const validatedInit = runInstalledBinaryThroughShell(
+          binary,
+          ["validate", "--config", initOutputPath],
+          cliContractDirectory
+        );
         expect(validatedInit.status, validatedInit.stderr || validatedInit.stdout).toBe(0);
         expect(validatedInit.stderr).toBe("");
         expect(JSON.parse(validatedInit.stdout)).toMatchObject({ ok: true, name: "starter config with spaces" });
@@ -654,7 +657,11 @@ describe("packed artifact contract", () => {
             }
           )
         );
-        const logs = runInstalledBinary(binary, ["logs", "--config", logsConfigPath], cliContractDirectory);
+        const logs = runInstalledBinaryThroughShell(
+          binary,
+          ["logs", "--config", logsConfigPath],
+          cliContractDirectory
+        );
         expect(logs.status, logs.stderr || logs.stdout).toBe(0);
         expect(logs.stderr).toBe("");
         for (const secret of ["username", "password", "uri-query-secret", "private-tenant", "non-default-profile-secret"]) {
