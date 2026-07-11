@@ -1,3 +1,4 @@
+import { truncateSync, writeFileSync } from "node:fs";
 import { access, appendFile, mkdir, rename, rm, truncate, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -197,6 +198,26 @@ describe("audit JSONL reader", () => {
     });
   });
 
+  it("replaces a complete invalid UTF-8 binary record with the fixed malformed marker", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      await writeFile(
+        auditPath,
+        Buffer.concat([Buffer.from('{"message":"'), Buffer.from([0xc3]), Buffer.from('"}\n')])
+      );
+      const output: string[] = [];
+
+      await readAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk)
+      });
+
+      expect(output.join("")).toBe(`${MALFORMED_AUDIT_RECORD}\n`);
+      expect(output.join("")).not.toContain("\uFFFD");
+    });
+  });
+
   it("retains a partial line until a later append completes it on the same file", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
@@ -303,6 +324,44 @@ describe("audit JSONL reader", () => {
         await waitFor(() => output.length === 2);
 
         expect(output.join("")).toBe('{"sequence":"before-truncate"}\n{"sequence":"after-truncate"}\n');
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
+  it("resets same-inode copytruncate state before reading an equal-or-larger replacement", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const initialContents = '{"generation":"old"}\n{"message":"stale-partial';
+      const replacementContents =
+        '{"generation":"replacement","padding":"this record is deliberately longer than the old cursor"}\n' +
+        '{"generation":"replacement-2","padding":"this second record keeps the rewrite larger too"}\n';
+      expect(Buffer.byteLength(replacementContents)).toBeGreaterThanOrEqual(Buffer.byteLength(initialContents));
+      await writeFile(auditPath, initialContents);
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs: 100
+      });
+      try {
+        await waitFor(() => output.length === 1);
+        truncateSync(auditPath, 0);
+        writeFileSync(auditPath, replacementContents);
+        await waitFor(() => output.length === 3, 2_000);
+
+        expect(output.join("")).toBe(
+          '{"generation":"old"}\n' +
+            '{"generation":"replacement","padding":"this record is deliberately longer than the old cursor"}\n' +
+            '{"generation":"replacement-2","padding":"this second record keeps the rewrite larger too"}\n'
+        );
+        expect(output.join("")).not.toContain("stale-partial");
+        expect(output).not.toContain(`${MALFORMED_AUDIT_RECORD}\n`);
       } finally {
         controller.abort();
         await follower;
