@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { presetConfig } from "../src/config/presets.js";
+import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahError } from "../src/utils/errors.js";
 
@@ -211,8 +211,17 @@ describe("config runtime parity", () => {
     expect(error.message).toContain("tooling.toolDiscoveryMode");
   });
 
-  it.each(["generic", "github", "sentry"])("keeps the %s generated preset valid", (preset) => {
-    expect(() => validateConfig(presetConfig("test", preset))).not.toThrow();
+  it.each([
+    ["generic", {}],
+    ["github", {}],
+    ["sentry", {}],
+    ["generic-npx", { npmPackage: "server@1.2.3" }],
+    ["generic-docker", {
+      dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }],
+    ["streamable-http", { url: "https://mcp.example.com" }]
+  ])("keeps the %s generated preset valid", (preset, options) => {
+    expect(() => validateConfig(buildPresetConfig("test", preset, options))).not.toThrow();
   });
 
   it.each(checkedInExamples)("keeps the checked-in %s example valid", (example) => {
