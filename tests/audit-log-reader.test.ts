@@ -1,4 +1,4 @@
-import { truncateSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, truncateSync, writeFileSync } from "node:fs";
 import {
   access,
   appendFile,
@@ -690,7 +690,12 @@ describe("audit JSONL reader", () => {
       });
       const rewriter = (async () => {
         while (keepRewriting) {
-          await writeFile(auditPath, replacementContents);
+          const replacementFile = openSync(auditPath, "r+");
+          try {
+            writeFileSync(replacementFile, replacementContents);
+          } finally {
+            closeSync(replacementFile);
+          }
           rewriteCount += 1;
           signalFirstRewrite();
           await delay(0);
