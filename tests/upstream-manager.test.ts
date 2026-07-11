@@ -347,8 +347,8 @@ describe("upstream process manager", () => {
         command: process.execPath,
         args: [fixture]
       },
-      { work: { env: { TEST_HANG_ON_START: "true" } }, personal: {} },
-      { startupTimeoutMs: 200, maxConcurrentProfiles: 1 }
+      { work: { env: { TEST_HANG_ON_START: "true" } } },
+      { startupTimeoutMs: 200 }
     );
     const startedAt = Date.now();
 
@@ -358,9 +358,34 @@ describe("upstream process manager", () => {
       await expect(startup).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
       expect(Date.now() - startedAt).toBeLessThan(500);
       expect(manager.listHealth()).toMatchObject([{ profile: "work", processState: "failed" }]);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("releases a profile capacity reservation after a failed startup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-failed-start-capacity-"));
+    const failurePath = join(directory, "fail");
+    await writeFile(failurePath, "fail");
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: { env: { TEST_CRASH_ON_CALL_TOOL_PATH: failurePath } },
+        personal: {}
+      },
+      { startupTimeoutMs: 1_000, maxConcurrentProfiles: 1 }
+    );
+
+    try {
+      await expect(manager.get("work")).rejects.toMatchObject({ code: "UPSTREAM_INIT_FAILED" });
       await expect((await manager.get("personal")).listTools()).resolves.toMatchObject({ tools: expect.any(Array) });
     } finally {
       await manager.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
