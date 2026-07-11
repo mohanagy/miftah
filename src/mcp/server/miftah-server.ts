@@ -168,6 +168,7 @@ export class MiftahServer {
   private mcpRootsInitialized = false;
   private readonly provideRoutingContext = async (): Promise<RoutingContextSnapshot> => {
     if (this.routingContextCollector === undefined) return emptyRoutingContext;
+    if (!this.mcpRootsInitialized) return this.routingContextCollector(EMPTY_MCP_ROOTS);
     await this.mcpRootsReady;
     return this.routingContextCollector(this.mcpRoots);
   };

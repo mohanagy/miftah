@@ -1,11 +1,13 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolResultSchema,
   ListRootsRequestSchema,
   RootsListChangedNotificationSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -67,6 +69,55 @@ function withoutMiftahProfile(): () => void {
     if (profile === undefined) delete process.env.MIFTAH_PROFILE;
     else process.env.MIFTAH_PROFILE = profile;
   };
+}
+
+class DropInitializedNotificationTransport implements Transport {
+  constructor(private readonly delegate: Transport) {}
+
+  get onclose(): Transport["onclose"] {
+    return this.delegate.onclose;
+  }
+
+  set onclose(handler: Transport["onclose"]) {
+    this.delegate.onclose = handler;
+  }
+
+  get onerror(): Transport["onerror"] {
+    return this.delegate.onerror;
+  }
+
+  set onerror(handler: Transport["onerror"]) {
+    this.delegate.onerror = handler;
+  }
+
+  get onmessage(): Transport["onmessage"] {
+    return this.delegate.onmessage;
+  }
+
+  set onmessage(handler: Transport["onmessage"]) {
+    this.delegate.onmessage = handler;
+  }
+
+  get sessionId(): string | undefined {
+    return this.delegate.sessionId;
+  }
+
+  get setProtocolVersion(): Transport["setProtocolVersion"] {
+    return this.delegate.setProtocolVersion;
+  }
+
+  async start(): Promise<void> {
+    await this.delegate.start();
+  }
+
+  async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    if ("method" in message && message.method === "notifications/initialized") return;
+    await this.delegate.send(message, options);
+  }
+
+  async close(): Promise<void> {
+    await this.delegate.close();
+  }
 }
 
 describe("Miftah MCP wrapper", () => {
@@ -822,6 +873,41 @@ describe("Miftah MCP wrapper", () => {
         content: [{ type: "text", text: "personal" }]
       });
       expect(rootRequests).toBe(1);
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("routes proxied calls with empty roots when the initialized notification is dropped", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const fixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "initialization-dropping-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let rootRequests = 0;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      return { roots: [{ uri: fixture.matchingRoot }] };
+    });
+
+    try {
+      await Promise.all([
+        runtime.connect(serverTransport),
+        client.connect(new DropInitializedNotificationTransport(clientTransport))
+      ]);
+
+      expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
+      expect(rootRequests).toBe(0);
+      expect(
+        await client.callTool({ name: "whoami", arguments: {} }, CallToolResultSchema, { timeout: 500 })
+      ).toMatchObject({ content: [{ type: "text", text: "work" }] });
+      expect(rootRequests).toBe(0);
     } finally {
       await client.close();
       await runtime.close();
