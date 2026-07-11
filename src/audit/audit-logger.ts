@@ -17,13 +17,16 @@ export class AuditLogger {
   }
 
   async log(event: AuditEvent): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const safeEvent = redactSecrets(
       !this.options.includeArguments
         ? { ...event, arguments: undefined }
         : event,
       this.options.secretValues ?? []
     );
-    await appendFile(this.path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...safeEvent })}\n`, "utf8");
+    await appendFile(this.path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...safeEvent })}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
   }
 }
