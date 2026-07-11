@@ -1,11 +1,13 @@
 import { truncateSync, writeFileSync } from "node:fs";
-import { access, appendFile, mkdir, rename, rm, truncate, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, open, rename, rm, truncate, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  AUDIT_READ_CHUNK_BYTES,
   MALFORMED_AUDIT_RECORD,
+  MAX_INCOMPLETE_AUDIT_RECORD_BYTES,
   followAuditJsonl,
   readAuditJsonl
 } from "../src/cli/audit-jsonl.js";
@@ -520,6 +522,184 @@ describe("audit JSONL reader", () => {
       } finally {
         controller.abort();
         await follower;
+      }
+    });
+  });
+
+  it("emits every record from a finite log substantially larger than the read chunk", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const records = Array.from(
+        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 3) / 48) },
+        (_, sequence) => JSON.stringify({ sequence, padding: "x".repeat(24) })
+      );
+      const contents = `${records.join("\n")}\n`;
+      expect(Buffer.byteLength(contents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 2);
+      await writeFile(auditPath, contents);
+      const output: string[] = [];
+
+      await readAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk)
+      });
+
+      expect(output.join("")).toBe(contents);
+    });
+  });
+
+  it("does not emit a rewritten chunk when a same-inode rewrite races a large finite read", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const records = Array.from(
+        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 32) / 96) },
+        (_, sequence) => ({ sequence, padding: "x".repeat(64) })
+      );
+      const originalContents = `${records
+        .map((record) => JSON.stringify({ ...record, generation: "original" }))
+        .join("\n")}\n`;
+      const replacementContents = `${records
+        .map((record) => JSON.stringify({ ...record, generation: "replaced" }))
+        .join("\n")}\n`;
+      expect(Buffer.byteLength(replacementContents)).toBe(Buffer.byteLength(originalContents));
+      await writeFile(auditPath, originalContents);
+      const handle = await open(auditPath, "r");
+      const handlePrototype = Object.getPrototypeOf(handle) as {
+        read: (this: unknown, ...args: unknown[]) => Promise<unknown>;
+      };
+      const originalRead = handlePrototype.read;
+      const sourceReadChunks = Math.ceil(Buffer.byteLength(originalContents) / AUDIT_READ_CHUNK_BYTES);
+      const rewriteOnRead = sourceReadChunks * 2 + 3;
+      let readCalls = 0;
+      let rewroteFile = false;
+      handlePrototype.read = async function (this: unknown, ...args: unknown[]) {
+        readCalls += 1;
+        if (readCalls === rewriteOnRead) {
+          rewroteFile = true;
+          await writeFile(auditPath, replacementContents);
+        }
+        return originalRead.apply(this, args);
+      };
+      await handle.close();
+      const output: string[] = [];
+
+      try {
+        await readAuditJsonl({
+          path: auditPath,
+          redactor: new SecretRedactor(),
+          write: (chunk) => output.push(chunk)
+        });
+      } finally {
+        handlePrototype.read = originalRead;
+      }
+
+      expect(rewroteFile).toBe(true);
+      expect(output.join("")).not.toContain('"generation":"replaced"');
+    });
+  });
+
+  it("marks an oversized unterminated record once and resumes after its newline", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const secret = "oversized-record-secret";
+      await writeFile(auditPath, `${secret}${"x".repeat(MAX_INCOMPLETE_AUDIT_RECORD_BYTES)}`);
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor([secret]),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      try {
+        await waitFor(() => output.length === 1);
+        expect(output).toEqual([`${MALFORMED_AUDIT_RECORD}\n`]);
+        expect(output.join("")).not.toContain(secret);
+
+        await appendFile(auditPath, '\n{"sequence":"after-oversized"}\n');
+        await waitFor(() => output.length === 2);
+        expect(output.join("")).toBe(
+          `${MALFORMED_AUDIT_RECORD}\n{"sequence":"after-oversized"}\n`
+        );
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
+  it("does not repeat an oversized marker across sustained fragmented writes", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const secret = "fragmented-oversized-secret";
+      await writeFile(auditPath, "");
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor([secret]),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      const fragment = `${secret}${"x".repeat(Math.ceil(MAX_INCOMPLETE_AUDIT_RECORD_BYTES / 4))}`;
+      try {
+        for (let index = 0; index < 6; index += 1) {
+          await appendFile(auditPath, fragment);
+          await delay(pollIntervalMs * 2);
+        }
+        await waitFor(() => output.length === 1);
+
+        for (let index = 0; index < 6; index += 1) {
+          await appendFile(auditPath, fragment);
+          await delay(pollIntervalMs * 2);
+        }
+        expect(output).toEqual([`${MALFORMED_AUDIT_RECORD}\n`]);
+        expect(output.join("")).not.toContain(secret);
+
+        await appendFile(auditPath, '\n{"sequence":"after-fragments"}\n');
+        await waitFor(() => output.length === 2);
+        expect(output.join("")).toBe(
+          `${MALFORMED_AUDIT_RECORD}\n{"sequence":"after-fragments"}\n`
+        );
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
+  it("resolves promptly after aborting while an oversized unterminated record keeps growing", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      await writeFile(auditPath, "");
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      const fragment = "x".repeat(Math.ceil(MAX_INCOMPLETE_AUDIT_RECORD_BYTES / 4));
+      const producer = (async () => {
+        for (let index = 0; index < 32 && !controller.signal.aborted; index += 1) {
+          await appendFile(auditPath, fragment);
+          await delay(1);
+        }
+      })();
+      try {
+        await waitFor(() => output.length === 1, 2_000);
+        const startedAt = Date.now();
+        controller.abort();
+        await follower;
+        expect(Date.now() - startedAt).toBeLessThan(250);
+        expect(output).toEqual([`${MALFORMED_AUDIT_RECORD}\n`]);
+      } finally {
+        controller.abort();
+        await Promise.all([follower, producer]);
       }
     });
   });
