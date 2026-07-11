@@ -25,8 +25,17 @@ interface PackResult {
   files: Array<{ path: string }>;
 }
 
+interface NpmCommand {
+  args: readonly string[];
+  timeoutMs: number;
+}
+
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommandTimeoutMs = 25_000;
+// A fresh consumer resolves package dependencies and is slower on Windows than local pack/build/check commands.
+const consumerInstallTimeoutMs = 120_000;
+const packedArtifactContractTimeoutMs = consumerInstallTimeoutMs + npmCommandTimeoutMs;
+const npmDiagnosticOutputLimit = 8_000;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
@@ -65,22 +74,60 @@ function npmInvocation(args: readonly string[]): { command: string; args: readon
   return { command: "npm", args };
 }
 
-function runNpm(args: readonly string[], cwd = repositoryRoot) {
+function consumerInstallCommand(tarballPath: string): NpmCommand {
+  return {
+    args: [
+      "install",
+      "--ignore-scripts",
+      "--no-package-lock",
+      "--no-audit",
+      "--no-fund",
+      "--prefer-offline",
+      tarballPath
+    ],
+    timeoutMs: consumerInstallTimeoutMs
+  };
+}
+
+function capturedNpmOutput(stream: "stdout" | "stderr", output: string | null): string | undefined {
+  const trimmed = output?.trim();
+  if (!trimmed) return undefined;
+
+  const truncated = trimmed.slice(0, npmDiagnosticOutputLimit);
+  const suffix = truncated.length === trimmed.length ? "" : "\n... output truncated";
+  return `${stream}:\n${truncated}${suffix}`;
+}
+
+function npmDiagnostics(stdout: string | null, stderr: string | null): string {
+  const outputs = [capturedNpmOutput("stdout", stdout), capturedNpmOutput("stderr", stderr)].filter(
+    (output): output is string => output !== undefined
+  );
+  return outputs.length === 0 ? "" : `\nCaptured npm output:\n${outputs.join("\n")}`;
+}
+
+function runNpm(args: readonly string[], cwd = repositoryRoot, timeoutMs = npmCommandTimeoutMs) {
   const invocation = npmInvocation(args);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
     env: { ...process.env, npm_config_loglevel: "silent" },
-    timeout: npmCommandTimeoutMs,
+    timeout: timeoutMs,
     killSignal: "SIGTERM"
   });
   if (result.error) {
     const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
     const reason =
       timedOut
-        ? `timed out after ${npmCommandTimeoutMs}ms`
+        ? `timed out after ${timeoutMs}ms`
         : `could not start: ${result.error.message}`;
-    throw new Error(`npm ${args.join(" ")} ${reason}`);
+    throw new Error(`npm ${args.join(" ")} ${reason}.${npmDiagnostics(result.stdout, result.stderr)}`);
+  }
+  if (result.status !== 0) {
+    const outcome =
+      result.status === null
+        ? `terminated by ${result.signal ?? "an unknown signal"}`
+        : `exited with status ${result.status}`;
+    throw new Error(`npm ${args.join(" ")} ${outcome}.${npmDiagnostics(result.stdout, result.stderr)}`);
   }
   return result;
 }
@@ -180,6 +227,35 @@ describe("package metadata contract", () => {
 });
 
 describe("packed artifact contract", () => {
+  it("gives the fresh consumer install deterministic offline options and its own timeout", () => {
+    expect(consumerInstallCommand("miftah-0.1.1.tgz")).toEqual({
+      args: [
+        "install",
+        "--ignore-scripts",
+        "--no-package-lock",
+        "--no-audit",
+        "--no-fund",
+        "--prefer-offline",
+        "miftah-0.1.1.tgz"
+      ],
+      timeoutMs: 120_000
+    });
+  });
+
+  it("includes captured output when an npm command exits unsuccessfully", () => {
+    expect(() =>
+      runNpm([
+        "exec",
+        "--",
+        process.execPath,
+        "--eval",
+        'process.stdout.write("miftah-diagnostic-out"); process.stderr.write("miftah-diagnostic-err"); process.exit(1);'
+      ])
+    ).toThrow(
+      /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
+    );
+  });
+
   it("loads its verifier from a shebang-free ESM module", async () => {
     const verifierSource = readFileSync(new URL("../scripts/pack-verifier.mjs", import.meta.url), "utf8");
 
@@ -254,7 +330,8 @@ describe("packed artifact contract", () => {
         const [result] = JSON.parse(packed.stdout) as PackResult[];
         if (!result) throw new Error("npm pack did not report an artifact.");
 
-        const install = runNpm(["install", "--ignore-scripts", "--no-package-lock", join(directory, result.filename)], directory);
+        const consumerInstall = consumerInstallCommand(join(directory, result.filename));
+        const install = runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
         expect(install.status, install.stderr || install.stdout).toBe(0);
 
         const consumerPath = join(directory, "consumer.mjs");
@@ -719,6 +796,6 @@ describe("packed artifact contract", () => {
         await rm(directory, { recursive: true, force: true });
       }
     },
-    30_000
+    packedArtifactContractTimeoutMs
   );
 });
