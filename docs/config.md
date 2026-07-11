@@ -31,6 +31,20 @@ Before loading secret sources or starting an upstream, Miftah validates that `de
 
 Profile `env` values can reference `${ENV_NAME}` or `secretref:env://ENV_NAME`. Put dotenv paths in `secrets.envFiles`; paths are resolved relative to the config file. Profile descriptions, tags, policy names, and upstream-specific `args` and `cwd` overrides are non-secret. Per-upstream `env` and `headers` values may contain credentials and use the same secret-resolution and redaction safeguards as profile-level values.
 
+## Remote upstream transports
+
+Use `transport: "streamable-http"` for new remote MCP servers. The historical `transport: "http"` value remains a Streamable HTTP compatibility alias. `transport: "sse"` supports legacy SSE servers but is deprecated and should be used only while an upstream has not migrated. `transport: "stdio"` remains the local-process default.
+
+Remote URLs must use `https`. Miftah accepts `http` only for loopback development URLs on `localhost`, `127.0.0.0/8`, or `::1`; other cleartext URLs and non-HTTP URL schemes fail config validation at the exact `upstream.url` or `upstreams.<name>.url` path. Profile headers override upstream headers case-insensitively, so `Authorization` and `authorization` are one credential slot rather than two combined values.
+
+Miftah uses Node's normal TLS validation and does not disable certificate verification. A self-signed remote certificate therefore fails closed unless the operator establishes a trusted local CA through the normal Node trust configuration. Do not use cleartext remote HTTP to transport profile credentials.
+
+For Streamable HTTP, an intentional restart, idle close, or wrapper shutdown sends DELETE for a negotiated MCP session before closing the local client transport. A remote server can return HTTP 405 to decline session termination; Miftah then completes local cleanup and the server retains control of its own session lifetime. If DELETE hangs, Miftah aborts the local transport at `shutdownTimeoutMs` rather than retrying an unbounded remote cleanup. Legacy SSE has no equivalent remote-session DELETE.
+
+Remote HTTP status failures map to `UPSTREAM_HTTP_ERROR` with `profile`, `transport`, and numeric `status`. Remote MCP JSON-RPC failures map to `UPSTREAM_PROTOCOL_ERROR` with `profile`, `transport`, and `mcpCode`. Miftah intentionally omits upstream response bodies and protocol messages from these errors.
+
+The SDK's default 60-second MCP request timeout applies to remote operations. Miftah does not expose a separate request-timeout setting. Streamable HTTP's SDK transport has its own bounded SSE reconnection behavior; if it closes permanently, `process.restartOnCrash` and `maxRestarts` govern the manager-level recovery described below.
+
 The supported routing fallback values are:
 
 - `activeProfile`: use the session's active profile.
@@ -56,10 +70,10 @@ Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFI
 
 ### Process lifecycle
 
-`process` controls real local session behavior:
+`process` controls real profile-bound upstream session behavior:
 
 - `startupTimeoutMs` is a positive integer and defaults to 30 seconds. A hung startup is terminated and reported as `UPSTREAM_START_FAILED`.
-- `shutdownTimeoutMs` is a positive integer and defaults to 5 seconds. Miftah first closes STDIO gracefully, then force-terminates a child that exceeds the deadline or rejects close. Health records `lastStopReason: "shutdown-timeout"` for a deadline and `"shutdown-error"` for a rejected close rather than treating either cleanup as a crash.
+- `shutdownTimeoutMs` is a positive integer and defaults to 5 seconds. Miftah closes the configured client transport; for STDIO it first requests graceful shutdown and force-terminates a child that exceeds the deadline or rejects close. Streamable HTTP cleanup sends DELETE before that local close. Health records `lastStopReason: "shutdown-timeout"` for a deadline and `"shutdown-error"` for a rejected close rather than treating either cleanup as a crash.
 - `idleTimeoutMs` is a positive integer. When omitted, sessions stay warm until an explicit restart or wrapper shutdown. When set, an inactive profile session closes after the timeout; in-flight upstream requests hold the session open.
 - `restartOnCrash` defaults to `false`. When `true`, only an unexpected upstream loss schedules automatic recovery; explicit restart, idle expiry, and wrapper shutdown do not.
 - `maxRestarts` is a non-negative integer and requires `restartOnCrash: true`. It defaults to 3 automatic attempts. Retry delay is bounded exponential backoff from 100 ms to 5 seconds with 20% jitter. A profile that keeps crashing exhausts its budget, reports `UPSTREAM_RESTART_LIMIT_EXCEEDED`, and rejects ordinary demand starts until `miftah_restart_profile` explicitly retries it. A recovered session must remain up for 30 seconds before its consecutive-crash budget resets.

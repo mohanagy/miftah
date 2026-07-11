@@ -9,6 +9,23 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
+async function waitFor<Value>(
+  read: () => Value | Promise<Value>,
+  matches: (value: Value) => boolean,
+  timeoutMs = 2_000
+): Promise<Value> {
+  const deadline = Date.now() + timeoutMs;
+  let value = await read();
+  while (!matches(value)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for lifecycle state; last value: ${JSON.stringify(value)}`);
+    }
+    await delay(10);
+    value = await read();
+  }
+  return value;
+}
+
 describe("configuration preflight", () => {
   it("rejects invalid references before loading secret sources or starting an upstream", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-preflight-"));
@@ -185,8 +202,11 @@ describe("configuration preflight", () => {
     const runtime = await createRuntime(configPath);
     try {
       await runtime.manager.get("default");
-      await delay(150);
-      expect(runtime.manager.listHealth()).toMatchObject([
+      const health = await waitFor(
+        () => runtime.manager.listHealth(),
+        (entries) => entries.some((entry) => entry.processState === "stopped" && entry.lastStopReason === "idle")
+      );
+      expect(health).toMatchObject([
         { profile: "default", processState: "stopped", lastStopReason: "idle" }
       ]);
     } finally {

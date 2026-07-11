@@ -110,6 +110,35 @@ Multi-upstream resource and prompt lists use opaque, bounded in-memory Miftah cu
 
 `tooling.toolDiscoveryMode` defaults to `"permissive"`. In that mode, a bundled list returns only healthy upstream contributions, removes routes for failed upstreams, and retries incomplete tool discovery on later tool requests. If every upstream fails a capability list, Miftah returns `UPSTREAM_DISCOVERY_FAILED` instead of advertising an empty upstream surface. Set it to `"strict"` to reject any unavailable upstream; strict tool discovery additionally checks every configured profile for an identical client-visible tool contract. `miftah_health` reports the profile, upstream name, overall and process state, transition time, automatic restart count, redacted error, intentional stop reason, pending recovery time, and per-capability discovery state for each started upstream. See `examples/multi-upstream.miftah.json`.
 
+## Remote upstreams
+
+Use `"streamable-http"` for a remote MCP server:
+
+```json
+{
+  "upstream": {
+    "transport": "streamable-http",
+    "url": "https://mcp.example.com/mcp",
+    "headers": {
+      "Authorization": "Bearer ${MCP_TOKEN}"
+    }
+  },
+  "profiles": {
+    "work": {
+      "headers": {
+        "authorization": "Bearer ${WORK_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Header names are case-insensitive, and a profile header always replaces the upstream header of the same name. Miftah requires HTTPS for non-loopback remote URLs; HTTP is accepted only for local development endpoints on `localhost`, `127.0.0.0/8`, or `::1`. The `"http"` transport is a compatibility alias for `"streamable-http"`. `"sse"` remains available for legacy MCP servers but is deprecated; prefer Streamable HTTP for new deployments.
+
+An intentional Streamable HTTP restart or wrapper shutdown sends the MCP session DELETE request before closing the local client transport. A server may decline DELETE with HTTP 405, in which case Miftah still closes its local session but the remote server controls any remaining server-side state. If DELETE does not settle before the configured shutdown deadline, Miftah aborts the local transport rather than leaving a live credential session behind. HTTP status failures are returned as `UPSTREAM_HTTP_ERROR` and MCP JSON-RPC failures as `UPSTREAM_PROTOCOL_ERROR`; response bodies and remote error messages are not exposed to callers.
+
+Miftah uses the SDK's existing 60-second MCP request timeout and does not add a second request-timeout setting. Startup and shutdown retain the configured 30-second and 5-second defaults. The SDK performs its bounded Streamable HTTP SSE reconnection behavior; if the transport ultimately closes, Miftah's opt-in `process.restartOnCrash` policy and bounded `maxRestarts` budget control profile recovery.
+
 ## Routing and safety
 
 Routing can use the active profile or rules matching tool arguments:
