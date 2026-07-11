@@ -215,7 +215,7 @@ export class SecretRedactor {
 
   private secretList(): readonly string[] {
     if (this.secretSnapshotDirty) {
-      this.secretSnapshot = [...this.secretValues];
+      this.secretSnapshot = [...this.secretValues].sort((first, second) => second.length - first.length);
       this.secretSnapshotDirty = false;
     }
     return this.secretSnapshot;

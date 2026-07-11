@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { presetConfig } from "../config/presets.js";
@@ -12,6 +12,7 @@ import { runDoctor } from "./doctor.js";
 import { formatDoctorReport } from "./doctor-report.js";
 import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./parse.js";
 import { exitCodeForError } from "./exit-codes.js";
+import { runLogsCommand } from "./logs.js";
 
 async function serve(configPath: string): Promise<void> {
   const runtime = await createMiftahRuntime(configPath);
@@ -82,10 +83,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "logs") {
-    const config = await loadConfig(args.config);
-    const path = config.audit?.path;
-    if (!path) throw new Error("Audit logging is not configured.");
-    process.stdout.write(await readFile(path, "utf8").catch((error) => redactSecrets(String(error))));
+    await runLogsCommand({ configPath: args.config, follow: args.follow === true });
     return;
   }
   throw new Error(`Unknown command '${command}'`);
