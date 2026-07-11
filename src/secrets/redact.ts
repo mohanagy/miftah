@@ -2,6 +2,10 @@ import { createHmac, randomUUID } from "node:crypto";
 
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 const uriInTextPattern = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+const maximumBufferedLineLength = 8_192;
+const maximumPendingStreamLength = maximumBufferedLineLength * 2;
+const redactedStreamLineMarker = "[REDACTED STREAM LINE]";
+const redactedStreamMarker = "[REDACTED STREAM]";
 const providerTokenPatterns = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g
@@ -34,10 +38,23 @@ function isSecretKey(key: string): boolean {
   return (parts.includes("api") && parts.includes("key")) || (parts.includes("private") && parts.includes("key"));
 }
 
+type UnfinishedSecretPredicate = (secret: string, value: string) => boolean;
+
 /** Redacts configured values and recognized credential formats from text. */
-function redactString(value: string, secretValues: readonly string[]): string {
+function redactString(value: string, secretValues: readonly string[]): string;
+function redactString(
+  value: string,
+  secretValues: readonly string[],
+  hasUnfinishedSecret: UnfinishedSecretPredicate
+): string | undefined;
+function redactString(
+  value: string,
+  secretValues: readonly string[],
+  hasUnfinishedSecret?: UnfinishedSecretPredicate
+): string | undefined {
   let result = value;
   for (const secret of secretValues) {
+    if (hasUnfinishedSecret?.(secret, value)) return undefined;
     if (secret.length > 0) {
       result = result.split(secret).join("[REDACTED]");
     }
@@ -47,6 +64,14 @@ function redactString(value: string, secretValues: readonly string[]): string {
     result = result.replace(pattern, "[REDACTED]");
   }
   return result;
+}
+
+function hasProperSecretPrefix(value: string, secret: string): boolean {
+  const maximumPrefixLength = Math.min(secret.length - 1, value.length);
+  for (let length = maximumPrefixLength; length > 0; length -= 1) {
+    if (value.endsWith(secret.slice(0, length))) return true;
+  }
+  return false;
 }
 
 /** Recursively redacts secrets while preserving the input's data shape. */
@@ -74,13 +99,19 @@ function redactValue(value: unknown, secretValues: readonly string[], key?: stri
 /** Shares a mutable set of known secret values across runtime output boundaries. */
 export class SecretRedactor {
   private readonly secretValues = new Set<string>();
+  private secretSnapshot: readonly string[] = [];
+  private secretSnapshotDirty = true;
+  private maximumSecretLength = 0;
 
   constructor(secretValues: readonly string[] = []) {
     this.addAll(secretValues);
   }
 
   add(value: string): void {
-    if (value.length > 0) this.secretValues.add(value);
+    if (value.length === 0 || this.secretValues.has(value)) return;
+    this.secretValues.add(value);
+    this.secretSnapshotDirty = true;
+    this.maximumSecretLength = Math.max(this.maximumSecretLength, value.length);
   }
 
   addAll(values: readonly string[]): void {
@@ -88,16 +119,16 @@ export class SecretRedactor {
   }
 
   values(): string[] {
-    return [...this.secretValues];
+    return [...this.secretList()];
   }
 
   redact<T>(value: T): T {
-    return redactValue(value, this.values()) as T;
+    return redactValue(value, this.secretList()) as T;
   }
 
   /** Redacts structured audit values, including URI credentials embedded in arbitrary string arguments. */
   redactForAudit<T>(value: T): T {
-    return redactValue(value, this.values(), undefined, true) as T;
+    return redactValue(value, this.secretList(), undefined, true) as T;
   }
 
   redactText(value: string): string {
@@ -110,41 +141,90 @@ export class SecretRedactor {
 
   createTextStream(): { write(value: string): string; flush(): string } {
     let pending = "";
+    let activeLine = "";
+    let suppressingOutput = false;
+
+    const suppress = (marker: string): string => {
+      pending = "";
+      activeLine = "";
+      suppressingOutput = true;
+      return `${marker}\n`;
+    };
+
+    const emitPending = (): string => {
+      if (pending.length === 0) return "";
+      const output = this.redactPending(pending);
+      if (output === undefined) return "";
+      pending = "";
+      return output;
+    };
+
     return {
       write: (value) => {
-        pending += value;
-        const lastLineBreak = pending.lastIndexOf("\n");
-        if (lastLineBreak >= 0) {
-          const completeLines = pending.slice(0, lastLineBreak + 1);
-          pending = pending.slice(lastLineBreak + 1);
-          return this.redactText(completeLines);
+        if (suppressingOutput) return "";
+        if (this.maximumSecretLength > maximumBufferedLineLength) return suppress(redactedStreamMarker);
+
+        let offset = 0;
+        while (offset < value.length) {
+          const lineBreak = value.indexOf("\n", offset);
+          const hasLineBreak = lineBreak >= 0;
+          const end = hasLineBreak ? lineBreak : value.length;
+          const completeLineLength = activeLine.length + (end - offset) + (hasLineBreak ? 1 : 0);
+          if (completeLineLength > maximumBufferedLineLength) {
+            return suppress(redactedStreamLineMarker);
+          }
+
+          activeLine += value.slice(offset, end + (hasLineBreak ? 1 : 0));
+          if (!hasLineBreak) break;
+          const completedLine = redactUrisInText(activeLine);
+          if (pending.length + completedLine.length > maximumPendingStreamLength) {
+            return suppress(redactedStreamMarker);
+          }
+          pending += completedLine;
+          activeLine = "";
+          offset = lineBreak + 1;
         }
-        const retainedLength = Math.max(1_024, ...[...this.secretValues].map((secret) => secret.length));
-        if (pending.length <= retainedLength) return "";
-        const requestedBoundary = pending.length - retainedLength;
-        const boundary = this.safeTextBoundary(pending, requestedBoundary);
-        const completeText = pending.slice(0, boundary);
-        pending = pending.slice(boundary);
-        return this.redactText(completeText);
+
+        const output = emitPending();
+        return output;
       },
       flush: () => {
-        const completeText = this.redactText(pending);
-        pending = "";
-        return completeText;
+        if (suppressingOutput) {
+          pending = "";
+          activeLine = "";
+          return "";
+        }
+        if (this.maximumSecretLength > maximumBufferedLineLength) {
+          return pending.length > 0 || activeLine.length > 0 ? suppress(redactedStreamMarker) : "";
+        }
+        if (activeLine.length > 0) {
+          const completedLine = redactUrisInText(activeLine);
+          if (pending.length + completedLine.length > maximumPendingStreamLength) {
+            return suppress(redactedStreamMarker);
+          }
+          pending += completedLine;
+          activeLine = "";
+        }
+        // A truncated known-secret prefix remains sensitive even after stderr closes.
+        const output = emitPending();
+        return pending.length > 0 ? output + suppress(redactedStreamMarker) : output;
       }
     };
   }
 
-  private safeTextBoundary(value: string, requestedBoundary: number): number {
-    let boundary = requestedBoundary;
-    for (const secret of this.secretValues) {
-      let index = value.indexOf(secret);
-      while (index >= 0) {
-        if (index < boundary && index + secret.length > boundary) boundary = index;
-        index = value.indexOf(secret, index + 1);
-      }
+  private secretList(): readonly string[] {
+    if (this.secretSnapshotDirty) {
+      this.secretSnapshot = [...this.secretValues];
+      this.secretSnapshotDirty = false;
     }
-    return boundary;
+    return this.secretSnapshot;
+  }
+
+  private redactPending(value: string): string | undefined {
+    const uriSafeValue = redactUrisInText(value);
+    return redactString(uriSafeValue, this.secretList(), (secret, pendingValue) =>
+      hasProperSecretPrefix(pendingValue, secret)
+    );
   }
 }
 

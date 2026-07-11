@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuditLogger } from "../src/audit/audit-logger.js";
 
 describe("audit logger", () => {
@@ -28,6 +28,67 @@ describe("audit logger", () => {
       operation: "tools/call",
       status: "success"
     });
+  });
+
+  it("timestamps an event when logging begins rather than when its queued write runs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-timestamp-"));
+    const path = join(directory, "audit.jsonl");
+    const logger = new AuditLogger(path);
+    const loggedAt = new Date("2026-07-11T06:00:00.000Z");
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(loggedAt);
+      const write = logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "whoami",
+        status: "success",
+        durationMs: 4
+      });
+      vi.setSystemTime(new Date("2026-07-11T07:00:00.000Z"));
+
+      await write;
+
+      expect(JSON.parse(await readFile(path, "utf8")).timestamp).toBe(loggedAt.toISOString());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("timestamps an event before synchronous redaction", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-redaction-timestamp-"));
+    const path = join(directory, "audit.jsonl");
+    const logger = new AuditLogger(path, { includeArguments: true });
+    const loggedAt = new Date("2026-07-11T06:00:00.000Z");
+    const redactedAt = new Date("2026-07-11T07:00:00.000Z");
+    const argumentsWithTimeShift: Record<string, unknown> = {};
+    Object.defineProperty(argumentsWithTimeShift, "value", {
+      enumerable: true,
+      get: () => {
+        vi.setSystemTime(redactedAt);
+        return "safe";
+      }
+    });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(loggedAt);
+      await logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "whoami",
+        status: "success",
+        durationMs: 4,
+        arguments: argumentsWithTimeShift
+      });
+
+      expect(JSON.parse(await readFile(path, "utf8")).timestamp).toBe(loggedAt.toISOString());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("redacts credential-bearing URI arguments when argument logging is enabled", async () => {

@@ -71,6 +71,114 @@ describe("secret redaction", () => {
     }
   });
 
+  it("keeps a long newline-free URI intact until its query values can be redacted", () => {
+    const stream = new SecretRedactor().createTextStream();
+    const secret = "stream-uri-secret";
+    const uriStart = `https://example.test/${"a".repeat(1_100)}`;
+
+    expect(stream.write(`prefix ${uriStart}`)).toBe("");
+    expect(stream.write(`?access_token=${secret}`)).toBe("");
+
+    const output = stream.flush();
+    expect(output).toContain("prefix ");
+    expect(output).not.toContain(secret);
+    expect(output).toContain("access_token=%5BREDACTED%5D");
+  });
+
+  it("redacts a URI whose arbitrary scheme is split across stream writes", () => {
+    const stream = new SecretRedactor().createTextStream();
+    const secret = "split-scheme-uri-secret";
+    const scheme = `a${"-".repeat(1_100)}`;
+
+    expect(stream.write(scheme)).toBe("");
+
+    const output = [
+      stream.write(`://user:password@example.test/path?access_token=${secret}`),
+      stream.flush()
+    ].join("");
+
+    expect(output).not.toContain("password");
+    expect(output).not.toContain(secret);
+    expect(output).toContain("access_token=%5BREDACTED%5D");
+  });
+
+  it("bounds a long newline-free stream by redacting the complete line", () => {
+    const stream = new SecretRedactor().createTextStream();
+    const secret = "overlong-uri-secret";
+    const uri = `https://example.test/${"a".repeat(8_193)}`;
+
+    const output = [
+      stream.write(uri),
+      stream.write(`?access_token=${secret}`),
+      stream.write(" end\n"),
+      stream.flush()
+    ].join("");
+
+    expect(output).toBe("[REDACTED STREAM LINE]\n");
+    expect(output).not.toContain(secret);
+  });
+
+  it("bounds an oversized complete line before forwarding it", () => {
+    const stream = new SecretRedactor().createTextStream();
+
+    expect(stream.write(`${"x".repeat(8_193)}\n`)).toBe("[REDACTED STREAM LINE]\n");
+  });
+
+  it("streams stderr with a large configured secret registry", () => {
+    const redactor = new SecretRedactor(
+      Array.from({ length: 200_000 }, (_, index) => `configured-secret-${index}`)
+    );
+    const stream = redactor.createTextStream();
+
+    expect(stream.write("diagnostic\n")).toBe("diagnostic\n");
+  });
+
+  it("redacts a configured multiline secret split across stream writes", () => {
+    const stream = new SecretRedactor(["alpha\nbeta"]).createTextStream();
+
+    expect(stream.write("prefix alpha\n")).toBe("");
+    expect(stream.write("beta\n")).toBe("prefix [REDACTED]\n");
+  });
+
+  it("redacts a configured secret spanning multiple completed lines", () => {
+    const stream = new SecretRedactor(["alpha\nbeta\ngamma"]).createTextStream();
+
+    expect(stream.write("prefix alpha\nbeta\n")).toBe("");
+    expect(stream.write("gamma\n")).toBe("prefix [REDACTED]\n");
+  });
+
+  it("uses secrets registered before later stream writes", () => {
+    const redactor = new SecretRedactor();
+    const stream = redactor.createTextStream();
+
+    expect(stream.write("prefix ")).toBe("");
+    redactor.add("dynamic-stream-secret");
+
+    expect(stream.write("dynamic-stream-secret\n")).toBe("prefix [REDACTED]\n");
+  });
+
+  it("suppresses stderr when a configured secret exceeds the stream cap", () => {
+    const stream = new SecretRedactor(["s".repeat(8_193)]).createTextStream();
+
+    expect(stream.write("diagnostic\n")).toBe("[REDACTED STREAM]\n");
+    expect(stream.flush()).toBe("");
+  });
+
+  it("bounds repeated incomplete multiline-secret prefixes", () => {
+    const stream = new SecretRedactor(["a\nb"]).createTextStream();
+
+    expect(stream.write("a\n".repeat(8_193))).toBe("[REDACTED STREAM]\n");
+    expect(stream.flush()).toBe("");
+  });
+
+  it("suppresses a flush that would exceed the pending stream cap", () => {
+    const stream = new SecretRedactor(["a\nb"]).createTextStream();
+
+    expect(stream.write("a\n".repeat(8_192))).toBe("");
+    expect(stream.write("x".repeat(8_192))).toBe("");
+    expect(stream.flush()).toBe("[REDACTED STREAM]\n");
+  });
+
   it("removes URI userinfo, query values, and fragments from public identifiers", () => {
     expect(
       redactUri(

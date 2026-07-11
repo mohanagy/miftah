@@ -27,13 +27,14 @@ export class AuditLogger {
   }
 
   async log(event: AuditEvent): Promise<void> {
+    const timestamp = new Date().toISOString();
     const safeEvent = this.redactor.redactForAudit(
       !this.options.includeArguments
         ? { ...event, arguments: undefined }
         : event
     );
     try {
-      await this.enqueue(() => this.writeLine(`${JSON.stringify({ timestamp: new Date().toISOString(), ...safeEvent })}\n`));
+      await this.enqueue(() => this.writeLine(`${JSON.stringify({ timestamp, ...safeEvent })}\n`));
       this.lastFailure = undefined;
     } catch (error) {
       const failure = this.recordFailure(error);
