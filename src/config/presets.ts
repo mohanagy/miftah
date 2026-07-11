@@ -8,8 +8,13 @@ const SENTRY_MCP_PACKAGE = "@sentry/mcp-server@0.36.0";
 const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const headerName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const allowedHeaderPrefixes = new Set(["Bearer ", "Sentry "]);
-const exactNpmPackageSpec =
-  /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const semverNumericIdentifier = "(?:0|[1-9][0-9]*)";
+const semverPrereleaseIdentifier =
+  `(?:${semverNumericIdentifier}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)`;
+const exactNpmPackageSpec = new RegExp(
+  `^(?:@[a-z0-9][a-z0-9._-]*\\/)?[a-z0-9][a-z0-9._-]*@${semverNumericIdentifier}\\.${semverNumericIdentifier}\\.${semverNumericIdentifier}(?:-${semverPrereleaseIdentifier}(?:\\.${semverPrereleaseIdentifier})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
+  "u"
+);
 const canonicalDigestImage =
   /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?\/)?(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)*[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@sha256:[A-Fa-f0-9]{64}$/u;
 
@@ -23,6 +28,9 @@ export interface PresetBuildOptions {
   headerName?: string;
   headerPrefix?: string;
 }
+
+type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
+type PresetRequirements = Readonly<Partial<Record<string, PresetOptionRequirement>>>;
 
 /** An ordinary input error that CLI code can translate to its own usage error. */
 export class PresetCatalogError extends Error {
@@ -282,8 +290,8 @@ function buildStreamableHttpPreset(name: string, options: PresetBuildOptions): M
 }
 
 /**
- * Versioned internal catalog for strict preset creation. Requirements are metadata
- * for CLI presentation while each entry owns the associated config builder.
+ * Versioned internal catalog for strict preset creation. Requirements define which
+ * caller-supplied inputs each builder may receive.
  */
 export const PRESET_CATALOG = {
   version: "1",
@@ -318,17 +326,41 @@ export const PRESET_CATALOG = {
       build: buildStreamableHttpPreset
     }
   }
-} as const;
+} as const satisfies {
+  readonly version: string;
+  readonly presets: Record<
+    string,
+    {
+      readonly requirements: PresetRequirements;
+      readonly build: (name: string, options: PresetBuildOptions) => MiftahConfig;
+    }
+  >;
+};
 
 export type PresetCatalogName = keyof typeof PRESET_CATALOG.presets;
 
+function validatePresetOptions(
+  preset: string,
+  requirements: PresetRequirements,
+  options: PresetBuildOptions
+): void {
+  for (const [option, value] of Object.entries(options)) {
+    if (value === undefined) continue;
+    const requirement = requirements[option];
+    if (requirement === undefined || requirement === "provider-managed") {
+      catalogError(`Preset '${preset}' does not support option '${option}'.`);
+    }
+  }
+  validateCredentialEnv(options.credentialEnv);
+}
+
 /** Builds a catalog preset strictly, rejecting unknown names instead of falling back. */
 export function buildPresetConfig(name: string, preset: string, options: PresetBuildOptions = {}): MiftahConfig {
-  validateCredentialEnv(options.credentialEnv);
   if (!Object.prototype.hasOwnProperty.call(PRESET_CATALOG.presets, preset)) {
     catalogError(`Unknown preset '${preset}'. Supported presets: ${Object.keys(PRESET_CATALOG.presets).join(", ")}.`);
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];
+  validatePresetOptions(preset, definition.requirements, options);
   return definition.build(name, options);
 }
 

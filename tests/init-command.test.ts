@@ -99,11 +99,18 @@ describe("init command", () => {
       runInitCommand({ name: "npx", preset: "generic-npx", output: "npx/config.json" }, commandContext(streams))
     ).rejects.toThrow(CliUsageError);
     await expect(
+      runInitCommand(
+        { name: "generic", preset: "generic", npmPackage: "server@1.2.3", output: "inapplicable/config.json" },
+        commandContext(streams)
+      )
+    ).rejects.toThrow(CliUsageError);
+    await expect(
       runInitCommand({ name: "client", client: "unsupported", output: "client/config.json" }, commandContext(streams))
     ).rejects.toThrow(CliUsageError);
 
     await expectNoPath(resolve(outputRoot, "unknown"));
     await expectNoPath(resolve(outputRoot, "npx"));
+    await expectNoPath(resolve(outputRoot, "inapplicable"));
     await expectNoPath(resolve(outputRoot, "client"));
     streams.input.end();
   });

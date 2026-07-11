@@ -28,8 +28,7 @@ describe("preset catalog", () => {
   });
 
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
-    const literalSecret = "literal-secret-that-must-not-appear";
-    const genericOptions = { credentialEnv: "GENERIC_TOKEN", secret: literalSecret };
+    const genericOptions = { credentialEnv: "GENERIC_TOKEN" };
     const configs = [
       buildPresetConfig("generic", "generic", genericOptions),
       buildPresetConfig("github", "github"),
@@ -52,7 +51,7 @@ describe("preset catalog", () => {
 
     for (const config of configs) {
       expect(() => validateConfig(config)).not.toThrow();
-      expect(serializedConfig(config)).not.toContain(literalSecret);
+      expect(serializedConfig(config)).not.toContain("literal-secret-that-must-not-appear");
     }
   });
 
@@ -94,6 +93,14 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@latest" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@^1.2.3" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server" })).toThrow(PresetCatalogError);
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01" })).toThrow(
+      PresetCatalogError
+    );
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-alpha.01" })).toThrow(
+      PresetCatalogError
+    );
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-0" })).not.toThrow();
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01alpha" })).not.toThrow();
     expect(() => buildPresetConfig("docker", "generic-docker", { dockerImage: "ghcr.io/acme/server:latest" })).toThrow(
       PresetCatalogError
     );
@@ -258,5 +265,26 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("test", "unknown")).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("test", "unknown")).toThrow(/Unknown preset 'unknown'/);
     expect(() => buildPresetConfig("test", "toString")).toThrow(PresetCatalogError);
+  });
+
+  it.each([
+    ["generic", { npmPackage: "server@1.2.3" }],
+    ["github", { credentialEnv: "GITHUB_TOKEN" }],
+    ["sentry", { credentialEnv: "SENTRY_TOKEN" }],
+    ["generic-npx", { npmPackage: "server@1.2.3", dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }],
+    ["generic-docker", { dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", url: "https://mcp.example.com" }],
+    ["streamable-http", { url: "https://mcp.example.com", npmPackage: "server@1.2.3" }]
+  ] as const)("rejects inapplicable preset inputs for %s", (preset, options) => {
+    expect(() => buildPresetConfig("test", preset, options)).toThrow(PresetCatalogError);
+  });
+
+  it.each(["unsupported", "secret"])("rejects undeclared strict catalog input %s", (option) => {
+    expect(() =>
+      buildPresetConfig(
+        "test",
+        "generic",
+        { [option]: option === "secret" ? "literal-secret-that-must-not-appear" : "value" } as unknown as PresetBuildOptions
+      )
+    ).toThrow(new RegExp(`Preset 'generic' does not support option '${option}'`));
   });
 });
