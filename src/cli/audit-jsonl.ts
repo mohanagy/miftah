@@ -2,7 +2,8 @@ import { chmod, mkdtemp, open, rm, stat, type FileHandle } from "node:fs/promise
 import type { Stats } from "node:fs";
 import { isUtf8 } from "node:buffer";
 import { createHash, type Hash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SecretRedactor } from "../secrets/redact.js";
 
 export const MALFORMED_AUDIT_RECORD = '{"type":"miftah.audit.malformed-record"}';
@@ -152,8 +153,8 @@ async function hashFromHandle(
   return hash;
 }
 
-async function createTemporarySpool(auditPath: string): Promise<OpenTemporarySpool> {
-  const directory = await mkdtemp(join(dirname(auditPath), ".miftah-audit-jsonl-"));
+async function createTemporarySpool(): Promise<OpenTemporarySpool> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-audit-jsonl-"));
   let handle: FileHandle | undefined;
   try {
     await chmod(directory, 0o700);
@@ -292,7 +293,7 @@ async function stageAuditSnapshot(
         prefixHash.update(chunk);
         deltaHash.update(chunk);
         await stageCompleteRecords(candidate, chunk, redactor, async (record) => {
-          if (spool === undefined) spool = await createTemporarySpool(path);
+          if (spool === undefined) spool = await createTemporarySpool();
           await spool.handle.writeFile(record, "utf8");
         });
       },

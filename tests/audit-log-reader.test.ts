@@ -2,6 +2,7 @@ import { truncateSync, writeFileSync } from "node:fs";
 import {
   access,
   appendFile,
+  chmod,
   mkdir,
   readdir,
   rename,
@@ -161,6 +162,30 @@ describe("runtime configuration resolution", () => {
 });
 
 describe("audit JSONL reader", () => {
+  it.skipIf(process.platform === "win32")(
+    "reads a normal audit file whose parent directory is not writable",
+    async () => {
+      await inSandbox(async (directory) => {
+        const auditPath = join(directory, "audit.jsonl");
+        await writeFile(auditPath, '{"message":"readable"}\n');
+        await chmod(directory, 0o500);
+        const output: string[] = [];
+
+        try {
+          await readAuditJsonl({
+            path: auditPath,
+            redactor: new SecretRedactor(),
+            write: (chunk) => output.push(chunk)
+          });
+        } finally {
+          await chmod(directory, 0o700);
+        }
+
+        expect(output.join("")).toBe('{"message":"readable"}\n');
+      });
+    }
+  );
+
   it("normalizes finite records after redacting URI credentials and a non-default profile secret", async () => {
     await inSandbox(async (directory) => {
       const configPath = join(directory, "miftah.json");
