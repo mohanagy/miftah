@@ -62,8 +62,6 @@ describe("config runtime parity", () => {
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: 1 } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: "profile" } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: true } }],
-    ["tooling.toolDiscoveryMode", { tooling: { toolDiscoveryMode: "allProfilesUnion" } }],
-    ["tooling.toolDiscoveryMode", { tooling: { toolDiscoveryMode: {} } }],
     ["state.persistActiveProfile", { state: { persistActiveProfile: true } }],
     ["state.persistActiveProfile", { state: { persistActiveProfile: "true" } }],
     ["state.path", { state: { path: ".miftah-state.json" } }],
@@ -153,6 +151,27 @@ describe("config runtime parity", () => {
     expect(config.process?.startupTimeoutMs).toBe(1_000);
     expect(config.security?.redactSecrets).toBe(true);
     expect(config.audit?.redact).toBe(true);
+  });
+
+  it.each(["permissive", "strict"] as const)("accepts the %s discovery mode", (toolDiscoveryMode) => {
+    const config = validateConfig(
+      baseConfig({
+        tooling: { toolDiscoveryMode }
+      })
+    );
+
+    expect(config.tooling?.toolDiscoveryMode).toBe(toolDiscoveryMode);
+  });
+
+  it.each(["allProfilesUnion", {}])("rejects an unsupported discovery mode value", (toolDiscoveryMode) => {
+    const error = validationError(
+      baseConfig({
+        tooling: { toolDiscoveryMode }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("tooling.toolDiscoveryMode");
   });
 
   it.each(["generic", "github", "sentry"])("keeps the %s generated preset valid", (preset) => {

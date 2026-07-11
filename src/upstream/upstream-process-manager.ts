@@ -17,11 +17,29 @@ export interface UpstreamManagerOptions {
   onStderr?: (profile: string, message: string) => void;
 }
 
+export type UpstreamCapability = "tools" | "resources" | "prompts";
+export type UpstreamCapabilityState = "unknown" | "available" | "failed";
+export type UpstreamProcessState = "stopped" | "starting" | "running" | "failed";
+export type UpstreamState = UpstreamProcessState | "degraded";
+
+export interface UpstreamCapabilityHealth {
+  state: UpstreamCapabilityState;
+  lastTransition: string;
+  error?: string;
+}
+
 export interface UpstreamHealth {
   profile: string;
-  status: "stopped" | "running" | "failed";
+  upstreamName: string;
+  /** @deprecated Use state. */
+  status: UpstreamState;
+  state: UpstreamState;
+  processState: UpstreamProcessState;
+  lastTransition: string;
+  restartCount: number;
   pid?: number | null;
   error?: string;
+  capabilities: Record<UpstreamCapability, UpstreamCapabilityHealth>;
 }
 
 export class UpstreamProcessManager {
@@ -29,13 +47,17 @@ export class UpstreamProcessManager {
   private readonly health = new Map<string, UpstreamHealth>();
   private readonly starts = new Map<string, Promise<UpstreamSession>>();
   private readonly secretValuesSet = new Set<string>();
+  private readonly startAttempts = new Map<string, number>();
+  private readonly processErrors = new Map<string, string>();
+  private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
   private readonly options: Required<Pick<UpstreamManagerOptions, "startupTimeoutMs">> &
     Omit<UpstreamManagerOptions, "startupTimeoutMs">;
 
   constructor(
     private readonly upstream: UpstreamConfig,
     private readonly profiles: Record<string, ProfileConfig>,
-    options: UpstreamManagerOptions = {}
+    options: UpstreamManagerOptions = {},
+    private readonly upstreamName = "default"
   ) {
     this.options = {
       ...options,
@@ -59,11 +81,36 @@ export class UpstreamProcessManager {
   }
 
   listHealth(): UpstreamHealth[] {
-    return [...this.health.values()];
+    return [...this.health.values()].map((health) => structuredClone(health));
   }
 
   getSecretValues(): string[] {
     return [...this.secretValuesSet];
+  }
+
+  addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
+    this.healthListeners.add(listener);
+    return () => this.healthListeners.delete(listener);
+  }
+
+  recordCapabilitySuccess(profile: string, capability: UpstreamCapability, _upstreamName?: string): void {
+    void _upstreamName;
+    this.recordCapability(profile, capability, "available");
+  }
+
+  recordCapabilityFailure(
+    profile: string,
+    capability: UpstreamCapability,
+    error: unknown,
+    _upstreamName?: string
+  ): void {
+    void _upstreamName;
+    this.recordCapability(
+      profile,
+      capability,
+      "failed",
+      redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
+    );
   }
 
   async restart(profile: string, _upstreamName?: string): Promise<UpstreamSession> {
@@ -82,17 +129,21 @@ export class UpstreamProcessManager {
     if (session) {
       await session.close();
     }
-    this.health.set(profile, { profile, status: "stopped" });
+    this.setProcessState(profile, "stopped", { resetCapabilities: true });
   }
 
   async listTools(profile: string, _upstreamName?: string): Promise<Tool[]> {
     void _upstreamName;
     try {
-      return (await (await this.get(profile)).listTools()).tools;
+      const tools = (await (await this.get(profile)).listTools()).tools;
+      this.recordCapabilitySuccess(profile, "tools");
+      return tools;
     } catch (error) {
-      throw new MiftahError("UPSTREAM_TOOL_LIST_FAILED", `UPSTREAM_TOOL_LIST_FAILED: unable to list tools for '${profile}'`, {
+      const failure = new MiftahError("UPSTREAM_TOOL_LIST_FAILED", `UPSTREAM_TOOL_LIST_FAILED: unable to list tools for '${profile}'`, {
         cause: redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
       });
+      this.recordCapabilityFailure(profile, "tools", failure);
+      throw failure;
     }
   }
 
@@ -107,6 +158,8 @@ export class UpstreamProcessManager {
         "UPSTREAM_START_FAILED: stdio upstream requires a command"
       );
     }
+    this.startAttempts.set(profile, (this.startAttempts.get(profile) ?? 0) + 1);
+    this.setProcessState(profile, "starting", { resetCapabilities: true });
 
     const resolvedEnvironment = {
       ...(this.upstream.env ? expandEnvironmentReferences(this.upstream.env) : {}),
@@ -158,7 +211,7 @@ export class UpstreamProcessManager {
     transport.onclose = () => {
       if (this.sessions.get(profile)) {
         this.sessions.delete(profile);
-        this.health.set(profile, { profile, status: "failed", error: "upstream process closed" });
+        this.setProcessState(profile, "failed", { error: "upstream process closed", resetCapabilities: true });
       }
     };
     const client = new Client({ name: "miftah", version: "0.1.1" });
@@ -178,17 +231,95 @@ export class UpstreamProcessManager {
       const session = await withTimeout(startPromise, this.options.startupTimeoutMs);
       this.sessions.set(profile, session);
       if ("pid" in transport && typeof transport.pid === "number") pid = transport.pid;
-      this.health.set(profile, { profile, status: "running", pid });
+      this.setProcessState(profile, "running", { pid });
       return session;
     } catch (error) {
       await transport.close().catch(() => undefined);
-      this.health.set(profile, {
-        profile,
-        status: "failed",
-        error: redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
+      this.setProcessState(profile, "failed", {
+          error: redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
       });
       throw error;
     }
+  }
+
+  private recordCapability(
+    profile: string,
+    capability: UpstreamCapability,
+    state: UpstreamCapabilityState,
+    error?: string
+  ): void {
+    const current = this.health.get(profile) ?? this.healthEntry(profile, "stopped");
+    const capabilities = structuredClone(current.capabilities);
+    capabilities[capability] = {
+      state,
+      lastTransition: new Date().toISOString(),
+      ...(error === undefined ? {} : { error })
+    };
+    this.publishHealth(
+      this.healthEntry(profile, current.processState, {
+        pid: current.pid,
+        capabilities
+      })
+    );
+  }
+
+  private setProcessState(
+    profile: string,
+    processState: UpstreamProcessState,
+    options: { pid?: number | null; error?: string; resetCapabilities?: boolean } = {}
+  ): void {
+    if (processState === "failed" && options.error !== undefined) {
+      this.processErrors.set(profile, options.error);
+    } else if (processState !== "failed") {
+      this.processErrors.delete(profile);
+    }
+    const current = this.health.get(profile);
+    this.publishHealth(
+      this.healthEntry(profile, processState, {
+        pid: options.pid,
+        capabilities: options.resetCapabilities ? this.initialCapabilities() : current?.capabilities
+      })
+    );
+  }
+
+  private healthEntry(
+    profile: string,
+    processState: UpstreamProcessState,
+    options: { pid?: number | null; capabilities?: Record<UpstreamCapability, UpstreamCapabilityHealth> } = {}
+  ): UpstreamHealth {
+    const capabilities = options.capabilities ?? this.initialCapabilities();
+    const capabilityFailure = Object.values(capabilities)
+      .filter((capability) => capability.state === "failed")
+      .at(-1);
+    const state: UpstreamState =
+      processState === "running" && capabilityFailure !== undefined ? "degraded" : processState;
+    const error = processState === "failed" ? this.processErrors.get(profile) : capabilityFailure?.error;
+    return {
+      profile,
+      upstreamName: this.upstreamName,
+      status: state,
+      state,
+      processState,
+      lastTransition: new Date().toISOString(),
+      restartCount: Math.max(0, (this.startAttempts.get(profile) ?? 0) - 1),
+      ...(options.pid === undefined ? {} : { pid: options.pid }),
+      ...(error === undefined ? {} : { error }),
+      capabilities
+    };
+  }
+
+  private initialCapabilities(): Record<UpstreamCapability, UpstreamCapabilityHealth> {
+    const lastTransition = new Date().toISOString();
+    return {
+      tools: { state: "unknown", lastTransition },
+      resources: { state: "unknown", lastTransition },
+      prompts: { state: "unknown", lastTransition }
+    };
+  }
+
+  private publishHealth(health: UpstreamHealth): void {
+    this.health.set(health.profile, health);
+    for (const listener of this.healthListeners) listener(structuredClone(health));
   }
 }
 

@@ -1,18 +1,25 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ProfileConfig } from "../config/types.js";
-import { UpstreamProcessManager, type UpstreamHealth, type UpstreamManagerOptions } from "./upstream-process-manager.js";
+import {
+  UpstreamProcessManager,
+  type UpstreamCapability,
+  type UpstreamHealth,
+  type UpstreamManagerOptions
+} from "./upstream-process-manager.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
 
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
+  private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
 
   constructor(config: MiftahConfig, options: UpstreamManagerOptions = {}) {
     this.managers = Object.fromEntries(
-      Object.entries(config.upstreams ?? {}).map(([name, upstream]) => [
-        name,
-        new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options)
-      ])
+      Object.entries(config.upstreams ?? {}).map(([name, upstream]) => {
+        const manager = new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options, name);
+        manager.addHealthListener((health) => this.publishHealth(health));
+        return [name, manager];
+      })
     );
   }
 
@@ -32,6 +39,24 @@ export class MultiUpstreamProcessManager {
     return this.manager(upstreamName).restart(profile);
   }
 
+  addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
+    this.healthListeners.add(listener);
+    return () => this.healthListeners.delete(listener);
+  }
+
+  recordCapabilitySuccess(profile: string, capability: UpstreamCapability, upstreamName?: string): void {
+    this.manager(upstreamName).recordCapabilitySuccess(profile, capability);
+  }
+
+  recordCapabilityFailure(
+    profile: string,
+    capability: UpstreamCapability,
+    error: unknown,
+    upstreamName?: string
+  ): void {
+    this.manager(upstreamName).recordCapabilityFailure(profile, capability, error);
+  }
+
   async restartProfile(profile: string): Promise<void> {
     const results = await Promise.allSettled(Object.values(this.managers).map((manager) => manager.restart(profile)));
     for (const result of results) {
@@ -40,7 +65,9 @@ export class MultiUpstreamProcessManager {
   }
 
   listHealth(): UpstreamHealth[] {
-    return Object.values(this.managers).flatMap((manager) => manager.listHealth());
+    return Object.values(this.managers)
+      .flatMap((manager) => manager.listHealth())
+      .sort((left, right) => left.profile.localeCompare(right.profile) || left.upstreamName.localeCompare(right.upstreamName));
   }
 
   getSecretValues(): string[] {
@@ -62,6 +89,10 @@ export class MultiUpstreamProcessManager {
     const selected = name ? this.managers[name] : configured[0];
     if (!selected) throw new Error(`No upstream configured${name ? ` named '${name}'` : ""}`);
     return selected;
+  }
+
+  private publishHealth(health: UpstreamHealth): void {
+    for (const listener of this.healthListeners) listener(health);
   }
 }
 

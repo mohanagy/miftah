@@ -166,6 +166,7 @@ const auditSchema = z
 const publicToolingSchema = z
   .object({
     collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
+    toolDiscoveryMode: z.enum(["permissive", "strict"]).optional(),
     toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
   })
   .strict();
@@ -175,7 +176,7 @@ const toolingSchema = z
     managementToolPrefix: unsupportedOptionSchema,
     upstreamToolNamespace: unsupportedOptionSchema,
     collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
-    toolDiscoveryMode: unsupportedOptionSchema,
+    toolDiscoveryMode: z.enum(["permissive", "strict"]).optional(),
     toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
   })
   .strict();
@@ -430,7 +431,7 @@ export const miftahConfigSchema = z
       rejectUnsupportedOption(["audit", "redact"], "audit redaction is always enabled and cannot be disabled");
     }
 
-    for (const option of ["managementToolPrefix", "upstreamToolNamespace", "toolDiscoveryMode"] as const) {
+    for (const option of ["managementToolPrefix", "upstreamToolNamespace"] as const) {
       if (value.tooling?.[option] !== undefined) {
         rejectUnsupportedOption(["tooling", option], `${option} is not implemented`);
       }

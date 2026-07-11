@@ -10,7 +10,7 @@ import {
   ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,7 +26,6 @@ import { MiftahError } from "../src/utils/errors.js";
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const promptCollisionPattern = /PROMPT_COLLISION/;
 const resourceCollisionPattern = /RESOURCE_COLLISION/;
-const upstreamToolListFailedPattern = /UPSTREAM_TOOL_LIST_FAILED/;
 const resourceCursorInvalidPattern = /RESOURCE_CURSOR_INVALID/;
 const promptCursorInvalidPattern = /PROMPT_CURSOR_INVALID/;
 const githubResourceRoutePattern = /^miftah:\/\/resource\/github\?/;
@@ -132,6 +131,260 @@ describe("multi-upstream wrapper", () => {
     }
   });
 
+  it("keeps healthy aggregate capabilities available when a bundled upstream cannot start", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("github__whoami");
+      expect(tools.tools.map((tool) => tool.name)).not.toContain("sentry__whoami");
+
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account"
+      ]);
+      expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual(["github__account_prompt"]);
+
+      const health = CallToolResultSchema.parse(
+        await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema)
+      );
+      const content = health.content[0];
+      expect(content).toMatchObject({ type: "text" });
+      if (content?.type !== "text") throw new Error("Expected a text health result");
+      expect(JSON.parse(content.text).upstreams).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            profile: "work",
+            upstreamName: "github",
+            state: "running",
+            lastTransition: expect.any(String),
+            restartCount: 0
+          }),
+          expect.objectContaining({
+            profile: "work",
+            upstreamName: "sentry",
+            state: "failed",
+            lastTransition: expect.any(String),
+            restartCount: expect.any(Number),
+            error: expect.any(String)
+          })
+        ])
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("reports redacted capability discovery failures as degraded upstream health", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-health-discovery-failure-"));
+    const sentryFailurePath = join(directory, "sentry-resource-failure");
+    const secret = "health-discovery-secret";
+    await writeFile(sentryFailurePath, "fail");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: {
+              env: {
+                API_TOKEN: secret,
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_FAIL_LIST_RESOURCES_PATH: sentryFailurePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account"
+      ]);
+      const health = CallToolResultSchema.parse(
+        await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema)
+      );
+      const content = health.content[0];
+      expect(content).toMatchObject({ type: "text" });
+      if (content?.type !== "text") throw new Error("Expected a text health result");
+      const sentry = JSON.parse(content.text).upstreams.find((upstream: { upstreamName: string }) => upstream.upstreamName === "sentry");
+      expect(sentry).toMatchObject({
+        profile: "work",
+        upstreamName: "sentry",
+        state: "degraded",
+        processState: "running",
+        lastTransition: expect.any(String),
+        restartCount: 0,
+        capabilities: {
+          resources: {
+            state: "failed",
+            lastTransition: expect.any(String),
+            error: expect.stringContaining("[REDACTED]")
+          }
+        }
+      });
+      expect(JSON.stringify(sentry)).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("fails strict tool discovery with a complete unavailable-upstream diagnostic", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } }
+          }
+        }
+      },
+      tooling: { toolDiscoveryMode: "strict" }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listTools()).rejects.toThrow(
+        /UPSTREAM_DISCOVERY_FAILED: strict tools discovery failed for profile 'work': upstream 'sentry'/
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("fails permissive tool discovery when no bundled upstream is healthy", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] },
+        sentry: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] }
+      },
+      profiles: { work: {} }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listTools()).rejects.toThrow(
+        /UPSTREAM_DISCOVERY_FAILED: no healthy upstream completed tools discovery for profile 'work': upstream 'github'.*upstream 'sentry'/
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("fails strict resource discovery with a complete unavailable-upstream diagnostic", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] }
+      },
+      profiles: { work: { upstreams: { github: { env: { TEST_ACCOUNT_NAME: "github-work" } } } } },
+      tooling: { toolDiscoveryMode: "strict" }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listResources()).rejects.toThrow(
+        /UPSTREAM_DISCOVERY_FAILED: strict resources discovery failed for profile 'work': upstream 'sentry'/
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("fails strict prompt discovery with a complete unavailable-upstream diagnostic", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] }
+      },
+      profiles: { work: { upstreams: { github: { env: { TEST_ACCOUNT_NAME: "github-work" } } } } },
+      tooling: { toolDiscoveryMode: "strict" }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listPrompts()).rejects.toThrow(
+        /UPSTREAM_DISCOVERY_FAILED: strict prompts discovery failed for profile 'work': upstream 'sentry'/
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("aggregates namespaced resources and routes each read to its originating upstream", async () => {
     const config = validateConfig({
       version: "1",
@@ -199,6 +452,173 @@ describe("multi-upstream wrapper", () => {
       expect(await client.getPrompt({ name: "sentry__account_prompt" })).toMatchObject({
         messages: [{ content: { text: "sentry-work" } }]
       });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("removes stale routes when a bundled upstream fails resource discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-discovery-failure-"));
+    const sentryFailurePath = join(directory, "sentry-resource-failure");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_FAIL_LIST_RESOURCES_PATH: sentryFailurePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const initial = await client.listResources();
+      const sentryResource = initial.resources.find((resource) => resource.name === "sentry__Current account");
+      if (!sentryResource) throw new Error("Expected a Sentry resource route.");
+
+      await writeFile(sentryFailurePath, "fail");
+      const partial = await client.listResources();
+      expect(partial.resources.map((resource) => resource.name)).toEqual(["github__Current account"]);
+      await expect(client.readResource({ uri: sentryResource.uri })).rejects.toThrow(resourceNotFoundPattern);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("removes stale routes when a bundled upstream fails prompt discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-prompt-discovery-failure-"));
+    const sentryFailurePath = join(directory, "sentry-prompt-failure");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_FAIL_LIST_PROMPTS_PATH: sentryFailurePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const initial = await client.listPrompts();
+      expect(initial.prompts.map((prompt) => prompt.name)).toContain("sentry__account_prompt");
+
+      await writeFile(sentryFailurePath, "fail");
+      const partial = await client.listPrompts();
+      expect(partial.prompts.map((prompt) => prompt.name)).toEqual(["github__account_prompt"]);
+      await expect(client.getPrompt({ name: "sentry__account_prompt" })).rejects.toThrow(promptNotFoundPattern);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("notifies clients when partial resource and prompt discovery recovers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-capability-recovery-"));
+    const sentryResourceFailurePath = join(directory, "sentry-resource-failure");
+    const sentryPromptFailurePath = join(directory, "sentry-prompt-failure");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_FAIL_LIST_RESOURCES_PATH: sentryResourceFailurePath,
+                TEST_FAIL_LIST_PROMPTS_PATH: sentryPromptFailurePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let resourceNotifications = 0;
+    let promptNotifications = 0;
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      resourceNotifications += 1;
+    });
+    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+      promptNotifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listResources();
+      await client.listPrompts();
+
+      await writeFile(sentryResourceFailurePath, "fail");
+      await writeFile(sentryPromptFailurePath, "fail");
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account"
+      ]);
+      expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual(["github__account_prompt"]);
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
+
+      resourceNotifications = 0;
+      promptNotifications = 0;
+      await unlink(sentryResourceFailurePath);
+      await unlink(sentryPromptFailurePath);
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account",
+        "sentry__Current account"
+      ]);
+      expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual([
+        "github__account_prompt",
+        "sentry__account_prompt"
+      ]);
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
     } finally {
       await client.close();
       await wrapper.close();
@@ -830,7 +1250,7 @@ describe("multi-upstream wrapper", () => {
     }
   });
 
-  it("invalidates and notifies after a partial multi-upstream restart failure", async () => {
+  it("recovers healthy tool discovery after a partial multi-upstream restart failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-bundle-restart-failure-"));
     const githubFailurePath = join(directory, "github-restart-failure");
     const config = validateConfig({
@@ -872,8 +1292,114 @@ describe("multi-upstream wrapper", () => {
         await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } }, CallToolResultSchema)
       );
       expect(restarted.isError).toBe(true);
-      await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
+      const partial = await client.listTools();
+      expect(partial.tools.map((tool) => tool.name)).toContain("sentry__whoami");
+      expect(partial.tools.map((tool) => tool.name)).not.toContain("github__whoami");
       await expectExactlyOneNotification(() => notifications);
+
+      notifications = 0;
+      await unlink(githubFailurePath);
+      expect(await client.callTool({ name: "sentry__whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "sentry-work" }]
+      });
+      await expectExactlyOneNotification(() => notifications);
+      const recovered = await client.listTools();
+      expect(recovered.tools.map((tool) => tool.name)).toContain("github__whoami");
+      expect(recovered.tools.map((tool) => tool.name)).toContain("sentry__whoami");
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("refreshes the tool registry after an upstream crashes and later recovers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-upstream-crash-recovery-"));
+    const sentryCrashPath = join(directory, "sentry-crash");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_CRASH_ON_CALL_TOOL_PATH: sentryCrashPath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let notifications = 0;
+    let resourceNotifications = 0;
+    let promptNotifications = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notifications += 1;
+    });
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      resourceNotifications += 1;
+    });
+    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+      promptNotifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+      await client.listResources();
+      await client.listPrompts();
+
+      await writeFile(sentryCrashPath, "crash");
+      expect(await client.callTool({ name: "sentry__whoami", arguments: {} })).toMatchObject({ isError: true });
+      await expect
+        .poll(() => manager.listHealth().find((health) => health.upstreamName === "sentry")?.state)
+        .toBe("failed");
+
+      const partial = await client.listTools();
+      expect(partial.tools.map((tool) => tool.name)).toContain("github__whoami");
+      expect(partial.tools.map((tool) => tool.name)).not.toContain("sentry__whoami");
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account"
+      ]);
+      expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual(["github__account_prompt"]);
+      await expectExactlyOneNotification(() => notifications);
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
+
+      notifications = 0;
+      resourceNotifications = 0;
+      promptNotifications = 0;
+      await unlink(sentryCrashPath);
+      const recovered = await client.listTools();
+      expect(recovered.tools.map((tool) => tool.name)).toContain("github__whoami");
+      expect(recovered.tools.map((tool) => tool.name)).toContain("sentry__whoami");
+      expect((await client.listResources()).resources.map((resource) => resource.name)).toEqual([
+        "github__Current account",
+        "sentry__Current account"
+      ]);
+      expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual([
+        "github__account_prompt",
+        "sentry__account_prompt"
+      ]);
+      expect(manager.listHealth().find((health) => health.upstreamName === "sentry")).toMatchObject({
+        state: "running",
+        processState: "running",
+        restartCount: expect.any(Number)
+      });
+      await expectExactlyOneNotification(() => notifications);
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
     } finally {
       await client.close();
       await wrapper.close();
@@ -948,7 +1474,9 @@ describe("multi-upstream wrapper", () => {
       await writeFile(sentryReleasePath, "release");
       const result = CallToolResultSchema.parse(await restart);
       expect(result.isError).toBe(true);
-      await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("sentry__whoami");
+      expect(tools.tools.map((tool) => tool.name)).not.toContain("github__whoami");
     } finally {
       await writeFile(sentryReleasePath, "release");
       await client.close();
