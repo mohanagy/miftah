@@ -501,6 +501,94 @@ describe("operation pipeline", () => {
     }
   });
 
+  it("completes in-flight aggregate reads and prompts after a profile switch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-aggregate-switch-race-"));
+    const resourceStartedPath = join(directory, "resource-started");
+    const promptStartedPath = join(directory, "prompt-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_READ_RESOURCE_STARTED_PATH: resourceStartedPath,
+                TEST_READ_RESOURCE_DELAY_MS: "100",
+                TEST_ADDITIONAL_RESOURCE_URI: "account://linked",
+                TEST_GET_PROMPT_STARTED_PATH: promptStartedPath,
+                TEST_GET_PROMPT_DELAY_MS: "100"
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-personal" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-personal" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const resources = await client.listResources();
+      const githubResource = resources.resources.find((resource) => resource.name === "github__Current account");
+      if (!githubResource) throw new Error("Expected a namespaced GitHub resource.");
+      await client.listPrompts();
+
+      const resource = client.readResource({ uri: githubResource.uri });
+      await expect
+        .poll(async () => {
+          try {
+            await access(resourceStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      const resourceResult = await resource;
+      expect(resourceResult.contents[0]).toMatchObject({ uri: githubResource.uri, text: "github-work" });
+      const linkedResource = resourceResult.contents[1];
+      if (!linkedResource) throw new Error("Expected a linked resource.");
+
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } });
+      await expect(client.readResource({ uri: linkedResource.uri })).rejects.toThrow(/RESOURCE_NOT_FOUND/);
+      const prompt = client.getPrompt({ name: "github__account_prompt" });
+      await expect
+        .poll(async () => {
+          try {
+            await access(promptStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(await prompt).toMatchObject({
+        messages: [{ content: { text: "github-work" } }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("checks aggregate resource and prompt policy before discovering upstream routes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-operation-aggregate-deny-"));
     const githubResourceListPath = join(directory, "github-resource-list");
