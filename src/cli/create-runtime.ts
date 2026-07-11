@@ -4,7 +4,12 @@ import { SecretResolver } from "../secrets/secret-resolver.js";
 import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
 
-/** Validates configuration before resolving secrets or constructing upstream runtime state. */
+/**
+ * Loads configuration, resolves its secrets, and constructs the runtime managers.
+ *
+ * @param configPath - Path to the configuration file.
+ * @returns The resolved configuration, upstream process manager, and profile manager.
+ */
 export async function createRuntime(configPath: string) {
   const config = await loadConfig(configPath);
   const resolver = new SecretResolver({

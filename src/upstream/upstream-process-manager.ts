@@ -805,6 +805,15 @@ export class UpstreamProcessManager {
   }
 }
 
+/**
+ * Resolves with the promise value or fails when the timeout elapses.
+ *
+ * @param promise - The asynchronous operation to bound.
+ * @param timeoutMs - The maximum time to wait in milliseconds.
+ * @param code - The error code used when the timeout elapses.
+ * @param message - The error message used when the timeout elapses.
+ * @returns The resolved value of `promise`.
+ */
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
