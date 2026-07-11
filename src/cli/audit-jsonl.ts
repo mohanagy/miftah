@@ -1,7 +1,8 @@
-import { open, type FileHandle } from "node:fs/promises";
+import { chmod, mkdtemp, open, rm, stat, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { isUtf8 } from "node:buffer";
 import { createHash, type Hash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { SecretRedactor } from "../secrets/redact.js";
 
 export const MALFORMED_AUDIT_RECORD = '{"type":"miftah.audit.malformed-record"}';
@@ -30,10 +31,25 @@ interface AuditReadState {
   discardingOversizedRecord: boolean;
 }
 
+interface OpenTemporarySpool {
+  directory: string;
+  path: string;
+  handle: FileHandle;
+}
+
+interface ClosedTemporarySpool {
+  directory: string;
+  path: string;
+}
+
+type SnapshotAttempt =
+  | { kind: "aborted" | "unstable" }
+  | { kind: "staged"; state: AuditReadState; spool: ClosedTemporarySpool | undefined };
+
 const defaultPollIntervalMs = 250;
 const minimumPollIntervalMs = 10;
 const maximumPollIntervalMs = 1_000;
-const auditSnapshotBlockBytes = AUDIT_READ_CHUNK_BYTES * 16;
+const maximumSnapshotAttempts = 3;
 const emptyCursorDigest = createHash("sha256").digest();
 
 function fileIdentity(stats: Stats): string | undefined {
@@ -53,6 +69,37 @@ function resetState(state: AuditReadState): void {
   state.identity = undefined;
   state.pendingLength = 0;
   state.discardingOversizedRecord = false;
+}
+
+function createReadState(): AuditReadState {
+  return {
+    cursor: 0,
+    cursorDigest: Buffer.from(emptyCursorDigest),
+    identity: undefined,
+    pending: Buffer.allocUnsafe(MAX_INCOMPLETE_AUDIT_RECORD_BYTES),
+    pendingLength: 0,
+    discardingOversizedRecord: false
+  };
+}
+
+function cloneReadState(state: AuditReadState): AuditReadState {
+  return {
+    cursor: state.cursor,
+    cursorDigest: Buffer.from(state.cursorDigest),
+    identity: state.identity,
+    pending: Buffer.from(state.pending),
+    pendingLength: state.pendingLength,
+    discardingOversizedRecord: state.discardingOversizedRecord
+  };
+}
+
+function commitReadState(target: AuditReadState, source: AuditReadState): void {
+  target.cursor = source.cursor;
+  target.cursorDigest = Buffer.from(source.cursorDigest);
+  target.identity = source.identity;
+  target.pending = source.pending;
+  target.pendingLength = source.pendingLength;
+  target.discardingOversizedRecord = source.discardingOversizedRecord;
 }
 
 async function readFromHandle(
@@ -81,6 +128,7 @@ async function readFromHandle(
 
 async function hashFromHandle(
   handle: FileHandle,
+  startPosition: number,
   length: number,
   chunk: Buffer,
   signal?: AbortSignal
@@ -88,15 +136,53 @@ async function hashFromHandle(
   const hash = createHash("sha256");
   if (length === 0) return hash;
 
-  let position = 0;
-  while (position < length) {
+  let offset = 0;
+  while (offset < length) {
     if (signal?.aborted) return undefined;
-    const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, length - position), position);
+    const { bytesRead } = await handle.read(
+      chunk,
+      0,
+      Math.min(chunk.length, length - offset),
+      startPosition + offset
+    );
     if (bytesRead === 0) return undefined;
     hash.update(chunk.subarray(0, bytesRead));
-    position += bytesRead;
+    offset += bytesRead;
   }
   return hash;
+}
+
+async function createTemporarySpool(auditPath: string): Promise<OpenTemporarySpool> {
+  const directory = await mkdtemp(join(dirname(auditPath), ".miftah-audit-jsonl-"));
+  let handle: FileHandle | undefined;
+  try {
+    await chmod(directory, 0o700);
+    const path = join(directory, "snapshot.jsonl");
+    handle = await open(path, "wx", 0o600);
+    await chmod(path, 0o600);
+    return { directory, path, handle };
+  } catch (error) {
+    try {
+      await handle?.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+async function discardOpenSpool(spool: OpenTemporarySpool): Promise<void> {
+  try {
+    await spool.handle.close();
+  } finally {
+    await rm(spool.directory, { recursive: true, force: true });
+  }
+}
+
+async function discardClosedSpool(spool: ClosedTemporarySpool | undefined): Promise<void> {
+  if (spool !== undefined) {
+    await rm(spool.directory, { recursive: true, force: true });
+  }
 }
 
 function digest(hash: Hash): Buffer {
@@ -121,17 +207,18 @@ function normalizeRecord(record: Buffer, redactor: SecretRedactor): string {
   }
 }
 
-async function emitCompleteRecords(
+async function stageCompleteRecords(
   state: AuditReadState,
   contents: Buffer,
   redactor: SecretRedactor,
   write: AuditJsonlWriter
 ): Promise<void> {
   let recordStart = 0;
+  const stagedRecords: string[] = [];
   while (recordStart < contents.length) {
     if (state.discardingOversizedRecord) {
       const lineEnd = contents.indexOf(0x0a, recordStart);
-      if (lineEnd === -1) return;
+      if (lineEnd === -1) break;
       state.discardingOversizedRecord = false;
       recordStart = lineEnd + 1;
       continue;
@@ -143,22 +230,165 @@ async function emitCompleteRecords(
     if (state.pendingLength + fragmentLength > MAX_INCOMPLETE_AUDIT_RECORD_BYTES) {
       state.pendingLength = 0;
       state.discardingOversizedRecord = true;
-      await write(`${MALFORMED_AUDIT_RECORD}\n`);
-      if (lineEnd === -1) return;
+      stagedRecords.push(`${MALFORMED_AUDIT_RECORD}\n`);
+      if (lineEnd === -1) break;
       state.discardingOversizedRecord = false;
       recordStart = lineEnd + 1;
       continue;
     }
-
     contents.copy(state.pending, state.pendingLength, recordStart, recordEnd);
     state.pendingLength += fragmentLength;
-    if (lineEnd === -1) return;
+    if (lineEnd === -1) break;
 
-    await write(
-      `${normalizeRecord(state.pending.subarray(0, state.pendingLength), redactor)}\n`
-    );
+    stagedRecords.push(`${normalizeRecord(state.pending.subarray(0, state.pendingLength), redactor)}\n`);
     state.pendingLength = 0;
     recordStart = lineEnd + 1;
+  }
+  if (stagedRecords.length > 0) await write(stagedRecords.join(""));
+}
+
+async function stageAuditSnapshot(
+  path: string,
+  state: AuditReadState,
+  redactor: SecretRedactor,
+  signal?: AbortSignal
+): Promise<SnapshotAttempt> {
+  if (signal?.aborted) return { kind: "aborted" };
+  const handle = await open(path, "r");
+  let sourceClosed = false;
+  let spool: OpenTemporarySpool | undefined;
+  try {
+    let stats = await handle.stat();
+    const candidate = cloneReadState(state);
+    const identity = fileIdentity(stats);
+    const hashChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
+    const readChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
+    if (shouldReset(candidate, stats, identity)) {
+      resetState(candidate);
+    }
+
+    let prefixHash = await hashFromHandle(handle, 0, candidate.cursor, hashChunk, signal);
+    if (prefixHash === undefined) {
+      return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
+    }
+    if (!digest(prefixHash).equals(candidate.cursorDigest)) {
+      resetState(candidate);
+      stats = await handle.stat();
+      prefixHash = await hashFromHandle(handle, 0, candidate.cursor, hashChunk, signal);
+      if (prefixHash === undefined) {
+        return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
+      }
+    }
+
+    const snapshotEnd = stats.size;
+    const expectedLength = snapshotEnd - candidate.cursor;
+    const deltaHash = createHash("sha256");
+    const bytesRead = await readFromHandle(
+      handle,
+      candidate.cursor,
+      expectedLength,
+      readChunk,
+      async (chunk) => {
+        prefixHash.update(chunk);
+        deltaHash.update(chunk);
+        await stageCompleteRecords(candidate, chunk, redactor, async (record) => {
+          if (spool === undefined) spool = await createTemporarySpool(path);
+          await spool.handle.writeFile(record, "utf8");
+        });
+      },
+      signal
+    );
+    if (signal?.aborted) return { kind: "aborted" };
+
+    const candidateCursor = candidate.cursor + bytesRead;
+    const candidateDigest = digest(prefixHash);
+    const deltaDigest = digest(deltaHash);
+    const finalStats = await handle.stat();
+    const finalIdentity = fileIdentity(finalStats);
+    const finalDeltaHash = await hashFromHandle(
+      handle,
+      candidate.cursor,
+      bytesRead,
+      hashChunk,
+      signal
+    );
+    if (finalDeltaHash === undefined) {
+      return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
+    }
+    const postHashStats = await handle.stat();
+    let endpointStats: Stats;
+    try {
+      endpointStats = await stat(path);
+    } catch (error) {
+      if (isNotFoundError(error)) return { kind: "unstable" };
+      throw error;
+    }
+
+    if (
+      bytesRead !== expectedLength ||
+      changedDuringRead(stats, finalStats) ||
+      changedDuringRead(finalStats, postHashStats) ||
+      changedDuringRead(postHashStats, endpointStats) ||
+      shouldReset(candidate, finalStats, finalIdentity) ||
+      !digest(finalDeltaHash).equals(deltaDigest)
+    ) {
+      return { kind: "unstable" };
+    }
+
+    candidate.identity = finalIdentity;
+    candidate.cursorDigest = candidateDigest;
+    candidate.cursor = candidateCursor;
+    await handle.close();
+    sourceClosed = true;
+
+    let closedSpool: ClosedTemporarySpool | undefined;
+    if (spool !== undefined) {
+      await spool.handle.close();
+      closedSpool = { directory: spool.directory, path: spool.path };
+      spool = undefined;
+    }
+    return { kind: "staged", state: candidate, spool: closedSpool };
+  } finally {
+    try {
+      if (!sourceClosed) await handle.close();
+    } finally {
+      if (spool !== undefined) await discardOpenSpool(spool);
+    }
+  }
+}
+
+async function forwardStagedOutput(
+  spool: ClosedTemporarySpool | undefined,
+  write: AuditJsonlWriter,
+  signal?: AbortSignal
+): Promise<boolean> {
+  if (spool === undefined) return !signal?.aborted;
+
+  const handle = await open(spool.path, "r");
+  const chunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let position = 0;
+  let pending = "";
+  try {
+    while (!signal?.aborted) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      pending += decoder.decode(chunk.subarray(0, bytesRead), { stream: true });
+      let lineEnd = pending.indexOf("\n");
+      while (lineEnd !== -1) {
+        if (signal?.aborted) return false;
+        await write(pending.slice(0, lineEnd + 1));
+        pending = pending.slice(lineEnd + 1);
+        lineEnd = pending.indexOf("\n");
+      }
+    }
+    if (signal?.aborted) return false;
+    pending += decoder.decode();
+    if (pending.length > 0) await write(pending);
+    return true;
+  } finally {
+    await handle.close();
   }
 }
 
@@ -168,73 +398,15 @@ async function pollAuditFile(
   redactor: SecretRedactor,
   write: AuditJsonlWriter,
   signal?: AbortSignal
-): Promise<void> {
-  if (signal?.aborted) return;
-  const handle = await open(path, "r");
+): Promise<"aborted" | "stable" | "unstable"> {
+  const attempt = await stageAuditSnapshot(path, state, redactor, signal);
+  if (attempt.kind !== "staged") return attempt.kind;
   try {
-    let stats = await handle.stat();
-    const identity = fileIdentity(stats);
-    const hashChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
-    const readChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
-    const snapshotChunk = Buffer.allocUnsafe(auditSnapshotBlockBytes);
-    if (shouldReset(state, stats, identity)) {
-      resetState(state);
-    }
-
-    let prefixHash = await hashFromHandle(handle, state.cursor, hashChunk, signal);
-    if (prefixHash === undefined || !digest(prefixHash).equals(state.cursorDigest)) {
-      resetState(state);
-      stats = await handle.stat();
-      prefixHash = await hashFromHandle(handle, state.cursor, hashChunk, signal);
-      if (prefixHash === undefined) return;
-    }
-
-    const snapshotEnd = stats.size;
-    while (state.cursor < snapshotEnd) {
-      const startCursor = state.cursor;
-      const expectedLength = Math.min(auditSnapshotBlockBytes, snapshotEnd - startCursor);
-      let snapshotLength = 0;
-      const bytesRead = await readFromHandle(
-        handle,
-        startCursor,
-        expectedLength,
-        readChunk,
-        (chunk) => {
-          chunk.copy(snapshotChunk, snapshotLength);
-          snapshotLength += chunk.length;
-        },
-        signal
-      );
-      const candidateCursor = startCursor + bytesRead;
-      prefixHash.update(snapshotChunk.subarray(0, snapshotLength));
-      const candidateDigest = digest(prefixHash);
-      const finalStats = await handle.stat();
-      const finalIdentity = fileIdentity(finalStats);
-      const finalHash = await hashFromHandle(handle, candidateCursor, hashChunk, signal);
-      const postHashStats = await handle.stat();
-      if (
-        bytesRead !== expectedLength ||
-        shouldReset(state, finalStats, finalIdentity) ||
-        finalHash === undefined ||
-        !digest(finalHash).equals(candidateDigest)
-      ) {
-        resetState(state);
-        return;
-      }
-      if (changedDuringRead(finalStats, postHashStats)) return;
-
-      await emitCompleteRecords(
-        state,
-        snapshotChunk.subarray(0, snapshotLength),
-        redactor,
-        write
-      );
-      state.identity = finalIdentity;
-      state.cursorDigest = candidateDigest;
-      state.cursor = candidateCursor;
-    }
+    if (!(await forwardStagedOutput(attempt.spool, write, signal))) return "aborted";
+    commitReadState(state, attempt.state);
+    return "stable";
   } finally {
-    await handle.close();
+    await discardClosedSpool(attempt.spool);
   }
 }
 
@@ -265,27 +437,16 @@ function isNotFoundError(error: unknown): boolean {
 
 /** Reads complete audit JSONL records from a single opened file and emits normalized redacted JSONL. */
 export async function readAuditJsonl(options: AuditJsonlReadOptions): Promise<void> {
-  const state: AuditReadState = {
-    cursor: 0,
-    cursorDigest: Buffer.from(emptyCursorDigest),
-    identity: undefined,
-    pending: Buffer.allocUnsafe(MAX_INCOMPLETE_AUDIT_RECORD_BYTES),
-    pendingLength: 0,
-    discardingOversizedRecord: false
-  };
-  await pollAuditFile(options.path, state, options.redactor, options.write);
+  const state = createReadState();
+  for (let attempt = 0; attempt < maximumSnapshotAttempts; attempt += 1) {
+    if ((await pollAuditFile(options.path, state, options.redactor, options.write)) === "stable") return;
+  }
+  throw new Error("Audit log did not stabilize while creating a snapshot");
 }
 
 /** Follows audit JSONL through appends, truncation, and path replacement without retaining file handles. */
 export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promise<void> {
-  const state: AuditReadState = {
-    cursor: 0,
-    cursorDigest: Buffer.from(emptyCursorDigest),
-    identity: undefined,
-    pending: Buffer.allocUnsafe(MAX_INCOMPLETE_AUDIT_RECORD_BYTES),
-    pendingLength: 0,
-    discardingOversizedRecord: false
-  };
+  const state = createReadState();
   const pollIntervalMs = boundedPollInterval(options.pollIntervalMs);
   while (!options.signal.aborted) {
     try {

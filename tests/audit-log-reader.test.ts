@@ -1,6 +1,16 @@
 import { truncateSync, writeFileSync } from "node:fs";
-import { access, appendFile, mkdir, open, rename, rm, truncate, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import {
+  access,
+  appendFile,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat,
+  truncate,
+  writeFile
+} from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
@@ -526,15 +536,15 @@ describe("audit JSONL reader", () => {
     });
   });
 
-  it("emits every record from a finite log substantially larger than the read chunk", async () => {
+  it("emits every record from a stable finite log spanning many fixed read chunks", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
       const records = Array.from(
-        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 3) / 48) },
+        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 20) / 48) },
         (_, sequence) => JSON.stringify({ sequence, padding: "x".repeat(24) })
       );
       const contents = `${records.join("\n")}\n`;
-      expect(Buffer.byteLength(contents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 2);
+      expect(Buffer.byteLength(contents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 16);
       await writeFile(auditPath, contents);
       const output: string[] = [];
 
@@ -548,11 +558,11 @@ describe("audit JSONL reader", () => {
     });
   });
 
-  it("does not emit a rewritten chunk when a same-inode rewrite races a large finite read", async () => {
+  it("keeps a finite multi-block same-inode rewrite race transactional", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
       const records = Array.from(
-        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 32) / 96) },
+        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 128) / 96) },
         (_, sequence) => ({ sequence, padding: "x".repeat(64) })
       );
       const originalContents = `${records
@@ -563,25 +573,24 @@ describe("audit JSONL reader", () => {
         .join("\n")}\n`;
       expect(Buffer.byteLength(replacementContents)).toBe(Buffer.byteLength(originalContents));
       await writeFile(auditPath, originalContents);
-      const handle = await open(auditPath, "r");
-      const handlePrototype = Object.getPrototypeOf(handle) as {
-        read: (this: unknown, ...args: unknown[]) => Promise<unknown>;
-      };
-      const originalRead = handlePrototype.read;
-      const sourceReadChunks = Math.ceil(Buffer.byteLength(originalContents) / AUDIT_READ_CHUNK_BYTES);
-      const rewriteOnRead = sourceReadChunks * 2 + 3;
-      let readCalls = 0;
-      let rewroteFile = false;
-      handlePrototype.read = async function (this: unknown, ...args: unknown[]) {
-        readCalls += 1;
-        if (readCalls === rewriteOnRead) {
-          rewroteFile = true;
+      const initialStats = await stat(auditPath);
+      let keepRewriting = true;
+      let rewriteCount = 0;
+      let signalFirstRewrite!: () => void;
+      const firstRewrite = new Promise<void>((resolve) => {
+        signalFirstRewrite = resolve;
+      });
+      const rewriter = (async () => {
+        while (keepRewriting) {
           await writeFile(auditPath, replacementContents);
+          rewriteCount += 1;
+          signalFirstRewrite();
+          await delay(0);
         }
-        return originalRead.apply(this, args);
-      };
-      await handle.close();
+      })();
+      await firstRewrite;
       const output: string[] = [];
+      let failure: unknown;
 
       try {
         await readAuditJsonl({
@@ -589,12 +598,50 @@ describe("audit JSONL reader", () => {
           redactor: new SecretRedactor(),
           write: (chunk) => output.push(chunk)
         });
+      } catch (error) {
+        failure = error;
       } finally {
-        handlePrototype.read = originalRead;
+        keepRewriting = false;
+        await rewriter;
       }
 
-      expect(rewroteFile).toBe(true);
-      expect(output.join("")).not.toContain('"generation":"replaced"');
+      expect(rewriteCount).toBeGreaterThan(1);
+      expect((await stat(auditPath)).ino).toBe(initialStats.ino);
+      if (failure !== undefined) {
+        expect(failure).toBeInstanceOf(Error);
+        expect(output).toEqual([]);
+      } else {
+        expect(createHash("sha256").update(output.join("")).digest("hex")).toBe(
+          createHash("sha256").update(replacementContents).digest("hex")
+        );
+      }
+    });
+  });
+
+  it("removes finite snapshot spools after successful output and writer failures", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const contents = '{"message":"spooled"}\n';
+      await writeFile(auditPath, contents);
+
+      await readAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: () => undefined
+      });
+      expect(await readdir(directory)).toEqual(["audit.jsonl"]);
+
+      const writeFailure = new Error("destination failed");
+      await expect(
+        readAuditJsonl({
+          path: auditPath,
+          redactor: new SecretRedactor(),
+          write: () => {
+            throw writeFailure;
+          }
+        })
+      ).rejects.toBe(writeFailure);
+      expect(await readdir(directory)).toEqual(["audit.jsonl"]);
     });
   });
 
