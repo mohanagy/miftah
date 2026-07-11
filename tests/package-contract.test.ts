@@ -22,6 +22,7 @@ interface PackResult {
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommandTimeoutMs = 25_000;
 const requiredPackPaths = [
   "LICENSE",
   "README.md",
@@ -38,11 +39,17 @@ function readPackageManifest(): PackageManifest {
 }
 
 function runNpm(args: readonly string[]) {
-  return spawnSync(npmCommand, args, {
+  const result = spawnSync(npmCommand, args, {
     cwd: repositoryRoot,
     encoding: "utf8",
-    env: { ...process.env, npm_config_loglevel: "silent" }
+    env: { ...process.env, npm_config_loglevel: "silent" },
+    timeout: npmCommandTimeoutMs,
+    killSignal: "SIGTERM"
   });
+  if (result.error) {
+    throw new Error(`npm ${args.join(" ")} did not complete within ${npmCommandTimeoutMs}ms: ${result.error.message}`);
+  }
+  return result;
 }
 
 async function loadPackVerifier(): Promise<PackVerifier> {
