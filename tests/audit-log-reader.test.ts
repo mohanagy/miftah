@@ -1,4 +1,4 @@
-import { closeSync, openSync, readdirSync, truncateSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, truncateSync, writeFileSync } from "node:fs";
 import {
   access,
   appendFile,
@@ -45,9 +45,9 @@ async function inSandbox<T>(run: (directory: string) => Promise<T>): Promise<T> 
   }
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs}ms`);
     await delay(pollIntervalMs);
   }
@@ -672,15 +672,17 @@ describe("audit JSONL reader", () => {
       const spoolRoot = join(directory, "spools");
       const originalRecord = '{"generation":"original"}';
       const replacementRecord = '{"generation":"replaced"}';
+      const sourceChunkCount = 8;
       const recordCount = Math.floor(
-        (AUDIT_READ_CHUNK_BYTES * 3) / Buffer.byteLength(`${originalRecord}\n`)
+        (AUDIT_READ_CHUNK_BYTES * sourceChunkCount) / Buffer.byteLength(`${originalRecord}\n`)
       );
       const originalContents = `${Array.from({ length: recordCount }, () => originalRecord).join("\n")}\n`;
       const replacementContents =
         `${Array.from({ length: recordCount }, () => replacementRecord).join("\n")}\n`;
-      expect(Buffer.byteLength(replacementContents)).toBe(Buffer.byteLength(originalContents));
-      expect(Buffer.byteLength(originalContents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 2);
-      expect(Buffer.byteLength(originalContents)).toBeLessThanOrEqual(AUDIT_READ_CHUNK_BYTES * 3);
+      const expectedStagedOutputLength = Buffer.byteLength(replacementContents);
+      expect(expectedStagedOutputLength).toBe(Buffer.byteLength(originalContents));
+      expect(Buffer.byteLength(originalContents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 7);
+      expect(Buffer.byteLength(originalContents)).toBeLessThanOrEqual(AUDIT_READ_CHUNK_BYTES * sourceChunkCount);
       await writeFile(auditPath, originalContents);
       await mkdir(spoolRoot, { mode: 0o700 });
       const initialStats = await stat(auditPath);
@@ -691,14 +693,24 @@ describe("audit JSONL reader", () => {
         temporaryDirectory: spoolRoot,
         write: (chunk) => output.push(chunk)
       });
-      let observedSpoolDirectory: string | undefined;
-      await waitFor(() => {
-        observedSpoolDirectory = readdirSync(spoolRoot).find((entry) =>
-          entry.startsWith("miftah-audit-jsonl-")
-        );
-        return observedSpoolDirectory !== undefined;
+      let observedSnapshotSize: number | undefined;
+      await waitFor(async () => {
+        for (const spoolDirectory of await readdir(spoolRoot)) {
+          if (!spoolDirectory.startsWith("miftah-audit-jsonl-")) continue;
+          try {
+            const snapshotSize = (await stat(join(spoolRoot, spoolDirectory, "snapshot.jsonl"))).size;
+            if (snapshotSize > 0 && snapshotSize < expectedStagedOutputLength) {
+              observedSnapshotSize = snapshotSize;
+              return true;
+            }
+          } catch {
+            // The spool directory can be visible before its snapshot file is created.
+          }
+        }
+        return false;
       });
-      expect(observedSpoolDirectory).toBeDefined();
+      expect(observedSnapshotSize).toBeGreaterThan(0);
+      expect(observedSnapshotSize).toBeLessThan(expectedStagedOutputLength);
       expect(output).toEqual([]);
       const replacementFile = openSync(auditPath, "r+");
       try {
