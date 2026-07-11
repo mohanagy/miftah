@@ -25,6 +25,12 @@ const resourceIconUri = process.env.TEST_RESOURCE_ICON_URI;
 const promptIconUri = process.env.TEST_PROMPT_ICON_URI;
 const promptResourceUri = process.env.TEST_PROMPT_RESOURCE_URI;
 const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
+const failListResourcesPath = process.env.TEST_FAIL_LIST_RESOURCES_PATH;
+const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
+const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
+if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
+  throw new Error("test upstream configured to stay unavailable after an abrupt exit");
+}
 if (failOnRestartPath) {
   if (existsSync(failOnRestartPath)) {
     throw new Error("test upstream configured to fail after its initial start");
@@ -118,6 +124,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
+    void delay(0).then(() => process.exit(1));
+    return new Promise(() => undefined);
+  }
   if (process.env.TEST_CALL_TOOL_COUNT_PATH) {
     appendFileSync(process.env.TEST_CALL_TOOL_COUNT_PATH, "1\n");
   }
@@ -131,7 +141,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
-  if (process.env.TEST_FAIL_LIST_RESOURCES === "true") {
+  if (process.env.TEST_FAIL_LIST_RESOURCES === "true" || (failListResourcesPath && existsSync(failListResourcesPath))) {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
   }
   const secondPage = paginateCapabilities && request.params?.cursor === "next";
@@ -167,7 +177,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async () => {
 });
 
 server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
-  if (process.env.TEST_FAIL_LIST_PROMPTS === "true") {
+  if (process.env.TEST_FAIL_LIST_PROMPTS === "true" || (failListPromptsPath && existsSync(failListPromptsPath))) {
     throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
   }
   const secondPage = paginateCapabilities && request.params?.cursor === "next";

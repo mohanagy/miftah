@@ -9,6 +9,7 @@ import type {
   ReadResourceResult,
   Resource
 } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolDiscoveryMode } from "../../config/types.js";
 import { redactUri } from "../../secrets/redact.js";
 import { MiftahError } from "../../utils/errors.js";
 
@@ -47,6 +48,11 @@ interface CursorState {
   readonly upstreamCursors: ReadonlyMap<string, string>;
 }
 
+interface DiscoveryFailure {
+  readonly upstreamName: string;
+  readonly message: string;
+}
+
 /**
  * Holds exact per-profile routes for multi-upstream resource and prompt capabilities.
  */
@@ -55,26 +61,39 @@ export class ResourcePromptRegistry {
   private readonly promptRoutes = new Map<string, Map<string, PromptRoute>>();
   private readonly cursors = new Map<string, CursorState>();
   private readonly epochs = new Map<string, number>();
+  private readonly availability = new Map<string, Map<CursorKind, Map<string, boolean>>>();
+  private readonly availabilityChanges = new Set<string>();
 
   constructor(
     private readonly upstreamNames: () => string[],
     private readonly discoverResources: ResourceDiscovery,
     private readonly discoverPrompts: PromptDiscovery,
     private readonly redact: Redact,
-    private readonly maximumCursors = defaultMaximumCursors
+    private readonly maximumCursors = defaultMaximumCursors,
+    private readonly discoveryMode: ToolDiscoveryMode = "permissive"
   ) {}
 
   async listResources(profile: string, cursor?: string): Promise<ListResourcesResult> {
     const epoch = this.captureEpoch(profile);
     const upstreamCursors = this.resolveCursor("resources", profile, cursor);
-    const discovered = await Promise.all(
-      [...upstreamCursors].map(async ([upstreamName, upstreamCursor]) => ({
+    const pages = [...upstreamCursors];
+    const discoveryResults = await Promise.allSettled(
+      pages.map(async ([upstreamName, upstreamCursor]) => ({
         upstreamName,
         result: await this.discoverResources(profile, upstreamName, upstreamCursor ? { cursor: upstreamCursor } : undefined)
       }))
     );
+    const discovered = discoveryResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     this.assertCurrentEpoch("resources", profile, epoch);
+    const failures = this.discoveryFailures(discoveryResults, pages);
+    this.updateAvailability("resources", profile, discovered.map(({ upstreamName }) => upstreamName), failures);
+    this.assertDiscoveryAvailable("resources", profile, discovered.length, failures);
     const routes = new Map(this.resourceRoutes.get(profile));
+    for (const { upstreamName } of failures) {
+      for (const [uri, route] of routes) {
+        if (route.upstreamName === upstreamName) routes.delete(uri);
+      }
+    }
     const names = new Map<string, string>();
     for (const route of routes.values()) {
       if (route.exposedName !== undefined) names.set(route.exposedName, route.exposedUri);
@@ -130,14 +149,24 @@ export class ResourcePromptRegistry {
   async listPrompts(profile: string, cursor?: string): Promise<ListPromptsResult> {
     const epoch = this.captureEpoch(profile);
     const upstreamCursors = this.resolveCursor("prompts", profile, cursor);
-    const discovered = await Promise.all(
-      [...upstreamCursors].map(async ([upstreamName, upstreamCursor]) => ({
+    const pages = [...upstreamCursors];
+    const discoveryResults = await Promise.allSettled(
+      pages.map(async ([upstreamName, upstreamCursor]) => ({
         upstreamName,
         result: await this.discoverPrompts(profile, upstreamName, upstreamCursor ? { cursor: upstreamCursor } : undefined)
       }))
     );
+    const discovered = discoveryResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     this.assertCurrentEpoch("prompts", profile, epoch);
+    const failures = this.discoveryFailures(discoveryResults, pages);
+    this.updateAvailability("prompts", profile, discovered.map(({ upstreamName }) => upstreamName), failures);
+    this.assertDiscoveryAvailable("prompts", profile, discovered.length, failures);
     const routes = new Map(this.promptRoutes.get(profile));
+    for (const { upstreamName } of failures) {
+      for (const [name, route] of routes) {
+        if (route.upstreamName === upstreamName) routes.delete(name);
+      }
+    }
     const prompts: Prompt[] = [];
 
     for (const { upstreamName, result } of discovered) {
@@ -185,6 +214,14 @@ export class ResourcePromptRegistry {
 
   resolvePrompt(profile: string, exposedName: string): PromptRoute | undefined {
     return this.promptRoutes.get(profile)?.get(exposedName);
+  }
+
+  hasResourceRoutes(profile: string): boolean {
+    return this.resourceRoutes.has(profile);
+  }
+
+  hasPromptRoutes(profile: string): boolean {
+    return this.promptRoutes.has(profile);
   }
 
   captureEpoch(profile: string): number {
@@ -256,9 +293,21 @@ export class ResourcePromptRegistry {
     this.epochs.set(profile, this.captureEpoch(profile) + 1);
     this.resourceRoutes.delete(profile);
     this.promptRoutes.delete(profile);
+    this.availability.delete(profile);
+    this.availabilityChanges.delete(this.availabilityKey("resources", profile));
+    this.availabilityChanges.delete(this.availabilityKey("prompts", profile));
     for (const [cursor, state] of this.cursors) {
       if (state.profile === profile) this.cursors.delete(cursor);
     }
+
+  }
+
+  consumeResourceListChange(profile: string): boolean {
+    return this.availabilityChanges.delete(this.availabilityKey("resources", profile));
+  }
+
+  consumePromptListChange(profile: string): boolean {
+    return this.availabilityChanges.delete(this.availabilityKey("prompts", profile));
   }
 
   private resolveCursor(kind: CursorKind, profile: string, cursor?: string): Map<string, string | undefined> {
@@ -283,8 +332,93 @@ export class ResourcePromptRegistry {
       if (oldest === undefined) break;
       this.cursors.delete(oldest);
     }
+
     this.cursors.set(cursor, { kind, profile, upstreamCursors });
     return cursor;
+  }
+
+  private discoveryFailures<T>(
+    results: PromiseSettledResult<T>[],
+    pages: ReadonlyArray<readonly [string, string | undefined]>
+  ): DiscoveryFailure[] {
+    return results.flatMap((result, index) => {
+      if (result.status === "fulfilled") return [];
+      const upstreamName = pages[index]?.[0];
+      if (upstreamName === undefined) return [];
+      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [{ upstreamName, message: this.redact(message) }];
+    });
+  }
+
+  private assertDiscoveryAvailable(
+    kind: CursorKind,
+    profile: string,
+    successfulUpstreams: number,
+    failures: readonly DiscoveryFailure[]
+  ): void {
+    if (failures.length === 0) return;
+    const strict = this.discoveryMode === "strict";
+    if (!strict && successfulUpstreams > 0) return;
+    this.clearCapability(profile, kind);
+    const capability = kind === "resources" ? "resources" : "prompts";
+    const prefix = strict
+      ? `strict ${capability} discovery failed`
+      : `no healthy upstream completed ${capability} discovery`;
+    throw new MiftahError(
+      "UPSTREAM_DISCOVERY_FAILED",
+      `UPSTREAM_DISCOVERY_FAILED: ${prefix} for profile '${profile}': ${failures
+        .map((failure) => `upstream '${failure.upstreamName}' (${failure.message})`)
+        .join("; ")}`,
+      { profile, capability, failures }
+    );
+  }
+
+  private clearCapability(profile: string, kind: CursorKind): void {
+    if (kind === "resources") {
+      this.resourceRoutes.delete(profile);
+    } else {
+      this.promptRoutes.delete(profile);
+    }
+
+    for (const [cursor, state] of this.cursors) {
+      if (state.profile === profile && state.kind === kind) this.cursors.delete(cursor);
+    }
+  }
+
+  private updateAvailability(
+    kind: CursorKind,
+    profile: string,
+    successfulUpstreams: readonly string[],
+    failures: readonly DiscoveryFailure[]
+  ): void {
+    const byKind = this.availability.get(profile) ?? new Map<CursorKind, Map<string, boolean>>();
+    this.availability.set(profile, byKind);
+    const upstreams = byKind.get(kind) ?? new Map<string, boolean>();
+    byKind.set(kind, upstreams);
+    for (const upstreamName of successfulUpstreams) {
+      this.updateUpstreamAvailability(kind, profile, upstreams, upstreamName, true);
+    }
+    for (const { upstreamName } of failures) {
+      this.updateUpstreamAvailability(kind, profile, upstreams, upstreamName, false);
+    }
+  }
+
+  private updateUpstreamAvailability(
+    kind: CursorKind,
+    profile: string,
+    upstreams: Map<string, boolean>,
+    upstreamName: string,
+    available: boolean
+  ): void {
+    const previous = upstreams.get(upstreamName);
+    if (previous !== undefined && previous !== available) {
+      this.availabilityChanges.add(this.availabilityKey(kind, profile));
+    }
+    upstreams.set(upstreamName, available);
+  }
+
+  private availabilityKey(kind: CursorKind, profile: string): string {
+    return `${kind}:${profile}`;
   }
 
   private assertCurrentEpoch(kind: CursorKind, profile: string, epoch: number): void {

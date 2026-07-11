@@ -45,6 +45,7 @@ export interface ValidatedRoutingConfig extends Omit<RoutingConfig, "mode"> {
 }
 
 export type RiskLevel = "read" | "write" | "destructive";
+export type ToolDiscoveryMode = "permissive" | "strict";
 
 export interface PolicyConfig {
   allow?: RiskLevel[];
@@ -76,6 +77,7 @@ export interface AuditConfig {
 
 export interface ToolingConfig {
   collisionStrategy?: "prefix-upstream" | "fail";
+  toolDiscoveryMode?: ToolDiscoveryMode;
   toolRiskOverrides?: Record<string, RiskLevel>;
 }
 

@@ -1,7 +1,7 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { access, mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -296,6 +296,88 @@ describe("Miftah MCP wrapper", () => {
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("TOOL_SCHEMA_MISMATCH") }]
       });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("fails strict discovery when configured profiles expose different tool schemas", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_WHOAMI_SCHEMA: "account"
+          }
+        }
+      },
+      tooling: { toolDiscoveryMode: "strict" }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listTools()).rejects.toThrow(
+        /TOOL_SCHEMA_MISMATCH: strict tools discovery found different client-visible schemas.*personal.*work.*whoami/
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("invalidates strict discovery when a non-active profile becomes unavailable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-strict-profile-failure-"));
+    const personalCrashPath = join(directory, "personal-crash");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_CRASH_ON_CALL_TOOL_PATH: personalCrashPath
+          }
+        }
+      },
+      routing: {
+        rules: [{ when: { "args.target": "personal" }, profile: "personal" }]
+      },
+      tooling: { toolDiscoveryMode: "strict" }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      await writeFile(personalCrashPath, "crash");
+      expect(await client.callTool({ name: "whoami", arguments: { target: "personal" } })).toMatchObject({
+        isError: true
+      });
+      await expect
+        .poll(() => manager.listHealth().find((health) => health.profile === "personal")?.state)
+        .toBe("failed");
+
+      await expect(client.listTools()).rejects.toThrow(
+        /UPSTREAM_DISCOVERY_FAILED: strict tools discovery failed for profile 'work'.*profile 'personal'/
+      );
     } finally {
       await client.close();
       await wrapper.close();

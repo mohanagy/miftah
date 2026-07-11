@@ -107,7 +107,7 @@ describe("published config schema", () => {
     expect(audit).toMatchObject({ format: { const: "jsonl" }, redact: { const: true } });
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
-    expect(tooling).not.toHaveProperty("toolDiscoveryMode");
+    expect(tooling).toMatchObject({ toolDiscoveryMode: { enum: ["permissive", "strict"] } });
     expect(root?.routing?.additionalProperties).toBe(false);
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);

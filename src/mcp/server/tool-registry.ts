@@ -6,6 +6,11 @@ export interface DiscoveredTools {
   tools: Tool[];
 }
 
+export interface ToolDiscoveryResult {
+  discovered: DiscoveredTools[];
+  incomplete: boolean;
+}
+
 export interface RegisteredTool {
   exposedName: string;
   originalName: string;
@@ -19,9 +24,10 @@ export interface ToolSnapshot {
   readonly fingerprint: string;
   getTools(): Tool[];
   resolve(exposedName: string): RegisteredTool | undefined;
+  isComplete(): boolean;
 }
 
-export type ToolDiscovery = (profile: string) => Promise<DiscoveredTools[]>;
+export type ToolDiscovery = (profile: string) => Promise<ToolDiscoveryResult>;
 export type ToolNameResolver = (name: string, upstreamName?: string) => string;
 
 interface SnapshotState extends ToolSnapshot {
@@ -34,7 +40,7 @@ interface PendingSnapshot {
 }
 
 /**
- * Builds and caches complete profile-specific tool snapshots without exposing partial discovery state.
+ * Builds profile-specific snapshots atomically and retries incomplete discovery on the next request.
  */
 export class ToolRegistry {
   private readonly snapshots = new Map<string, SnapshotState>();
@@ -50,11 +56,12 @@ export class ToolRegistry {
     for (;;) {
       const generation = this.generation(profile);
       const cached = this.snapshots.get(profile);
-      if (cached?.generation === generation) return cached;
+      if (cached?.generation === generation && cached.isComplete()) return cached;
 
       const current = this.pending.get(profile);
       if (current?.generation === generation) {
-        await current.promise;
+        const snapshot = await current.promise;
+        if (this.generation(profile) === generation) return snapshot;
       } else {
         const pending: PendingSnapshot = {
           generation,
@@ -65,6 +72,7 @@ export class ToolRegistry {
           const snapshot = await pending.promise;
           if (this.generation(profile) === generation) {
             this.snapshots.set(profile, snapshot);
+            return snapshot;
           }
         } finally {
           if (this.pending.get(profile) === pending) this.pending.delete(profile);
@@ -92,7 +100,8 @@ export class ToolRegistry {
   }
 
   private async build(profile: string, generation: number): Promise<SnapshotState> {
-    const discovered = await this.discover(profile);
+    const discovery = await this.discover(profile);
+    const discovered = discovery.discovered;
     const routes = new Map<string, RegisteredTool>();
     const tools: Tool[] = [];
 
@@ -123,7 +132,8 @@ export class ToolRegistry {
       profile,
       fingerprint: canonicalJson(snapshotTools),
       getTools: () => snapshotTools.map(cloneTool),
-      resolve: (exposedName) => routes.get(exposedName)
+      resolve: (exposedName) => routes.get(exposedName),
+      isComplete: () => !discovery.incomplete
     };
   }
 }
@@ -140,7 +150,7 @@ function cloneTool(tool: Tool): Tool {
   return structuredClone(tool);
 }
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const entries = Object.entries(value)
