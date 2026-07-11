@@ -4,6 +4,7 @@ export interface RoutingInput {
   toolName: string;
   args?: Record<string, unknown>;
   context?: Record<string, unknown>;
+  profileHints?: readonly RoutingContextProfileHint[];
 }
 
 export interface RoutingDecision {

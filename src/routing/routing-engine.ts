@@ -14,12 +14,25 @@ function getPath(input: RoutingInput, path: string): unknown {
 function matches(rule: RoutingRule, input: RoutingInput): boolean {
   return Object.entries(rule.when).every(([path, expected]) => {
     const actual = getPath(input, path);
-    if (typeof expected === "string" && expected.includes("*")) {
-      const pattern = new RegExp(`^${expected.split("*").map(escapeRegExp).join(".*")}$`);
-      return typeof actual === "string" && pattern.test(actual);
+
+    if (path.startsWith("context.") && Array.isArray(actual)) {
+      return actual.some((value) => isScalar(value) && isScalar(expected) && matchesValue(value, expected));
     }
-    return actual === expected;
+
+    return matchesValue(actual, expected);
   });
+}
+
+function matchesValue(actual: unknown, expected: unknown): boolean {
+  if (typeof expected === "string" && expected.includes("*")) {
+    const pattern = new RegExp(`^${expected.split("*").map(escapeRegExp).join(".*")}$`);
+    return typeof actual === "string" && pattern.test(actual);
+  }
+  return actual === expected;
+}
+
+function isScalar(value: unknown): boolean {
+  return value === null || (typeof value !== "object" && typeof value !== "function");
 }
 
 function escapeRegExp(value: string): string {
@@ -38,6 +51,28 @@ export class RoutingEngine {
   }
 
   resolve(input: RoutingInput, activeProfile = this.activeProfile): RoutingDecision {
+    const environmentHint = input.profileHints?.find((hint) => hint.source === "environment");
+    if (environmentHint) {
+      return { profile: environmentHint.profile, reason: "profile-hint:environment" };
+    }
+
+    const markerProfiles = [
+      ...new Set(
+        (input.profileHints ?? [])
+          .filter((hint) => hint.source === "project-marker")
+          .map((hint) => hint.profile)
+      )
+    ].sort();
+    if (markerProfiles.length > 1) {
+      throw new MiftahError(
+        "ROUTING_AMBIGUOUS",
+        `ROUTING_AMBIGUOUS: project-marker profile hints are ${markerProfiles.join(", ")}`
+      );
+    }
+    if (markerProfiles.length === 1) {
+      return { profile: markerProfiles[0]!, reason: "profile-hint:project-marker" };
+    }
+
     const matchingRules = (this.config.rules ?? []).filter((rule) => matches(rule, input));
     const profiles = [...new Set(matchingRules.map((rule) => rule.profile))];
     if (profiles.length > 1) {

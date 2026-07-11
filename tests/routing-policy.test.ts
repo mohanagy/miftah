@@ -25,6 +25,150 @@ describe("routing and policy", () => {
     });
   });
 
+  it("matches exact context values against members of a context array", () => {
+    const engine = new RoutingEngine(
+      {
+        rules: [
+          {
+            name: "workspace-root",
+            when: { "context.fileRoots": "file:///workspace/project" },
+            profile: "workspace"
+          }
+        ]
+      },
+      "active"
+    );
+
+    expect(
+      engine.resolve({
+        toolName: "search_issues",
+        context: { fileRoots: ["file:///other", "file:///workspace/project"] }
+      })
+    ).toEqual({ profile: "workspace", reason: "rule:workspace-root" });
+  });
+
+  it("matches wildcard context values against members of a context array", () => {
+    const engine = new RoutingEngine(
+      {
+        rules: [
+          {
+            name: "workspace-root",
+            when: { "context.fileRoots": "file:///workspace/*" },
+            profile: "workspace"
+          }
+        ]
+      },
+      "active"
+    );
+
+    expect(
+      engine.resolve({
+        toolName: "search_issues",
+        context: { fileRoots: ["file:///other", "file:///workspace/project"] }
+      })
+    ).toEqual({ profile: "workspace", reason: "rule:workspace-root" });
+    expect(
+      engine.resolve({
+        toolName: "search_issues",
+        context: { fileRoots: ["file:///other", "file:///different/project"] }
+      })
+    ).toEqual({ profile: "active", reason: "active-profile" });
+  });
+
+  it("prefers an environment profile hint over marker hints, rules, and active fallback", () => {
+    const engine = new RoutingEngine(
+      {
+        rules: [{ name: "matching-rule", when: { "args.repo": "org/work" }, profile: "rule" }]
+      },
+      "active"
+    );
+
+    const decision = engine.resolve({
+      toolName: "search_issues",
+      args: { repo: "org/work" },
+      profileHints: [
+        {
+          profile: "marker",
+          source: "project-marker",
+          evidence: { kind: "marker", path: "/workspace/.miftah-profile" }
+        },
+        {
+          profile: "environment",
+          source: "environment",
+          evidence: { kind: "environment", variable: "MIFTAH_PROFILE" }
+        }
+      ]
+    });
+
+    expect(decision).toEqual({ profile: "environment", reason: "profile-hint:environment" });
+    expect(decision.reason.startsWith("rule:")).toBe(false);
+  });
+
+  it("prefers one project-marker profile hint over matching rules and fallback", () => {
+    const engine = new RoutingEngine(
+      {
+        rules: [{ name: "matching-rule", when: { "args.repo": "org/work" }, profile: "rule" }]
+      },
+      "active"
+    );
+
+    expect(
+      engine.resolve({
+        toolName: "search_issues",
+        args: { repo: "org/work" },
+        profileHints: [
+          {
+            profile: "marker",
+            source: "project-marker",
+            evidence: { kind: "marker", path: "/workspace/.miftah-profile" }
+          },
+          {
+            profile: "marker",
+            source: "project-marker",
+            evidence: { kind: "marker", path: "/workspace/nested/.miftah-profile" }
+          }
+        ]
+      })
+    ).toEqual({ profile: "marker", reason: "profile-hint:project-marker" });
+  });
+
+  it("rejects distinct project-marker profile hints in stable profile order", () => {
+    const engine = new RoutingEngine({}, "active");
+    const input = {
+      toolName: "search_issues",
+      profileHints: [
+        {
+          profile: "zeta",
+          source: "project-marker" as const,
+          evidence: { kind: "marker" as const, path: "/workspace/zeta/.miftah-profile" }
+        },
+        {
+          profile: "alpha",
+          source: "project-marker" as const,
+          evidence: { kind: "marker" as const, path: "/workspace/alpha/.miftah-profile" }
+        }
+      ]
+    };
+
+    expect(() => engine.resolve(input)).toThrow(
+      "ROUTING_AMBIGUOUS: project-marker profile hints are alpha, zeta"
+    );
+  });
+
+  it("uses matching rules before fallback when no profile hint is provided", () => {
+    const engine = new RoutingEngine(
+      {
+        rules: [{ name: "matching-rule", when: { "args.repo": "org/work" }, profile: "rule" }]
+      },
+      "active"
+    );
+
+    expect(engine.resolve({ toolName: "search_issues", args: { repo: "org/work" } })).toEqual({
+      profile: "rule",
+      reason: "rule:matching-rule"
+    });
+  });
+
   it("returns an ambiguity error when ask fallback has multiple matches", () => {
     const engine = new RoutingEngine(
       {
