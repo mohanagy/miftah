@@ -30,7 +30,7 @@ miftah doctor --json --config github.json
 
 Reports are `healthy`, `degraded`, or `failed`. Every check has a stable `code`, `status`, `target`, `explanation`, and `remediation`. Doctor validates configuration and secret references, checks redaction, permissions and configured audit storage, and probes executable availability, upstream startup, discovery, and clean shutdown where applicable.
 
-Doctor never emits resolved secret values, raw configuration paths, or configured upstream command arguments in its report. A `healthy` or `degraded` report exits `0`; warnings therefore do not block automation. A `failed` report has blocking checks and exits `1`.
+Doctor never emits resolved secret values, raw configuration paths, configured upstream command arguments, or the per-run synthetic redaction canary in its report. A `healthy` or `degraded` report exits `0`; warnings therefore do not block automation. A `failed` report has blocking checks and exits `1`.
 
 Inspect or initialize an upstream:
 
