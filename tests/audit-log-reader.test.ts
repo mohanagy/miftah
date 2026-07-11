@@ -155,6 +155,7 @@ describe("runtime configuration resolution", () => {
         env: { SINGLE_ENV: "single-upstream-env" },
         headers: { Authorization: "single-upstream-header" }
       });
+      expect(resolved.config.upstream).toEqual(resolved.upstream);
       expect(resolved.redactor.redactForAudit({ message: "single-upstream-header" })).toEqual({
         message: "[REDACTED]"
       });
@@ -676,9 +677,9 @@ describe("audit JSONL reader", () => {
       const recordCount = Math.floor(
         (AUDIT_READ_CHUNK_BYTES * sourceChunkCount) / Buffer.byteLength(`${originalRecord}\n`)
       );
-      const originalContents = `${Array.from({ length: recordCount }, () => originalRecord).join("\n")}\n`;
+      const originalContents = `${Array.from({ length: recordCount }).fill(originalRecord).join("\n")}\n`;
       const replacementContents =
-        `${Array.from({ length: recordCount }, () => replacementRecord).join("\n")}\n`;
+        `${Array.from({ length: recordCount }).fill(replacementRecord).join("\n")}\n`;
       const expectedStagedOutputLength = Buffer.byteLength(replacementContents);
       expect(expectedStagedOutputLength).toBe(Buffer.byteLength(originalContents));
       expect(Buffer.byteLength(originalContents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 7);

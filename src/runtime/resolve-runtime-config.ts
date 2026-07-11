@@ -59,14 +59,14 @@ export async function resolveRuntimeConfig(configPath: string): Promise<Resolved
         ])
       )
     : config.upstreams;
-  const resolvedConfig = { ...config, profiles, upstreams };
-  const upstream = resolvedConfig.upstream
+  const upstream = config.upstream
     ? {
-        ...resolvedConfig.upstream,
-        env: resolveMap(resolvedConfig.upstream.env),
-        headers: resolveMap(resolvedConfig.upstream.headers)
+        ...config.upstream,
+        env: resolveMap(config.upstream.env),
+        headers: resolveMap(config.upstream.headers)
       }
     : undefined;
+  const resolvedConfig = { ...config, profiles, upstreams, upstream };
   const values = [...secretValues];
   return {
     config: resolvedConfig,

@@ -31,6 +31,11 @@ describe("CLI parser", () => {
       command: "list-tools",
       options: { config: "wrapper.json", profile: "work" }
     });
+    expect(parseCli(["--follow", "logs", "--config=wrapper.json"])).toEqual({
+      kind: "run",
+      command: "logs",
+      options: { config: "wrapper.json", follow: true }
+    });
   });
 
   it("accepts a leading dash in an explicitly assigned option value", () => {
@@ -66,6 +71,7 @@ describe("CLI parser", () => {
     }
     expect(renderCommandHelp("doctor")).toContain("--config <file>");
     expect(renderCommandHelp("doctor")).toContain("--json");
+    expect(renderCommandHelp("logs")).toContain("Continue reading audit logs as they are appended or rotated.");
   });
 
   it("returns help without requiring a command and recognizes help around commands", () => {

@@ -116,7 +116,7 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     name: "follow",
     takesValue: false,
     usage: "--follow",
-    description: "Read audit logs as requested."
+    description: "Continue reading audit logs as they are appended or rotated."
   },
   json: {
     name: "json",
