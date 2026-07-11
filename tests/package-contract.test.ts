@@ -136,6 +136,11 @@ function quoteForWindowsCommand(value: string): string {
   return `"${value.replace(/"/gu, '""')}"`;
 }
 
+function buildWindowsCommand(binary: string, args: readonly string[]): string {
+  // cmd.exe /s removes this outer pair before parsing the quoted executable path.
+  return `"${[binary, ...args].map(quoteForWindowsCommand).join(" ")}"`;
+}
+
 function runInstalledBinary(binary: string, args: readonly string[], cwd: string) {
   if (process.platform !== "win32") {
     return spawnSync(binary, args, {
@@ -146,11 +151,12 @@ function runInstalledBinary(binary: string, args: readonly string[], cwd: string
   }
   return spawnSync(
     process.env.ComSpec ?? "cmd.exe",
-    ["/d", "/s", "/c", [binary, ...args].map(quoteForWindowsCommand).join(" ")],
+    ["/d", "/s", "/c", buildWindowsCommand(binary, args)],
     {
       cwd,
       encoding: "utf8",
-      timeout: npmCommandTimeoutMs
+      timeout: npmCommandTimeoutMs,
+      windowsVerbatimArguments: true
     }
   );
 }
