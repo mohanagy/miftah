@@ -36,15 +36,19 @@ function catalogError(message: string): never {
   throw new PresetCatalogError(message);
 }
 
-function environmentReference(name: string): string {
-  if (!environmentVariableName.test(name)) {
+function environmentReference(name: unknown): string {
+  if (typeof name !== "string" || !environmentVariableName.test(name)) {
     catalogError(`Invalid credential environment variable name '${name}'.`);
   }
   return `\${${name}}`;
 }
 
-function validateCredentialEnv(credentialEnv: string | undefined): void {
-  if (credentialEnv !== undefined && !environmentVariableName.test(credentialEnv)) {
+function validateCredentialEnv(credentialEnv: unknown): void {
+  if (credentialEnv === undefined) return;
+  if (typeof credentialEnv !== "string") {
+    catalogError("Preset option 'credentialEnv' must be a string when supplied.");
+  }
+  if (!environmentVariableName.test(credentialEnv)) {
     catalogError(`Invalid credential environment variable name '${credentialEnv}'.`);
   }
 }
@@ -169,7 +173,10 @@ function buildGithubPreset(name: string): MiftahConfig {
   };
 }
 
-function requireExactNpmPackage(value: string | undefined): string {
+function requireExactNpmPackage(value: unknown): string {
+  if (typeof value !== "string") {
+    catalogError("Preset option 'npmPackage' must be a string.");
+  }
   if (!value || !exactNpmPackageSpec.test(value)) {
     catalogError("Preset 'generic-npx' requires an exact npm package semver spec such as '@scope/server@1.2.3'.");
   }
@@ -182,13 +189,16 @@ function buildGenericNpxPreset(name: string, options: PresetBuildOptions): Mifta
     {
       transport: "stdio",
       command: "npx",
-      args: ["--yes", requireExactNpmPackage(options.npmPackage), "stdio"]
+      args: ["--yes", requireExactNpmPackage(options.npmPackage)]
     },
     options.credentialEnv
   );
 }
 
-function requireCanonicalDigestImage(value: string | undefined): string {
+function requireCanonicalDigestImage(value: unknown): string {
+  if (typeof value !== "string") {
+    catalogError("Preset option 'dockerImage' must be a string.");
+  }
   if (!value || !canonicalDigestImage.test(value)) {
     catalogError(
       "Preset 'generic-docker' requires a canonical image reference with an @sha256: digest containing 64 hexadecimal characters."
@@ -210,7 +220,13 @@ function buildGenericDockerPreset(name: string, options: PresetBuildOptions): Mi
   );
 }
 
-function requireHttpsUrl(value: string | undefined): string {
+function requireHttpsUrl(value: unknown): string {
+  if (value === undefined) {
+    catalogError("Preset 'streamable-http' requires an HTTPS URL.");
+  }
+  if (typeof value !== "string") {
+    catalogError("Preset option 'url' must be a string.");
+  }
   if (!value) {
     catalogError("Preset 'streamable-http' requires an HTTPS URL.");
   }
@@ -235,10 +251,16 @@ function buildCredentialHeaders(options: PresetBuildOptions): Record<string, str
   if (options.credentialEnv === undefined || options.headerName === undefined) {
     catalogError("Streamable HTTP credentials require credentialEnv and headerName together.");
   }
+  if (typeof options.headerName !== "string") {
+    catalogError("Preset option 'headerName' must be a string when supplied.");
+  }
   if (!headerName.test(options.headerName)) {
     catalogError(`Invalid HTTP header name '${options.headerName}'.`);
   }
-  const headerPrefix = options.headerPrefix ?? "";
+  const headerPrefix = options.headerPrefix === undefined ? "" : options.headerPrefix;
+  if (typeof headerPrefix !== "string") {
+    catalogError("Preset option 'headerPrefix' must be a string when supplied.");
+  }
   if (headerPrefix !== "" && !allowedHeaderPrefixes.has(headerPrefix)) {
     catalogError("HTTP header prefix must be empty, 'Bearer ', or 'Sentry '.");
   }

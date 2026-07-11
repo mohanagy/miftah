@@ -4,6 +4,7 @@ import {
   PRESET_CATALOG,
   PresetCatalogError
 } from "../src/config/presets.js";
+import type { PresetBuildOptions } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 
 function serializedConfig(config: unknown): string {
@@ -56,9 +57,11 @@ describe("preset catalog", () => {
   });
 
   it("builds exact provider contracts with only environment secret references", () => {
+    const generic = buildPresetConfig("generic", "generic");
     const github = buildPresetConfig("github", "github");
     const sentry = buildPresetConfig("sentry", "sentry");
 
+    expect(generic.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
     expect(github.upstream?.args).toEqual([
       "run",
       "-i",
@@ -84,6 +87,10 @@ describe("preset catalog", () => {
   it("requires and validates exact generic preset inputs", () => {
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3" })).not.toThrow();
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).not.toThrow();
+    expect(buildPresetConfig("npx", "generic-npx", { npmPackage: "@sentry/mcp-server@0.36.0" }).upstream?.args).toEqual([
+      "--yes",
+      "@sentry/mcp-server@0.36.0"
+    ]);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@latest" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@^1.2.3" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server" })).toThrow(PresetCatalogError);
@@ -204,6 +211,47 @@ describe("preset catalog", () => {
     ]
   ] as const)("rejects a supplied %s credential environment name of %j", (preset, options, credentialEnv) => {
     expect(() => buildPresetConfig("test", preset, { ...options, credentialEnv })).toThrow(PresetCatalogError);
+  });
+
+  it.each([
+    ["generic", "credentialEnv", {}],
+    ["generic-npx", "npmPackage", { npmPackage: "server@1.2.3" }],
+    [
+      "generic-docker",
+      "dockerImage",
+      { dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    ],
+    ["streamable-http", "url", { url: "https://mcp.example.com/v1" }],
+    [
+      "streamable-http",
+      "headerName",
+      { url: "https://mcp.example.com/v1", credentialEnv: "REMOTE_TOKEN", headerName: "Authorization" }
+    ],
+    [
+      "streamable-http",
+      "headerPrefix",
+      { url: "https://mcp.example.com/v1", credentialEnv: "REMOTE_TOKEN", headerName: "Authorization" }
+    ]
+  ] as const)(
+    "rejects a non-string %s option for %s presets before generating config",
+    (preset, option, validOptions) => {
+      for (const value of [null, true, {}, []]) {
+        const options = { ...validOptions, [option]: value };
+        expect(() => buildPresetConfig("test", preset, options as unknown as PresetBuildOptions)).toThrow(
+          /must be a string/
+        );
+      }
+    }
+  );
+
+  it("accepts explicitly undefined optional preset inputs", () => {
+    expect(() => buildPresetConfig("generic", "generic", { credentialEnv: undefined })).not.toThrow();
+    expect(() => buildPresetConfig("remote", "streamable-http", {
+      url: "https://mcp.example.com/v1",
+      credentialEnv: undefined,
+      headerName: undefined,
+      headerPrefix: undefined
+    })).not.toThrow();
   });
 
   it("rejects unknown strict catalog presets with a clear typed error", () => {
