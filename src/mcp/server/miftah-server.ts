@@ -612,13 +612,26 @@ export class MiftahServer {
       return textResult("Profile restarted.");
     }
     if (name === "miftah_route_preview") {
+      const toolName = requiredString(args, "toolName");
+      const snapshot = await this.provideRoutingContext();
       const route = this.routing.resolve({
-        toolName: requiredString(args, "toolName"),
-        args: isRecord(args.args) ? args.args : {}
+        toolName,
+        args: isRecord(args.args) ? args.args : {},
+        context: snapshot.context,
+        profileHints: snapshot.profileHints
       });
       const profile = this.profiles.get(route.profile);
-      audit.update({ profile: route.profile });
-      return textResult(JSON.stringify({ ...route, policy: this.policy.evaluate(profile.policy, requiredString(args, "toolName")) }));
+      const evidence = this.redactor.redactForAudit(snapshot.evidence);
+      const policy = this.policy.evaluate(profile.policy, toolName);
+      audit.update({
+        profile: route.profile,
+        routingReason: route.reason,
+        policyName: profile.policy ?? "default",
+        policyDecision: policy.action,
+        risk: policy.risk,
+        routingEvidence: evidence
+      });
+      return textResult(JSON.stringify({ ...route, policy, evidence }));
     }
     throw new MiftahError("TOOL_NOT_FOUND", `TOOL_NOT_FOUND: management tool '${name}' is not registered`);
   }

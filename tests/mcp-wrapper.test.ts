@@ -174,6 +174,83 @@ describe("Miftah MCP wrapper", () => {
     await wrapper.close();
   });
 
+  it("uses the collector snapshot for matching redacted preview and audit evidence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-route-evidence-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const rawProject = "private-project-identity";
+    const rawToken = "collector-secret-token";
+    const contextPath = join(directory, "project");
+    const snapshot: RoutingContextSnapshot = {
+      context: {
+        package: { name: "@example/personal-project" },
+        environment: { project: rawProject }
+      },
+      evidence: {
+        cwd: contextPath,
+        fileRoots: [`${pathToFileURL(contextPath).toString()}?token=${rawToken}`],
+        environment: { hasProject: true },
+        package: {
+          path: join(contextPath, "package.json"),
+          name: "@example/personal-project",
+          repository: `https://${rawToken}@github.com/example/personal-project.git?token=${rawToken}`
+        }
+      },
+      profileHints: []
+    };
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      routing: {
+        rules: [{ name: "personal-project", when: { "context.package.name": "@example/personal-project" }, profile: "personal" }]
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager, async () => snapshot);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const previewResult = CallToolResultSchema.parse(
+        await client.callTool({
+          name: "miftah_route_preview",
+          arguments: { toolName: "whoami" }
+        })
+      );
+      const previewContent = previewResult.content[0];
+      if (previewContent?.type !== "text") throw new Error("Expected route preview text.");
+      const preview = JSON.parse(previewContent.text) as Record<string, unknown>;
+      expect(preview).toMatchObject({ profile: "personal", reason: "rule:personal-project" });
+      expect(JSON.stringify(preview.evidence)).not.toContain(rawProject);
+      expect(JSON.stringify(preview.evidence)).not.toContain(rawToken);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const operation = events.find((event) => event.kind === "operation" && event.operation === "tools/call" && event.name === "whoami");
+      expect(operation).toMatchObject({ profile: "personal", routingReason: "rule:personal-project" });
+      expect(operation?.routingEvidence).toEqual(preview.evidence);
+      expect(JSON.stringify(operation?.routingEvidence)).not.toContain(rawProject);
+      expect(JSON.stringify(operation?.routingEvidence)).not.toContain(rawToken);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("blocks destructive calls when runtime policy lookup misses an explicitly named policy", async () => {
     const config: MiftahConfig = {
       version: "1",

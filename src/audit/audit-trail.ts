@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AuditLogger } from "./audit-logger.js";
 import type { AuditEvent, AuditHealth, AuditRoutingSource, AuditStatus } from "./audit-types.js";
+import type { RoutingContextEvidence } from "../routing/routing-types.js";
 
 export interface AuditOperationInput {
   operation: string;
@@ -19,6 +20,7 @@ export interface AuditScopeUpdate {
   policyName?: string;
   policyDecision?: AuditEvent["policyDecision"];
   risk?: AuditEvent["risk"];
+  routingEvidence?: RoutingContextEvidence;
 }
 
 export interface AuditScopeResult {
@@ -133,6 +135,7 @@ export class AuditScope {
       ...(this.event.policyName === undefined ? {} : { policyName: this.event.policyName }),
       ...(this.event.policyDecision === undefined ? {} : { policyDecision: this.event.policyDecision }),
       ...(this.event.risk === undefined ? {} : { risk: this.event.risk }),
+      ...(this.event.routingEvidence === undefined ? {} : { routingEvidence: this.event.routingEvidence }),
       ...(this.event.arguments === undefined ? {} : { arguments: this.event.arguments }),
       ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode })
     });

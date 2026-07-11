@@ -55,6 +55,7 @@ export class OperationPipeline {
   async execute<Result>(operation: ProxiedOperation<Result>, audit: AuditScope): Promise<Result> {
     try {
       const snapshot = await this.options.routingContext();
+      audit.update({ routingEvidence: this.options.redactor.redactForAudit(snapshot.evidence) });
       const route = this.options.routing.resolve(
         {
           toolName: operation.routingName,

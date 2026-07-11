@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
+import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
@@ -223,6 +224,82 @@ describe("operation pipeline", () => {
           expect.objectContaining({ operation: "prompts/get", status: "ambiguous", errorCode: "ROUTING_AMBIGUOUS" })
         ])
       );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("does not forward destructive calls when project context profile hints conflict", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-context-ambiguous-"));
+    const toolCountPath = join(directory, "tool-count");
+    const auditPath = join(directory, "audit.jsonl");
+    const snapshot: RoutingContextSnapshot = {
+      context: {},
+      evidence: {
+        cwd: join(directory, "project"),
+        fileRoots: [],
+        marker: { path: join(directory, "project", ".miftahrc.json") }
+      },
+      profileHints: [
+        {
+          profile: "work",
+          source: "project-marker",
+          evidence: { kind: "marker", path: join(directory, "work", ".miftahrc.json") }
+        },
+        {
+          profile: "personal",
+          source: "project-marker",
+          evidence: { kind: "marker", path: join(directory, "personal", ".miftahrc.json") }
+        }
+      ]
+    };
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_CALL_TOOL_COUNT_PATH: toolCountPath
+          }
+        },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_CALL_TOOL_COUNT_PATH: toolCountPath
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { create_item: "destructive" } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager, async () => snapshot);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "create_item", arguments: { name: "x" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("ROUTING_AMBIGUOUS") }]
+      });
+      await expect(access(toolCountPath)).rejects.toThrow();
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.find((event) => event.kind === "operation" && event.operation === "tools/call")).toMatchObject({
+        status: "ambiguous",
+        errorCode: "ROUTING_AMBIGUOUS",
+        routingEvidence: snapshot.evidence
+      });
     } finally {
       await client.close();
       await wrapper.close();
