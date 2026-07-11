@@ -16,7 +16,7 @@ With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` u
 
 For a multi-entry `upstreams` map, Miftah aggregates resources and prompts. Resource names and prompt names use `<upstream>__<name>`. Resource URIs use `miftah://resource/<encoded-upstream>?uri=<encoded-redacted-upstream-uri>` and resolve through an exact, per-profile route map; callers cannot select an upstream by supplying a raw URI or an unlisted namespaced identifier. Prompt links and sub-resource URIs become exact Miftah routes to their originating upstream as well. Before publication, Miftah strips URI userinfo/fragments and redacts every query value in resource and prompt URI metadata. Multi-upstream list cursors are opaque, bounded Miftah cursors, scoped to the active profile and capability type, and cannot be reused after a profile change or restart. Clients receive `notifications/resources/list_changed` and `notifications/prompts/list_changed` with the tool notification and must re-list all affected capabilities.
 
-A standard `upstream` and a one-entry `upstreams` map retain raw resource URIs, prompt names, and native upstream pagination. A zero-entry map omits resource and prompt capabilities.
+A standard `upstream` and a one-entry `upstreams` map retain credential-free raw resource URIs, prompt names, and native upstream pagination. Miftah still strips URI userinfo and fragments and redacts all query values in resource and prompt URI/icon fields before returning them. A zero-entry map omits resource and prompt capabilities.
 
 ## Discovery resilience
 

@@ -4,7 +4,7 @@ import type { PolicyDecision } from "../../policy/policy-types.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import type { RoutingDecision } from "../../routing/routing-types.js";
-import { redactSecrets, redactUri } from "../../secrets/redact.js";
+import { redactSecrets, redactUri, redactUrisInText } from "../../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
@@ -169,7 +169,10 @@ export class OperationPipeline {
   }
 
   private toSafeError(error: unknown): MiftahError {
-    const message = redactSecrets(error instanceof Error ? error.message : String(error), this.options.upstreams.getSecretValues());
+    const message = redactSecrets(
+      redactUrisInText(error instanceof Error ? error.message : String(error)),
+      this.options.upstreams.getSecretValues()
+    );
     if (error instanceof MiftahError) return new MiftahError(error.code, message, error.details);
     return new MiftahError("UPSTREAM_CALL_FAILED", `UPSTREAM_CALL_FAILED: ${message}`);
   }

@@ -14,12 +14,14 @@ import {
   type ListPromptsResult,
   type ListResourcesRequest,
   type ListResourcesResult,
+  type Prompt,
   type ReadResourceResult,
   type ReadResourceRequest,
+  type Resource,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig } from "../../config/types.js";
-import { redactSecrets, redactUri } from "../../secrets/redact.js";
+import { redactSecrets, redactUri, redactUrisInText } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
@@ -197,7 +199,7 @@ export class MiftahServer {
           }
         }
         return redactSecrets(
-          await this.discoverResources(profile, upstreamName, request.params),
+          redactDirectResourceList(await this.discoverResources(profile, upstreamName, request.params)),
           this.upstreams.getSecretValues()
         );
       });
@@ -224,7 +226,7 @@ export class MiftahServer {
           }
         }
         return redactSecrets(
-          await this.discoverPrompts(profile, upstreamName, request.params),
+          redactDirectPromptList(await this.discoverPrompts(profile, upstreamName, request.params)),
           this.upstreams.getSecretValues()
         );
       });
@@ -292,7 +294,7 @@ export class MiftahServer {
       });
     } catch (error) {
       const safeMessage = redactSecrets(
-        error instanceof Error ? error.message : String(error),
+        redactUrisInText(error instanceof Error ? error.message : String(error)),
         this.upstreams.getSecretValues()
       );
       if (error instanceof MiftahError) {
@@ -558,7 +560,7 @@ export class MiftahServer {
           ...(upstreamName === undefined ? {} : { upstreamName }),
           name: params.uri,
           execute: (session) => session.readResource(params),
-          redact: (result) => result
+          redact: redactDirectReadResult
         };
       }
     });
@@ -582,7 +584,7 @@ export class MiftahServer {
           ...(upstreamName === undefined ? {} : { upstreamName }),
           name: params.name,
           execute: (session) => session.getPrompt(params),
-          redact: (result) => result
+          redact: redactDirectPromptResult
         };
       }
     });
@@ -628,7 +630,7 @@ export class MiftahServer {
       return await operation(session);
     } catch (error) {
       const safeMessage = redactSecrets(
-        error instanceof Error ? error.message : String(error),
+        redactUrisInText(error instanceof Error ? error.message : String(error)),
         this.upstreams.getSecretValues()
       );
       throw new Error(safeMessage, { cause: error });
@@ -641,14 +643,11 @@ export class MiftahServer {
   ): Promise<ResolvedOperation<ReadResourceResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Resource aggregation is unavailable");
     const registry = this.resourcePromptRegistry;
-    const epoch = registry.captureEpoch(profile);
+    let epoch = registry.captureEpoch(profile);
     let route = registry.resolveResource(profile, params.uri);
     if (!route) {
-      try {
-        await registry.listResources(profile);
-      } finally {
-        await this.notifyResourceAvailabilityChange(profile);
-      }
+      await this.listResourcesForCapturedOperation(profile, registry);
+      epoch = registry.captureEpoch(profile);
       registry.assertResourceEpoch(profile, epoch);
       route = registry.resolveResource(profile, params.uri);
     }
@@ -673,14 +672,11 @@ export class MiftahServer {
   ): Promise<ResolvedOperation<GetPromptResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Prompt aggregation is unavailable");
     const registry = this.resourcePromptRegistry;
-    const epoch = registry.captureEpoch(profile);
+    let epoch = registry.captureEpoch(profile);
     let route = registry.resolvePrompt(profile, params.name);
     if (!route) {
-      try {
-        await registry.listPrompts(profile);
-      } finally {
-        await this.notifyPromptAvailabilityChange(profile);
-      }
+      await this.listPromptsForCapturedOperation(profile, registry);
+      epoch = registry.captureEpoch(profile);
       registry.assertPromptEpoch(profile, epoch);
       route = registry.resolvePrompt(profile, params.name);
     }
@@ -697,6 +693,28 @@ export class MiftahServer {
       execute: (session) => session.getPrompt({ ...params, name: route.originalName }),
       redact: (result) => registry.redactPromptResult(route, result, epoch)
     };
+  }
+
+  private async listResourcesForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+    try {
+      await registry.listResources(profile);
+    } catch (error) {
+      if (!(error instanceof MiftahError) || error.code !== "RESOURCE_DISCOVERY_INVALIDATED") throw error;
+      await registry.listResources(profile);
+    } finally {
+      await this.notifyResourceAvailabilityChange(profile);
+    }
+  }
+
+  private async listPromptsForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+    try {
+      await registry.listPrompts(profile);
+    } catch (error) {
+      if (!(error instanceof MiftahError) || error.code !== "PROMPT_DISCOVERY_INVALIDATED") throw error;
+      await registry.listPrompts(profile);
+    } finally {
+      await this.notifyPromptAvailabilityChange(profile);
+    }
   }
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
@@ -806,4 +824,85 @@ function requiredString(args: Record<string, unknown>, key: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function redactDirectResourceList(result: ListResourcesResult): ListResourcesResult {
+  return {
+    ...result,
+    resources: result.resources.map(redactDirectResource)
+  };
+}
+
+function redactDirectPromptList(result: ListPromptsResult): ListPromptsResult {
+  return {
+    ...result,
+    prompts: result.prompts.map(redactDirectPrompt)
+  };
+}
+
+function redactDirectReadResult(result: ReadResourceResult): ReadResourceResult {
+  return {
+    ...result,
+    contents: result.contents.map((content) => ({ ...content, uri: redactSensitiveUri(content.uri) }))
+  };
+}
+
+function redactDirectPromptResult(result: GetPromptResult): GetPromptResult {
+  return {
+    ...result,
+    messages: result.messages.map((message) => {
+      if (message.content.type === "resource_link") {
+        return {
+          ...message,
+          content: {
+            ...message.content,
+            uri: redactSensitiveUri(message.content.uri),
+            icons: redactDirectIconSources(message.content.icons)
+          }
+        };
+      }
+      if (message.content.type === "resource") {
+        return {
+          ...message,
+          content: {
+            ...message.content,
+            resource: {
+              ...message.content.resource,
+              uri: redactSensitiveUri(message.content.resource.uri)
+            }
+          }
+        };
+      }
+      return message;
+    })
+  };
+}
+
+function redactDirectResource(resource: Resource): Resource {
+  return {
+    ...resource,
+    uri: redactSensitiveUri(resource.uri),
+    icons: redactDirectIconSources(resource.icons)
+  };
+}
+
+function redactDirectPrompt(prompt: Prompt): Prompt {
+  return {
+    ...prompt,
+    icons: redactDirectIconSources(prompt.icons)
+  };
+}
+
+function redactDirectIconSources<T extends { src: string }>(icons: readonly T[] | undefined) {
+  return icons?.map((icon) => ({ ...icon, src: redactSensitiveUri(icon.src) }));
+}
+
+function redactSensitiveUri(uri: string): string {
+  try {
+    const value = new URL(uri);
+    if (!value.username && !value.password && !value.hash && value.search.length === 0) return uri;
+  } catch {
+    return uri;
+  }
+  return redactUri(uri);
 }

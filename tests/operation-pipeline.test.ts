@@ -589,6 +589,89 @@ describe("operation pipeline", () => {
     }
   });
 
+  it("retries cold aggregate route discovery against the captured profile after a switch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-cold-aggregate-switch-race-"));
+    const resourceListStartedPath = join(directory, "resource-list-started");
+    const promptListStartedPath = join(directory, "prompt-list-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_LIST_RESOURCES_STARTED_PATH: resourceListStartedPath,
+                TEST_LIST_RESOURCES_DELAY_MS: "100",
+                TEST_LIST_PROMPTS_STARTED_PATH: promptListStartedPath,
+                TEST_LIST_PROMPTS_DELAY_MS: "100"
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-personal" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-personal" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const resource = client.readResource({
+        uri: "miftah://resource/github?uri=account%3A%2F%2Fcurrent"
+      });
+      await expect
+        .poll(async () => {
+          try {
+            await access(resourceListStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(await resource).toMatchObject({
+        contents: [{ text: "github-work" }]
+      });
+
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } });
+      const prompt = client.getPrompt({ name: "github__account_prompt" });
+      await expect
+        .poll(async () => {
+          try {
+            await access(promptListStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(await prompt).toMatchObject({
+        messages: [{ content: { text: "github-work" } }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("checks aggregate resource and prompt policy before discovering upstream routes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-operation-aggregate-deny-"));
     const githubResourceListPath = join(directory, "github-resource-list");
@@ -730,6 +813,107 @@ describe("operation pipeline", () => {
       expect(message).toContain("RESOURCE_NOT_FOUND");
       for (const value of [username, password, "hidden-token", queryValue, fragment]) {
         expect(message).not.toContain(value);
+      }
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("redacts sensitive URI components from direct resource and prompt metadata", async () => {
+    const username = "direct-uri-user";
+    const password = "direct-uri-password";
+    const token = "direct-uri-token";
+    const queryValue = "direct-uri-query";
+    const fragment = "direct-uri-fragment";
+    const credentialUri = `account://${username}:${password}@current?access_token=${token}&state=${queryValue}#${fragment}`;
+    const iconUri = `https://${username}:${password}@icons.example?access_token=${token}&state=${queryValue}#${fragment}`;
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_URI: credentialUri,
+            TEST_RESOURCE_ICON_URI: iconUri,
+            TEST_PROMPT_ICON_URI: iconUri,
+            TEST_PROMPT_RESOURCE_URI: credentialUri
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const resources = await client.listResources();
+      const read = await client.readResource({ uri: credentialUri });
+      const prompts = await client.listPrompts();
+      const prompt = await client.getPrompt({ name: "account_prompt" });
+      const publicOutput = JSON.stringify({ resources, read, prompts, prompt });
+      for (const value of [username, password, token, queryValue, fragment]) {
+        expect(publicOutput).not.toContain(value);
+      }
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("redacts credential-bearing URIs from direct resource and prompt errors", async () => {
+    const username = "direct-error-user";
+    const password = "direct-error-password";
+    const token = "direct-error-token";
+    const queryValue = "direct-error-query";
+    const fragment = "direct-error-fragment";
+    const credentialUri = `account://${username}:${password}@current?access_token=${token}&state=${queryValue}#${fragment}`;
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_FAIL_READ_RESOURCE: "true",
+            TEST_FAIL_GET_PROMPT: "true",
+            TEST_ERROR_URI: credentialUri
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      for (const operation of [
+        () => client.readResource({ uri: "account://current" }),
+        () => client.getPrompt({ name: "account_prompt" })
+      ]) {
+        let failure: unknown;
+        try {
+          await operation();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeDefined();
+        const message = String(failure);
+        expect(message).toContain("REDACTED");
+        for (const value of [username, password, token, queryValue, fragment]) {
+          expect(message).not.toContain(value);
+        }
       }
     } finally {
       await client.close();

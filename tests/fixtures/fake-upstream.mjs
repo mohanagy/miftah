@@ -15,6 +15,8 @@ const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const responseText =
   process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const listResourcesDelayMs = Number(process.env.TEST_LIST_RESOURCES_DELAY_MS ?? "0");
+const listPromptsDelayMs = Number(process.env.TEST_LIST_PROMPTS_DELAY_MS ?? "0");
 const readResourceDelayMs = Number(process.env.TEST_READ_RESOURCE_DELAY_MS ?? "0");
 const getPromptDelayMs = Number(process.env.TEST_GET_PROMPT_DELAY_MS ?? "0");
 const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
@@ -151,6 +153,12 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
   if (process.env.TEST_LIST_RESOURCES_COUNT_PATH) {
     appendFileSync(process.env.TEST_LIST_RESOURCES_COUNT_PATH, "1\n");
   }
+  if (process.env.TEST_LIST_RESOURCES_STARTED_PATH) {
+    writeFileSync(process.env.TEST_LIST_RESOURCES_STARTED_PATH, "started");
+  }
+  if (listResourcesDelayMs > 0) {
+    await delay(listResourcesDelayMs);
+  }
   if (process.env.TEST_FAIL_LIST_RESOURCES === "true" || (failListResourcesPath && existsSync(failListResourcesPath))) {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
   }
@@ -182,7 +190,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async () => {
     await delay(readResourceDelayMs);
   }
   if (process.env.TEST_FAIL_READ_RESOURCE === "true") {
-    throw new Error(`test resource read failure: ${process.env.API_TOKEN}`);
+    throw new Error(`test resource read failure: ${process.env.TEST_ERROR_URI ?? process.env.API_TOKEN}`);
   }
   return {
     contents: [
@@ -195,6 +203,12 @@ server.setRequestHandler(ReadResourceRequestSchema, async () => {
 server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
   if (process.env.TEST_LIST_PROMPTS_COUNT_PATH) {
     appendFileSync(process.env.TEST_LIST_PROMPTS_COUNT_PATH, "1\n");
+  }
+  if (process.env.TEST_LIST_PROMPTS_STARTED_PATH) {
+    writeFileSync(process.env.TEST_LIST_PROMPTS_STARTED_PATH, "started");
+  }
+  if (listPromptsDelayMs > 0) {
+    await delay(listPromptsDelayMs);
   }
   if (process.env.TEST_FAIL_LIST_PROMPTS === "true" || (failListPromptsPath && existsSync(failListPromptsPath))) {
     throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
@@ -226,7 +240,7 @@ server.setRequestHandler(GetPromptRequestSchema, async () => {
     await delay(getPromptDelayMs);
   }
   if (process.env.TEST_FAIL_GET_PROMPT === "true") {
-    throw new Error(`test prompt get failure: ${process.env.API_TOKEN}`);
+    throw new Error(`test prompt get failure: ${process.env.TEST_ERROR_URI ?? process.env.API_TOKEN}`);
   }
   return {
     description: promptName,
