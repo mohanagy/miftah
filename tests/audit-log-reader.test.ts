@@ -4,6 +4,7 @@ import {
   appendFile,
   chmod,
   mkdir,
+  readFile,
   readdir,
   rename,
   rm,
@@ -333,6 +334,53 @@ describe("audit JSONL reader", () => {
         await waitFor(() => output.length === 2);
 
         expect(output.join("")).toBe('{"sequence":1}\n{"sequence":2}\n');
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
+  it("avoids prefix hashing and output staging for verified idle follower polls", async () => {
+    const source = await readFile(new URL("../src/cli/audit-jsonl.ts", import.meta.url), "utf8");
+    const idleFastPath = source.indexOf("if (follow && isVerifiedIdlePoll(candidate, version))");
+    const firstPrefixHash = source.indexOf("let prefixHash = await hashFromHandle");
+
+    expect(source).toContain("await handle.stat({ bigint: true })");
+    expect(idleFastPath).toBeGreaterThanOrEqual(0);
+    expect(idleFastPath).toBeLessThan(firstPrefixHash);
+    expect(source.slice(idleFastPath, firstPrefixHash)).toContain(
+      'return { kind: "staged", state: candidate, spool: undefined };'
+    );
+  });
+
+  it("keeps verified idle polls silent while detecting appends and same-size rewrites", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      await writeFile(auditPath, '{"sequence":1}\n');
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      try {
+        await waitFor(() => output.length === 1);
+        await delay(pollIntervalMs * 4);
+        expect(output).toEqual(['{"sequence":1}\n']);
+
+        await appendFile(auditPath, '{"sequence":2}\n');
+        await waitFor(() => output.length === 2);
+
+        await writeFile(auditPath, '{"sequence":9}\n{"sequence":3}\n');
+        await waitFor(() => output.length === 4);
+
+        expect(output.join("")).toBe(
+          '{"sequence":1}\n{"sequence":2}\n{"sequence":9}\n{"sequence":3}\n'
+        );
       } finally {
         controller.abort();
         await follower;

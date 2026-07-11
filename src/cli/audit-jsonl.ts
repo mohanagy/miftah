@@ -1,5 +1,5 @@
 import { chmod, mkdtemp, open, rm, stat, type FileHandle } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { isUtf8 } from "node:buffer";
 import { createHash, type Hash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -26,10 +26,17 @@ export interface AuditJsonlFollowOptions extends AuditJsonlReadOptions {
 interface AuditReadState {
   cursor: number;
   cursorDigest: Buffer;
-  identity: string | undefined;
+  version: AuditFileVersion | undefined;
   pending: Buffer;
   pendingLength: number;
   discardingOversizedRecord: boolean;
+}
+
+interface AuditFileVersion {
+  readonly identity: string | undefined;
+  readonly size: number;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
 }
 
 interface OpenTemporarySpool {
@@ -53,21 +60,53 @@ const maximumPollIntervalMs = 1_000;
 const maximumSnapshotAttempts = 3;
 const emptyCursorDigest = createHash("sha256").digest();
 
-function fileIdentity(stats: Stats): string | undefined {
-  return stats.dev !== 0 && stats.ino !== 0 ? `${stats.dev}:${stats.ino}` : undefined;
+function fileIdentity(stats: BigIntStats): string | undefined {
+  return stats.dev !== 0n && stats.ino !== 0n ? `${stats.dev}:${stats.ino}` : undefined;
 }
 
-function shouldReset(state: AuditReadState, stats: Stats, identity: string | undefined): boolean {
+function safelyConvertFileSize(size: bigint): number {
+  const converted = Number(size);
+  if (!Number.isSafeInteger(converted) || converted < 0) {
+    throw new Error("Audit log size cannot be represented safely.");
+  }
+  return converted;
+}
+
+function fileVersion(stats: BigIntStats): AuditFileVersion {
+  return {
+    identity: fileIdentity(stats),
+    size: safelyConvertFileSize(stats.size),
+    mtimeNs: stats.mtimeNs,
+    ctimeNs: stats.ctimeNs
+  };
+}
+
+function sameVersion(left: AuditFileVersion, right: AuditFileVersion): boolean {
   return (
-    stats.size < state.cursor ||
-    (state.identity !== undefined && identity !== undefined && state.identity !== identity)
+    left.identity === right.identity &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function isVerifiedIdlePoll(state: AuditReadState, version: AuditFileVersion): boolean {
+  return state.cursor === version.size && state.version !== undefined && sameVersion(state.version, version);
+}
+
+function shouldReset(state: AuditReadState, version: AuditFileVersion): boolean {
+  return (
+    version.size < state.cursor ||
+    (state.version?.identity !== undefined &&
+      version.identity !== undefined &&
+      state.version.identity !== version.identity)
   );
 }
 
 function resetState(state: AuditReadState): void {
   state.cursor = 0;
   state.cursorDigest = Buffer.from(emptyCursorDigest);
-  state.identity = undefined;
+  state.version = undefined;
   state.pendingLength = 0;
   state.discardingOversizedRecord = false;
 }
@@ -76,7 +115,7 @@ function createReadState(): AuditReadState {
   return {
     cursor: 0,
     cursorDigest: Buffer.from(emptyCursorDigest),
-    identity: undefined,
+    version: undefined,
     pending: Buffer.allocUnsafe(MAX_INCOMPLETE_AUDIT_RECORD_BYTES),
     pendingLength: 0,
     discardingOversizedRecord: false
@@ -87,7 +126,7 @@ function cloneReadState(state: AuditReadState): AuditReadState {
   return {
     cursor: state.cursor,
     cursorDigest: Buffer.from(state.cursorDigest),
-    identity: state.identity,
+    version: state.version,
     pending: Buffer.from(state.pending),
     pendingLength: state.pendingLength,
     discardingOversizedRecord: state.discardingOversizedRecord
@@ -97,7 +136,7 @@ function cloneReadState(state: AuditReadState): AuditReadState {
 function commitReadState(target: AuditReadState, source: AuditReadState): void {
   target.cursor = source.cursor;
   target.cursorDigest = Buffer.from(source.cursorDigest);
-  target.identity = source.identity;
+  target.version = source.version;
   target.pending = source.pending;
   target.pendingLength = source.pendingLength;
   target.discardingOversizedRecord = source.discardingOversizedRecord;
@@ -190,13 +229,8 @@ function digest(hash: Hash): Buffer {
   return hash.copy().digest();
 }
 
-function changedDuringRead(before: Stats, after: Stats): boolean {
-  return (
-    fileIdentity(before) !== fileIdentity(after) ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs ||
-    before.ctimeMs !== after.ctimeMs
-  );
+function changedDuringRead(before: AuditFileVersion, after: AuditFileVersion): boolean {
+  return !sameVersion(before, after);
 }
 
 function normalizeRecord(record: Buffer, redactor: SecretRedactor): string {
@@ -252,19 +286,24 @@ async function stageAuditSnapshot(
   path: string,
   state: AuditReadState,
   redactor: SecretRedactor,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  follow = false
 ): Promise<SnapshotAttempt> {
   if (signal?.aborted) return { kind: "aborted" };
   const handle = await open(path, "r");
   let sourceClosed = false;
   let spool: OpenTemporarySpool | undefined;
   try {
-    let stats = await handle.stat();
+    let version = fileVersion(await handle.stat({ bigint: true }));
     const candidate = cloneReadState(state);
-    const identity = fileIdentity(stats);
+    // Finite reads always snapshot; only a fully verified follower endpoint can skip hashing.
+    if (follow && isVerifiedIdlePoll(candidate, version)) {
+      return { kind: "staged", state: candidate, spool: undefined };
+    }
+
     const hashChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
     const readChunk = Buffer.allocUnsafe(AUDIT_READ_CHUNK_BYTES);
-    if (shouldReset(candidate, stats, identity)) {
+    if (shouldReset(candidate, version)) {
       resetState(candidate);
     }
 
@@ -274,14 +313,14 @@ async function stageAuditSnapshot(
     }
     if (!digest(prefixHash).equals(candidate.cursorDigest)) {
       resetState(candidate);
-      stats = await handle.stat();
+      version = fileVersion(await handle.stat({ bigint: true }));
       prefixHash = await hashFromHandle(handle, 0, candidate.cursor, hashChunk, signal);
       if (prefixHash === undefined) {
         return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
       }
     }
 
-    const snapshotEnd = stats.size;
+    const snapshotEnd = version.size;
     const expectedLength = snapshotEnd - candidate.cursor;
     const deltaHash = createHash("sha256");
     const bytesRead = await readFromHandle(
@@ -304,8 +343,7 @@ async function stageAuditSnapshot(
     const candidateCursor = candidate.cursor + bytesRead;
     const candidateDigest = digest(prefixHash);
     const deltaDigest = digest(deltaHash);
-    const finalStats = await handle.stat();
-    const finalIdentity = fileIdentity(finalStats);
+    const finalVersion = fileVersion(await handle.stat({ bigint: true }));
     const finalDeltaHash = await hashFromHandle(
       handle,
       candidate.cursor,
@@ -316,10 +354,10 @@ async function stageAuditSnapshot(
     if (finalDeltaHash === undefined) {
       return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
     }
-    const postHashStats = await handle.stat();
-    let endpointStats: Stats;
+    const postHashVersion = fileVersion(await handle.stat({ bigint: true }));
+    let endpointVersion: AuditFileVersion;
     try {
-      endpointStats = await stat(path);
+      endpointVersion = fileVersion(await stat(path, { bigint: true }));
     } catch (error) {
       if (isNotFoundError(error)) return { kind: "unstable" };
       throw error;
@@ -327,16 +365,16 @@ async function stageAuditSnapshot(
 
     if (
       bytesRead !== expectedLength ||
-      changedDuringRead(stats, finalStats) ||
-      changedDuringRead(finalStats, postHashStats) ||
-      changedDuringRead(postHashStats, endpointStats) ||
-      shouldReset(candidate, finalStats, finalIdentity) ||
+      changedDuringRead(version, finalVersion) ||
+      changedDuringRead(finalVersion, postHashVersion) ||
+      changedDuringRead(postHashVersion, endpointVersion) ||
+      shouldReset(candidate, finalVersion) ||
       !digest(finalDeltaHash).equals(deltaDigest)
     ) {
       return { kind: "unstable" };
     }
 
-    candidate.identity = finalIdentity;
+    candidate.version = finalVersion;
     candidate.cursorDigest = candidateDigest;
     candidate.cursor = candidateCursor;
     await handle.close();
@@ -398,9 +436,10 @@ async function pollAuditFile(
   state: AuditReadState,
   redactor: SecretRedactor,
   write: AuditJsonlWriter,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  follow = false
 ): Promise<"aborted" | "stable" | "unstable"> {
-  const attempt = await stageAuditSnapshot(path, state, redactor, signal);
+  const attempt = await stageAuditSnapshot(path, state, redactor, signal, follow);
   if (attempt.kind !== "staged") return attempt.kind;
   try {
     if (!(await forwardStagedOutput(attempt.spool, write, signal))) return "aborted";
@@ -451,7 +490,7 @@ export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promis
   const pollIntervalMs = boundedPollInterval(options.pollIntervalMs);
   while (!options.signal.aborted) {
     try {
-      await pollAuditFile(options.path, state, options.redactor, options.write, options.signal);
+      await pollAuditFile(options.path, state, options.redactor, options.write, options.signal, true);
     } catch (error) {
       if (!isNotFoundError(error)) throw error;
       resetState(state);
