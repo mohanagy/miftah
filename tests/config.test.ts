@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
-import { expandEnvironmentReferences } from "../src/config/env-expand.js";
+import { expandEnvironmentReferences, expandEnvironmentReferencesWithSecretValues } from "../src/config/env-expand.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const policyNotFoundPattern = /POLICY_NOT_FOUND/u;
@@ -23,6 +23,18 @@ describe("config foundation", () => {
     expect(
       expandEnvironmentReferences(config.profiles.work!.env!, { WORK_TOKEN: "secret-value" })
     ).toEqual({ API_TOKEN: "secret-value", ACCOUNT: "work" });
+  });
+
+  it("tracks values resolved from environment references regardless of their configuration key", () => {
+    expect(
+      expandEnvironmentReferencesWithSecretValues(
+        { COOKIE: "session=${SESSION_ID}", ACCOUNT: "work" },
+        { SESSION_ID: "dynamic-session-secret" }
+      )
+    ).toEqual({
+      values: { COOKIE: "session=dynamic-session-secret", ACCOUNT: "work" },
+      secretValues: ["dynamic-session-secret"]
+    });
   });
 
   it("rejects a config whose default profile does not exist", () => {

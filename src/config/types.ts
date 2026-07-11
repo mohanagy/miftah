@@ -63,8 +63,14 @@ export interface SecurityConfig {
   lockToProfile?: string | null;
 }
 
+/** Configures lifecycle behavior for profile-bound upstream processes. */
 export interface ProcessConfig {
   startupTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  restartOnCrash?: boolean;
+  maxRestarts?: number;
+  maxConcurrentProfiles?: number;
 }
 
 export interface AuditConfig {

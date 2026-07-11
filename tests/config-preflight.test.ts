@@ -1,9 +1,11 @@
-import { access, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { createRuntime } from "../src/cli/create-runtime.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
@@ -105,6 +107,91 @@ describe("configuration preflight", () => {
       });
     } finally {
       await runtime.manager.close();
+    }
+  });
+
+  it("redacts dotenv secrets assigned to noncredential upstream configuration keys", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-runtime-redaction-"));
+    const configPath = join(directory, "miftah.json");
+    const secretKey = `MIFTAH_TEST_COOKIE_${process.pid}_${Date.now()}`;
+    const secret = "runtime-cookie-secret";
+    await writeFile(join(directory, ".env"), `${secretKey}=${secret}\n`);
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "1",
+        name: "runtime-redaction",
+        defaultProfile: "default",
+        upstream: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [fixture],
+          env: {
+            TEST_ERROR_MESSAGE: `secretref:dotenv://${secretKey}`,
+            TEST_FAIL_LIST_TOOLS: "true"
+          }
+        },
+        profiles: { default: {} },
+        secrets: { envFiles: [".env"] }
+      })
+    );
+
+    const runtime = await createRuntime(configPath);
+    try {
+      let failure: unknown;
+      try {
+        await runtime.manager.listTools("default");
+      } catch (error) {
+        failure = error;
+      }
+      if (!(failure instanceof MiftahError)) throw new Error("Expected a Miftah tool-list failure");
+      const cause = failure.details?.cause;
+      if (typeof cause !== "string") throw new Error("Expected a redacted capability diagnostic cause");
+      expect(cause).not.toContain(secret);
+      expect(cause).toContain("[REDACTED]");
+      expect(runtime.manager.getSecretValues()).toContain(secret);
+    } finally {
+      await runtime.manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("wires supported lifecycle settings from configuration into the process manager", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-lifecycle-runtime-"));
+    const configPath = join(directory, "miftah.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "1",
+        name: "lifecycle-runtime",
+        defaultProfile: "default",
+        upstream: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [fixture]
+        },
+        profiles: { default: {} },
+        process: {
+          startupTimeoutMs: 1_000,
+          shutdownTimeoutMs: 100,
+          idleTimeoutMs: 50,
+          restartOnCrash: true,
+          maxRestarts: 2,
+          maxConcurrentProfiles: 1
+        }
+      })
+    );
+
+    const runtime = await createRuntime(configPath);
+    try {
+      await runtime.manager.get("default");
+      await delay(150);
+      expect(runtime.manager.listHealth()).toMatchObject([
+        { profile: "default", processState: "stopped", lastStopReason: "idle" }
+      ]);
+    } finally {
+      await runtime.manager.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

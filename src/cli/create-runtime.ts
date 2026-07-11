@@ -4,7 +4,12 @@ import { SecretResolver } from "../secrets/secret-resolver.js";
 import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
 
-/** Validates configuration before resolving secrets or constructing upstream runtime state. */
+/**
+ * Loads configuration, resolves its secrets, and constructs the runtime managers.
+ *
+ * @param configPath - Path to the configuration file.
+ * @returns The resolved configuration, upstream process manager, and profile manager.
+ */
 export async function createRuntime(configPath: string) {
   const config = await loadConfig(configPath);
   const resolver = new SecretResolver({
@@ -12,21 +17,28 @@ export async function createRuntime(configPath: string) {
     allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets
   });
   await resolver.load();
+  const secretValues = new Set<string>();
+  const resolveMap = (values: Record<string, string> | undefined): Record<string, string> | undefined => {
+    if (!values) return values;
+    const resolved = resolver.resolveMapWithSecretValues(values);
+    for (const value of resolved.secretValues) secretValues.add(value);
+    return resolved.values;
+  };
   const profiles = Object.fromEntries(
     Object.entries(config.profiles).map(([name, profile]) => [
       name,
       {
         ...profile,
-        env: profile.env ? resolver.resolveMap(profile.env) : profile.env,
-        headers: profile.headers ? resolver.resolveMap(profile.headers) : profile.headers,
+        env: resolveMap(profile.env),
+        headers: resolveMap(profile.headers),
         upstreams: profile.upstreams
           ? Object.fromEntries(
               Object.entries(profile.upstreams).map(([upstreamName, override]) => [
                 upstreamName,
                 {
                   ...override,
-                  env: override.env ? resolver.resolveMap(override.env) : override.env,
-                  headers: override.headers ? resolver.resolveMap(override.headers) : override.headers
+                  env: resolveMap(override.env),
+                  headers: resolveMap(override.headers)
                 }
               ])
             )
@@ -40,8 +52,8 @@ export async function createRuntime(configPath: string) {
           name,
           {
             ...upstream,
-            env: upstream.env ? resolver.resolveMap(upstream.env) : undefined,
-            headers: upstream.headers ? resolver.resolveMap(upstream.headers) : undefined
+            env: resolveMap(upstream.env),
+            headers: resolveMap(upstream.headers)
           }
         ])
       )
@@ -50,17 +62,14 @@ export async function createRuntime(configPath: string) {
   const upstream = resolvedConfig.upstream
     ? {
         ...resolvedConfig.upstream,
-        env: resolvedConfig.upstream.env ? resolver.resolveMap(resolvedConfig.upstream.env) : undefined,
-        headers: resolvedConfig.upstream.headers ? resolver.resolveMap(resolvedConfig.upstream.headers) : undefined
+        env: resolveMap(resolvedConfig.upstream.env),
+        headers: resolveMap(resolvedConfig.upstream.headers)
       }
     : undefined;
+  const managerOptions = { ...config.process, secretValues: [...secretValues] };
   const manager = resolvedConfig.upstreams
-    ? new MultiUpstreamProcessManager(resolvedConfig, {
-        startupTimeoutMs: config.process?.startupTimeoutMs
-      })
-    : new UpstreamProcessManager(upstream!, profiles, {
-        startupTimeoutMs: config.process?.startupTimeoutMs
-      });
+    ? new MultiUpstreamProcessManager(resolvedConfig, managerOptions)
+    : new UpstreamProcessManager(upstream!, profiles, managerOptions);
   const profileManager = new ProfileManager(resolvedConfig, resolvedConfig.security);
   return { config: resolvedConfig, manager, profileManager };
 }

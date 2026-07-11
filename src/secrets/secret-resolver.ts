@@ -2,12 +2,22 @@ import { parse } from "dotenv";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { MiftahError } from "../utils/errors.js";
 
+const exactEnvironmentReferencePattern = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const embeddedEnvironmentReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
 export interface SecretResolverOptions {
   environment?: NodeJS.ProcessEnv;
   envFiles?: string[];
   allowPlaintextSecrets?: boolean;
 }
 
+/** Contains resolved configuration values and every value sourced from a secret reference. */
+export interface ResolvedSecretMap {
+  values: Record<string, string>;
+  secretValues: string[];
+}
+
+/** Resolves configured secret references without retaining provider-specific configuration in runtime objects. */
 export class SecretResolver {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly values: Record<string, string>;
@@ -38,19 +48,42 @@ export class SecretResolver {
   }
 
   resolveMap(values: Record<string, string>): Record<string, string> {
-    return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, this.resolveValue(value)]));
+    return this.resolveMapWithSecretValues(values).values;
+  }
+
+  /** Resolves a map while retaining secret-reference values for downstream diagnostic redaction. */
+  resolveMapWithSecretValues(values: Record<string, string>): ResolvedSecretMap {
+    const secretValues = new Set<string>();
+    const resolvedValues = Object.fromEntries(
+      Object.entries(values).map(([key, value]) => {
+        const resolved = this.resolveValueWithSecretValues(value);
+        for (const secretValue of resolved.secretValues) secretValues.add(secretValue);
+        return [key, resolved.value];
+      })
+    );
+    return { values: resolvedValues, secretValues: [...secretValues] };
   }
 
   resolveValue(value: string): string {
-    const environmentReference = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+    return this.resolveValueWithSecretValues(value).value;
+  }
+
+  private resolveValueWithSecretValues(value: string): { value: string; secretValues: string[] } {
+    const secretValues = new Set<string>();
+    const resolveReference = (name: string): string => {
+      const resolved = this.require(name);
+      secretValues.add(resolved);
+      return resolved;
+    };
+    const environmentReference = value.match(exactEnvironmentReferencePattern);
     if (environmentReference) {
-      return this.require(environmentReference[1]!);
+      return { value: resolveReference(environmentReference[1]!), secretValues: [...secretValues] };
     }
     if (value.startsWith("secretref:env://")) {
-      return this.require(value.slice("secretref:env://".length));
+      return { value: resolveReference(value.slice("secretref:env://".length)), secretValues: [...secretValues] };
     }
     if (value.startsWith("secretref:dotenv://")) {
-      return this.require(value.slice("secretref:dotenv://".length));
+      return { value: resolveReference(value.slice("secretref:dotenv://".length)), secretValues: [...secretValues] };
     }
     if (value.startsWith("secretref:plain://")) {
       if (this.options.allowPlaintextSecrets !== true) {
@@ -59,7 +92,9 @@ export class SecretResolver {
           "SECRET_PROVIDER_FAILED: PLAINTEXT secret references are disabled"
         );
       }
-      return value.slice("secretref:plain://".length);
+      const resolved = value.slice("secretref:plain://".length);
+      secretValues.add(resolved);
+      return { value: resolved, secretValues: [...secretValues] };
     }
     if (value.startsWith("secretref:")) {
       throw new MiftahError(
@@ -67,7 +102,10 @@ export class SecretResolver {
         `SECRET_PROVIDER_FAILED: unsupported secret provider in '${value.slice(0, value.indexOf("://") + 3)}'`
       );
     }
-    return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => this.require(name));
+    return {
+      value: value.replace(embeddedEnvironmentReferencePattern, (_, name: string) => resolveReference(name)),
+      secretValues: [...secretValues]
+    };
   }
 
   private require(name: string): string {

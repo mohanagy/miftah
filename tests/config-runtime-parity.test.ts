@@ -39,12 +39,6 @@ describe("config runtime parity", () => {
   it.each([
     ["process.startMode", { process: { startMode: "lazy" } }],
     ["process.cache", { process: { cache: true } }],
-    ["process.idleTimeoutMs", { process: { idleTimeoutMs: 1 } }],
-    ["process.restartOnCrash", { process: { restartOnCrash: true } }],
-    ["process.restartOnCrash", { process: { restartOnCrash: "true" } }],
-    ["process.maxRestarts", { process: { maxRestarts: 1 } }],
-    ["process.shutdownTimeoutMs", { process: { shutdownTimeoutMs: 1 } }],
-    ["process.maxConcurrentProfiles", { process: { maxConcurrentProfiles: 1 } }],
     ["routing.mode", { routing: { mode: "active" } }],
     ["routing.mode", { routing: { mode: "rules" } }],
     ["routing.mode", { routing: { mode: true } }],
@@ -151,6 +145,41 @@ describe("config runtime parity", () => {
     expect(config.process?.startupTimeoutMs).toBe(1_000);
     expect(config.security?.redactSecrets).toBe(true);
     expect(config.audit?.redact).toBe(true);
+  });
+
+  it("accepts implemented lifecycle controls", () => {
+    const config = validateConfig(
+      baseConfig({
+        process: {
+          startupTimeoutMs: 1_000,
+          shutdownTimeoutMs: 500,
+          idleTimeoutMs: 1_500,
+          restartOnCrash: true,
+          maxRestarts: 2,
+          maxConcurrentProfiles: 3
+        }
+      })
+    );
+
+    expect(config.process).toEqual({
+      startupTimeoutMs: 1_000,
+      shutdownTimeoutMs: 500,
+      idleTimeoutMs: 1_500,
+      restartOnCrash: true,
+      maxRestarts: 2,
+      maxConcurrentProfiles: 3
+    });
+  });
+
+  it("requires automatic recovery when a restart limit is configured", () => {
+    const error = validationError(
+      baseConfig({
+        process: { maxRestarts: 2 }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("process.maxRestarts");
   });
 
   it.each(["permissive", "strict"] as const)("accepts the %s discovery mode", (toolDiscoveryMode) => {

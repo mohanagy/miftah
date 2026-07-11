@@ -11,38 +11,55 @@ import type {
   ReadResourceRequest
 } from "@modelcontextprotocol/sdk/types.js";
 
+/** Lets the process manager bracket upstream work so idle shutdown cannot interrupt an active request. */
+export interface UpstreamSessionActivity {
+  begin(): void;
+  end(): void;
+}
+
+/** Provides profile-bound MCP operations while reporting their activity to lifecycle management. */
 export class UpstreamSession {
   constructor(
     readonly profile: string,
     private readonly client: Client,
-    private readonly closeTransport: () => Promise<void>
+    private readonly closeTransport: () => Promise<void>,
+    private readonly activity?: UpstreamSessionActivity
   ) {}
 
   listTools(): Promise<ListToolsResult> {
-    return this.client.listTools();
+    return this.request(() => this.client.listTools());
   }
 
   callTool(params: CallToolRequest["params"]): Promise<CallToolResult> {
-    return this.client.callTool(params) as Promise<CallToolResult>;
+    return this.request(() => this.client.callTool(params) as Promise<CallToolResult>);
   }
 
   listResources(params?: ListResourcesRequest["params"]): Promise<ListResourcesResult> {
-    return this.client.listResources(params);
+    return this.request(() => this.client.listResources(params));
   }
 
   readResource(params: ReadResourceRequest["params"]) {
-    return this.client.readResource(params);
+    return this.request(() => this.client.readResource(params));
   }
 
   listPrompts(params?: ListPromptsRequest["params"]): Promise<ListPromptsResult> {
-    return this.client.listPrompts(params);
+    return this.request(() => this.client.listPrompts(params));
   }
 
   getPrompt(params: GetPromptRequest["params"]) {
-    return this.client.getPrompt(params);
+    return this.request(() => this.client.getPrompt(params));
   }
 
   async close(): Promise<void> {
     await this.closeTransport();
+  }
+
+  private async request<Result>(operation: () => Promise<Result>): Promise<Result> {
+    this.activity?.begin();
+    try {
+      return await operation();
+    } finally {
+      this.activity?.end();
+    }
   }
 }

@@ -129,17 +129,26 @@ const securitySchema = z
   })
   .strict();
 
-const publicProcessSchema = z.object({ startupTimeoutMs: z.number().int().positive().optional() }).strict();
+const publicProcessSchema = z
+  .object({
+    startupTimeoutMs: z.number().int().positive().optional(),
+    shutdownTimeoutMs: z.number().int().positive().optional(),
+    idleTimeoutMs: z.number().int().positive().optional(),
+    restartOnCrash: z.boolean().optional(),
+    maxRestarts: z.number().int().nonnegative().optional(),
+    maxConcurrentProfiles: z.number().int().positive().optional()
+  })
+  .strict();
 const processSchema = z
   .object({
     startMode: unsupportedOptionSchema,
     cache: unsupportedOptionSchema,
-    idleTimeoutMs: unsupportedOptionSchema,
-    restartOnCrash: unsupportedOptionSchema,
-    maxRestarts: unsupportedOptionSchema,
     startupTimeoutMs: z.number().int().positive().optional(),
-    shutdownTimeoutMs: unsupportedOptionSchema,
-    maxConcurrentProfiles: unsupportedOptionSchema
+    shutdownTimeoutMs: z.number().int().positive().optional(),
+    idleTimeoutMs: z.number().int().positive().optional(),
+    restartOnCrash: z.boolean().optional(),
+    maxRestarts: z.number().int().nonnegative().optional(),
+    maxConcurrentProfiles: z.number().int().positive().optional()
   })
   .strict();
 
@@ -400,21 +409,22 @@ export const miftahConfigSchema = z
       rejectUnsupportedOption(["routing", "plugins"], "routing plugins are not implemented");
     }
 
-    for (const option of [
-      "startMode",
-      "cache",
-      "idleTimeoutMs",
-      "restartOnCrash",
-      "maxRestarts",
-      "shutdownTimeoutMs",
-      "maxConcurrentProfiles"
-    ] as const) {
+    for (const option of ["startMode", "cache"] as const) {
       if (value.process?.[option] !== undefined) {
         rejectUnsupportedOption(
           ["process", option],
-          `${option} is not implemented; only process.startupTimeoutMs currently changes runtime behavior`
+          `${option} is not implemented; Miftah always starts cached upstream sessions lazily`
         );
       }
+    }
+    if (value.process?.maxRestarts !== undefined && value.process.restartOnCrash !== true) {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        ["process", "maxRestarts"],
+        "maxRestarts requires process.restartOnCrash to be true",
+        "Set process.restartOnCrash to true or remove process.maxRestarts."
+      );
     }
 
     if (value.security?.requireProfileSwitchConfirmation !== undefined) {

@@ -88,6 +88,7 @@ interface ResourcePromptProxyUnavailable {
 
 type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePromptProxyUnavailable;
 
+/** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
   readonly server: Server;
   private readonly routing: RoutingEngine;
@@ -98,7 +99,7 @@ export class MiftahServer {
   private readonly operationPipeline: OperationPipeline;
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
-  private readonly restartingProfiles = new Set<string>();
+  private readonly restartingProfiles = new Map<string, Promise<void>>();
   private readonly pendingResourceListChanges = new Set<string>();
   private readonly pendingPromptListChanges = new Set<string>();
 
@@ -363,22 +364,7 @@ export class MiftahServer {
       }
       if (name === "miftah_restart_profile") {
         const profile = requiredString(args, "profile");
-        this.restartingProfiles.add(profile);
-        try {
-          if (this.upstreams instanceof MultiUpstreamProcessManager) {
-            await this.upstreams.restartProfile(profile);
-          } else {
-            await this.upstreams.restart(profile);
-          }
-        } finally {
-          this.restartingProfiles.delete(profile);
-          this.toolRegistry.invalidate(profile);
-          this.resourcePromptRegistry?.invalidate(profile);
-          if (profile === this.profiles.current().activeProfile) {
-            await this.notifyToolListChanged(undefined, undefined);
-            await this.notifyResourcePromptListChanged();
-          }
-        }
+        await this.restartUpstreamProfile(profile);
         return textResult("Profile restarted.");
       }
       if (name === "miftah_route_preview") {
@@ -731,6 +717,39 @@ export class MiftahServer {
         if (previous !== undefined) await this.notifyToolListChanged(previous, snapshot);
         this.invalidatedToolSnapshots.delete(state.activeProfile);
         return snapshot;
+      }
+    }
+  }
+
+  private restartUpstreamProfile(profile: string): Promise<void> {
+    const existing = this.restartingProfiles.get(profile);
+    if (existing) return existing;
+    const restart = this.restartUpstreamProfileOnce(profile);
+    this.restartingProfiles.set(profile, restart);
+    void restart.then(
+      () => {
+        if (this.restartingProfiles.get(profile) === restart) this.restartingProfiles.delete(profile);
+      },
+      () => {
+        if (this.restartingProfiles.get(profile) === restart) this.restartingProfiles.delete(profile);
+      }
+    );
+    return restart;
+  }
+
+  private async restartUpstreamProfileOnce(profile: string): Promise<void> {
+    try {
+      if (this.upstreams instanceof MultiUpstreamProcessManager) {
+        await this.upstreams.restartProfile(profile);
+      } else {
+        await this.upstreams.restart(profile);
+      }
+    } finally {
+      this.toolRegistry.invalidate(profile);
+      this.resourcePromptRegistry?.invalidate(profile);
+      if (profile === this.profiles.current().activeProfile) {
+        await this.notifyToolListChanged(undefined, undefined);
+        await this.notifyResourcePromptListChanged();
       }
     }
   }

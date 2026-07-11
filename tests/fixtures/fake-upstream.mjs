@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolRequestSchema,
   GetPromptRequestSchema,
+  InitializeRequestSchema,
   ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
@@ -34,6 +35,49 @@ const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
 const failListResourcesPath = process.env.TEST_FAIL_LIST_RESOURCES_PATH;
 const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
 const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
+const crashAfterConnectPath = process.env.TEST_CRASH_AFTER_CONNECT_PATH;
+const crashAfterConnectDelayMs = Number(process.env.TEST_CRASH_AFTER_CONNECT_DELAY_MS ?? "10");
+const startCountPath = process.env.TEST_START_COUNT_PATH;
+const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
+const stderrMessage = process.env.TEST_STDERR_MESSAGE;
+const hangOnStartPath = process.env.TEST_HANG_ON_START_PATH;
+const hangOnStartReadyPath = process.env.TEST_HANG_ON_START_READY_PATH;
+const shutdownDelayMs = Number(process.env.TEST_SHUTDOWN_DELAY_MS ?? "0");
+const shutdownEndPath = process.env.TEST_SHUTDOWN_END_PATH;
+
+if (startCountPath) {
+  appendFileSync(startCountPath, "1\n");
+}
+if (process.env.TEST_HANG_ON_START === "true" || (hangOnStartPath && existsSync(hangOnStartPath))) {
+  if (hangOnStartReadyPath) {
+    writeFileSync(hangOnStartReadyPath, "ready");
+  }
+  if (hangOnStartPath) {
+    while (existsSync(hangOnStartPath)) {
+      await delay(5);
+    }
+  } else {
+    for (;;) {
+      await delay(1_000);
+    }
+  }
+}
+if (shutdownEndPath || shutdownDelayMs > 0) {
+  process.stdin.once("end", () => {
+    if (shutdownEndPath) {
+      writeFileSync(shutdownEndPath, "ended");
+    }
+    if (shutdownDelayMs > 0) {
+      void delay(shutdownDelayMs).then(() => process.exit(0));
+    }
+  });
+}
+if (process.env.TEST_IGNORE_SIGTERM === "true") {
+  process.on("SIGTERM", () => undefined);
+}
+if (stderrMessage) {
+  process.stderr.write(`${stderrMessage}\n`);
+}
 if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
   throw new Error("test upstream configured to stay unavailable after an abrupt exit");
 }
@@ -72,6 +116,12 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
 
+if (failInitialize) {
+  server.setRequestHandler(InitializeRequestSchema, async () => {
+    throw new Error(`test initialize failure: ${process.env.API_TOKEN}`);
+  });
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
@@ -81,6 +131,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   }
   if (listToolsDelayMs > 0) {
     await delay(listToolsDelayMs);
+  }
+  if (process.env.TEST_FAIL_LIST_TOOLS === "true") {
+    throw new Error(`test tool list failure: ${process.env.TEST_ERROR_MESSAGE ?? process.env.API_TOKEN}`);
   }
   return {
     tools: [
@@ -271,3 +324,6 @@ server.setRequestHandler(GetPromptRequestSchema, async () => {
 });
 
 await server.connect(new StdioServerTransport());
+if (crashAfterConnectPath && existsSync(crashAfterConnectPath)) {
+  void delay(crashAfterConnectDelayMs).then(() => process.exit(1));
+}
