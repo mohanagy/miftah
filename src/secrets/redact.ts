@@ -147,6 +147,7 @@ export class SecretRedactor {
     const suppress = (marker: string): string => {
       pending = "";
       activeLine = "";
+      // Dropping an overlong line can lose a multiline-secret prefix, so later stderr stays fail-closed.
       suppressingOutput = true;
       return `${marker}\n`;
     };

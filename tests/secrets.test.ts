@@ -124,6 +124,13 @@ describe("secret redaction", () => {
     expect(stream.write(`${"x".repeat(8_193)}\n`)).toBe("[REDACTED STREAM LINE]\n");
   });
 
+  it("fails closed after a capped line can contain a multiline secret prefix", () => {
+    const stream = new SecretRedactor(["abc\ndef"]).createTextStream();
+
+    expect(stream.write(`${"x".repeat(8_190)}abc`)).toBe("[REDACTED STREAM LINE]\n");
+    expect(stream.write("\ndef\n")).toBe("");
+  });
+
   it("streams stderr with a large configured secret registry", () => {
     const redactor = new SecretRedactor(
       Array.from({ length: 200_000 }, (_, index) => `configured-secret-${index}`)
