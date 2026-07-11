@@ -89,6 +89,21 @@ describe("init command", () => {
     expect(streams.transcript.contents).toBe(`Created ${output}\n`);
   });
 
+  it("reports an existing output file as a usage error without changing it", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "existing.json");
+
+    await runInitCommand({ name: "existing", output: "existing.json" }, commandContext(streams));
+    const originalContents = await readFile(output, "utf8");
+
+    await expect(
+      runInitCommand({ name: "replacement", output: "existing.json" }, commandContext(streams))
+    ).rejects.toThrow(CliUsageError);
+
+    expect(await readFile(output, "utf8")).toBe(originalContents);
+    streams.input.end();
+  });
+
   it("rejects unknown presets and missing generic metadata before creating output directories", async () => {
     const streams = createStreams();
 
@@ -206,6 +221,35 @@ describe("init command", () => {
 
     await expectNoPath(resolve(outputRoot, "eof"));
     await expectNoPath(resolve(outputRoot, "cancel"));
+  });
+
+  it("does not emit an unhandled rejection when fully supplied wizard input closes", async () => {
+    const streams = createStreams();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    queueMicrotask(() => {
+      streams.input.write("\u0003");
+      streams.input.end();
+    });
+
+    try {
+      await runInitCommand(
+        {
+          interactive: true,
+          name: "fully-supplied",
+          preset: "generic",
+          output: "fully-supplied.json",
+          client: "all"
+        },
+        commandContext(streams)
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("rejects interactive init without TTY input and output before creating files", async () => {

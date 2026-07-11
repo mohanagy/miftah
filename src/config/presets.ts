@@ -8,13 +8,9 @@ const SENTRY_MCP_PACKAGE = "@sentry/mcp-server@0.36.0";
 const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const headerName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const allowedHeaderPrefixes = new Set(["Bearer ", "Sentry "]);
-const semverNumericIdentifier = "(?:0|[1-9][0-9]*)";
-const semverPrereleaseIdentifier =
-  `(?:${semverNumericIdentifier}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)`;
-const exactNpmPackageSpec = new RegExp(
-  `^(?:@[a-z0-9][a-z0-9._-]*\\/)?[a-z0-9][a-z0-9._-]*@${semverNumericIdentifier}\\.${semverNumericIdentifier}\\.${semverNumericIdentifier}(?:-${semverPrereleaseIdentifier}(?:\\.${semverPrereleaseIdentifier})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
-  "u"
-);
+const npmPackageWithVersion = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@(.+)$/u;
+const exactSemver =
+  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const canonicalDigestImage =
   /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?\/)?(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)*[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@sha256:[A-Fa-f0-9]{64}$/u;
 
@@ -185,7 +181,8 @@ function requireExactNpmPackage(value: unknown): string {
   if (typeof value !== "string") {
     catalogError("Preset option 'npmPackage' must be a string.");
   }
-  if (!value || !exactNpmPackageSpec.test(value)) {
+  const version = npmPackageWithVersion.exec(value)?.[1];
+  if (!value || version === undefined || !exactSemver.test(version)) {
     catalogError("Preset 'generic-npx' requires an exact npm package semver spec such as '@scope/server@1.2.3'.");
   }
   return value;
@@ -356,7 +353,7 @@ function validatePresetOptions(
 
 /** Builds a catalog preset strictly, rejecting unknown names instead of falling back. */
 export function buildPresetConfig(name: string, preset: string, options: PresetBuildOptions = {}): MiftahConfig {
-  if (!Object.prototype.hasOwnProperty.call(PRESET_CATALOG.presets, preset)) {
+  if (!Object.hasOwn(PRESET_CATALOG.presets, preset)) {
     catalogError(`Unknown preset '${preset}'. Supported presets: ${Object.keys(PRESET_CATALOG.presets).join(", ")}.`);
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];

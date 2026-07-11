@@ -71,6 +71,7 @@ function createCancellation(line: PromptInterface): Cancellation {
   const promise = new Promise<never>((_resolve, reject) => {
     rejectCancellation = reject;
   });
+  void promise.catch(() => undefined);
   const cancel = (message: string) => {
     if (cancelled) return;
     cancelled = true;
@@ -221,6 +222,10 @@ function resolveOutputPath(output: string, cwd: string): string {
   return resolve(cwd, output);
 }
 
+function isExistingOutputError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
   if (values.client !== undefined && !isClientSelection(values.client)) {
@@ -275,7 +280,14 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
   const plan = buildInitPlan(values, context);
 
   await mkdir(dirname(plan.output), { recursive: true });
-  await writeFile(plan.output, `${JSON.stringify(plan.config, null, 2)}\n`, { flag: "wx" });
+  try {
+    await writeFile(plan.output, `${JSON.stringify(plan.config, null, 2)}\n`, { flag: "wx" });
+  } catch (error) {
+    if (isExistingOutputError(error)) {
+      usageError(`Output '${plan.output}' already exists.`);
+    }
+    throw error;
+  }
   context.output.write(`Created ${plan.output}\n`);
   writeSnippets(context.output, plan.snippets);
 }
