@@ -587,6 +587,35 @@ describe("upstream process manager", () => {
     }
   });
 
+  it("finalizes a timed-out close without waiting for its original promise", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      { work: {}, personal: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25, maxConcurrentProfiles: 1 }
+    );
+
+    try {
+      const work = await manager.get("work");
+      vi.spyOn(work, "close").mockImplementation(() => new Promise<void>(() => undefined));
+
+      const completion = await Promise.race([
+        manager.closeProfile("work").then(() => "closed"),
+        delay(500).then(() => "timed-out")
+      ]);
+      expect(completion).toBe("closed");
+      expect(manager.listHealth()).toMatchObject([
+        { profile: "work", processState: "stopped", lastStopReason: "shutdown-timeout" }
+      ]);
+      await expect(manager.get("personal")).resolves.toBeDefined();
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("limits a multi-upstream bundle by distinct active profiles without evicting a live session", async () => {
     const manager = new MultiUpstreamProcessManager(
       {

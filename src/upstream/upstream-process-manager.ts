@@ -606,8 +606,8 @@ export class UpstreamProcessManager {
       );
       return undefined;
     } catch (error) {
-      await this.terminateTransport(entry.transport, entry.pid);
-      await close.catch(() => undefined);
+      // Send SIGKILL before releasing capacity, but never let best-effort transport cleanup exceed the shutdown deadline.
+      void this.terminateTransport(entry.transport, entry.pid).catch(() => undefined);
       return error instanceof MiftahError && error.code === "UPSTREAM_SHUTDOWN_TIMEOUT"
         ? "shutdown-timeout"
         : "shutdown-error";
