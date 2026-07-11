@@ -50,23 +50,27 @@ describe("preset documentation contract", () => {
       "--read-only",
       "repos,issues,pull_requests",
       "@sentry/mcp-server@0.36.0",
-      "--skills=inspect",
-      "https://github.com/github/github-mcp-server",
-      "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server",
-      "https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md#read-only-mode",
-      "https://github.com/github/github-mcp-server#tool-configuration",
-      "https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pull-by-digest",
-      "https://github.com/getsentry/sentry-mcp/tree/0.36.0",
-      "https://registry.npmjs.org/@sentry/mcp-server/0.36.0",
-      "https://github.com/getsentry/sentry-mcp/blob/0.36.0/packages/mcp-server/src/cli/usage.ts",
-      "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
-      "https://www.npmjs.com/package/@modelcontextprotocol/server-everything",
-      "https://code.claude.com/docs/en/mcp",
-      "https://cursor.com/docs/mcp",
-      "https://code.visualstudio.com/docs/agent-customization/mcp-servers",
-      "https://code.visualstudio.com/docs/agents/reference/mcp-configuration"
+      "--skills=inspect"
     ]) {
       expect(compatibility).toContain(requiredFact);
+    }
+    for (const sourceLink of [
+      "[GitHub MCP source](https://github.com/github/github-mcp-server)",
+      "[GitHub IDE setup](https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server)",
+      "[GitHub read-only mode](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md#read-only-mode)",
+      "[GitHub tool configuration](https://github.com/github/github-mcp-server#tool-configuration)",
+      "[GitHub Container registry pull by digest](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pull-by-digest)",
+      "[Sentry MCP source at `0.36.0`](https://github.com/getsentry/sentry-mcp/tree/0.36.0)",
+      "[Sentry package metadata at `0.36.0`](https://registry.npmjs.org/@sentry/mcp-server/0.36.0)",
+      "[Sentry `0.36.0` CLI usage](https://github.com/getsentry/sentry-mcp/blob/0.36.0/packages/mcp-server/src/cli/usage.ts)",
+      "[MCP Everything source](https://github.com/modelcontextprotocol/servers/tree/main/src/everything)",
+      "[MCP Everything npm package](https://www.npmjs.com/package/@modelcontextprotocol/server-everything)",
+      "[Claude Code MCP](https://code.claude.com/docs/en/mcp)",
+      "[Cursor MCP](https://cursor.com/docs/mcp)",
+      "[VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)",
+      "[VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)"
+    ]) {
+      expect(compatibility).toContain(sourceLink);
     }
 
     expect(readme).toContain("[Preset and client compatibility](docs/presets-and-clients.md)");
@@ -90,5 +94,6 @@ describe("preset documentation contract", () => {
 
     const unreleased = unreleasedSection(changelog);
     expect(unreleased).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);
+    expect(unreleased).not.toContain("runtime construction");
   });
 });
