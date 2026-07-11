@@ -2,6 +2,9 @@ import { parse } from "dotenv";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { MiftahError } from "../utils/errors.js";
 
+const exactEnvironmentReferencePattern = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const embeddedEnvironmentReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
 export interface SecretResolverOptions {
   environment?: NodeJS.ProcessEnv;
   envFiles?: string[];
@@ -72,7 +75,7 @@ export class SecretResolver {
       secretValues.add(resolved);
       return resolved;
     };
-    const environmentReference = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+    const environmentReference = value.match(exactEnvironmentReferencePattern);
     if (environmentReference) {
       return { value: resolveReference(environmentReference[1]!), secretValues: [...secretValues] };
     }
@@ -100,7 +103,7 @@ export class SecretResolver {
       );
     }
     return {
-      value: value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => resolveReference(name)),
+      value: value.replace(embeddedEnvironmentReferencePattern, (_, name: string) => resolveReference(name)),
       secretValues: [...secretValues]
     };
   }

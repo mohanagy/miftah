@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 import { MiftahError } from "../src/utils/errors.js";
@@ -559,6 +559,31 @@ describe("upstream process manager", () => {
     } finally {
       await manager.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("releases capacity after a session close rejects", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      { work: {}, personal: {} },
+      { startupTimeoutMs: 1_000, maxConcurrentProfiles: 1 }
+    );
+
+    try {
+      const work = await manager.get("work");
+      vi.spyOn(work, "close").mockRejectedValueOnce(new Error("simulated close failure"));
+
+      await expect(manager.closeProfile("work")).resolves.toBeUndefined();
+      expect(manager.listHealth()).toMatchObject([
+        { profile: "work", processState: "stopped", lastStopReason: "shutdown-error" }
+      ]);
+      await expect(manager.get("personal")).resolves.toBeDefined();
+    } finally {
+      await manager.close();
     }
   });
 

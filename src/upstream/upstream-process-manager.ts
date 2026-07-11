@@ -37,8 +37,9 @@ export type UpstreamCapability = "tools" | "resources" | "prompts";
 export type UpstreamCapabilityState = "unknown" | "available" | "failed";
 export type UpstreamProcessState = "stopped" | "starting" | "running" | "failed";
 export type UpstreamState = UpstreamProcessState | "degraded";
+type ShutdownFailureReason = "shutdown-timeout" | "shutdown-error";
 /** Identifies an intentional reason a profile's upstream process stopped. */
-export type UpstreamStopReason = "idle" | "manual" | "restart" | "shutdown" | "shutdown-timeout";
+export type UpstreamStopReason = "idle" | "manual" | "restart" | "shutdown" | ShutdownFailureReason;
 
 export interface UpstreamCapabilityHealth {
   state: UpstreamCapabilityState;
@@ -572,11 +573,11 @@ export class UpstreamProcessManager {
     this.clearStabilityTimer(profile);
     const entry = this.sessions.get(profile);
     this.sessions.delete(profile);
-    let shutdownTimedOut = false;
+    let shutdownFailure: ShutdownFailureReason | undefined;
 
     if (entry) {
       entry.closing = true;
-      shutdownTimedOut = await this.closeSession(entry);
+      shutdownFailure = await this.closeSession(entry);
     }
     if (startingAttempt) {
       await this.terminateTransport(startingAttempt.transport, startingAttempt.pid);
@@ -586,12 +587,14 @@ export class UpstreamProcessManager {
     this.setProcessState(profile, "stopped", {
       pid: null,
       resetCapabilities: true,
-      lastStopReason: shutdownTimedOut ? "shutdown-timeout" : reason
+      lastStopReason: shutdownFailure ?? reason
     });
   }
 
-  /** Enforces the configured graceful-shutdown deadline before force-closing a hung transport. */
-  private async closeSession(entry: ManagedSession): Promise<boolean> {
+  /** Finalizes a session after a timeout or close error so lifecycle capacity is never stranded. */
+  private async closeSession(
+    entry: ManagedSession
+  ): Promise<ShutdownFailureReason | undefined> {
     const close = entry.session.close();
     void close.catch(() => undefined);
     try {
@@ -601,14 +604,13 @@ export class UpstreamProcessManager {
         "UPSTREAM_SHUTDOWN_TIMEOUT",
         `UPSTREAM_SHUTDOWN_TIMEOUT: shutdown timed out after ${this.options.shutdownTimeoutMs}ms`
       );
-      return false;
+      return undefined;
     } catch (error) {
-      if (!(error instanceof MiftahError) || error.code !== "UPSTREAM_SHUTDOWN_TIMEOUT") {
-        throw error;
-      }
       await this.terminateTransport(entry.transport, entry.pid);
       await close.catch(() => undefined);
-      return true;
+      return error instanceof MiftahError && error.code === "UPSTREAM_SHUTDOWN_TIMEOUT"
+        ? "shutdown-timeout"
+        : "shutdown-error";
     }
   }
 
