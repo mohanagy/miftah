@@ -175,17 +175,21 @@ New audit directories and files use owner-only permissions where the platform su
 
 ## CLI
 
+Use `miftah --help` for the generated command list and `miftah <command> --help` for command-specific options. The available commands are:
+
 | Command | Purpose |
 | --- | --- |
-| `miftah --config <file>` | Run the STDIO MCP wrapper |
-| `miftah serve --config <file>` | Run the wrapper explicitly |
-| `miftah validate --config <file>` | Parse and validate JSON config |
-| `miftah doctor --config <file>` | Validate config and report redacted runtime details |
-| `miftah init <name> --preset <generic\|github\|sentry>` | Generate a template |
-| `miftah schema` | Print the JSON Schema |
-| `miftah list-tools --config <file> [--profile <name>]` | Discover upstream tools |
-| `miftah test-profile --config <file> --profile <name>` | Start and initialize one profile |
-| `miftah logs --config <file>` | Read the configured JSONL audit log |
+| `miftah --config <file>` / `miftah serve --config <file>` | Run the STDIO MCP wrapper. |
+| `miftah validate --config <file>` | Parse and validate JSON config; writes JSON. |
+| `miftah doctor --config <file> [--json]` | Report redacted configuration and upstream readiness. |
+| `miftah init [name] [--name <name>] [--preset <name>] [--output <file>]` | Generate a generic, GitHub, or Sentry template. |
+| `miftah schema` | Print the JSON Schema. |
+| `miftah list-tools --config <file> [--profile <name>]` | Discover upstream tools as JSON. |
+| `miftah test-profile --config <file> [--profile <name>]` | Start and initialize one profile; writes JSON. |
+| `miftah logs --config <file> [--follow]` | Read normalized, redacted audit JSONL; follow rotation safely when requested. |
+| `miftah --version` / `miftah -v` / `miftah version [--json]` | Print the package SemVer. `--json` intentionally preserves bare SemVer output. |
+
+Structured success output is written to stdout with stderr empty. Stable nonzero categories are usage (`2`), configuration (`3`), secret resolution (`4`), upstream (`5`), and policy (`6`); `1` is an uncategorized operational failure. Quote config and output paths with spaces. `logs --follow` handles appends, truncation, and rotation, and exits cleanly on `SIGINT` or `SIGTERM` without starting an upstream. See the complete [CLI reference](docs/cli.md) for help behavior, defaults, JSON contracts, redaction, and audit reader boundaries.
 
 ## Documentation
 

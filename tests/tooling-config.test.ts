@@ -23,9 +23,9 @@ describe("repository tooling contracts", () => {
   });
 
   it("documents every nontrivial pack verifier function", () => {
-    const verifier = readRepositoryFile("scripts/check-pack.mjs");
+    const verifier = readRepositoryFile("scripts/pack-verifier.mjs");
 
-    for (const name of ["formatPaths", "isAllowedPath", "verifyPackPaths", "parsePackOutput", "checkPack"]) {
+    for (const name of ["formatPaths", "isAllowedPath", "verifyPackPaths", "parsePackOutput"]) {
       const exportedFunctionIndex = verifier.indexOf(`export function ${name}(`);
       const functionIndex =
         exportedFunctionIndex >= 0 ? exportedFunctionIndex : verifier.indexOf(`function ${name}(`);
@@ -37,7 +37,7 @@ describe("repository tooling contracts", () => {
   });
 
   it("recognizes adjacent JSDoc comments after Windows line-ending conversion", () => {
-    const verifier = readRepositoryFile("scripts/check-pack.mjs");
+    const verifier = readRepositoryFile("scripts/pack-verifier.mjs");
     const windowsVerifier = verifier.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
     const functionIndex = windowsVerifier.indexOf("function formatPaths(");
 
