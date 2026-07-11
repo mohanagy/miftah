@@ -546,7 +546,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         .listHealth()
         .every(
           (health) =>
-            health.processState !== "running" &&
+            health.processState === "stopped" &&
             health.pid == null &&
             health.lastStopReason !== "shutdown-timeout" &&
             health.lastStopReason !== "shutdown-error"

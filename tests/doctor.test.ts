@@ -186,6 +186,12 @@ describe("doctor readiness runner", () => {
     expect(report.overallStatus).toBe("failed");
   });
 
+  it("requires every post-close health entry to be stopped", async () => {
+    const doctorSource = await readFile(new URL("../src/cli/doctor.ts", import.meta.url), "utf8");
+
+    expect(doctorSource).toContain('health.processState === "stopped"');
+  });
+
   it("returns safe failures for a missing executable without throwing", async () => {
     const { configPath } = await writeConfig(
       "missing-executable",
