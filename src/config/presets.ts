@@ -7,7 +7,7 @@ const GENERIC_MCP_PACKAGE = "@modelcontextprotocol/server-everything@2026.7.4";
 const SENTRY_MCP_PACKAGE = "@sentry/mcp-server@0.36.0";
 const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const headerName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
-const authSchemePrefix = /^[A-Za-z][A-Za-z0-9-]* $/u;
+const allowedHeaderPrefixes = new Set(["Bearer ", "Sentry "]);
 const exactNpmPackageSpec =
   /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const canonicalDigestImage =
@@ -239,8 +239,8 @@ function buildCredentialHeaders(options: PresetBuildOptions): Record<string, str
     catalogError(`Invalid HTTP header name '${options.headerName}'.`);
   }
   const headerPrefix = options.headerPrefix ?? "";
-  if (headerPrefix !== "" && !authSchemePrefix.test(headerPrefix)) {
-    catalogError("HTTP header prefix must be empty or an auth scheme token followed by exactly one ASCII space.");
+  if (headerPrefix !== "" && !allowedHeaderPrefixes.has(headerPrefix)) {
+    catalogError("HTTP header prefix must be empty, 'Bearer ', or 'Sentry '.");
   }
 
   return { [options.headerName]: `${headerPrefix}${environmentReference(options.credentialEnv)}` };

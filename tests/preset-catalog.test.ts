@@ -178,12 +178,12 @@ describe("preset catalog", () => {
     expect(() => validateConfig(omittedPrefix)).not.toThrow();
   });
 
-  it("rejects literal header prefixes before returning a streamable HTTP config", () => {
+  it("rejects a literal credential followed by a space as a streamable HTTP header prefix", () => {
     expect(() => buildPresetConfig("remote", "streamable-http", {
       url: "https://mcp.example.com/v1",
       credentialEnv: "REMOTE_TOKEN",
       headerName: "Authorization",
-      headerPrefix: "super-secret-value"
+      headerPrefix: "literal-secret-value "
     })).toThrow(PresetCatalogError);
   });
 
