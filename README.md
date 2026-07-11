@@ -194,6 +194,7 @@ New audit directories and files use owner-only permissions where the platform su
 - [Security](docs/security.md)
 - [Security reporting](SECURITY.md)
 - [CLI](docs/cli.md)
+- [Library API](docs/library-api.md)
 - [Claude Desktop](docs/claude-desktop.md)
 - [GitHub example](docs/examples/github.md)
 - [Sentry example](docs/examples/sentry.md)

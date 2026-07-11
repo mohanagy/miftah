@@ -1,6 +1,10 @@
 import { defineConfig } from "vitest/config";
+import { packageVersion } from "./build/package-version.js";
 
 export default defineConfig({
+  define: {
+    __MIFTAH_VERSION__: JSON.stringify(packageVersion)
+  },
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],

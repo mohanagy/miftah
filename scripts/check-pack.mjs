@@ -12,6 +12,7 @@ const REQUIRED_PATHS = [
   "dist/index.d.ts",
   "dist/index.js",
   "docs/cli.md",
+  "docs/library-api.md",
   "examples/generic.miftah.json",
   "package.json"
 ];
@@ -25,6 +26,17 @@ const ALLOWED_PATH_PATTERNS = [
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = dirname(dirname(scriptPath));
+const npmCliPath = process.env.npm_execpath;
+
+function npmInvocation(args) {
+  if (npmCliPath) {
+    return { command: process.execPath, args: [npmCliPath, ...args] };
+  }
+  if (process.platform === "win32") {
+    throw new Error("npm_execpath is required to invoke npm safely on Windows. Run this command through npm.");
+  }
+  return { command: "npm", args };
+}
 
 /**
  * Formats package paths as an indented list for actionable verification errors.
@@ -118,8 +130,8 @@ export function parsePackOutput(output) {
  * @throws {Error} when npm cannot run, packing fails, or the package contract is violated
  */
 export function checkPack() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const packed = spawnSync(npmCommand, ["pack", "--dry-run", "--json"], {
+  const invocation = npmInvocation(["pack", "--dry-run", "--json"]);
+  const packed = spawnSync(invocation.command, invocation.args, {
     cwd: repositoryRoot,
     encoding: "utf8",
     env: { ...process.env, npm_config_loglevel: "silent" },

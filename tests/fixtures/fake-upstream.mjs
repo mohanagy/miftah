@@ -39,6 +39,7 @@ const crashAfterConnectPath = process.env.TEST_CRASH_AFTER_CONNECT_PATH;
 const crashAfterConnectDelayMs = Number(process.env.TEST_CRASH_AFTER_CONNECT_DELAY_MS ?? "10");
 const startCountPath = process.env.TEST_START_COUNT_PATH;
 const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
+const clientInfoPath = process.env.TEST_CLIENT_INFO_PATH;
 const stderrMessage = process.env.TEST_STDERR_MESSAGE;
 const stderrSplitAt = Number(process.env.TEST_STDERR_SPLIT_AT ?? "0");
 const hangOnStartPath = process.env.TEST_HANG_ON_START_PATH;
@@ -123,9 +124,19 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
 
-if (failInitialize) {
-  server.setRequestHandler(InitializeRequestSchema, async () => {
-    throw new Error(`test initialize failure: ${process.env.API_TOKEN}`);
+if (failInitialize || clientInfoPath) {
+  server.setRequestHandler(InitializeRequestSchema, async (request) => {
+    if (clientInfoPath) {
+      writeFileSync(clientInfoPath, JSON.stringify(request.params.clientInfo));
+    }
+    if (failInitialize) {
+      throw new Error(`test initialize failure: ${process.env.API_TOKEN}`);
+    }
+    return {
+      protocolVersion: request.params.protocolVersion,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
+      serverInfo: { name: "fake-upstream", version: "1.0.0" }
+    };
   });
 }
 
