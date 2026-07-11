@@ -42,8 +42,8 @@ function inputError(message: string): never {
   throw new ClientSnippetError(message);
 }
 
-function isClientName(value: string): value is ClientName {
-  return (CLIENT_NAMES as readonly string[]).includes(value);
+function isClientName(value: unknown): value is ClientName {
+  return typeof value === "string" && (CLIENT_NAMES as readonly string[]).includes(value);
 }
 
 function isAbsolutePath(path: string): boolean {
@@ -75,15 +75,22 @@ function validateInput(input: ClientSnippetInput): void {
   if (!isAbsolutePath(input.launcher.command)) {
     inputError("Launcher command must be absolute.");
   }
-  if (!Array.isArray(input.launcher.args) || input.launcher.args.length === 0 || input.launcher.args.some((argument) => typeof argument !== "string" || argument.length === 0)) {
+  if (!Array.isArray(input.launcher.args)) {
     inputError("Every launcher argument must be a non-empty string.");
   }
-  if (input.launcher.args.some((argument) => argument.includes("\0"))) {
+  const launcherArguments = Array.from(input.launcher.args);
+  if (launcherArguments.length === 0 || launcherArguments.some((argument) => typeof argument !== "string" || argument.length === 0)) {
+    inputError("Every launcher argument must be a non-empty string.");
+  }
+  if (launcherArguments.some((argument) => argument.includes("\0"))) {
     inputError("Launcher arguments must not contain a NUL character.");
   }
-  const entrypoint = input.launcher.args[0];
+  const entrypoint = launcherArguments[0];
   if (entrypoint === undefined || !isAbsolutePath(entrypoint)) {
     inputError("Miftah CLI entrypoint must be absolute.");
+  }
+  if (launcherArguments.some((argument) => argument === "--config" || argument.startsWith("--config="))) {
+    inputError("Launcher arguments must not include '--config'; the snippet supplies it.");
   }
 }
 
@@ -110,7 +117,7 @@ function renderConfiguration(client: ClientName, input: ClientSnippetInput): obj
 
 export function renderClientSnippet(client: ClientName, input: ClientSnippetInput): ClientSnippet {
   if (!isClientName(client)) {
-    inputError(`Unsupported client '${client}'.`);
+    inputError("Unsupported client.");
   }
   validateInput(input);
   return {

@@ -142,6 +142,8 @@ describe("client snippets", () => {
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [""] } }, "launcher argument"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: ["dist/cli/main.js"] } }, "absolute"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: ["/safe\u0000cli.js"] } }, "NUL"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, args: [posixInput.launcher.args[0]!, "--config", "/other/config.json"] } }, "--config"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, args: [posixInput.launcher.args[0]!, "--config=/other/config.json"] } }, "--config"],
     [{ ...posixInput, configPath: "relative/config.json" }, "absolute"],
     [{ ...posixInput, configPath: "/safe\u0000path/config.json" }, "NUL"]
   ])("rejects invalid input %#", (input, message) => {
@@ -152,6 +154,15 @@ describe("client snippets", () => {
   it.each([null, undefined, true, "not an object"])("rejects malformed top-level input %#", (input) => {
     expect(() => renderClientSnippet("cursor", input as never)).toThrow(ClientSnippetError);
     expect(() => renderClientSnippet("cursor", input as never)).toThrow("snippet input");
+  });
+
+  it("rejects sparse launcher argument arrays", () => {
+    const sparseArgs = [posixInput.launcher.args[0]!, "serve"];
+    delete sparseArgs[1];
+
+    expect(() => renderClientSnippet("cursor", { ...posixInput, launcher: { ...posixInput.launcher, args: sparseArgs } })).toThrow(
+      ClientSnippetError
+    );
   });
 
   it("accepts UNC paths and rejects unrecognized client names at runtime", () => {
@@ -165,6 +176,11 @@ describe("client snippets", () => {
     );
     expect(() => renderClientSnippet("unsupported" as never, posixInput)).toThrow(ClientSnippetError);
     expect(() => renderClientSnippet("unsupported" as never, posixInput)).toThrow("Unsupported client");
+  });
+
+  it.each([Symbol("cursor"), 1, null])("rejects malformed client values %#", (client) => {
+    expect(() => renderClientSnippet(client as never, posixInput)).toThrow(ClientSnippetError);
+    expect(() => renderClientSnippets(client as never, posixInput)).toThrow(ClientSnippetError);
   });
 
   it("accepts Windows extended-length absolute paths", () => {
