@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const jsdocAdjacencyPattern = /\/\*\*[\s\S]*?\*\/\n$/u;
+const jsdocAdjacencyPattern = /\/\*\*[\s\S]*?\*\/\r?\n$/u;
 const jsonIgnorePattern = /ignores:\s*\[[^\]]*"\*\*\/\*\.json"/u;
 const pullRequestTitlePattern = /^# [^#\n]+/u;
 
@@ -34,5 +34,13 @@ describe("repository tooling contracts", () => {
         jsdocAdjacencyPattern
       );
     }
+  });
+
+  it("recognizes adjacent JSDoc comments after Windows line-ending conversion", () => {
+    const verifier = readRepositoryFile("scripts/check-pack.mjs");
+    const windowsVerifier = verifier.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+    const functionIndex = windowsVerifier.indexOf("function formatPaths(");
+
+    expect(windowsVerifier.slice(0, functionIndex)).toMatch(jsdocAdjacencyPattern);
   });
 });
