@@ -81,14 +81,21 @@ describe("continuous integration workflow contract", () => {
     expect(scripts["test:coverage"]).toContain("vitest run --coverage");
   });
 
-  it("keeps the packed-artifact npm helper executable on Windows", () => {
+  it("runs packed-artifact npm commands without Windows shell parsing", () => {
     const packageContract = readRepositoryFile("tests/package-contract.test.ts");
-    const runNpm = packageContract.slice(
-      packageContract.indexOf("function runNpm"),
-      packageContract.indexOf("async function loadPackVerifier")
+    const packVerifier = readRepositoryFile("scripts/check-pack.mjs");
+    const npmHelper = packageContract.slice(
+      packageContract.indexOf("function npmInvocation"),
+      packageContract.indexOf("function quoteForWindowsCommand")
     );
 
-    expect(runNpm).toContain('shell: process.platform === "win32"');
+    for (const source of [packageContract, packVerifier]) {
+      expect(source).toContain("process.env.npm_execpath");
+    }
+    for (const source of [npmHelper, packVerifier]) {
+      expect(source).toContain("command: process.execPath");
+      expect(source).not.toContain("shell:");
+    }
   });
 
   it("collects V8 coverage for the critical runtime boundaries", () => {

@@ -36,6 +36,7 @@ import {
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { MIFTAH_VERSION } from "../../version.js";
 import {
   OperationPipeline,
   type CapturedProfileState,
@@ -136,7 +137,7 @@ export class MiftahServer {
     this.redactor = upstreams.getRedactor();
     this.resourcePromptProxy = this.resourcePromptProxyAvailability();
     this.server = new Server(
-      { name: `miftah-${config.name}`, version: "0.1.1" },
+      { name: `miftah-${config.name}`, version: MIFTAH_VERSION },
       {
         debouncedNotificationMethods: [
           "notifications/tools/list_changed",

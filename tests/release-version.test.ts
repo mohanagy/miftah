@@ -31,16 +31,32 @@ describe("v0.1.1 release artifacts", () => {
     );
   });
 
-  it("aligns package and MCP handshake versions", () => {
+  it("derives MCP, upstream, and CLI metadata from one package version", () => {
     const manifest = JSON.parse(readRepositoryFile("package.json")) as { version: string };
+    const versionModule = readRepositoryFile("src/version.ts");
+    const packageVersion = readRepositoryFile("build/package-version.ts");
 
     expect(manifest.version).toBe(releaseVersion);
-    expect(readRepositoryFile("src/mcp/server/miftah-server.ts")).toContain(
-      `version: "${manifest.version}"`
-    );
-    expect(readRepositoryFile("src/upstream/upstream-process-manager.ts")).toContain(
-      `version: "${manifest.version}"`
-    );
+    expect(packageVersion).toContain('import packageManifest from "../package.json" with { type: "json" }');
+    expect(packageVersion).toContain("export const packageVersion = packageManifest.version");
+    expect(versionModule).toContain("export const MIFTAH_VERSION = __MIFTAH_VERSION__");
+
+    for (const path of ["tsup.config.ts", "vitest.config.ts"]) {
+      const source = readRepositoryFile(path);
+      expect(source).toContain('import { packageVersion } from "./build/package-version.js"');
+      expect(source).toContain("__MIFTAH_VERSION__");
+      expect(source).not.toContain(`"${manifest.version}"`);
+    }
+
+    for (const path of [
+      "src/mcp/server/miftah-server.ts",
+      "src/upstream/upstream-process-manager.ts",
+      "src/cli/main.ts"
+    ]) {
+      const source = readRepositoryFile(path);
+      expect(source).toContain("MIFTAH_VERSION");
+      expect(source).not.toContain(`"${manifest.version}"`);
+    }
   });
 
   it("documents every hotfix while retaining the experimental package status", () => {

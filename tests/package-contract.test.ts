@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PackageManifest {
+  version?: string;
   repository?: unknown;
   homepage?: unknown;
   bugs?: unknown;
@@ -25,8 +26,18 @@ interface PackResult {
 }
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const npmCommandTimeoutMs = 25_000;
+const npmCliPath = process.env.npm_execpath;
+const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+const publicRuntimeExports = [
+  "MIFTAH_VERSION",
+  "MiftahError",
+  "createMiftahRuntime",
+  "generateConfigSchema",
+  "loadConfig",
+  "presetConfig",
+  "validateConfig"
+];
 const requiredPackPaths = [
   "LICENSE",
   "README.md",
@@ -34,6 +45,7 @@ const requiredPackPaths = [
   "dist/index.d.ts",
   "dist/index.js",
   "docs/cli.md",
+  "docs/library-api.md",
   "examples/generic.miftah.json",
   "package.json"
 ] as const;
@@ -42,14 +54,24 @@ function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
 }
 
+function npmInvocation(args: readonly string[]): { command: string; args: readonly string[] } {
+  if (npmCliPath) {
+    return { command: process.execPath, args: [npmCliPath, ...args] };
+  }
+  if (process.platform === "win32") {
+    throw new Error("npm_execpath is required to invoke npm safely on Windows. Run the test through npm.");
+  }
+  return { command: "npm", args };
+}
+
 function runNpm(args: readonly string[], cwd = repositoryRoot) {
-  const result = spawnSync(npmCommand, args, {
+  const invocation = npmInvocation(args);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
     env: { ...process.env, npm_config_loglevel: "silent" },
     timeout: npmCommandTimeoutMs,
-    killSignal: "SIGTERM",
-    shell: process.platform === "win32"
+    killSignal: "SIGTERM"
   });
   if (result.error) {
     const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
@@ -60,6 +82,29 @@ function runNpm(args: readonly string[], cwd = repositoryRoot) {
     throw new Error(`npm ${args.join(" ")} ${reason}`);
   }
   return result;
+}
+
+function quoteForWindowsCommand(value: string): string {
+  return `"${value.replace(/"/gu, '""')}"`;
+}
+
+function runInstalledBinary(binary: string, args: readonly string[], cwd: string) {
+  if (process.platform !== "win32") {
+    return spawnSync(binary, args, {
+      cwd,
+      encoding: "utf8",
+      timeout: npmCommandTimeoutMs
+    });
+  }
+  return spawnSync(
+    process.env.ComSpec ?? "cmd.exe",
+    ["/d", "/s", "/c", [binary, ...args].map(quoteForWindowsCommand).join(" ")],
+    {
+      cwd,
+      encoding: "utf8",
+      timeout: npmCommandTimeoutMs
+    }
+  );
 }
 
 async function loadPackVerifier(): Promise<PackVerifier> {
@@ -184,21 +229,106 @@ describe("packed artifact contract", () => {
         const install = runNpm(["install", "--ignore-scripts", "--no-package-lock", join(directory, result.filename)], directory);
         expect(install.status, install.stderr || install.stdout).toBe(0);
 
-        const packageRoot = join(directory, "node_modules", "@lubab", "miftah");
-        const entryPoint = await import(pathToFileURL(join(packageRoot, "dist", "index.js")).href);
-        expect(entryPoint.validateConfig).toBeTypeOf("function");
-
-        const binary = join(directory, "node_modules", ".bin", process.platform === "win32" ? "miftah.cmd" : "miftah");
-        const schema = spawnSync(binary, ["schema"], {
+        const consumerPath = join(directory, "consumer.mjs");
+        const configPath = join(directory, "miftah.json");
+        await writeFile(
+          configPath,
+          JSON.stringify({
+            version: "1",
+            name: "packed-public-api",
+            defaultProfile: "work",
+            upstream: { transport: "stdio", command: process.execPath },
+            profiles: { work: {} }
+          })
+        );
+        await writeFile(
+          consumerPath,
+          [
+            'import * as api from "@lubab/miftah";',
+            'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
+            'import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";',
+            "",
+            "const runtime = await api.createMiftahRuntime(process.argv[2]);",
+            "const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();",
+            'const client = new Client({ name: "packed-artifact-test", version: "1.0.0" });',
+            "try {",
+            "  await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);",
+            "  process.stdout.write(JSON.stringify({",
+            "    exports: Object.keys(api).sort(),",
+            "    version: api.MIFTAH_VERSION,",
+            "    server: client.getServerVersion()",
+            "  }));",
+            "} finally {",
+            "  await client.close();",
+            "  await runtime.close();",
+            "}"
+          ].join("\n")
+        );
+        const entryPoint = spawnSync(process.execPath, [consumerPath, configPath], {
           cwd: directory,
           encoding: "utf8",
-          shell: process.platform === "win32",
           timeout: npmCommandTimeoutMs
         });
+        expect(entryPoint.status, entryPoint.stderr || entryPoint.stdout).toBe(0);
+        expect(JSON.parse(entryPoint.stdout)).toEqual({
+          exports: [...publicRuntimeExports].sort(),
+          version: readPackageManifest().version,
+          server: {
+            name: "miftah-packed-public-api",
+            version: readPackageManifest().version
+          }
+        });
+
+        const typeConsumerPath = join(directory, "consumer.ts");
+        await writeFile(
+          typeConsumerPath,
+          [
+            'import { createMiftahRuntime, MIFTAH_VERSION, type AuditConfig, type ConfigDiagnostic, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            "",
+            "type SupportedTypes = [",
+            "  AuditConfig, ConfigDiagnostic, MiftahConfig, MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
+            "  PolicyConfig, ProcessConfig, ProfileConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
+            "  RoutingRule, SecurityConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UpstreamConfig,",
+            "  ValidatedRoutingConfig",
+            "];",
+            "declare const types: SupportedTypes;",
+            "const version: string = MIFTAH_VERSION;",
+            'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
+            "void [types, version, runtime];"
+          ].join("\n")
+        );
+        const typecheck = spawnSync(
+          process.execPath,
+          [
+            typescriptCliPath,
+            "--noEmit",
+            "--module",
+            "NodeNext",
+            "--moduleResolution",
+            "NodeNext",
+            "--target",
+            "ES2022",
+            "--skipLibCheck",
+            typeConsumerPath
+          ],
+          {
+            cwd: directory,
+            encoding: "utf8",
+            timeout: npmCommandTimeoutMs
+          }
+        );
+        expect(typecheck.status, typecheck.stderr || typecheck.stdout).toBe(0);
+
+        const binary = join(directory, "node_modules", ".bin", process.platform === "win32" ? "miftah.cmd" : "miftah");
+        const schema = runInstalledBinary(binary, ["schema"], directory);
         expect(schema.status, schema.stderr || schema.stdout).toBe(0);
         expect(JSON.parse(schema.stdout)).toMatchObject({
           $schema: "https://json-schema.org/draft/2019-09/schema#"
         });
+
+        const version = runInstalledBinary(binary, ["version"], directory);
+        expect(version.status, version.stderr || version.stdout).toBe(0);
+        expect(version.stdout.trim()).toBe(readPackageManifest().version);
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

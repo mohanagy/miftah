@@ -12,6 +12,7 @@ import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
+import { MIFTAH_VERSION } from "../version.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
@@ -361,7 +362,7 @@ export class UpstreamProcessManager {
       }
 
       transport.onclose = () => this.handleTransportClosed(profile, token, generation);
-      const client = new Client({ name: "miftah", version: "0.1.1" });
+      const client = new Client({ name: "miftah", version: MIFTAH_VERSION });
       startingAttempt = { transport, generation, pid: null };
       this.startingAttempts.set(profile, startingAttempt);
       const connection = client.connect(transport);

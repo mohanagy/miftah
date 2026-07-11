@@ -3,10 +3,11 @@ import { dirname, resolve } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { presetConfig } from "../config/presets.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
-import { MiftahServer } from "../mcp/server/miftah-server.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { redactSecrets } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
+import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
+import { MIFTAH_VERSION } from "../version.js";
 
 interface CliArgs {
   command?: string;
@@ -16,6 +17,7 @@ interface CliArgs {
   preset?: string;
   follow?: boolean;
   name?: string;
+  version?: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -28,6 +30,8 @@ function parseArgs(argv: string[]): CliArgs {
     const value = values[index];
     if (value === "--follow") {
       result.follow = true;
+    } else if (value === "--version" || value === "-v") {
+      result.version = true;
     } else if (value === "--config") {
       result.config = values[++index];
     } else if (value === "--profile") {
@@ -44,20 +48,23 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 async function serve(configPath: string): Promise<void> {
-  const runtime = await createRuntime(configPath);
-  const server = new MiftahServer(runtime.config, runtime.profileManager, runtime.manager);
+  const runtime = await createMiftahRuntime(configPath);
   const transport = new StdioServerTransport();
   const shutdown = async () => {
-    await server.close();
+    await runtime.close();
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
-  await server.connect(transport);
+  await runtime.connect(transport);
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const command = args.command ?? "serve";
+  if (args.version || command === "version") {
+    process.stdout.write(`${MIFTAH_VERSION}\n`);
+    return;
+  }
   if (command === "schema") {
     process.stdout.write(`${JSON.stringify(generateConfigSchema(), null, 2)}\n`);
     return;
@@ -72,7 +79,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (!args.config) {
-    throw new Error("Usage: miftah --config <file> | miftah <validate|doctor|list-tools|test-profile|logs> --config <file>");
+    throw new Error("Usage: miftah --config <file> | miftah <validate|doctor|list-tools|test-profile|logs|version> --config <file>");
   }
   if (command === "serve") {
     await serve(args.config);

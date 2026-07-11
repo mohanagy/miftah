@@ -1,4 +1,5 @@
 import { defineConfig } from "tsup";
+import { packageVersion } from "./build/package-version.js";
 
 export default defineConfig({
   entry: {
@@ -9,6 +10,9 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
+  define: {
+    __MIFTAH_VERSION__: JSON.stringify(packageVersion)
+  },
   banner: {
     js: "#!/usr/bin/env node"
   }
