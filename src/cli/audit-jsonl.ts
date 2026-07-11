@@ -1,6 +1,7 @@
 import { open, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { isUtf8 } from "node:buffer";
+import { createHash, type Hash } from "node:crypto";
 import { SecretRedactor } from "../secrets/redact.js";
 
 export const MALFORMED_AUDIT_RECORD = '{"type":"miftah.audit.malformed-record"}';
@@ -20,7 +21,7 @@ export interface AuditJsonlFollowOptions extends AuditJsonlReadOptions {
 
 interface AuditReadState {
   cursor: number;
-  cursorFingerprint: Buffer;
+  cursorDigest: Buffer;
   identity: string | undefined;
   pending: Buffer;
 }
@@ -28,7 +29,8 @@ interface AuditReadState {
 const defaultPollIntervalMs = 250;
 const minimumPollIntervalMs = 10;
 const maximumPollIntervalMs = 1_000;
-const maximumCursorFingerprintBytes = 4 * 1024;
+const hashChunkBytes = 64 * 1024;
+const emptyCursorDigest = createHash("sha256").digest();
 
 function fileIdentity(stats: Stats): string | undefined {
   return stats.dev !== 0 && stats.ino !== 0 ? `${stats.dev}:${stats.ino}` : undefined;
@@ -43,7 +45,7 @@ function shouldReset(state: AuditReadState, stats: Stats, identity: string | und
 
 function resetState(state: AuditReadState): void {
   state.cursor = 0;
-  state.cursorFingerprint = Buffer.alloc(0);
+  state.cursorDigest = Buffer.from(emptyCursorDigest);
   state.identity = undefined;
   state.pending = Buffer.alloc(0);
 }
@@ -58,6 +60,34 @@ async function readFromHandle(handle: FileHandle, position: number, length: numb
     offset += bytesRead;
   }
   return contents.subarray(0, offset);
+}
+
+async function hashFromHandle(handle: FileHandle, length: number): Promise<Hash | undefined> {
+  const hash = createHash("sha256");
+  if (length === 0) return hash;
+
+  const chunk = Buffer.allocUnsafe(Math.min(hashChunkBytes, length));
+  let position = 0;
+  while (position < length) {
+    const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, length - position), position);
+    if (bytesRead === 0) return undefined;
+    hash.update(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return hash;
+}
+
+function digest(hash: Hash): Buffer {
+  return hash.copy().digest();
+}
+
+function changedDuringRead(before: Stats, after: Stats): boolean {
+  return (
+    fileIdentity(before) !== fileIdentity(after) ||
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs ||
+    before.ctimeMs !== after.ctimeMs
+  );
 }
 
 function normalizeRecord(record: Buffer, redactor: SecretRedactor): string {
@@ -84,30 +114,6 @@ async function emitCompleteRecords(
   state.pending = Buffer.from(buffered.subarray(recordStart));
 }
 
-function nextCursorFingerprint(state: AuditReadState, contents: Buffer): Buffer {
-  if (contents.length >= maximumCursorFingerprintBytes) {
-    return Buffer.from(contents.subarray(contents.length - maximumCursorFingerprintBytes));
-  }
-  const previousLength = Math.min(
-    state.cursorFingerprint.length,
-    maximumCursorFingerprintBytes - contents.length
-  );
-  return Buffer.concat([
-    state.cursorFingerprint.subarray(state.cursorFingerprint.length - previousLength),
-    contents
-  ]);
-}
-
-async function cursorFingerprintMatches(state: AuditReadState, handle: FileHandle): Promise<boolean> {
-  if (state.cursorFingerprint.length === 0) return true;
-  const currentFingerprint = await readFromHandle(
-    handle,
-    state.cursor - state.cursorFingerprint.length,
-    state.cursorFingerprint.length
-  );
-  return currentFingerprint.equals(state.cursorFingerprint);
-}
-
 async function pollAuditFile(
   path: string,
   state: AuditReadState,
@@ -116,21 +122,44 @@ async function pollAuditFile(
 ): Promise<void> {
   const handle = await open(path, "r");
   try {
-    const stats = await handle.stat();
+    let stats = await handle.stat();
     const identity = fileIdentity(stats);
-    if (shouldReset(state, stats, identity) || !(await cursorFingerprintMatches(state, handle))) {
+    if (shouldReset(state, stats, identity)) {
       resetState(state);
     }
-    const contents = await readFromHandle(handle, state.cursor, stats.size - state.cursor);
+
+    let prefixHash = await hashFromHandle(handle, state.cursor);
+    if (prefixHash === undefined || !digest(prefixHash).equals(state.cursorDigest)) {
+      resetState(state);
+      stats = await handle.stat();
+      prefixHash = await hashFromHandle(handle, state.cursor);
+      if (prefixHash === undefined) return;
+    }
+
+    const expectedLength = stats.size - state.cursor;
+    const contents = await readFromHandle(handle, state.cursor, expectedLength);
+    const candidateCursor = state.cursor + contents.length;
+    const candidateDigest = digest(prefixHash.update(contents));
     const finalStats = await handle.stat();
     const finalIdentity = fileIdentity(finalStats);
-    if (shouldReset(state, finalStats, finalIdentity) || !(await cursorFingerprintMatches(state, handle))) {
+    if (expectedLength === 0 && changedDuringRead(stats, finalStats)) return;
+
+    const finalHash = await hashFromHandle(handle, candidateCursor);
+    const postHashStats = await handle.stat();
+    if (
+      contents.length !== expectedLength ||
+      changedDuringRead(stats, finalStats) ||
+      changedDuringRead(finalStats, postHashStats) ||
+      shouldReset(state, finalStats, finalIdentity) ||
+      finalHash === undefined ||
+      !digest(finalHash).equals(candidateDigest)
+    ) {
       resetState(state);
       return;
     }
     state.identity = finalIdentity;
-    state.cursorFingerprint = nextCursorFingerprint(state, contents);
-    state.cursor += contents.length;
+    state.cursorDigest = candidateDigest;
+    state.cursor = candidateCursor;
     await emitCompleteRecords(state, contents, redactor, write);
   } finally {
     await handle.close();
@@ -166,7 +195,7 @@ function isNotFoundError(error: unknown): boolean {
 export async function readAuditJsonl(options: AuditJsonlReadOptions): Promise<void> {
   const state: AuditReadState = {
     cursor: 0,
-    cursorFingerprint: Buffer.alloc(0),
+    cursorDigest: Buffer.from(emptyCursorDigest),
     identity: undefined,
     pending: Buffer.alloc(0)
   };
@@ -177,7 +206,7 @@ export async function readAuditJsonl(options: AuditJsonlReadOptions): Promise<vo
 export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promise<void> {
   const state: AuditReadState = {
     cursor: 0,
-    cursorFingerprint: Buffer.alloc(0),
+    cursorDigest: Buffer.from(emptyCursorDigest),
     identity: undefined,
     pending: Buffer.alloc(0)
   };

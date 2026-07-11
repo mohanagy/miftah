@@ -369,6 +369,45 @@ describe("audit JSONL reader", () => {
     });
   });
 
+  it("resets same-inode copytruncate state when only an earlier consumed byte changes", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const sharedSuffix = `{"padding":"${"x".repeat(4 * 1024)}"}\n`;
+      const initialRecord = '{"generation":"old","value":"before"}\n';
+      const replacementRecord = '{"generation":"new","value":"after!"}\n';
+      const initialContents = initialRecord + sharedSuffix;
+      const replacementContents = replacementRecord + sharedSuffix;
+      expect(Buffer.byteLength(sharedSuffix)).toBeGreaterThanOrEqual(4 * 1024);
+      expect(Buffer.byteLength(replacementContents)).toBeGreaterThanOrEqual(Buffer.byteLength(initialContents));
+      await writeFile(auditPath, initialContents);
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs: 100
+      });
+      try {
+        await waitFor(() => output.length === 2);
+        output.length = 0;
+        truncateSync(auditPath, 0);
+        writeFileSync(auditPath, replacementContents);
+        await waitFor(() => output.length === 2, 2_000);
+
+        expect(output.join("")).toBe(replacementContents);
+        expect(output).toContain(replacementRecord);
+        expect(output.filter((chunk) => chunk === replacementRecord)).toHaveLength(1);
+        expect(output.join("")).not.toContain(initialRecord);
+        expect(output).not.toContain(`${MALFORMED_AUDIT_RECORD}\n`);
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
   it("discards partial data when rename/replacement rotation changes file identity", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
