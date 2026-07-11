@@ -61,7 +61,7 @@ function validateInput(input: ClientSnippetInput): void {
   if (typeof input.launcher?.command !== "string" || input.launcher.command.length === 0) {
     inputError("A non-empty launcher command is required.");
   }
-  if (!Array.isArray(input.launcher.args) || input.launcher.args.some((argument) => typeof argument !== "string" || argument.length === 0)) {
+  if (!Array.isArray(input.launcher.args) || input.launcher.args.length === 0 || input.launcher.args.some((argument) => typeof argument !== "string" || argument.length === 0)) {
     inputError("Every launcher argument must be a non-empty string.");
   }
 }

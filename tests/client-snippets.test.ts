@@ -123,6 +123,7 @@ describe("client snippets", () => {
   it.each([
     [{ ...posixInput, serverName: "" }, "server name"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, command: "" } }, "launcher command"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, args: [] } }, "launcher argument"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [""] } }, "launcher argument"],
     [{ ...posixInput, configPath: "relative/config.json" }, "absolute"],
     [{ ...posixInput, configPath: "/safe\u0000path/config.json" }, "NUL"]
