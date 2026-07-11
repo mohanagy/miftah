@@ -27,7 +27,15 @@ export type MiftahErrorCode =
   | "POLICY_BLOCKED"
   | "TOOL_COLLISION"
   | "TOOL_NOT_FOUND"
-  | "TOOL_SCHEMA_MISMATCH";
+  | "TOOL_SCHEMA_MISMATCH"
+  | "RESOURCE_COLLISION"
+  | "RESOURCE_NOT_FOUND"
+  | "RESOURCE_CURSOR_INVALID"
+  | "RESOURCE_DISCOVERY_INVALIDATED"
+  | "PROMPT_COLLISION"
+  | "PROMPT_NOT_FOUND"
+  | "PROMPT_CURSOR_INVALID"
+  | "PROMPT_DISCOVERY_INVALIDATED";
 
 export interface MiftahErrorDetails {
   readonly diagnostics?: readonly ConfigDiagnostic[];

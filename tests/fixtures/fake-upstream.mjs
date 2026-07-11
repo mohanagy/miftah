@@ -13,6 +13,17 @@ import {
 
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
+const resourceUri = process.env.TEST_RESOURCE_URI ?? "account://current";
+const promptName = process.env.TEST_PROMPT_NAME ?? "account_prompt";
+const paginateCapabilities = process.env.TEST_PAGINATE_CAPABILITIES === "true";
+const secondResourceName = process.env.TEST_SECOND_RESOURCE_NAME ?? "Second account";
+const secondResourceUri = process.env.TEST_SECOND_RESOURCE_URI ?? "account://second";
+const secondPromptName = process.env.TEST_SECOND_PROMPT_NAME ?? "second_prompt";
+const additionalResourceUri = process.env.TEST_ADDITIONAL_RESOURCE_URI;
+const resourceIconUri = process.env.TEST_RESOURCE_ICON_URI;
+const promptIconUri = process.env.TEST_PROMPT_ICON_URI;
+const promptResourceUri = process.env.TEST_PROMPT_RESOURCE_URI;
 const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
 if (failOnRestartPath) {
   if (existsSync(failOnRestartPath)) {
@@ -119,57 +130,94 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return { content: [{ type: "text", text: `created:${String(request.params.arguments?.name ?? "")}` }] };
 });
 
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
+server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
   if (process.env.TEST_FAIL_LIST_RESOURCES === "true") {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
   }
+  const secondPage = paginateCapabilities && request.params?.cursor === "next";
   return {
     resources: [
       {
-        uri: "account://current",
+        uri: secondPage ? secondResourceUri : resourceUri,
         name:
           process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
             ? `Current account ${process.env.API_TOKEN}`
-            : "Current account",
-        mimeType: "text/plain"
+            : secondPage ? secondResourceName : resourceName,
+        mimeType: "text/plain",
+        ...(resourceIconUri ? { icons: [{ src: resourceIconUri }] } : {})
       }
-    ]
+    ],
+    ...(paginateCapabilities && !secondPage ? { nextCursor: "next" } : {})
   };
 });
 
 server.setRequestHandler(ReadResourceRequestSchema, async () => {
+  if (process.env.TEST_READ_RESOURCE_COUNT_PATH) {
+    appendFileSync(process.env.TEST_READ_RESOURCE_COUNT_PATH, "1\n");
+  }
   if (process.env.TEST_FAIL_READ_RESOURCE === "true") {
     throw new Error(`test resource read failure: ${process.env.API_TOKEN}`);
   }
   return {
-    contents: [{ uri: "account://current", text: account, mimeType: "text/plain" }]
-  };
-});
-
-server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  if (process.env.TEST_FAIL_LIST_PROMPTS === "true") {
-    throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
-  }
-  return {
-    prompts: [
-      {
-        name: "account_prompt",
-        description:
-          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
-            ? `Account prompt ${process.env.API_TOKEN}`
-            : "Account prompt"
-      }
+    contents: [
+      { uri: resourceUri, text: account, mimeType: "text/plain" },
+      ...(additionalResourceUri ? [{ uri: additionalResourceUri, text: account, mimeType: "text/plain" }] : [])
     ]
   };
 });
 
+server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+  if (process.env.TEST_FAIL_LIST_PROMPTS === "true") {
+    throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
+  }
+  const secondPage = paginateCapabilities && request.params?.cursor === "next";
+  return {
+    prompts: [
+      {
+        name: secondPage ? secondPromptName : promptName,
+        description:
+          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+            ? `Account prompt ${process.env.API_TOKEN}`
+            : secondPage ? "Second account prompt" : "Account prompt",
+        ...(promptIconUri ? { icons: [{ src: promptIconUri }] } : {})
+      }
+    ],
+    ...(paginateCapabilities && !secondPage ? { nextCursor: "next" } : {})
+  };
+});
+
 server.setRequestHandler(GetPromptRequestSchema, async () => {
+  if (process.env.TEST_GET_PROMPT_COUNT_PATH) {
+    appendFileSync(process.env.TEST_GET_PROMPT_COUNT_PATH, "1\n");
+  }
   if (process.env.TEST_FAIL_GET_PROMPT === "true") {
     throw new Error(`test prompt get failure: ${process.env.API_TOKEN}`);
   }
   return {
-    description: "Account prompt",
-    messages: [{ role: "user", content: { type: "text", text: account } }]
+    description: promptName,
+    messages: [
+      { role: "user", content: { type: "text", text: account } },
+      ...(promptResourceUri
+        ? [
+            {
+              role: "assistant",
+              content: {
+                type: "resource_link",
+                uri: promptResourceUri,
+                name: "Account resource",
+                ...(promptIconUri ? { icons: [{ src: promptIconUri }] } : {})
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "resource",
+                resource: { uri: promptResourceUri, text: account, mimeType: "text/plain" }
+              }
+            }
+          ]
+        : [])
+    ]
   };
 });
 

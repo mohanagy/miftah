@@ -5,7 +5,9 @@ import {
   GetPromptResultSchema,
   ListPromptsResultSchema,
   ListResourcesResultSchema,
+  PromptListChangedNotificationSchema,
   ReadResourceResultSchema,
+  ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
 import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -14,7 +16,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { expectExactlyOneToolListChanged } from "./helpers/notifications.js";
+import { expectExactlyOneNotification } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
@@ -22,6 +24,8 @@ import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-proc
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const promptCollisionPattern = /PROMPT_COLLISION/;
+const resourceCollisionPattern = /RESOURCE_COLLISION/;
 const upstreamToolListFailedPattern = /UPSTREAM_TOOL_LIST_FAILED/;
 
 describe("multi-upstream wrapper", () => {
@@ -80,7 +84,7 @@ describe("multi-upstream wrapper", () => {
     }
   });
 
-  it("does not proxy resources or prompts from an ambiguous multi-upstream bundle", async () => {
+  it("advertises resources and prompts for a multi-upstream bundle", async () => {
     const config = validateConfig({
       version: "1",
       name: "bundle",
@@ -106,36 +110,421 @@ describe("multi-upstream wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      expect(client.getServerCapabilities()).not.toHaveProperty("resources");
-      expect(client.getServerCapabilities()).not.toHaveProperty("prompts");
-      expect(client.getInstructions()).toContain("multi-upstream");
-
-      for (const { request, resultSchema } of [
-        { request: { method: "resources/list", params: {} }, resultSchema: ListResourcesResultSchema },
-        {
-          request: { method: "resources/read", params: { uri: "account://current" } },
-          resultSchema: ReadResourceResultSchema
-        },
-        { request: { method: "prompts/list", params: {} }, resultSchema: ListPromptsResultSchema },
-        {
-          request: { method: "prompts/get", params: { name: "account_prompt" } },
-          resultSchema: GetPromptResultSchema
-        }
-      ]) {
-        await expect(client.request(request, resultSchema)).rejects.toMatchObject({ code: -32601 });
-      }
+      expect(client.getServerCapabilities()).toMatchObject({ resources: {}, prompts: {} });
+      expect(client.getInstructions()).not.toContain("multi-upstream");
 
       const health = await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema);
       const text = CallToolResultSchema.parse(health).content[0];
       expect(text?.type).toBe("text");
       if (text?.type !== "text") throw new Error("Expected a text health result");
       expect(JSON.parse(text.text)).toMatchObject({
-        resourcePromptProxy: {
-          available: false,
-          reason: expect.stringContaining("multi-upstream")
-        },
+        resourcePromptProxy: { available: true },
         upstreams: []
       });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("aggregates namespaced resources and routes each read to its originating upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()).toMatchObject({ resources: {}, prompts: {} });
+      const resources = await client.listResources();
+      expect(resources.resources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "github__Current account",
+            uri: "miftah://resource/github?uri=account%3A%2F%2Fcurrent"
+          }),
+          expect.objectContaining({
+            name: "sentry__Current account",
+            uri: "miftah://resource/sentry?uri=account%3A%2F%2Fcurrent"
+          })
+        ])
+      );
+
+      const githubResource = resources.resources.find((resource) => resource.name === "github__Current account");
+      const sentryResource = resources.resources.find((resource) => resource.name === "sentry__Current account");
+      expect(githubResource).toBeDefined();
+      expect(sentryResource).toBeDefined();
+      if (!githubResource || !sentryResource) throw new Error("Expected namespaced resources.");
+
+      expect(await client.readResource({ uri: githubResource.uri })).toMatchObject({
+        contents: [{ uri: githubResource.uri, text: "github-work" }]
+      });
+      expect(await client.readResource({ uri: sentryResource.uri })).toMatchObject({
+        contents: [{ uri: sentryResource.uri, text: "sentry-work" }]
+      });
+
+      const prompts = await client.listPrompts();
+      expect(prompts.prompts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "github__account_prompt" }),
+          expect.objectContaining({ name: "sentry__account_prompt" })
+        ])
+      );
+      expect(await client.getPrompt({ name: "github__account_prompt" })).toMatchObject({
+        messages: [{ content: { text: "github-work" } }]
+      });
+      expect(await client.getPrompt({ name: "sentry__account_prompt" })).toMatchObject({
+        messages: [{ content: { text: "sentry-work" } }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("rejects ambiguous namespaced resource and prompt collisions atomically", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        github__sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_RESOURCE_NAME: "sentry__Current account",
+                TEST_PROMPT_NAME: "sentry__account_prompt"
+              }
+            },
+            github__sentry: {
+              env: {
+                TEST_RESOURCE_NAME: "Current account",
+                TEST_PROMPT_NAME: "account_prompt"
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listResources()).rejects.toThrow(resourceCollisionPattern);
+      await expect(client.listPrompts()).rejects.toThrow(promptCollisionPattern);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("preserves independent upstream pagination through opaque aggregate cursors", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_PAGINATE_CAPABILITIES: "true" } },
+            sentry: { env: { TEST_PAGINATE_CAPABILITIES: "true" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const firstResources = await client.listResources();
+      expect(firstResources.resources.map((resource) => resource.name)).toEqual([
+        "github__Current account",
+        "sentry__Current account"
+      ]);
+      expect(firstResources.nextCursor).toEqual(expect.any(String));
+      expect(firstResources.nextCursor).not.toBe("next");
+      if (!firstResources.nextCursor) throw new Error("Expected an aggregate resource cursor.");
+
+      const secondResources = await client.listResources({ cursor: firstResources.nextCursor });
+      expect(secondResources.resources.map((resource) => resource.name)).toEqual([
+        "github__Second account",
+        "sentry__Second account"
+      ]);
+      expect(secondResources.nextCursor).toBeUndefined();
+
+      const firstPrompts = await client.listPrompts();
+      expect(firstPrompts.prompts.map((prompt) => prompt.name)).toEqual([
+        "github__account_prompt",
+        "sentry__account_prompt"
+      ]);
+      expect(firstPrompts.nextCursor).toEqual(expect.any(String));
+      expect(firstPrompts.nextCursor).not.toBe("next");
+      if (!firstPrompts.nextCursor) throw new Error("Expected an aggregate prompt cursor.");
+
+      const secondPrompts = await client.listPrompts({ cursor: firstPrompts.nextCursor });
+      expect(secondPrompts.prompts.map((prompt) => prompt.name)).toEqual([
+        "github__second_prompt",
+        "sentry__second_prompt"
+      ]);
+      expect(secondPrompts.nextCursor).toBeUndefined();
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("notifies clients to re-list aggregated resources and prompts after a profile change", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work", TEST_PAGINATE_CAPABILITIES: "true" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work", TEST_PAGINATE_CAPABILITIES: "true" } }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-personal" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-personal" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let resourceNotifications = 0;
+    let promptNotifications = 0;
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      resourceNotifications += 1;
+    });
+    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+      promptNotifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()).toMatchObject({
+        resources: { listChanged: true },
+        prompts: { listChanged: true }
+      });
+      const workResources = await client.listResources();
+      const workPrompts = await client.listPrompts();
+      if (!workResources.nextCursor || !workPrompts.nextCursor) {
+        throw new Error("Expected work-profile aggregate cursors.");
+      }
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
+
+      const resources = await client.listResources();
+      const githubResource = resources.resources.find((resource) => resource.name === "github__Current account");
+      expect(githubResource).toBeDefined();
+      if (!githubResource) throw new Error("Expected a namespaced GitHub resource.");
+      expect(await client.readResource({ uri: githubResource.uri })).toMatchObject({
+        contents: [{ uri: githubResource.uri, text: "github-personal" }]
+      });
+      expect(await client.getPrompt({ name: "github__account_prompt" })).toMatchObject({
+        messages: [{ content: { text: "github-personal" } }]
+      });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } });
+      await expect(client.listResources({ cursor: workResources.nextCursor })).rejects.toThrow(/RESOURCE_CURSOR_INVALID/);
+      await expect(client.listPrompts({ cursor: workPrompts.nextCursor })).rejects.toThrow(/PROMPT_CURSOR_INVALID/);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("redacts configured and URI-embedded credentials before publishing a namespaced resource URI", async () => {
+    const secret = "resource-uri-secret";
+    const username = "resource-uri-user";
+    const password = "resource-uri-password";
+    const queryValue = "resource-uri-query-value";
+    const fragment = "resource-uri-fragment";
+    const credentialUri = `account://${username}:${password}@current?access_token=${secret}&state=${queryValue}#${fragment}`;
+    const iconUri = `https://${username}:${password}@icons.example?access_token=${secret}&state=${queryValue}#${fragment}`;
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                API_TOKEN: secret,
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_RESOURCE_URI: credentialUri,
+                TEST_ADDITIONAL_RESOURCE_URI: credentialUri.replace("@current", "@secondary"),
+                TEST_RESOURCE_ICON_URI: iconUri,
+                TEST_PROMPT_ICON_URI: iconUri,
+                TEST_PROMPT_RESOURCE_URI: credentialUri
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const resources = await client.listResources();
+      const githubResource = resources.resources.find((resource) => resource.name === "github__Current account");
+      expect(githubResource).toBeDefined();
+      if (!githubResource) throw new Error("Expected a namespaced GitHub resource.");
+      const publicResources = JSON.stringify(resources);
+      for (const value of [secret, username, password, queryValue, fragment]) {
+        expect(publicResources).not.toContain(value);
+      }
+      const encodedUpstreamUri = new URL(githubResource.uri).searchParams.get("uri");
+      expect(encodedUpstreamUri).toBeDefined();
+      expect(decodeURIComponent(encodedUpstreamUri ?? "")).toContain("[REDACTED]");
+      const read = await client.readResource({ uri: githubResource.uri });
+      expect(read.contents[0]).toMatchObject({ uri: githubResource.uri, text: "github-work" });
+      const additionalResourceUri = read.contents[1]?.uri;
+      expect(additionalResourceUri).toMatch(/^miftah:\/\/resource\/github\?/);
+      const publicRead = JSON.stringify(read);
+      for (const value of [secret, username, password, queryValue, fragment]) {
+        expect(publicRead).not.toContain(value);
+      }
+      const prompts = await client.listPrompts();
+      const publicPrompts = JSON.stringify(prompts);
+      for (const value of [secret, username, password, queryValue, fragment]) {
+        expect(publicPrompts).not.toContain(value);
+      }
+      const prompt = await client.getPrompt({ name: "github__account_prompt" });
+      const publicPrompt = JSON.stringify(prompt);
+      for (const value of [secret, username, password, queryValue, fragment]) {
+        expect(publicPrompt).not.toContain(value);
+      }
+      const linkedResource = prompt.messages.find((message) => message.content.type === "resource_link")?.content;
+      expect(linkedResource).toMatchObject({ uri: githubResource.uri });
+      if (!linkedResource || linkedResource.type !== "resource_link") {
+        throw new Error("Expected a resource link in the prompt result.");
+      }
+      const linkedRead = await client.readResource({ uri: linkedResource.uri });
+      expect(linkedRead.contents[0]).toMatchObject({ uri: linkedResource.uri, text: "github-work" });
+      if (!additionalResourceUri) throw new Error("Expected an additional resource URI.");
+      const additionalRead = await client.readResource({ uri: additionalResourceUri });
+      expect(additionalRead.contents[0]).toMatchObject({ uri: githubResource.uri, text: "github-work" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("uses controlled discovery to route cold namespaced reads and prompt gets exactly", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cold-resource-prompt-"));
+    const githubReadPath = join(directory, "github-read-count");
+    const sentryReadPath = join(directory, "sentry-read-count");
+    const githubPromptPath = join(directory, "github-prompt-count");
+    const sentryPromptPath = join(directory, "sentry-prompt-count");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_READ_RESOURCE_COUNT_PATH: githubReadPath,
+                TEST_GET_PROMPT_COUNT_PATH: githubPromptPath
+              }
+            },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_READ_RESOURCE_COUNT_PATH: sentryReadPath,
+                TEST_GET_PROMPT_COUNT_PATH: sentryPromptPath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const githubResourceUri = "miftah://resource/github?uri=account%3A%2F%2Fcurrent";
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.readResource({ uri: githubResourceUri })).toMatchObject({
+        contents: [{ uri: githubResourceUri, text: "github-work" }]
+      });
+      expect(await client.getPrompt({ name: "github__account_prompt" })).toMatchObject({
+        messages: [{ content: { text: "github-work" } }]
+      });
+      await expect(client.readResource({ uri: "miftah://resource/github?uri=account%3A%2F%2Funknown" })).rejects.toThrow(
+        /RESOURCE_NOT_FOUND/
+      );
+      await expect(client.getPrompt({ name: "github__unknown_prompt" })).rejects.toThrow(/PROMPT_NOT_FOUND/);
+      expect((await readFile(githubReadPath, "utf8")).trim().split("\n")).toEqual(["1"]);
+      expect((await readFile(githubPromptPath, "utf8")).trim().split("\n")).toEqual(["1"]);
+      await expect(access(sentryReadPath)).rejects.toThrow();
+      await expect(access(sentryPromptPath)).rejects.toThrow();
     } finally {
       await client.close();
       await wrapper.close();
@@ -153,7 +542,7 @@ describe("multi-upstream wrapper", () => {
       profiles: {
         work: {
           upstreams: {
-            github: { env: { TEST_ACCOUNT_NAME: "github-work" } }
+            github: { env: { TEST_ACCOUNT_NAME: "github-work", TEST_PAGINATE_CAPABILITIES: "true" } }
           }
         }
       }
@@ -167,14 +556,24 @@ describe("multi-upstream wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       expect(client.getServerCapabilities()).toMatchObject({ resources: {}, prompts: {} });
-      expect(await client.listResources()).toMatchObject({
-        resources: [{ uri: "account://current" }]
+      const firstResources = await client.listResources();
+      expect(firstResources).toMatchObject({
+        resources: [{ uri: "account://current" }],
+        nextCursor: "next"
+      });
+      expect(await client.listResources({ cursor: firstResources.nextCursor })).toMatchObject({
+        resources: [{ uri: "account://second" }]
       });
       expect(await client.readResource({ uri: "account://current" })).toMatchObject({
         contents: [{ text: "github-work" }]
       });
-      expect(await client.listPrompts()).toMatchObject({
-        prompts: [{ name: "account_prompt" }]
+      const firstPrompts = await client.listPrompts();
+      expect(firstPrompts).toMatchObject({
+        prompts: [{ name: "account_prompt" }],
+        nextCursor: "next"
+      });
+      expect(await client.listPrompts({ cursor: firstPrompts.nextCursor })).toMatchObject({
+        prompts: [{ name: "second_prompt" }]
       });
       expect(await client.getPrompt({ name: "account_prompt" })).toMatchObject({
         messages: [{ content: { text: "github-work" } }]
@@ -385,8 +784,16 @@ describe("multi-upstream wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let notifications = 0;
+    let resourceNotifications = 0;
+    let promptNotifications = 0;
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
       notifications += 1;
+    });
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      resourceNotifications += 1;
+    });
+    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+      promptNotifications += 1;
     });
 
     try {
@@ -409,7 +816,9 @@ describe("multi-upstream wrapper", () => {
       expect(afterPids.every((pid, index) => pid !== beforePids[index])).toBe(true);
       expect((await readFile(githubCountPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
       expect((await readFile(sentryCountPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
-      await expectExactlyOneToolListChanged(() => notifications);
+      await expectExactlyOneNotification(() => notifications);
+      await expectExactlyOneNotification(() => resourceNotifications);
+      await expectExactlyOneNotification(() => promptNotifications);
     } finally {
       await client.close();
       await wrapper.close();
@@ -459,7 +868,7 @@ describe("multi-upstream wrapper", () => {
       );
       expect(restarted.isError).toBe(true);
       await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
-      await expectExactlyOneToolListChanged(() => notifications);
+      await expectExactlyOneNotification(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();

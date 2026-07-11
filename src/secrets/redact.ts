@@ -72,6 +72,22 @@ export function createRedactor(secretValues: readonly string[] = []): <T>(value:
   return <T>(value: T) => redactValue(value, secretValues) as T;
 }
 
+/** Produces a safe public representation of a URI while retaining only its non-sensitive identity. */
+export function redactUri(uri: string): string {
+  try {
+    const value = new URL(uri);
+    value.username = "";
+    value.password = "";
+    for (const key of new Set(value.searchParams.keys())) {
+      value.searchParams.set(key, "[REDACTED]");
+    }
+    value.hash = "";
+    return value.toString();
+  } catch {
+    return "[REDACTED]";
+  }
+}
+
 /** Redacts secret values and secret-bearing keys from an arbitrary value. */
 export function redactSecrets<T>(value: T, secretValues: readonly string[] = []): T {
   return createRedactor(secretValues)(value);

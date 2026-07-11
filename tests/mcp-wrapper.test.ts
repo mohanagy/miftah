@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { expectExactlyOneToolListChanged } from "./helpers/notifications.js";
+import { expectExactlyOneNotification } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
@@ -124,7 +124,7 @@ describe("Miftah MCP wrapper", () => {
 
       expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
       await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
-      await expectExactlyOneToolListChanged(() => notifications);
+      await expectExactlyOneNotification(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();
@@ -516,7 +516,7 @@ describe("Miftah MCP wrapper", () => {
       await client.listTools();
 
       expect((await readFile(countPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
-      await expectExactlyOneToolListChanged(() => notifications);
+      await expectExactlyOneNotification(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();

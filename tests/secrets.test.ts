@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRedactor, redactSecrets } from "../src/secrets/redact.js";
+import { createRedactor, redactSecrets, redactUri } from "../src/secrets/redact.js";
 
 describe("secret redaction", () => {
   it("redacts configured secret values in nested data", () => {
@@ -51,6 +51,14 @@ describe("secret redaction", () => {
     for (const testCase of cases) {
       expect(redactSecrets({ [testCase.key]: testCase.value })[testCase.key]).toBe("[REDACTED]");
     }
+  });
+
+  it("removes URI userinfo, query values, and fragments from public identifiers", () => {
+    expect(
+      redactUri(
+        "account://resource-uri-user:resource-uri-password@current/path?access_token=resource-uri-secret&state=resource-uri-query-value#resource-uri-fragment"
+      )
+    ).toBe("account://current/path?access_token=%5BREDACTED%5D&state=%5BREDACTED%5D");
   });
 
   it("preserves non-secret identifiers and benign key names", () => {
