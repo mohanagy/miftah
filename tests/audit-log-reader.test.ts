@@ -694,27 +694,40 @@ describe("audit JSONL reader", () => {
   it("removes finite snapshot spools after successful output and writer failures", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
+      const spoolRoot = join(directory, "spools");
       const contents = '{"message":"spooled"}\n';
       await writeFile(auditPath, contents);
+      await mkdir(spoolRoot, { mode: 0o700 });
+
+      async function assertPrivateSpoolIsPresent(): Promise<void> {
+        const [spoolDirectory] = await readdir(spoolRoot);
+        expect(spoolDirectory).toBeDefined();
+        const spoolPath = join(spoolRoot, spoolDirectory!);
+        expect((await stat(spoolPath)).mode & 0o777).toBe(0o700);
+        expect((await stat(join(spoolPath, "snapshot.jsonl"))).mode & 0o777).toBe(0o600);
+      }
 
       await readAuditJsonl({
         path: auditPath,
         redactor: new SecretRedactor(),
-        write: () => undefined
+        temporaryDirectory: spoolRoot,
+        write: assertPrivateSpoolIsPresent
       });
-      expect(await readdir(directory)).toEqual(["audit.jsonl"]);
+      expect(await readdir(spoolRoot)).toEqual([]);
 
       const writeFailure = new Error("destination failed");
       await expect(
         readAuditJsonl({
           path: auditPath,
           redactor: new SecretRedactor(),
-          write: () => {
+          temporaryDirectory: spoolRoot,
+          write: async () => {
+            await assertPrivateSpoolIsPresent();
             throw writeFailure;
           }
         })
       ).rejects.toBe(writeFailure);
-      expect(await readdir(directory)).toEqual(["audit.jsonl"]);
+      expect(await readdir(spoolRoot)).toEqual([]);
     });
   });
 

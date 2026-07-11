@@ -16,6 +16,7 @@ export interface AuditJsonlReadOptions {
   readonly path: string;
   readonly redactor: SecretRedactor;
   readonly write: AuditJsonlWriter;
+  readonly temporaryDirectory?: string;
 }
 
 export interface AuditJsonlFollowOptions extends AuditJsonlReadOptions {
@@ -192,8 +193,8 @@ async function hashFromHandle(
   return hash;
 }
 
-async function createTemporarySpool(): Promise<OpenTemporarySpool> {
-  const directory = await mkdtemp(join(tmpdir(), "miftah-audit-jsonl-"));
+async function createTemporarySpool(temporaryDirectory?: string): Promise<OpenTemporarySpool> {
+  const directory = await mkdtemp(join(temporaryDirectory ?? tmpdir(), "miftah-audit-jsonl-"));
   let handle: FileHandle | undefined;
   try {
     await chmod(directory, 0o700);
@@ -287,7 +288,8 @@ async function stageAuditSnapshot(
   state: AuditReadState,
   redactor: SecretRedactor,
   signal?: AbortSignal,
-  follow = false
+  follow = false,
+  temporaryDirectory?: string
 ): Promise<SnapshotAttempt> {
   if (signal?.aborted) return { kind: "aborted" };
   const handle = await open(path, "r");
@@ -332,7 +334,7 @@ async function stageAuditSnapshot(
         prefixHash.update(chunk);
         deltaHash.update(chunk);
         await stageCompleteRecords(candidate, chunk, redactor, async (record) => {
-          if (spool === undefined) spool = await createTemporarySpool();
+          if (spool === undefined) spool = await createTemporarySpool(temporaryDirectory);
           await spool.handle.writeFile(record, "utf8");
         });
       },
@@ -437,9 +439,10 @@ async function pollAuditFile(
   redactor: SecretRedactor,
   write: AuditJsonlWriter,
   signal?: AbortSignal,
-  follow = false
+  follow = false,
+  temporaryDirectory?: string
 ): Promise<"aborted" | "stable" | "unstable"> {
-  const attempt = await stageAuditSnapshot(path, state, redactor, signal, follow);
+  const attempt = await stageAuditSnapshot(path, state, redactor, signal, follow, temporaryDirectory);
   if (attempt.kind !== "staged") return attempt.kind;
   try {
     if (!(await forwardStagedOutput(attempt.spool, write, signal))) return "aborted";
@@ -479,7 +482,19 @@ function isNotFoundError(error: unknown): boolean {
 export async function readAuditJsonl(options: AuditJsonlReadOptions): Promise<void> {
   const state = createReadState();
   for (let attempt = 0; attempt < maximumSnapshotAttempts; attempt += 1) {
-    if ((await pollAuditFile(options.path, state, options.redactor, options.write)) === "stable") return;
+    if (
+      (await pollAuditFile(
+        options.path,
+        state,
+        options.redactor,
+        options.write,
+        undefined,
+        false,
+        options.temporaryDirectory
+      )) === "stable"
+    ) {
+      return;
+    }
   }
   throw new Error("Audit log did not stabilize while creating a snapshot");
 }
@@ -490,7 +505,15 @@ export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promis
   const pollIntervalMs = boundedPollInterval(options.pollIntervalMs);
   while (!options.signal.aborted) {
     try {
-      await pollAuditFile(options.path, state, options.redactor, options.write, options.signal, true);
+      await pollAuditFile(
+        options.path,
+        state,
+        options.redactor,
+        options.write,
+        options.signal,
+        true,
+        options.temporaryDirectory
+      );
     } catch (error) {
       if (!isNotFoundError(error)) throw error;
       resetState(state);
