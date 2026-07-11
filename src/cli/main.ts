@@ -10,47 +10,8 @@ import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { runDoctor } from "./doctor.js";
 import { formatDoctorReport } from "./doctor-report.js";
-
-interface CliArgs {
-  command?: string;
-  config?: string;
-  profile?: string;
-  output?: string;
-  preset?: string;
-  follow?: boolean;
-  name?: string;
-  version?: boolean;
-  json?: boolean;
-}
-
-function parseArgs(argv: string[]): CliArgs {
-  const [first, ...rest] = argv;
-  const result: CliArgs = {};
-  if (first && !first.startsWith("-")) result.command = first;
-  if (first === "init" && rest[0] && !rest[0].startsWith("-")) result.name = rest[0];
-  const values = first?.startsWith("-") ? argv : rest;
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (value === "--follow") {
-      result.follow = true;
-    } else if (value === "--json") {
-      result.json = true;
-    } else if (value === "--version" || value === "-v") {
-      result.version = true;
-    } else if (value === "--config") {
-      result.config = values[++index];
-    } else if (value === "--profile") {
-      result.profile = values[++index];
-    } else if (value === "--output") {
-      result.output = values[++index];
-    } else if (value === "--preset") {
-      result.preset = values[++index];
-    } else if (value === "--name") {
-      result.name = values[++index];
-    }
-  }
-  return result;
-}
+import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./parse.js";
+import { exitCodeForError } from "./exit-codes.js";
 
 async function serve(configPath: string): Promise<void> {
   const runtime = await createMiftahRuntime(configPath);
@@ -64,18 +25,22 @@ async function serve(configPath: string): Promise<void> {
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
-  const args = parseArgs(argv);
-  const command = args.command ?? "serve";
-  if (args.version || command === "version") {
+  const invocation = parseCli(argv);
+  if (invocation.kind === "help") {
+    process.stdout.write(`${invocation.command ? renderCommandHelp(invocation.command) : renderRootHelp()}\n`);
+    return;
+  }
+  if (invocation.kind === "version") {
     process.stdout.write(`${MIFTAH_VERSION}\n`);
     return;
   }
+  const { command, options: args } = invocation;
   if (command === "schema") {
     process.stdout.write(`${JSON.stringify(generateConfigSchema(), null, 2)}\n`);
     return;
   }
   if (command === "init") {
-    const name = args.name ?? args.config?.split("/").pop()?.replace(/\.json$/, "") ?? "miftah-wrapper";
+    const name = args.name ?? "miftah-wrapper";
     const output = resolve(args.output ?? `${name}.miftah.json`);
     const config = presetConfig(name, args.preset ?? "generic");
     await mkdir(dirname(output), { recursive: true });
@@ -84,8 +49,8 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (!args.config) {
-    throw new Error(
-      "Usage: miftah --config <file> | miftah doctor [--json] --config <file> | miftah <validate|list-tools|test-profile|logs|version> --config <file>"
+    throw new CliUsageError(
+      `Command '${command}' requires '--config <file>'. Use 'miftah ${command} --help' for usage.`
     );
   }
   if (command === "serve") {
@@ -128,7 +93,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
 main().catch((error: unknown) => {
   process.stderr.write(`${redactSecrets(error instanceof Error ? error.message : String(error))}\n`);
-  process.exitCode = 1;
+  process.exitCode = exitCodeForError(error);
 });
 
-export { main, parseArgs };
+export { main };
