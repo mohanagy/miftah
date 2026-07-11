@@ -24,6 +24,7 @@ const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
 const resourceUri = process.env.TEST_RESOURCE_URI ?? "account://current";
 const promptName = process.env.TEST_PROMPT_NAME ?? "account_prompt";
 const paginateCapabilities = process.env.TEST_PAGINATE_CAPABILITIES === "true";
+const paginateTools = process.env.TEST_PAGINATE_TOOLS === "true";
 const secondResourceName = process.env.TEST_SECOND_RESOURCE_NAME ?? "Second account";
 const secondResourceUri = process.env.TEST_SECOND_RESOURCE_URI ?? "account://second";
 const secondPromptName = process.env.TEST_SECOND_PROMPT_NAME ?? "second_prompt";
@@ -140,7 +141,7 @@ if (failInitialize || clientInfoPath) {
   });
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
   }
@@ -153,34 +154,63 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (process.env.TEST_FAIL_LIST_TOOLS === "true") {
     throw new Error(`test tool list failure: ${process.env.TEST_ERROR_MESSAGE ?? process.env.API_TOKEN}`);
   }
+  const secondPage = paginateTools && request.params?.cursor === "next";
   return {
     tools: [
-      {
-        name: "whoami",
-        description:
-          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
-            ? `Return the injected account ${process.env.API_TOKEN}`
-            : "Return the injected account.",
-        inputSchema: whoamiInputSchema
-      },
-      {
-        name: "echo",
-        description: "Echo a message.",
-        inputSchema: {
-          type: "object",
-          properties: { message: { type: "string" } },
-          required: ["message"]
-        }
-      },
-      {
-        name: "create_item",
-        description: "Create an item.",
-        inputSchema: {
-          type: "object",
-          properties: { name: { type: "string" } },
-          required: ["name"]
-        }
-      },
+      ...(secondPage
+        ? [
+            {
+              name: "whoami_second",
+              description: "Return the second injected account.",
+              inputSchema: whoamiInputSchema
+            },
+            {
+              name: "echo_second",
+              description: "Echo a second message.",
+              inputSchema: {
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"]
+              }
+            },
+            {
+              name: "create_second_item",
+              description: "Create a second item.",
+              inputSchema: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"]
+              }
+            }
+          ]
+        : [
+            {
+              name: "whoami",
+              description:
+                process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+                  ? `Return the injected account ${process.env.API_TOKEN}`
+                  : "Return the injected account.",
+              inputSchema: whoamiInputSchema
+            },
+            {
+              name: "echo",
+              description: "Echo a message.",
+              inputSchema: {
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"]
+              }
+            },
+            {
+              name: "create_item",
+              description: "Create an item.",
+              inputSchema: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"]
+              }
+            }
+          ]),
       ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
         ? [
             {
@@ -199,7 +229,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           ]
         : [])
-    ]
+    ],
+    ...(paginateTools && !secondPage ? { nextCursor: "next" } : {})
   };
 });
 
