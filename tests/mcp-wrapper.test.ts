@@ -4,6 +4,7 @@ import { CallToolResultSchema, ToolListChangedNotificationSchema } from "@modelc
 import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
@@ -13,6 +14,14 @@ import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const notificationSettleMs = 50;
+const toolCollisionPattern = /TOOL_COLLISION/;
+
+async function expectExactlyOneToolListChanged(count: () => number): Promise<void> {
+  await expect.poll(count).toBe(1);
+  await delay(notificationSettleMs);
+  expect(count()).toBe(1);
+}
 
 describe("Miftah MCP wrapper", () => {
   it("exposes management and upstream capabilities while routing calls by active profile", async () => {
@@ -122,7 +131,7 @@ describe("Miftah MCP wrapper", () => {
 
       expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
       await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
-      await expect.poll(() => notifications).toBe(1);
+      await expectExactlyOneToolListChanged(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();
@@ -301,12 +310,21 @@ describe("Miftah MCP wrapper", () => {
   });
 
   it("rejects unknown tool calls without forwarding them upstream", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-unknown-tool-"));
+    const callCountPath = join(directory, "upstream-call-count");
     const config = validateConfig({
       version: "1",
       name: "accounts",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
-      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_CALL_TOOL_COUNT_PATH: callCountPath
+          }
+        }
+      }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -316,10 +334,12 @@ describe("Miftah MCP wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
+      await expect(access(callCountPath)).rejects.toThrow();
       expect(await client.callTool({ name: "not_an_upstream_tool", arguments: {} })).toMatchObject({
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("TOOL_NOT_FOUND") }]
       });
+      await expect(access(callCountPath)).rejects.toThrow();
     } finally {
       await client.close();
       await wrapper.close();
@@ -408,7 +428,7 @@ describe("Miftah MCP wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      await expect(client.listTools()).rejects.toThrow(/TOOL_COLLISION/);
+      await expect(client.listTools()).rejects.toThrow(toolCollisionPattern);
       expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("TOOL_COLLISION") }]
@@ -503,7 +523,7 @@ describe("Miftah MCP wrapper", () => {
       await client.listTools();
 
       expect((await readFile(countPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
-      await expect.poll(() => notifications).toBe(1);
+      await expectExactlyOneToolListChanged(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();

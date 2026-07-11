@@ -11,6 +11,7 @@ import {
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
@@ -20,6 +21,14 @@ import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-proc
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const notificationSettleMs = 50;
+const upstreamToolListFailedPattern = /UPSTREAM_TOOL_LIST_FAILED/;
+
+async function expectExactlyOneToolListChanged(count: () => number): Promise<void> {
+  await expect.poll(count).toBe(1);
+  await delay(notificationSettleMs);
+  expect(count()).toBe(1);
+}
 
 describe("multi-upstream wrapper", () => {
   it("does not proxy resources or prompts when no upstream is configured", async () => {
@@ -406,7 +415,57 @@ describe("multi-upstream wrapper", () => {
       expect(afterPids.every((pid, index) => pid !== beforePids[index])).toBe(true);
       expect((await readFile(githubCountPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
       expect((await readFile(sentryCountPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
-      await expect.poll(() => notifications).toBe(1);
+      await expectExactlyOneToolListChanged(() => notifications);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("invalidates and notifies after a partial multi-upstream restart failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-bundle-restart-failure-"));
+    const githubFailurePath = join(directory, "github-restart-failure");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_FAIL_ON_RESTART_PATH: githubFailurePath
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let notifications = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools();
+      const restarted = CallToolResultSchema.parse(
+        await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } }, CallToolResultSchema)
+      );
+      expect(restarted.isError).toBe(true);
+      await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
+      await expectExactlyOneToolListChanged(() => notifications);
     } finally {
       await client.close();
       await wrapper.close();

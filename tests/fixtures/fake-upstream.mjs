@@ -1,6 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolRequestSchema,
@@ -13,6 +13,13 @@ import {
 
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
+if (failOnRestartPath) {
+  if (existsSync(failOnRestartPath)) {
+    throw new Error("test upstream configured to fail after its initial start");
+  }
+  writeFileSync(failOnRestartPath, "started");
+}
 const whoamiInputSchema =
   process.env.TEST_WHOAMI_SCHEMA === "account"
     ? {
@@ -84,6 +91,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (process.env.TEST_CALL_TOOL_COUNT_PATH) {
+    appendFileSync(process.env.TEST_CALL_TOOL_COUNT_PATH, "1\n");
+  }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: account }] };
   }

@@ -300,14 +300,17 @@ export class MiftahServer {
       }
       if (name === "miftah_restart_profile") {
         const profile = requiredString(args, "profile");
-        if (this.upstreams instanceof MultiUpstreamProcessManager) {
-          await this.upstreams.restartProfile(profile);
-        } else {
-          await this.upstreams.restart(profile);
-        }
-        this.toolRegistry.invalidate(profile);
-        if (profile === this.profiles.current().activeProfile) {
-          await this.notifyToolListChanged(undefined, undefined);
+        try {
+          if (this.upstreams instanceof MultiUpstreamProcessManager) {
+            await this.upstreams.restartProfile(profile);
+          } else {
+            await this.upstreams.restart(profile);
+          }
+        } finally {
+          this.toolRegistry.invalidate(profile);
+          if (profile === this.profiles.current().activeProfile) {
+            await this.notifyToolListChanged(undefined, undefined);
+          }
         }
         return textResult("Profile restarted.");
       }
