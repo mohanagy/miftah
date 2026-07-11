@@ -8,11 +8,10 @@ miftah init github --preset github --output ~/.config/miftah/github.json --clien
 
 Miftah writes only `~/.config/miftah/github.json` in this example. It prints JSON for you to copy and does not create or overwrite a Claude Desktop configuration file.
 
-Claude Desktop uses an `mcpServers` object. Its normal locations are:
+Claude Desktop uses an `mcpServers` object and is officially available on macOS and Windows. Its normal locations are:
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
 
 Use the installed app’s **Developer → Edit Config** flow as the source of truth for the actual location and schema. Merge the generated top-level `mcpServers` property into the host config. If the host config already has an `mcpServers` object, merge the generated server entry into that object instead of nesting another `mcpServers` property. Do not convert its absolute command and argument paths into a shell command. The launcher uses absolute Node and compiled Miftah CLI paths because desktop GUI processes often have a different `PATH` than a terminal.
 

@@ -66,7 +66,7 @@ Miftah does not create any of these files. Copy only the generated JSON into the
 
 | Client | Target and scope | Required shape |
 | --- | --- | --- |
-| Claude Desktop | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`; Linux: `~/.config/Claude/claude_desktop_config.json`. Use Claude Desktop’s **Developer → Edit Config** flow as the source of truth for the installed app. | `mcpServers` with the generated command/args object. |
+| Claude Desktop | Officially supported on macOS at `~/Library/Application Support/Claude/claude_desktop_config.json` and Windows at `%APPDATA%\Claude\claude_desktop_config.json`. Use Claude Desktop’s **Developer → Edit Config** flow as the source of truth for the installed app. | `mcpServers` with the generated command/args object. |
 | Claude Code | Project `.mcp.json` is the generated-snippet target. User-scope MCP entries live in `~/.claude.json` across projects; local-scope entries also live in `~/.claude.json` but apply only to the current project. | `mcpServers` with the generated command/args object. The generated `.mcp.json` is authoritative for this workflow. |
 | Cursor | Project `.cursor/mcp.json`, or global `~/.cursor/mcp.json`. | `mcpServers`, with each generated server explicitly declaring `"type": "stdio"`. |
 | VS Code | Use **MCP: Open User Configuration** for user scope, or workspace `.vscode/mcp.json`. | `servers`, with each generated server explicitly declaring `"type": "stdio"`. |
