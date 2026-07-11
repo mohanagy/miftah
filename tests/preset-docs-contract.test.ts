@@ -69,9 +69,12 @@ describe("preset documentation contract", () => {
       expect(compatibility).toContain(requiredFact);
     }
 
-    expect(readme).toContain("docs/presets-and-clients.md");
-    expect(cli).toContain("presets-and-clients.md");
+    expect(readme).toContain("[Preset and client compatibility](docs/presets-and-clients.md)");
+    expect(cli).toContain("[preset and client compatibility](presets-and-clients.md)");
     for (const option of [
+      "--name",
+      "--preset",
+      "--output",
       "--interactive",
       "--client",
       "--credential-env",
@@ -83,6 +86,7 @@ describe("preset documentation contract", () => {
     ]) {
       expect(cli).toContain(option);
     }
+    expect(compatibility).not.toContain("runtime construction");
 
     const unreleased = unreleasedSection(changelog);
     expect(unreleased).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);

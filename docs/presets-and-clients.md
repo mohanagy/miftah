@@ -4,7 +4,7 @@ This is the compatibility source of truth for generated `miftah init` configurat
 
 - Catalog version: `1`
 - Miftah package version: `0.1.1`
-- Last tested / validation boundary: the catalog builds strict Miftah configuration that `validateConfig` accepts. The docs contract test checks generated configuration and runtime construction only; it does **not** start, authenticate to, or smoke-test external providers.
+- Last tested / validation boundary: the catalog builds strict Miftah configuration that `validateConfig` accepts. The docs contract test checks generated configuration only; it does **not** construct a runtime, start, authenticate to, or smoke-test external providers.
 
 Miftah itself requires Node.js `>=20`. That does not establish an upstream server's Node requirement.
 
