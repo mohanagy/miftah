@@ -119,6 +119,23 @@ describe("doctor report", () => {
     await expect(diagnosePathPermissions("config", file)).resolves.toMatchObject({ status: "pass" });
   });
 
+  it("returns a safe error when a Unix permission probe cannot stat a missing path", async () => {
+    if (process.platform === "win32") return;
+
+    const missingPath = resolve(fixtureDirectory, "missing-config.json");
+    const check = await diagnosePathPermissions("config", missingPath);
+
+    expect(check).toEqual({
+      code: DOCTOR_CODES.CONFIG_PERMISSIONS,
+      status: "error",
+      target: "configuration path",
+      explanation: "Permission mode check could not be completed.",
+      remediation: "Ensure the path exists and is accessible before running doctor."
+    });
+    expect(JSON.stringify(check)).not.toContain(missingPath);
+    expect(JSON.stringify(check)).not.toContain("ENOENT");
+  });
+
   it("skips permission diagnostics on Windows without filesystem mocks", async () => {
     if (process.platform !== "win32") return;
 
@@ -166,6 +183,20 @@ describe("doctor report", () => {
     for (const value of ["docker-unpinned", "podman-unpinned", "npx-unpinned", "npm-unpinned", "@scope/npm-pinned"]) {
       expect(output).not.toContain(value);
     }
+  });
+
+  it("warns for malformed semantic versions in package invocations", () => {
+    const malformedVersions = ["1.2.3-.", "1.2.3-alpha..beta", "01.2.3"];
+    const checks = malformedVersions.map((version) => diagnoseCommandPinning("npx", [`package@${version}`]));
+
+    expect(checks.map((check) => check.status)).toEqual(["warning", "warning", "warning"]);
+  });
+
+  it("accepts valid prerelease and build semantic versions in package invocations", () => {
+    const validVersions = ["1.2.3-alpha", "1.2.3-alpha.1", "1.2.3+build.7", "1.2.3-alpha.1+build.7"];
+    const checks = validVersions.map((version) => diagnoseCommandPinning("npx", [`package@${version}`]));
+
+    expect(checks.map((check) => check.status)).toEqual(["pass", "pass", "pass", "pass"]);
   });
 
   it("diagnoses images after standard Docker and Podman value-taking run options", () => {

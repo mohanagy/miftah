@@ -105,6 +105,13 @@ const packageLaunchers = new Map<string, string>([
   ["yarn", "dlx"],
   ["npm", "exec"]
 ]);
+const semverNumericIdentifier = "(?:0|[1-9]\\d*)";
+const semverPrereleaseIdentifier = `(?:${semverNumericIdentifier}|\\d*[A-Za-z-][0-9A-Za-z-]*)`;
+const strictSemver = new RegExp(
+  `^${semverNumericIdentifier}\\.${semverNumericIdentifier}\\.${semverNumericIdentifier}` +
+    `(?:-${semverPrereleaseIdentifier}(?:\\.${semverPrereleaseIdentifier})*)?` +
+    "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+);
 
 function noAction(): string {
   return "No action required.";
@@ -173,7 +180,7 @@ function isExplicitSemverPackage(value: string): boolean {
   const separator = value.lastIndexOf("@");
   if (separator <= 0) return false;
   const version = value.slice(separator + 1);
-  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
+  return strictSemver.test(version);
 }
 
 function codePosition(code: DoctorCode): number {
@@ -253,7 +260,18 @@ export async function diagnosePathPermissions(target: PermissionTarget, path: st
     };
   }
 
-  const metadata = await stat(path);
+  let metadata: Awaited<ReturnType<typeof stat>>;
+  try {
+    metadata = await stat(path);
+  } catch {
+    return {
+      code,
+      status: "error",
+      target: `${target === "config" ? "configuration" : target === "env" ? "environment" : "audit"} path`,
+      explanation: "Permission mode check could not be completed.",
+      remediation: "Ensure the path exists and is accessible before running doctor."
+    };
+  }
   const label = permissionLabel(target, metadata.isDirectory());
   const secureMode = (metadata.mode & 0o066) === 0;
   if (secureMode) {
