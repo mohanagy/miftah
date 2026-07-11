@@ -16,7 +16,7 @@ With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` u
 
 For a multi-entry `upstreams` map, Miftah aggregates resources and prompts. Resource names and prompt names use `<upstream>__<name>`. Resource URIs use `miftah://resource/<encoded-upstream>?uri=<encoded-redacted-upstream-uri>` and resolve through an exact, per-profile route map; callers cannot select an upstream by supplying a raw URI or an unlisted namespaced identifier. Prompt links and sub-resource URIs become exact Miftah routes to their originating upstream as well. Before publication, Miftah strips URI userinfo/fragments and redacts every query value in resource and prompt URI metadata. Multi-upstream list cursors are opaque, bounded Miftah cursors, scoped to the active profile and capability type, and cannot be reused after a profile change or restart. Clients receive `notifications/resources/list_changed` and `notifications/prompts/list_changed` with the tool notification and must re-list all affected capabilities.
 
-A standard `upstream` and a one-entry `upstreams` map retain raw resource URIs, prompt names, and native upstream pagination. A zero-entry map omits resource and prompt capabilities.
+A standard `upstream` and a one-entry `upstreams` map retain credential-free raw resource URIs, prompt names, and native upstream pagination. Miftah still strips URI userinfo and fragments and redacts all query values in resource and prompt URI/icon fields before returning them. A zero-entry map omits resource and prompt capabilities.
 
 ## Discovery resilience
 
@@ -38,7 +38,13 @@ The supported routing fallback values are:
 - `ask`: return `ROUTING_AMBIGUOUS` when no unique rule applies.
 - `block`: reject requests that do not match a rule.
 
-Policies classify tools as `read`, `write`, or `destructive` using configurable overrides and conservative name heuristics. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the call.
+## Operation routing and policy
+
+Miftah applies one safety pipeline to every proxied upstream tool call, resource read, and prompt retrieval. It captures the active profile once at request start, resolves the routing rule using that immutable fallback, evaluates the selected profile's policy before resolving an aggregate route or forwarding, redacts the result or error, and records the terminal operation metadata in audit output.
+
+Routing rules receive a tool's original arguments unchanged. Resource reads expose the requested URI as `args.uri`; prompt retrieval exposes the prompt arguments and always sets `args.name` to the requested prompt name. Policies evaluate upstream tools by their original tool name, resource reads as `resources/read`, and prompt retrieval as `prompts/get`. For example, `deny: ["resources/read"]` blocks all resource reads for the selected profile, while `requireConfirmation: ["prompts/get"]` returns `POLICY_CONFIRMATION_REQUIRED` without forwarding the request.
+
+Policies classify these operation names as `read`, `write`, or `destructive` using configurable overrides and conservative name heuristics. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the operation.
 
 Audit logging defaults to local JSONL when a path is configured. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing.
 

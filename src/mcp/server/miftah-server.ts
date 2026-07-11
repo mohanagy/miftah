@@ -9,15 +9,19 @@ import {
   ReadResourceRequestSchema,
   type CallToolResult,
   type GetPromptRequest,
+  type GetPromptResult,
   type ListPromptsRequest,
   type ListPromptsResult,
   type ListResourcesRequest,
   type ListResourcesResult,
+  type Prompt,
+  type ReadResourceResult,
   type ReadResourceRequest,
+  type Resource,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig } from "../../config/types.js";
-import { redactSecrets } from "../../secrets/redact.js";
+import { redactSecrets, redactUri, redactUrisInText } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
@@ -26,6 +30,11 @@ import { UpstreamProcessManager, type UpstreamHealth } from "../../upstream/upst
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import {
+  OperationPipeline,
+  type CapturedProfileState,
+  type ResolvedOperation
+} from "./operation-pipeline.js";
 import { ResourcePromptRegistry } from "./resource-prompt-registry.js";
 import {
   canonicalJson,
@@ -86,6 +95,7 @@ export class MiftahServer {
   private readonly audit?: AuditLogger;
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private readonly toolRegistry: ToolRegistry;
+  private readonly operationPipeline: OperationPipeline;
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
   private readonly restartingProfiles = new Set<string>();
@@ -144,6 +154,14 @@ export class MiftahServer {
         secretValues: []
       });
     }
+    this.operationPipeline = new OperationPipeline({
+      wrapper: config.name,
+      profiles,
+      routing: this.routing,
+      policy: this.policy,
+      upstreams,
+      writeAudit: (event) => this.writeAudit(event)
+    });
     this.registerHandlers();
   }
 
@@ -181,21 +199,21 @@ export class MiftahServer {
           }
         }
         return redactSecrets(
-          await this.discoverResources(profile, upstreamName, request.params),
+          redactDirectResourceList(await this.discoverResources(profile, upstreamName, request.params)),
           this.upstreams.getSecretValues()
         );
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-        const profile = this.profiles.current().activeProfile;
+        const source = this.profiles.current();
         if (this.resourcePromptRegistry) {
           try {
-            return await this.readAggregatedResource(profile, request.params);
+            return await this.executeResourceRead(source, upstreamName, request.params);
           } finally {
-            await this.notifyResourceAvailabilityChange(profile);
+            await this.notifyResourceAvailabilityChange(source.activeProfile);
           }
         }
-        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.readResource(request.params));
+        return this.executeResourceRead(source, upstreamName, request.params);
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
@@ -208,113 +226,79 @@ export class MiftahServer {
           }
         }
         return redactSecrets(
-          await this.discoverPrompts(profile, upstreamName, request.params),
+          redactDirectPromptList(await this.discoverPrompts(profile, upstreamName, request.params)),
           this.upstreams.getSecretValues()
         );
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-        const profile = this.profiles.current().activeProfile;
+        const source = this.profiles.current();
         if (this.resourcePromptRegistry) {
           try {
-            return await this.getAggregatedPrompt(profile, request.params);
+            return await this.executePromptGet(source, upstreamName, request.params);
           } finally {
-            await this.notifyPromptAvailabilityChange(profile);
+            await this.notifyPromptAvailabilityChange(source.activeProfile);
           }
         }
-        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.getPrompt(request.params));
+        return this.executePromptGet(source, upstreamName, request.params);
       });
     }
   }
 
   private async handleUpstreamTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    const startedAt = Date.now();
     try {
       const sourceState = this.profiles.current();
       const sourceProfile = sourceState.activeProfile;
-    const previous =
-      this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
-    const sourceSnapshot = await this.toolRegistry.get(sourceProfile);
-    if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
-      await this.notifyToolListChanged(previous, sourceSnapshot);
-      this.invalidatedToolSnapshots.delete(sourceProfile);
-    }
-    const mapped = sourceSnapshot.resolve(name);
+      const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
+      const sourceSnapshot = await this.toolRegistry.get(sourceProfile);
+      if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
+        await this.notifyToolListChanged(previous, sourceSnapshot);
+        this.invalidatedToolSnapshots.delete(sourceProfile);
+      }
+      const mapped = sourceSnapshot.resolve(name);
       if (!mapped) {
         throw new MiftahError(
           "TOOL_NOT_FOUND",
           `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
         );
       }
-      const route = this.routing.resolve({ toolName: mapped.originalName, args }, sourceState.activeProfile);
-      const target = (await this.toolRegistry.get(route.profile)).resolve(name);
-      if (!target) {
-        throw new MiftahError(
-          "TOOL_NOT_FOUND",
-          `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${route.profile}'`
-        );
-      }
-      if (target.fingerprint !== mapped.fingerprint) {
-        throw new MiftahError(
-          "TOOL_SCHEMA_MISMATCH",
-          `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${route.profile}'`
-        );
-      }
-      const upstreamName = target.originalName;
-      const targetUpstream = target.upstreamName;
-      const profile = this.profiles.get(route.profile);
-      const decision = this.policy.evaluate(profile.policy, upstreamName);
-      if (
-        decision.risk === "destructive" &&
-        this.config.security?.requireExplicitProfileForDestructive &&
-        !route.reason.startsWith("rule:")
-      ) {
-        return textResult(
-          `POLICY_BLOCKED: destructive tool '${upstreamName}' requires an explicit routing rule`,
-          true
-        );
-      }
-      if (decision.action === "deny") {
-        await this.writeAudit({
-          wrapper: this.config.name,
-          profile: route.profile,
-          operation: "tools/call",
-          name: upstreamName,
-          status: "blocked",
-          durationMs: Date.now() - startedAt,
-          routingReason: route.reason,
-          policyDecision: decision.action,
-          risk: decision.risk
-        });
-        return textResult(`POLICY_BLOCKED: tool '${upstreamName}' is blocked for profile '${route.profile}'`, true);
-      }
-      if (decision.action === "confirm") {
-        return textResult(
-          `POLICY_CONFIRMATION_REQUIRED: tool '${upstreamName}' requires confirmation for profile '${route.profile}'`,
-          true
-        );
-      }
-      const result = await (await this.upstreams.get(route.profile, targetUpstream)).callTool({ name: upstreamName, arguments: args });
-      await this.writeAudit({
-        wrapper: this.config.name,
-        profile: route.profile,
+      return await this.operationPipeline.execute({
+        source: sourceState,
         operation: "tools/call",
-        name: upstreamName,
-        status: "success",
-        durationMs: Date.now() - startedAt,
-        routingReason: route.reason,
-        policyDecision: decision.action,
-        risk: decision.risk,
-        arguments: args
+        routingName: mapped.originalName,
+        policyName: mapped.originalName,
+        name: mapped.originalName,
+        args,
+        requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
+        resolveTarget: async (profile) => {
+          const target = (await this.toolRegistry.get(profile)).resolve(name);
+          if (!target) {
+            throw new MiftahError(
+              "TOOL_NOT_FOUND",
+              `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${profile}'`
+            );
+          }
+          if (target.fingerprint !== mapped.fingerprint) {
+            throw new MiftahError(
+              "TOOL_SCHEMA_MISMATCH",
+              `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
+            );
+          }
+          return {
+            upstreamName: target.upstreamName,
+            name: target.originalName,
+            execute: (session) => session.callTool({ name: target.originalName, arguments: args }),
+            redact: (result) => result
+          };
+        }
       });
-      return redactSecrets(result, this.upstreams.getSecretValues());
     } catch (error) {
       const safeMessage = redactSecrets(
-        error instanceof Error ? error.message : String(error),
+        redactUrisInText(error instanceof Error ? error.message : String(error)),
         this.upstreams.getSecretValues()
       );
       if (error instanceof MiftahError) {
-        return textResult(`${error.code}: ${safeMessage}`, true);
+        return textResult(safeMessage, true);
       }
       return textResult(`UPSTREAM_CALL_FAILED: ${safeMessage}`, true);
     }
@@ -558,12 +542,52 @@ export class MiftahServer {
     return { available: true };
   }
 
-  private async proxyResourcePrompt<Result>(
-    profile: string,
+  private async executeResourceRead(
+    source: CapturedProfileState,
     upstreamName: string | undefined,
-    operation: (session: UpstreamSession) => Promise<Result>
-  ): Promise<Result> {
-    return redactSecrets(await this.callUpstream(profile, upstreamName, operation), this.upstreams.getSecretValues());
+    params: ReadResourceRequest["params"]
+  ): Promise<ReadResourceResult> {
+    return this.operationPipeline.execute({
+      source,
+      operation: "resources/read",
+      routingName: "resources/read",
+      policyName: "resources/read",
+      name: params.uri,
+      args: { uri: params.uri },
+      resolveTarget: async (profile) => {
+        if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
+        return {
+          ...(upstreamName === undefined ? {} : { upstreamName }),
+          name: params.uri,
+          execute: (session) => session.readResource(params),
+          redact: redactDirectReadResult
+        };
+      }
+    });
+  }
+
+  private async executePromptGet(
+    source: CapturedProfileState,
+    upstreamName: string | undefined,
+    params: GetPromptRequest["params"]
+  ): Promise<GetPromptResult> {
+    return this.operationPipeline.execute({
+      source,
+      operation: "prompts/get",
+      routingName: "prompts/get",
+      policyName: "prompts/get",
+      name: params.name,
+      args: { ...(params.arguments ?? {}), name: params.name },
+      resolveTarget: async (profile) => {
+        if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
+        return {
+          ...(upstreamName === undefined ? {} : { upstreamName }),
+          name: params.name,
+          execute: (session) => session.getPrompt(params),
+          redact: redactDirectPromptResult
+        };
+      }
+    });
   }
 
   private async discoverResources(
@@ -606,43 +630,55 @@ export class MiftahServer {
       return await operation(session);
     } catch (error) {
       const safeMessage = redactSecrets(
-        error instanceof Error ? error.message : String(error),
+        redactUrisInText(error instanceof Error ? error.message : String(error)),
         this.upstreams.getSecretValues()
       );
       throw new Error(safeMessage, { cause: error });
     }
   }
 
-  private async readAggregatedResource(profile: string, params: ReadResourceRequest["params"]) {
+  private async resolveAggregatedResource(
+    profile: string,
+    params: ReadResourceRequest["params"]
+  ): Promise<ResolvedOperation<ReadResourceResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Resource aggregation is unavailable");
-    const epoch = this.resourcePromptRegistry.captureEpoch(profile);
-    let route = this.resourcePromptRegistry.resolveResource(profile, params.uri);
+    const registry = this.resourcePromptRegistry;
+    let epoch = registry.captureEpoch(profile);
+    let route = registry.resolveResource(profile, params.uri);
     if (!route) {
-      await this.resourcePromptRegistry.listResources(profile);
-      this.resourcePromptRegistry.assertResourceEpoch(profile, epoch);
-      route = this.resourcePromptRegistry.resolveResource(profile, params.uri);
+      await this.listResourcesForCapturedOperation(profile, registry);
+      epoch = registry.captureEpoch(profile);
+      registry.assertResourceEpoch(profile, epoch);
+      route = registry.resolveResource(profile, params.uri);
     }
     if (!route) {
       throw new MiftahError(
         "RESOURCE_NOT_FOUND",
-        `RESOURCE_NOT_FOUND: resource '${params.uri}' is not exposed for profile '${profile}'`
+        `RESOURCE_NOT_FOUND: resource '${redactUri(params.uri)}' is not exposed for profile '${profile}'`
       );
     }
-    this.resourcePromptRegistry.assertResourceEpoch(profile, epoch);
-    const result = await this.callUpstream(profile, route.upstreamName, (session) =>
-      session.readResource({ ...params, uri: route.originalUri })
-    );
-    return this.resourcePromptRegistry.redactReadResult(route, result, epoch);
+    registry.assertResourceEpoch(profile, epoch);
+    return {
+      upstreamName: route.upstreamName,
+      name: route.originalUri,
+      execute: (session) => session.readResource({ ...params, uri: route.originalUri }),
+      redact: (result) => registry.redactReadResult(route, result, epoch)
+    };
   }
 
-  private async getAggregatedPrompt(profile: string, params: GetPromptRequest["params"]) {
+  private async resolveAggregatedPrompt(
+    profile: string,
+    params: GetPromptRequest["params"]
+  ): Promise<ResolvedOperation<GetPromptResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Prompt aggregation is unavailable");
-    const epoch = this.resourcePromptRegistry.captureEpoch(profile);
-    let route = this.resourcePromptRegistry.resolvePrompt(profile, params.name);
+    const registry = this.resourcePromptRegistry;
+    let epoch = registry.captureEpoch(profile);
+    let route = registry.resolvePrompt(profile, params.name);
     if (!route) {
-      await this.resourcePromptRegistry.listPrompts(profile);
-      this.resourcePromptRegistry.assertPromptEpoch(profile, epoch);
-      route = this.resourcePromptRegistry.resolvePrompt(profile, params.name);
+      await this.listPromptsForCapturedOperation(profile, registry);
+      epoch = registry.captureEpoch(profile);
+      registry.assertPromptEpoch(profile, epoch);
+      route = registry.resolvePrompt(profile, params.name);
     }
     if (!route) {
       throw new MiftahError(
@@ -650,11 +686,35 @@ export class MiftahServer {
         `PROMPT_NOT_FOUND: prompt '${params.name}' is not exposed for profile '${profile}'`
       );
     }
-    this.resourcePromptRegistry.assertPromptEpoch(profile, epoch);
-    const result = await this.callUpstream(profile, route.upstreamName, (session) =>
-      session.getPrompt({ ...params, name: route.originalName })
-    );
-    return this.resourcePromptRegistry.redactPromptResult(route, result, epoch);
+    registry.assertPromptEpoch(profile, epoch);
+    return {
+      upstreamName: route.upstreamName,
+      name: route.originalName,
+      execute: (session) => session.getPrompt({ ...params, name: route.originalName }),
+      redact: (result) => registry.redactPromptResult(route, result, epoch)
+    };
+  }
+
+  private async listResourcesForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+    try {
+      await registry.listResources(profile);
+    } catch (error) {
+      if (!(error instanceof MiftahError) || error.code !== "RESOURCE_DISCOVERY_INVALIDATED") throw error;
+      await registry.listResources(profile);
+    } finally {
+      await this.notifyResourceAvailabilityChange(profile);
+    }
+  }
+
+  private async listPromptsForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+    try {
+      await registry.listPrompts(profile);
+    } catch (error) {
+      if (!(error instanceof MiftahError) || error.code !== "PROMPT_DISCOVERY_INVALIDATED") throw error;
+      await registry.listPrompts(profile);
+    } finally {
+      await this.notifyPromptAvailabilityChange(profile);
+    }
   }
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
@@ -764,4 +824,85 @@ function requiredString(args: Record<string, unknown>, key: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function redactDirectResourceList(result: ListResourcesResult): ListResourcesResult {
+  return {
+    ...result,
+    resources: result.resources.map(redactDirectResource)
+  };
+}
+
+function redactDirectPromptList(result: ListPromptsResult): ListPromptsResult {
+  return {
+    ...result,
+    prompts: result.prompts.map(redactDirectPrompt)
+  };
+}
+
+function redactDirectReadResult(result: ReadResourceResult): ReadResourceResult {
+  return {
+    ...result,
+    contents: result.contents.map((content) => ({ ...content, uri: redactSensitiveUri(content.uri) }))
+  };
+}
+
+function redactDirectPromptResult(result: GetPromptResult): GetPromptResult {
+  return {
+    ...result,
+    messages: result.messages.map((message) => {
+      if (message.content.type === "resource_link") {
+        return {
+          ...message,
+          content: {
+            ...message.content,
+            uri: redactSensitiveUri(message.content.uri),
+            icons: redactDirectIconSources(message.content.icons)
+          }
+        };
+      }
+      if (message.content.type === "resource") {
+        return {
+          ...message,
+          content: {
+            ...message.content,
+            resource: {
+              ...message.content.resource,
+              uri: redactSensitiveUri(message.content.resource.uri)
+            }
+          }
+        };
+      }
+      return message;
+    })
+  };
+}
+
+function redactDirectResource(resource: Resource): Resource {
+  return {
+    ...resource,
+    uri: redactSensitiveUri(resource.uri),
+    icons: redactDirectIconSources(resource.icons)
+  };
+}
+
+function redactDirectPrompt(prompt: Prompt): Prompt {
+  return {
+    ...prompt,
+    icons: redactDirectIconSources(prompt.icons)
+  };
+}
+
+function redactDirectIconSources<T extends { src: string }>(icons: readonly T[] | undefined) {
+  return icons?.map((icon) => ({ ...icon, src: redactSensitiveUri(icon.src) }));
+}
+
+function redactSensitiveUri(uri: string): string {
+  try {
+    const value = new URL(uri);
+    if (!value.username && !value.password && !value.hash && value.search.length === 0) return uri;
+  } catch {
+    return uri;
+  }
+  return redactUri(uri);
 }

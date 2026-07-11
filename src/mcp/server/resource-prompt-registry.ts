@@ -237,7 +237,7 @@ export class ResourcePromptRegistry {
   }
 
   redactReadResult(route: ResourceRoute, result: ReadResourceResult, epoch: number): ReadResourceResult {
-    this.assertResourceEpoch(route.profile, epoch);
+    const canRegisterLinkedRoutes = this.captureEpoch(route.profile) === epoch;
     const redacted = this.redact(result);
     return {
       ...redacted,
@@ -246,15 +246,19 @@ export class ResourcePromptRegistry {
           ? { ...content, uri: route.exposedUri }
           : {
               ...content,
-              uri: this.registerLinkedResource(route.profile, route.upstreamName, result.contents[index]?.uri ?? content.uri)
-                .exposedUri
+              uri: this.exposedLinkedResource(
+                route.profile,
+                route.upstreamName,
+                result.contents[index]?.uri ?? content.uri,
+                canRegisterLinkedRoutes
+              )
             }
       )
     };
   }
 
   redactPromptResult(route: PromptRoute, result: GetPromptResult, epoch: number): GetPromptResult {
-    this.assertPromptEpoch(route.profile, epoch);
+    const canRegisterLinkedRoutes = this.captureEpoch(route.profile) === epoch;
     const redacted = this.redact(result);
     return {
       ...redacted,
@@ -266,7 +270,7 @@ export class ResourcePromptRegistry {
             ...message,
             content: {
               ...message.content,
-              uri: this.registerLinkedResource(route.profile, route.upstreamName, originalUri).exposedUri,
+              uri: this.exposedLinkedResource(route.profile, route.upstreamName, originalUri, canRegisterLinkedRoutes),
               icons: redactIconSources(message.content.icons)
             }
           };
@@ -279,7 +283,7 @@ export class ResourcePromptRegistry {
               ...message.content,
               resource: {
                 ...message.content.resource,
-                uri: this.registerLinkedResource(route.profile, route.upstreamName, originalUri).exposedUri
+                uri: this.exposedLinkedResource(route.profile, route.upstreamName, originalUri, canRegisterLinkedRoutes)
               }
             }
           };
@@ -442,6 +446,19 @@ export class ResourcePromptRegistry {
     routes.set(exposedUri, route);
     this.resourceRoutes.set(profile, routes);
     return route;
+  }
+
+  private exposedLinkedResource(
+    profile: string,
+    upstreamName: string,
+    originalUri: string,
+    canRegister: boolean
+  ): string {
+    if (canRegister) {
+      return this.registerLinkedResource(profile, upstreamName, originalUri).exposedUri;
+    }
+    // A request already bound to a route may complete, but invalidated maps cannot gain new callable routes.
+    return namespaceResourceUri(upstreamName, redactUri(this.redact(originalUri)));
   }
 }
 

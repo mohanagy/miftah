@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
+const uriInTextPattern = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
 const providerTokenPatterns = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g
@@ -91,7 +92,30 @@ export function redactUri(uri: string): string {
   }
 }
 
+/** Redacts sensitive URI components embedded in an arbitrary diagnostic string. */
+export function redactUrisInText(value: string): string {
+  return value.replace(uriInTextPattern, (candidate) => {
+    const { uri, suffix } = splitTrailingPunctuation(candidate);
+    try {
+      const parsed = new URL(uri);
+      if (!parsed.username && !parsed.password && !parsed.hash && parsed.search.length === 0) return candidate;
+      return `${redactUri(uri)}${suffix}`;
+    } catch {
+      return candidate;
+    }
+  });
+}
+
 /** Redacts secret values and secret-bearing keys from an arbitrary value. */
 export function redactSecrets<T>(value: T, secretValues: readonly string[] = []): T {
   return createRedactor(secretValues)(value);
+}
+
+function splitTrailingPunctuation(value: string): { uri: string; suffix: string } {
+  const match = value.match(/[),.;!?]+$/);
+  if (!match) return { uri: value, suffix: "" };
+  return {
+    uri: value.slice(0, -match[0].length),
+    suffix: match[0]
+  };
 }
