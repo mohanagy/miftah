@@ -46,13 +46,51 @@ const doctorCodeOrder = Object.values(DOCTOR_CODES);
 const statusOrder: DoctorCheckStatus[] = ["pass", "warning", "error", "skipped"];
 const noValueContainerOptions = new Set(["--rm", "--init", "--interactive", "-i", "--tty", "-t", "--detach", "-d"]);
 const valueContainerOptions = new Set([
+  "--add-host",
+  "--attach",
+  "-a",
+  "--cap-add",
+  "--cap-drop",
+  "--cidfile",
+  "--cpus",
+  "--detach-keys",
+  "--device",
+  "--dns",
+  "--dns-option",
+  "--dns-search",
+  "--domainname",
   "--name",
   "--env",
   "-e",
+  "--env-file",
+  "--expose",
+  "--group-add",
+  "--hostname",
+  "-h",
+  "--label",
+  "-l",
+  "--label-file",
+  "--link",
+  "--log-driver",
+  "--log-opt",
+  "--memory",
+  "-m",
+  "--mount",
+  "--network-alias",
+  "--platform",
   "--volume",
   "-v",
   "--publish",
   "-p",
+  "--pull",
+  "--restart",
+  "--security-opt",
+  "--shm-size",
+  "--stop-signal",
+  "--stop-timeout",
+  "--sysctl",
+  "--tmpfs",
+  "--ulimit",
   "--workdir",
   "-w",
   "--user",
@@ -180,9 +218,9 @@ export function formatDoctorReport(report: DoctorReport): string {
 
 export function runRedactionCanary(redactor: SecretRedactor): DoctorCheck {
   const canary = `doctor-canary-${randomUUID()}`;
-  redactor.add(canary);
-  const textRedacted = redactor.redactText(`canary=${canary}`) === "canary=[REDACTED]";
-  const objectRedacted = redactor.redact({ value: canary });
+  const canaryRedactor = new SecretRedactor([...redactor.values(), canary]);
+  const textRedacted = canaryRedactor.redactText(`canary=${canary}`) === "canary=[REDACTED]";
+  const objectRedacted = canaryRedactor.redact({ value: canary });
   const structuredRedacted = objectRedacted.value === "[REDACTED]";
 
   if (textRedacted && structuredRedacted) {
@@ -217,7 +255,7 @@ export async function diagnosePathPermissions(target: PermissionTarget, path: st
 
   const metadata = await stat(path);
   const label = permissionLabel(target, metadata.isDirectory());
-  const secureMode = (metadata.mode & 0o077) === 0;
+  const secureMode = (metadata.mode & 0o066) === 0;
   if (secureMode) {
     return {
       code,

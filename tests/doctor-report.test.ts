@@ -1,6 +1,6 @@
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DOCTOR_CODES,
   diagnoseCommandPinning,
@@ -10,6 +10,11 @@ import {
   runRedactionCanary
 } from "../src/cli/doctor-report.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
+
+vi.mock("node:crypto", async () => {
+  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+  return { ...actual, randomUUID: () => "fixed-uuid" };
+});
 
 const fixtureDirectory = resolve(`.doctor-report-test-${process.pid}`);
 
@@ -64,19 +69,23 @@ describe("doctor report", () => {
     expect(output).not.toContain("/unsafe/path");
   });
 
-  it("uses a real redactor to validate a generated canary without reporting it", () => {
-    const redactor = new SecretRedactor();
+  it("validates a generated canary without retaining it on the supplied redactor", () => {
+    const redactor = new SecretRedactor(["runtime-secret"]);
+    const canary = "doctor-canary-fixed-uuid";
     const check = runRedactionCanary(redactor);
-    const canary = redactor.values()[0];
 
-    expect(canary).toBeDefined();
-    expect(redactor.redactText(`value=${canary}`)).not.toContain(canary!);
-    expect(redactor.redact({ value: canary })).toEqual({ value: "[REDACTED]" });
+    expect(redactor.values()).toEqual(["runtime-secret"]);
+    expect(redactor.values()).not.toContain(canary);
+    expect(redactor.redactText("value=runtime-secret")).toBe("value=[REDACTED]");
+    expect(redactor.redact({ value: "runtime-secret" })).toEqual({ value: "[REDACTED]" });
     expect(check).toMatchObject({ code: DOCTOR_CODES.CANARY, status: "pass" });
+    expect(JSON.stringify(check)).not.toContain(canary);
 
     const report = normalizeDoctorReport([check]);
-    expect(JSON.stringify(report)).not.toContain(canary!);
-    expect(formatDoctorReport(report)).not.toContain(canary!);
+    expect(JSON.stringify(report)).not.toContain("runtime-secret");
+    expect(formatDoctorReport(report)).not.toContain("runtime-secret");
+    expect(JSON.stringify(report)).not.toContain(canary);
+    expect(formatDoctorReport(report)).not.toContain(canary);
   });
 
   it("reports Unix group and world permissions on existing files and directories", async () => {
@@ -97,6 +106,17 @@ describe("doctor report", () => {
     await chmod(directory, 0o700);
     await expect(diagnosePathPermissions("config", file)).resolves.toMatchObject({ status: "pass" });
     await expect(diagnosePathPermissions("audit", directory)).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("allows execute-only group and world permissions on Unix", async () => {
+    if (process.platform === "win32") return;
+
+    await mkdir(fixtureDirectory, { recursive: true });
+    const file = resolve(fixtureDirectory, "config.json");
+    await writeFile(file, "{}");
+    await chmod(file, 0o611);
+
+    await expect(diagnosePathPermissions("config", file)).resolves.toMatchObject({ status: "pass" });
   });
 
   it("skips permission diagnostics on Windows without filesystem mocks", async () => {
@@ -146,5 +166,16 @@ describe("doctor report", () => {
     for (const value of ["docker-unpinned", "podman-unpinned", "npx-unpinned", "npm-unpinned", "@scope/npm-pinned"]) {
       expect(output).not.toContain(value);
     }
+  });
+
+  it("diagnoses images after standard Docker and Podman value-taking run options", () => {
+    const checks = [
+      diagnoseCommandPinning("docker", ["run", "--platform", "linux/amd64", "registry.example/unpinned:latest"]),
+      diagnoseCommandPinning("podman", ["run", "--pull", "always", "registry.example/pinned@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]),
+      diagnoseCommandPinning("docker", ["run", "--label", "team=platform", "--mount", "type=tmpfs,target=/tmp", "--env-file", ".env", "registry.example/unpinned:latest"])
+    ];
+
+    expect(checks.map((check) => check.status)).toEqual(["warning", "pass", "warning"]);
+    expect(checks.map((check) => check.target)).toEqual(["container image", "container image", "container image"]);
   });
 });
