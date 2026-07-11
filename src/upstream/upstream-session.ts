@@ -11,11 +11,13 @@ import type {
   ReadResourceRequest
 } from "@modelcontextprotocol/sdk/types.js";
 
+/** Lets the process manager bracket upstream work so idle shutdown cannot interrupt an active request. */
 export interface UpstreamSessionActivity {
   begin(): void;
   end(): void;
 }
 
+/** Provides profile-bound MCP operations while reporting their activity to lifecycle management. */
 export class UpstreamSession {
   constructor(
     readonly profile: string,

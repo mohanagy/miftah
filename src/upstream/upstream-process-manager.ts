@@ -6,7 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
-import { expandEnvironmentReferences } from "../config/env-expand.js";
+import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expand.js";
 import { redactSecrets } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
@@ -19,7 +19,9 @@ const initialRestartDelayMs = 100;
 const maximumRestartDelayMs = 5_000;
 const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
+const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
 
+/** Configures lifecycle behavior, capacity, and redacted diagnostics for an upstream manager. */
 export interface UpstreamManagerOptions {
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
@@ -35,6 +37,7 @@ export type UpstreamCapability = "tools" | "resources" | "prompts";
 export type UpstreamCapabilityState = "unknown" | "available" | "failed";
 export type UpstreamProcessState = "stopped" | "starting" | "running" | "failed";
 export type UpstreamState = UpstreamProcessState | "degraded";
+/** Identifies an intentional reason a profile's upstream process stopped. */
 export type UpstreamStopReason = "idle" | "manual" | "restart" | "shutdown" | "shutdown-timeout";
 
 export interface UpstreamCapabilityHealth {
@@ -43,6 +46,7 @@ export interface UpstreamCapabilityHealth {
   error?: string;
 }
 
+/** Describes the latest lifecycle and capability state for one profile/upstream pair. */
 export interface UpstreamHealth {
   profile: string;
   upstreamName: string;
@@ -133,6 +137,7 @@ export class UpstreamProcessManager {
     this.limiter = limiter ?? new ProfileSessionLimiter(options.maxConcurrentProfiles);
   }
 
+  /** Returns the live session or starts it after any scheduled recovery completes. */
   async get(profile: string, _upstreamName?: string): Promise<UpstreamSession> {
     void _upstreamName;
     this.assertOpen();
@@ -153,8 +158,9 @@ export class UpstreamProcessManager {
     return [...this.health.values()].map((health) => structuredClone(health));
   }
 
+  /** Returns every configured or dynamically resolved value that must be redacted from upstream output. */
   getSecretValues(): string[] {
-    return [...this.secretValuesSet];
+    return [...new Set([...this.secretValuesSet, ...(this.options.secretValues ?? [])])];
   }
 
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
@@ -178,10 +184,11 @@ export class UpstreamProcessManager {
       profile,
       capability,
       "failed",
-      redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
+      this.redactProcessOutput(error instanceof Error ? error.message : String(error))
     );
   }
 
+  /** Manually restarts a profile and resets any exhausted automatic-recovery budget. */
   async restart(profile: string, _upstreamName?: string): Promise<UpstreamSession> {
     void _upstreamName;
     this.assertOpen();
@@ -203,6 +210,7 @@ export class UpstreamProcessManager {
     return restart;
   }
 
+  /** Stops every known profile and waits for active startup and restart work to settle. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -218,15 +226,17 @@ export class UpstreamProcessManager {
       this.clearIdleTimer(profile);
       this.clearStabilityTimer(profile);
     }
-    await Promise.all([...profiles].map((profile) => this.stopProfile(profile, "shutdown", true)));
+    await Promise.all(Array.from(profiles, (profile) => this.stopProfile(profile, "shutdown", true)));
     await Promise.allSettled([...this.starts.values(), ...this.manualRestarts.values()]);
   }
 
+  /** Stops one profile without closing the manager itself. */
   async closeProfile(profile: string): Promise<void> {
     this.cancelAutomaticRestart(profile, true);
     await this.stopProfile(profile, "manual", true);
   }
 
+  /** Lists upstream tools and records a redacted capability outcome for health reporting. */
   async listTools(profile: string, _upstreamName?: string): Promise<Tool[]> {
     void _upstreamName;
     try {
@@ -235,7 +245,7 @@ export class UpstreamProcessManager {
       return tools;
     } catch (error) {
       const failure = new MiftahError("UPSTREAM_TOOL_LIST_FAILED", `UPSTREAM_TOOL_LIST_FAILED: unable to list tools for '${profile}'`, {
-        cause: redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
+        cause: this.redactProcessOutput(error instanceof Error ? error.message : String(error))
       });
       this.recordCapabilityFailure(profile, "tools", failure);
       throw failure;
@@ -366,32 +376,56 @@ export class UpstreamProcessManager {
     }
   }
 
+  /** Resolves per-profile process settings and retains credential values for later diagnostic redaction. */
   private resolveProfileOptions(profile: ProfileConfig): {
     environment: Record<string, string>;
     headers: Record<string, string>;
   } {
+    const upstreamEnvironment = this.upstream.env
+      ? expandEnvironmentReferencesWithSecretValues(this.upstream.env)
+      : undefined;
+    const profileEnvironment = profile.env ? expandEnvironmentReferencesWithSecretValues(profile.env) : undefined;
+    const upstreamHeaders = this.upstream.headers
+      ? expandEnvironmentReferencesWithSecretValues(this.upstream.headers)
+      : undefined;
+    const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
     const environment = {
-      ...(this.upstream.env ? expandEnvironmentReferences(this.upstream.env) : {}),
-      ...(profile.env ? expandEnvironmentReferences(profile.env) : {})
+      ...(upstreamEnvironment?.values ?? {}),
+      ...(profileEnvironment?.values ?? {})
     };
     const headers = {
-      ...(this.upstream.headers ? expandEnvironmentReferences(this.upstream.headers) : {}),
-      ...(profile.headers ? expandEnvironmentReferences(profile.headers) : {})
+      ...(upstreamHeaders?.values ?? {}),
+      ...(profileHeaders?.values ?? {})
     };
+    for (const value of [
+      ...(upstreamEnvironment?.secretValues ?? []),
+      ...(profileEnvironment?.secretValues ?? []),
+      ...(upstreamHeaders?.secretValues ?? []),
+      ...(profileHeaders?.secretValues ?? [])
+    ]) {
+      this.secretValuesSet.add(value);
+    }
     for (const [key, value] of Object.entries({ ...environment, ...headers })) {
-      if (/(token|secret|password|api[_-]?key|auth|private|credential)/i.test(key) && value.length > 0) {
+      if (credentialKeyPattern.test(key) && value.length > 0) {
         this.secretValuesSet.add(value);
       }
     }
     return { environment, headers };
   }
 
+  /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
   private attachStderr(profile: string, stderr: Stream | null): void {
     stderr?.on("data", (chunk: Buffer) => {
-      this.options.onStderr?.(profile, redactSecrets(chunk.toString("utf8"), this.options.secretValues ?? []));
+      this.options.onStderr?.(profile, this.redactProcessOutput(chunk.toString("utf8")));
     });
   }
 
+  /** Redacts process-originated text using static and dynamically resolved secret values. */
+  private redactProcessOutput(value: string): string {
+    return redactSecrets(value, [...this.secretValuesSet, ...(this.options.secretValues ?? [])]);
+  }
+
+  /** Handles an unexpected close only when it belongs to the current live session generation. */
   private handleTransportClosed(profile: string, token: number, generation: number): void {
     const entry = this.sessions.get(profile);
     if (!entry || entry.token !== token || entry.generation !== generation || entry.closing) return;
@@ -413,6 +447,7 @@ export class UpstreamProcessManager {
     }
   }
 
+  /** Schedules one bounded automatic retry while retaining the profile's capacity reservation. */
   private scheduleAutomaticRestart(profile: string, generation: number): void {
     if (!this.isCurrent(profile, generation) || !this.options.restartOnCrash || this.manualRestarts.has(profile)) return;
     if (this.automaticRestarts.has(profile)) return;
@@ -457,6 +492,7 @@ export class UpstreamProcessManager {
     this.automaticRestarts.set(profile, scheduled);
   }
 
+  /** Runs the scheduled retry and chains another one only while this lifecycle generation remains current. */
   private async runAutomaticRestart(profile: string, scheduled: ScheduledRestart): Promise<void> {
     if (this.automaticRestarts.get(profile) !== scheduled) {
       scheduled.resolve();
@@ -482,6 +518,7 @@ export class UpstreamProcessManager {
     return Math.max(1, Math.round(baseDelay - jitter + Math.random() * jitter * 2));
   }
 
+  /** Clears the consecutive-crash budget only after an automatically recovered session remains stable. */
   private scheduleStabilityWindow(profile: string, entry: ManagedSession): void {
     this.clearStabilityTimer(profile);
     const timer = setTimeout(() => {
@@ -526,6 +563,7 @@ export class UpstreamProcessManager {
     );
   }
 
+  /** Stops a profile, cancels an in-progress start, and avoids stale lifecycle state after a replacement begins. */
   private async stopProfile(profile: string, reason: UpstreamStopReason, releaseReservation: boolean): Promise<void> {
     const startEpoch = this.startEpoch(profile);
     const startingAttempt = this.startingAttempts.get(profile);
@@ -552,6 +590,7 @@ export class UpstreamProcessManager {
     });
   }
 
+  /** Enforces the configured graceful-shutdown deadline before force-closing a hung transport. */
   private async closeSession(entry: ManagedSession): Promise<boolean> {
     const close = entry.session.close();
     void close.catch(() => undefined);
@@ -584,6 +623,7 @@ export class UpstreamProcessManager {
     await transport.close().catch(() => undefined);
   }
 
+  /** Prevents an idle timer from closing a session after the activity callback has admitted an operation. */
   private beginOperation(profile: string, token: number, entry: ManagedSession | undefined): void {
     const current = this.sessions.get(profile);
     if (!entry || current !== entry || entry.token !== token || entry.closing) {
@@ -593,6 +633,7 @@ export class UpstreamProcessManager {
     this.clearIdleTimer(profile);
   }
 
+  /** Re-arms idle shutdown only after the final in-flight operation completes. */
   private endOperation(profile: string, token: number, entry: ManagedSession | undefined): void {
     const current = this.sessions.get(profile);
     if (!entry || current !== entry || entry.token !== token) return;
@@ -655,7 +696,7 @@ export class UpstreamProcessManager {
   private asStartFailure(profile: string, error: unknown): MiftahError {
     if (error instanceof MiftahError) return error;
     return new MiftahError("UPSTREAM_INIT_FAILED", `UPSTREAM_INIT_FAILED: could not initialize profile '${profile}'`, {
-      cause: redactSecrets(error instanceof Error ? error.message : String(error), this.options.secretValues ?? [])
+      cause: this.redactProcessOutput(error instanceof Error ? error.message : String(error))
     });
   }
 

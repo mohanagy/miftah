@@ -10,6 +10,7 @@ import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
 
+/** Coordinates named upstream managers while sharing profile-capacity accounting across the bundle. */
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();

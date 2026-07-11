@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
@@ -75,6 +76,88 @@ describe("upstream process manager", () => {
 
     try {
       expect((await (await manager.get("work")).listTools()).tools.map((tool) => tool.name)).toContain("whoami");
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("redacts dynamically resolved secrets from manager stderr and capability diagnostics", async () => {
+    const secret = "dynamic-profile-secret";
+    const stderr: string[] = [];
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: {
+          env: {
+            API_TOKEN: secret,
+            TEST_STDERR_MESSAGE: `test stderr: ${secret}`,
+            TEST_FAIL_LIST_TOOLS: "true"
+          }
+        }
+      },
+      {
+        startupTimeoutMs: 1_000,
+        onStderr: (_profile, message) => stderr.push(message)
+      }
+    );
+
+    try {
+      await manager.get("work");
+      await waitFor(() => stderr.join("\n"), (output) => output.includes("test stderr"));
+      expect(stderr.join("\n")).not.toContain(secret);
+      expect(stderr.join("\n")).toContain("[REDACTED]");
+
+      let failure: unknown;
+      try {
+        await manager.listTools("work");
+      } catch (error) {
+        failure = error;
+      }
+      if (!(failure instanceof MiftahError)) throw new Error("Expected a Miftah error from failed tool discovery");
+      const cause = failure.details?.cause;
+      if (typeof cause !== "string") throw new Error("Expected a redacted diagnostic cause");
+      expect(cause).not.toContain(secret);
+      expect(cause).toContain("[REDACTED]");
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("redacts dynamically resolved secrets from startup diagnostics", async () => {
+    const secret = "dynamic-startup-secret";
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: {
+          env: {
+            API_TOKEN: secret,
+            TEST_FAIL_INITIALIZE: "true"
+          }
+        }
+      },
+      { startupTimeoutMs: 1_000 }
+    );
+
+    try {
+      let failure: unknown;
+      try {
+        await manager.get("work");
+      } catch (error) {
+        failure = error;
+      }
+      if (!(failure instanceof MiftahError)) throw new Error("Expected a Miftah startup error");
+      const cause = failure.details?.cause;
+      if (typeof cause !== "string") throw new Error("Expected a redacted startup diagnostic cause");
+      expect(cause).not.toContain(secret);
+      expect(cause).toContain("[REDACTED]");
     } finally {
       await manager.close();
     }

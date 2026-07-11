@@ -88,6 +88,7 @@ interface ResourcePromptProxyUnavailable {
 
 type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePromptProxyUnavailable;
 
+/** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
   readonly server: Server;
   private readonly routing: RoutingEngine;

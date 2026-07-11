@@ -8,6 +8,7 @@ export class ProfileSessionLimiter {
 
   constructor(private readonly maximumProfiles?: number) {}
 
+  /** Acquires this owner's share of a profile slot, rejecting a new profile when the global limit is reached. */
   acquire(profile: string, owner: string): boolean {
     const existingOwners = this.ownersByProfile.get(profile);
     if (existingOwners?.has(owner)) return false;
@@ -23,6 +24,7 @@ export class ProfileSessionLimiter {
     return true;
   }
 
+  /** Releases an owner's share and frees the profile slot after its final upstream stops. */
   release(profile: string, owner: string): void {
     const owners = this.ownersByProfile.get(profile);
     if (!owners) return;
