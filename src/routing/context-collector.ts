@@ -122,8 +122,17 @@ function collectEnvironment(environment: Readonly<Record<string, string | undefi
 } {
   return {
     ...(environment.MIFTAH_PROFILE === undefined ? {} : { profile: environment.MIFTAH_PROFILE }),
-    ...(environment.MIFTAH_PROJECT === undefined ? {} : { project: environment.MIFTAH_PROJECT })
+    ...(environment.MIFTAH_PROJECT === undefined
+      ? {}
+      : { project: redactProjectValue(environment.MIFTAH_PROJECT) })
   };
+}
+
+function redactProjectValue(value: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[a-z]:[\\/]/i.test(value)) {
+    return redactUri(value);
+  }
+  return value;
 }
 
 function normalizeFileRoots(roots: readonly (string | RoutingContextMcpRoot)[]): string[] {
@@ -174,7 +183,7 @@ async function findProjectMarker(
   runtimeConfigPath: string | undefined,
   knownProfileNames: readonly string[]
 ): Promise<ProjectMarker | undefined> {
-  const runtimePath = runtimeConfigPath ? resolve(runtimeConfigPath) : undefined;
+  const runtimePath = runtimeConfigPath ? await canonicalPath(runtimeConfigPath) : undefined;
   for (const directory of ancestors(cwd, boundary)) {
     for (const name of [".miftahrc.json", "miftah.json"]) {
       const path = resolve(directory, name);
@@ -188,6 +197,15 @@ async function findProjectMarker(
     }
   }
   return undefined;
+}
+
+async function canonicalPath(path: string): Promise<string> {
+  const resolvedPath = resolve(path);
+  try {
+    return await realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
 }
 
 async function findPackageMetadata(
@@ -287,21 +305,37 @@ async function findGitOrigin(
   executable: string
 ): Promise<string | undefined> {
   try {
+    const { stdout: gitDirectory } = await execFile(
+      executable,
+      ["rev-parse", "--git-common-dir"],
+      gitExecutionOptions(cwd, boundary)
+    );
+    const resolvedGitDirectory = await realpath(resolve(cwd, gitDirectory.trim()));
+    if (!isWithin(boundary, resolvedGitDirectory)) return undefined;
+
     const { stdout } = await execFile(executable, ["remote", "get-url", "origin"], {
-      cwd,
-      maxBuffer: MAX_ROUTING_CONTEXT_JSON_BYTES,
-      env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))
-        ),
-        GIT_CEILING_DIRECTORIES: dirname(boundary)
-      }
+      ...gitExecutionOptions(cwd, boundary)
     });
     const origin = stdout.trim();
     return origin.length === 0 ? undefined : redactUri(origin);
   } catch {
     return undefined;
   }
+}
+
+function gitExecutionOptions(cwd: string, boundary: string): {
+  cwd: string;
+  maxBuffer: number;
+  env: NodeJS.ProcessEnv;
+} {
+  return {
+    cwd,
+    maxBuffer: MAX_ROUTING_CONTEXT_JSON_BYTES,
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+      GIT_CEILING_DIRECTORIES: dirname(boundary)
+    }
+  };
 }
 
 function assertKnownProfile(profile: string, profiles: readonly string[]): void {

@@ -76,7 +76,10 @@ describe("routing context collector", () => {
       mcpRoots: [fileUri(root)]
     });
 
-    expect(snapshot.context.environment).toEqual({ profile: "work", project });
+    expect(snapshot.context.environment).toEqual({
+      profile: "work",
+      project: "https://example.test/private?secret=%5BREDACTED%5D"
+    });
     expect(snapshot.profileHints).toContainEqual({
       profile: "work",
       source: "environment",
@@ -214,6 +217,26 @@ describe("routing context collector", () => {
     expect(snapshot.profileHints).toEqual([]);
   });
 
+  it("excludes a symlinked runtime config from automatic marker discovery", async () => {
+    const root = await createProject();
+    const runtimeConfigPath = join(root, "miftah.json");
+    const runtimeConfigLink = join(root, "runtime-config.json");
+    await writeJson(runtimeConfigPath, { profiles: { github: "work" } });
+    await symlink(runtimeConfigPath, runtimeConfigLink);
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: ["work"],
+      cwd: root,
+      environment: {},
+      runtimeConfigPath: runtimeConfigLink,
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.context.marker).toBeUndefined();
+    expect(snapshot.profileHints).toEqual([]);
+  });
+
   it("exposes no fields outside the explicit marker and package schemas", async () => {
     const root = await createProject();
     await writeJson(join(root, ".miftahrc.json"), {
@@ -287,5 +310,24 @@ describe("routing context collector", () => {
       if (originalGitDirectory === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = originalGitDirectory;
     }
+  });
+
+  it("does not follow a Git directory indirection outside the file-root boundary", async () => {
+    const root = await createProject();
+    const outside = await createProject();
+    await execFile("git", ["init"], { cwd: outside });
+    await execFile("git", ["remote", "add", "origin", "https://example.test/outside"], { cwd: outside });
+    await writeFile(join(root, ".git"), `gitdir: ${join(outside, ".git")}\n`);
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: [],
+      cwd: root,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.context.git).toBeUndefined();
+    expect(snapshot.evidence.git).toBeUndefined();
   });
 });
