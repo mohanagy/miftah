@@ -521,6 +521,41 @@ describe("audit JSONL reader", () => {
     });
   });
 
+  it("preserves consumed records when its path temporarily disappears", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const unavailablePath = join(directory, "audit.jsonl.unavailable");
+      const initialRecord = '{"sequence":"before-disappearance"}\n';
+      const appendedRecord = '{"sequence":"after-restoration"}\n';
+      await writeFile(auditPath, initialRecord);
+      const output: string[] = [];
+      const controller = new AbortController();
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        write: (chunk) => output.push(chunk),
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      try {
+        await waitFor(() => output.length === 1);
+        await rename(auditPath, unavailablePath);
+        await delay(pollIntervalMs * 4);
+        await rename(unavailablePath, auditPath);
+        await delay(pollIntervalMs * 4);
+
+        expect(output).toEqual([initialRecord]);
+
+        await appendFile(auditPath, appendedRecord);
+        await waitFor(() => output.length === 2);
+        expect(output.join("")).toBe(initialRecord + appendedRecord);
+      } finally {
+        controller.abort();
+        await follower;
+      }
+    });
+  });
+
   it("drops a pending line after the path disappears before its replacement appears", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
@@ -728,6 +763,54 @@ describe("audit JSONL reader", () => {
         })
       ).rejects.toBe(writeFailure);
       expect(await readdir(spoolRoot)).toEqual([]);
+    });
+  });
+
+  it("aborts a follower blocked on staged output and removes its spool", async () => {
+    await inSandbox(async (directory) => {
+      const auditPath = join(directory, "audit.jsonl");
+      const spoolRoot = join(directory, "spools");
+      await writeFile(auditPath, '{"message":"blocked"}\n');
+      await mkdir(spoolRoot, { mode: 0o700 });
+      const controller = new AbortController();
+      const lateFailure = new Error("write failed after abort");
+      let rejectBlockedWrite!: (error: Error) => void;
+      const blockedWrite = new Promise<void>((_resolve, reject) => {
+        rejectBlockedWrite = reject;
+      });
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+      process.on("unhandledRejection", onUnhandledRejection);
+      let writeStarted = false;
+      const follower = followAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        temporaryDirectory: spoolRoot,
+        write: () => {
+          writeStarted = true;
+          return blockedWrite;
+        },
+        signal: controller.signal,
+        pollIntervalMs
+      });
+      let settled = false;
+
+      try {
+        await waitFor(() => writeStarted);
+        controller.abort();
+        settled =
+          (await Promise.race([follower.then(() => true), delay(250).then(() => false)])) === true;
+
+        expect(settled).toBe(true);
+        expect(await readdir(spoolRoot)).toEqual([]);
+        rejectBlockedWrite(lateFailure);
+        await delay(0);
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        controller.abort();
+        if (settled) await follower;
+        process.removeListener("unhandledRejection", onUnhandledRejection);
+      }
     });
   });
 

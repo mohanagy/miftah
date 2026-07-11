@@ -21,7 +21,9 @@ export function createStdoutWriter(target: Writable = process.stdout): (chunk: s
       let writeReturned: boolean | undefined;
       let writeCompleted = false;
       let drained = false;
+      let callbackErrorFallback: ReturnType<typeof setImmediate> | undefined;
       const cleanup = () => {
+        if (callbackErrorFallback !== undefined) clearImmediate(callbackErrorFallback);
         target.removeListener("drain", onDrain);
         target.removeListener("error", onError);
       };
@@ -41,8 +43,9 @@ export function createStdoutWriter(target: Writable = process.stdout): (chunk: s
       };
       const onError = (error: Error) => settle(error);
       const onWriteComplete = (error: Error | null | undefined) => {
+        if (settled) return;
         if (error !== null && error !== undefined) {
-          // Writable invokes its callback before emitting the corresponding error event.
+          callbackErrorFallback = setImmediate(() => settle(error));
           return;
         }
         writeCompleted = true;

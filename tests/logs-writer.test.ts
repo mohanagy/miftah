@@ -1,5 +1,5 @@
 import { PassThrough, Writable } from "node:stream";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { createStdoutWriter } from "../src/cli/logs.js";
 
@@ -36,6 +36,26 @@ describe("stdout writer", () => {
     target.destroy(expected);
 
     await expect(write).rejects.toBe(expected);
+    expect(target.listenerCount("drain")).toBe(0);
+    expect(target.listenerCount("error")).toBe(0);
+  });
+
+  it("rejects destroyed writable callback errors and cleans up listeners", async () => {
+    const target = new PassThrough({ highWaterMark: 1 });
+    target.destroy();
+    const write = createStdoutWriter(target)("x");
+    const outcome = await Promise.race([
+      write.then(
+        () => ({ kind: "resolved" as const }),
+        (error: unknown) => ({ kind: "rejected" as const, error })
+      ),
+      delay(100).then(() => ({ kind: "timed-out" as const }))
+    ]);
+
+    expect(outcome).toMatchObject({
+      kind: "rejected",
+      error: { code: "ERR_STREAM_DESTROYED" }
+    });
     expect(target.listenerCount("drain")).toBe(0);
     expect(target.listenerCount("error")).toBe(0);
   });

@@ -398,6 +398,33 @@ async function stageAuditSnapshot(
   }
 }
 
+async function writeWithAbort(
+  write: AuditJsonlWriter,
+  chunk: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  if (signal?.aborted) return false;
+
+  const writePromise = Promise.resolve(write(chunk));
+  if (signal === undefined) {
+    await writePromise;
+    return true;
+  }
+
+  let removeAbortListener = () => {};
+  const aborted = new Promise<false>((resolve) => {
+    const onAbort = () => resolve(false);
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+    if (signal.aborted) onAbort();
+  });
+  try {
+    return await Promise.race([writePromise.then(() => true), aborted]);
+  } finally {
+    removeAbortListener();
+  }
+}
+
 async function forwardStagedOutput(
   spool: ClosedTemporarySpool | undefined,
   write: AuditJsonlWriter,
@@ -419,14 +446,14 @@ async function forwardStagedOutput(
       let lineEnd = pending.indexOf("\n");
       while (lineEnd !== -1) {
         if (signal?.aborted) return false;
-        await write(pending.slice(0, lineEnd + 1));
+        if (!(await writeWithAbort(write, pending.slice(0, lineEnd + 1), signal))) return false;
         pending = pending.slice(lineEnd + 1);
         lineEnd = pending.indexOf("\n");
       }
     }
     if (signal?.aborted) return false;
     pending += decoder.decode();
-    if (pending.length > 0) await write(pending);
+    if (pending.length > 0 && !(await writeWithAbort(write, pending, signal))) return false;
     return true;
   } finally {
     await handle.close();
@@ -516,7 +543,6 @@ export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promis
       );
     } catch (error) {
       if (!isNotFoundError(error)) throw error;
-      resetState(state);
     }
     await waitForNextPoll(options.signal, pollIntervalMs);
   }
