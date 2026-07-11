@@ -114,13 +114,15 @@ describe("doctor readiness runner", () => {
     expect(serialized).not.toContain("ready-account");
   });
 
-  it("degrades instead of failing when a real optional discovery capability fails", async () => {
+  it("degrades instead of failing when real optional discovery capabilities fail in permissive mode", async () => {
     const shutdownPath = join(fixtureDirectory, "degraded", "upstream-ended");
     const { configPath } = await writeConfig(
       "degraded",
       baseConfig(
         stdioUpstream({
+          TEST_FAIL_LIST_TOOLS: "true",
           TEST_FAIL_LIST_RESOURCES: "true",
+          TEST_FAIL_LIST_PROMPTS: "true",
           TEST_SHUTDOWN_END_PATH: shutdownPath
         })
       )
@@ -129,9 +131,60 @@ describe("doctor readiness runner", () => {
     const report = await runDoctor(configPath);
 
     expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("warning");
     expect(check(report, DOCTOR_CODES.RESOURCES_DISCOVERY).status).toBe("warning");
+    expect(check(report, DOCTOR_CODES.PROMPTS_DISCOVERY).status).toBe("warning");
     expect(check(report, DOCTOR_CODES.CLEAN_SHUTDOWN).status).toBe("pass");
     await waitForFile(shutdownPath);
+  });
+
+  it("fails strict readiness when a real upstream partially fails capability discovery", async () => {
+    const secret = "strict-doctor-discovery-secret";
+    const { configPath } = await writeConfig("strict-discovery", {
+      version: "1",
+      name: "doctor-strict-discovery",
+      defaultProfile: "default",
+      upstreams: {
+        "a-failing": stdioUpstream(),
+        "z-healthy": stdioUpstream()
+      },
+      profiles: {
+        default: {
+          upstreams: {
+            "a-failing": {
+              env: {
+                API_TOKEN: secret,
+                TEST_FAIL_LIST_TOOLS: "true",
+                TEST_FAIL_LIST_RESOURCES: "true",
+                TEST_FAIL_LIST_PROMPTS: "true"
+              }
+            }
+          }
+        }
+      },
+      tooling: { toolDiscoveryMode: "strict" },
+      process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+    });
+
+    const report = await runDoctor(configPath);
+
+    expect(report).toMatchObject({ overallStatus: "failed", ok: false });
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY)).toMatchObject({
+      status: "error",
+      explanation: "Tool discovery did not complete.",
+      remediation: "Review upstream tool discovery before relying on this profile."
+    });
+    expect(check(report, DOCTOR_CODES.RESOURCES_DISCOVERY)).toMatchObject({
+      status: "error",
+      explanation: "Resource discovery did not complete.",
+      remediation: "Review upstream resource discovery before relying on this capability."
+    });
+    expect(check(report, DOCTOR_CODES.PROMPTS_DISCOVERY)).toMatchObject({
+      status: "error",
+      explanation: "Prompt discovery did not complete.",
+      remediation: "Review upstream prompt discovery before relying on this capability."
+    });
+    expect(JSON.stringify(report)).not.toContain(secret);
   });
 
   it("uses only the wrapper-visible first page of paginated upstream tools", async () => {

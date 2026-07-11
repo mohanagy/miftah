@@ -406,6 +406,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
     const targets = configuredTargets(runtime.config);
+    const discoveryFailureStatus = runtime.config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
     const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
       if (target.upstream.transport === "stdio") {
@@ -493,7 +494,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         checks.push(
           check(
             DOCTOR_CODES.TOOLS_DISCOVERY,
-            "warning",
+            discoveryFailureStatus,
             targetText,
             "Tool discovery did not complete.",
             "Review upstream tool discovery before relying on this profile."
@@ -520,7 +521,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         checks.push(
           check(
             DOCTOR_CODES.RESOURCES_DISCOVERY,
-            "warning",
+            discoveryFailureStatus,
             targetText,
             "Resource discovery did not complete.",
             "Review upstream resource discovery before relying on this capability."
@@ -547,7 +548,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         checks.push(
           check(
             DOCTOR_CODES.PROMPTS_DISCOVERY,
-            "warning",
+            discoveryFailureStatus,
             targetText,
             "Prompt discovery did not complete.",
             "Review upstream prompt discovery before relying on this capability."
