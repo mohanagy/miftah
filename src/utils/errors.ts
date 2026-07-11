@@ -25,7 +25,9 @@ export type MiftahErrorCode =
   | "ROUTING_AMBIGUOUS"
   | "ROUTING_BLOCKED"
   | "POLICY_BLOCKED"
-  | "TOOL_COLLISION";
+  | "TOOL_COLLISION"
+  | "TOOL_NOT_FOUND"
+  | "TOOL_SCHEMA_MISMATCH";
 
 export interface MiftahErrorDetails {
   readonly diagnostics?: readonly ConfigDiagnostic[];

@@ -1,5 +1,8 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { CallToolResultSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import { access, mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -92,5 +95,470 @@ describe("Miftah MCP wrapper", () => {
 
     await client.close();
     await wrapper.close();
+  });
+
+  it("advertises and emits tool list changes after a profile switch", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let notifications = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await expect.poll(() => notifications).toBe(1);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("keeps the internal profile revision out of the management response", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const result = CallToolResultSchema.parse(
+        await client.callTool({ name: "miftah_current_profile", arguments: {} }, CallToolResultSchema)
+      );
+      const content = result.content[0];
+      expect(content).toMatchObject({ type: "text" });
+      if (content?.type !== "text") throw new Error("Expected a text result.");
+      expect(JSON.parse(content.text)).toEqual({
+        activeProfile: "work",
+        defaultProfile: "work",
+        routingMode: "hybrid"
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("refreshes the advertised tool schema after a profile switch", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_WHOAMI_SCHEMA: "account"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const before = await client.listTools();
+      expect(before.tools.find((tool) => tool.name === "whoami")).toMatchObject({
+        inputSchema: { properties: {} }
+      });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+
+      const after = await client.listTools();
+      expect(after.tools.find((tool) => tool.name === "whoami")).toMatchObject({
+        inputSchema: {
+          properties: { account: { type: "string" } },
+          required: ["account"]
+        }
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("retries tool discovery when the active profile changes during listing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-tool-list-race-"));
+    const startedPath = join(directory, "tools-list-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "100"
+          }
+        },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_WHOAMI_SCHEMA: "account"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const listing = client.listTools();
+      await expect
+        .poll(async () => {
+          try {
+            await access(startedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+
+      const tools = await listing;
+      expect(tools.tools.find((tool) => tool.name === "whoami")).toMatchObject({
+        inputSchema: {
+          properties: { account: { type: "string" } },
+          required: ["account"]
+        }
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("rejects routing to a profile with a different advertised tool schema", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_WHOAMI_SCHEMA: "account"
+          }
+        }
+      },
+      routing: {
+        rules: [{ when: { "args.target": "personal" }, profile: "personal" }]
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "whoami", arguments: { target: "personal" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("TOOL_SCHEMA_MISMATCH") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("rejects unknown tool calls without forwarding them upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "not_an_upstream_tool", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("TOOL_NOT_FOUND") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("resolves unregistered miftah-prefixed names through the tool registry", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_not_registered", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("TOOL_NOT_FOUND") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("routes registered miftah-prefixed upstream tools through the registry", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_INCLUDE_MIFTAH_PREFIX_TOOL: "true"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_custom", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "created:" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("does not publish partial routes when discovery finds a tool collision", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_INCLUDE_MANAGEMENT_TOOL: "true"
+          }
+        }
+      },
+      tooling: { collisionStrategy: "fail" }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listTools()).rejects.toThrow(/TOOL_COLLISION/);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("TOOL_COLLISION") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("shares controlled discovery between a list request and a cold call", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-tool-discovery-"));
+    const startedPath = join(directory, "tools-list-started");
+    const countPath = join(directory, "tools-list-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_COUNT_PATH: countPath,
+            TEST_LIST_TOOLS_DELAY_MS: "100"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const listing = client.listTools();
+      await expect
+        .poll(async () => {
+          try {
+            await access(startedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      const calling = client.callTool({ name: "whoami", arguments: {} });
+
+      expect(await calling).toMatchObject({ content: [{ type: "text", text: "work" }] });
+      expect((await listing).tools.map((tool) => tool.name)).toContain("whoami");
+      expect((await readFile(countPath, "utf8")).trim().split("\n")).toEqual(["1"]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("invalidates a profile tool snapshot after an explicit restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-tool-restart-"));
+    const countPath = join(directory, "tools-list-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_COUNT_PATH: countPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    let notifications = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notifications += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools();
+      await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } });
+      await client.listTools();
+
+      expect((await readFile(countPath, "utf8")).trim().split("\n")).toEqual(["1", "1"]);
+      await expect.poll(() => notifications).toBe(1);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("linearizes a cold tool call before a concurrent profile switch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-tool-call-race-"));
+    const startedPath = join(directory, "tools-list-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "100"
+          }
+        },
+        personal: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_WHOAMI_SCHEMA: "account"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const call = client.callTool({ name: "whoami", arguments: {} });
+      await expect
+        .poll(async () => {
+          try {
+            await access(startedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+
+      expect(await call).toMatchObject({ content: [{ type: "text", text: "work" }] });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
   });
 });

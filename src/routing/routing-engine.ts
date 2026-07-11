@@ -37,7 +37,7 @@ export class RoutingEngine {
     this.activeProfile = profile;
   }
 
-  resolve(input: RoutingInput): RoutingDecision {
+  resolve(input: RoutingInput, activeProfile = this.activeProfile): RoutingDecision {
     const matchingRules = (this.config.rules ?? []).filter((rule) => matches(rule, input));
     const profiles = [...new Set(matchingRules.map((rule) => rule.profile))];
     if (profiles.length > 1) {
@@ -52,7 +52,7 @@ export class RoutingEngine {
     }
 
     const fallback = this.config.fallback ?? "activeProfile";
-    if (fallback === "activeProfile") return { profile: this.activeProfile, reason: "active-profile" };
+    if (fallback === "activeProfile") return { profile: activeProfile, reason: "active-profile" };
     if (fallback === "default") return { profile: this.defaultProfile, reason: "default-profile" };
     if (fallback === "block") {
       throw new MiftahError("ROUTING_BLOCKED", "ROUTING_BLOCKED: no routing rule matched this request");

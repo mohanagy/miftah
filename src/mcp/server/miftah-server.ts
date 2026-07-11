@@ -20,6 +20,7 @@ import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { ToolRegistry, type ToolSnapshot } from "./tool-registry.js";
 
 const managementTools: Tool[] = [
   tool("miftah_list_profiles", "List configured profiles without exposing secrets."),
@@ -71,7 +72,7 @@ export class MiftahServer {
   private readonly policy: PolicyEngine;
   private readonly audit?: AuditLogger;
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
-  private toolMap = new Map<string, { name: string; upstreamName?: string }>();
+  private readonly toolRegistry: ToolRegistry;
 
   constructor(
     private readonly config: MiftahConfig,
@@ -82,8 +83,9 @@ export class MiftahServer {
     this.server = new Server(
       { name: `miftah-${config.name}`, version: "0.1.1" },
       {
+        debouncedNotificationMethods: ["notifications/tools/list_changed"],
         capabilities: {
-          tools: {},
+          tools: { listChanged: true },
           ...(this.resourcePromptProxy.available ? { resources: {}, prompts: {} } : {})
         },
         instructions: [
@@ -96,6 +98,16 @@ export class MiftahServer {
     );
     this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile);
     this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {});
+    this.toolRegistry = new ToolRegistry(
+      async (profile) =>
+        Promise.all(
+          this.upstreamNames().map(async (upstreamName) => ({
+            upstreamName,
+            tools: await this.upstreams.listTools(profile, upstreamName)
+          }))
+        ),
+      (name, upstreamName) => this.exposedToolName(name, upstreamName)
+    );
     if (config.audit?.enabled !== false && config.audit?.path) {
       this.audit = new AuditLogger(config.audit.path, {
         includeArguments: config.audit.includeArguments,
@@ -116,35 +128,14 @@ export class MiftahServer {
 
   private registerHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const management = managementTools;
-      try {
-        const upstreamNames = this.upstreamNames();
-        const discovered = await Promise.all(
-          upstreamNames.map(async (upstreamName) => ({
-            upstreamName,
-            tools: await this.upstreams.listTools(this.profiles.current().activeProfile, upstreamName)
-          }))
-        );
-        this.toolMap = new Map();
-        const exposedTools = discovered.flatMap(({ upstreamName, tools }) =>
-          tools.map((item) => {
-            const exposedName = this.exposedToolName(item.name, upstreamName);
-            this.toolMap.set(exposedName, { name: item.name, upstreamName });
-            return { ...item, name: exposedName };
-          })
-        );
-        return { tools: [...management, ...exposedTools] };
-      } catch (error) {
-        if (error instanceof MiftahError && error.code === "TOOL_COLLISION") throw error;
-        this.toolMap.clear();
-        return { tools: management };
-      }
+      const snapshot = await this.activeToolSnapshot();
+      return { tools: [...managementTools, ...snapshot.getTools()] };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name;
       const args = request.params.arguments ?? {};
-      if (name.startsWith("miftah_")) return this.handleManagement(name, args);
+      if (managementTools.some((tool) => tool.name === name)) return this.handleManagement(name, args);
       return this.handleUpstreamTool(name, args);
     });
 
@@ -169,12 +160,33 @@ export class MiftahServer {
   }
 
   private async handleUpstreamTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    const mapped = this.toolMap.get(name);
-    const upstreamName = mapped?.name ?? name;
-    const targetUpstream = mapped?.upstreamName;
     const startedAt = Date.now();
     try {
-      const route = this.routing.resolve({ toolName: upstreamName, args });
+      const sourceState = this.profiles.current();
+      const sourceProfile = sourceState.activeProfile;
+      const mapped = (await this.toolRegistry.get(sourceProfile)).resolve(name);
+      if (!mapped) {
+        throw new MiftahError(
+          "TOOL_NOT_FOUND",
+          `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
+        );
+      }
+      const route = this.routing.resolve({ toolName: mapped.originalName, args }, sourceState.activeProfile);
+      const target = (await this.toolRegistry.get(route.profile)).resolve(name);
+      if (!target) {
+        throw new MiftahError(
+          "TOOL_NOT_FOUND",
+          `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${route.profile}'`
+        );
+      }
+      if (target.fingerprint !== mapped.fingerprint) {
+        throw new MiftahError(
+          "TOOL_SCHEMA_MISMATCH",
+          `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${route.profile}'`
+        );
+      }
+      const upstreamName = target.originalName;
+      const targetUpstream = target.upstreamName;
       const profile = this.profiles.get(route.profile);
       const decision = this.policy.evaluate(profile.policy, upstreamName);
       if (
@@ -243,17 +255,28 @@ export class MiftahServer {
         }))));
       }
       if (name === "miftah_current_profile") {
-        return textResult(JSON.stringify({ ...this.profiles.current(), routingMode: this.config.routing?.mode ?? "hybrid" }));
+        const current = this.profiles.current();
+        return textResult(
+          JSON.stringify({
+            activeProfile: current.activeProfile,
+            defaultProfile: current.defaultProfile,
+            routingMode: this.config.routing?.mode ?? "hybrid"
+          })
+        );
       }
       if (name === "miftah_use_profile") {
+        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
         const profile = requiredString(args, "profile");
         const switched = this.profiles.switch(profile);
         this.routing.setActiveProfile(switched.activeProfile);
+        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
         return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
       }
       if (name === "miftah_reset_profile") {
+        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
         const reset = this.profiles.reset();
         this.routing.setActiveProfile(reset.activeProfile);
+        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
         return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
       }
       if (name === "miftah_profile_info") return textResult(JSON.stringify(this.profiles.info(requiredString(args, "profile"))));
@@ -271,11 +294,17 @@ export class MiftahServer {
       }
       if (name === "miftah_validate_config") return textResult(JSON.stringify({ ok: true, errors: [] }));
       if (name === "miftah_list_upstream_tools") {
-        const tools = await this.upstreams.listTools(String(args.profile ?? this.profiles.current().activeProfile));
+        const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
+        const tools = (await this.toolRegistry.get(profile)).getTools();
         return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
       }
       if (name === "miftah_restart_profile") {
-        await this.upstreams.restart(requiredString(args, "profile"));
+        const profile = requiredString(args, "profile");
+        await this.upstreams.restart(profile);
+        this.toolRegistry.invalidate(profile);
+        if (profile === this.profiles.current().activeProfile) {
+          await this.notifyToolListChanged(undefined, undefined);
+        }
         return textResult("Profile restarted.");
       }
       if (name === "miftah_route_preview") {
@@ -340,6 +369,23 @@ export class MiftahServer {
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
     if (this.audit) await this.audit.log(redactSecrets(event, this.upstreams.getSecretValues()));
+  }
+
+  private async activeToolSnapshot(): Promise<ToolSnapshot> {
+    for (;;) {
+      const state = this.profiles.current();
+      const snapshot = await this.toolRegistry.get(state.activeProfile);
+      if (this.profiles.current().revision === state.revision) return snapshot;
+    }
+  }
+
+  private async notifyToolListChanged(
+    previous: ReturnType<ToolRegistry["peek"]>,
+    next: ReturnType<ToolRegistry["peek"]>
+  ): Promise<void> {
+    if (!this.toolRegistry.hasSameTools(previous, next) && this.server.transport) {
+      await this.server.sendToolListChanged();
+    }
   }
 }
 

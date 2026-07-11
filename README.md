@@ -102,7 +102,7 @@ Profiles are named credential environments. Keep secret values outside JSON when
 
 The GitHub preset pins `ghcr.io/github/github-mcp-server:v1.5.0`. To upgrade safely, read the release notes first, update the tag in your config, run `miftah validate`, then smoke-test both profiles before rollout.
 
-Claude can call `miftah_list_profiles`, `miftah_current_profile`, `miftah_use_profile`, `miftah_profile_info`, `miftah_health`, `miftah_validate_config`, `miftah_list_upstream_tools`, `miftah_restart_profile`, and `miftah_route_preview`. Upstream tools are exposed unchanged unless they collide with a reserved `miftah_` name.
+Claude can call `miftah_list_profiles`, `miftah_current_profile`, `miftah_use_profile`, `miftah_profile_info`, `miftah_health`, `miftah_validate_config`, `miftah_list_upstream_tools`, `miftah_restart_profile`, and `miftah_route_preview`. Upstream tools are exposed unchanged unless they collide with a reserved management name. After a profile change or active-profile restart, MCP clients receive `tools/list_changed` and should re-list tools before calling a changed schema.
 
 For account bundles, define `upstreams` instead of `upstream`. Tools are exposed as `<upstream>__<tool>` (for example `github__search_issues`) and each profile can provide per-upstream environment or header overrides. Resources and prompts are available only when the bundle has exactly one upstream; multi-entry bundles intentionally omit them until namespaced aggregation exists. `miftah_health` reports this availability. See `examples/multi-upstream.miftah.json`.
 
