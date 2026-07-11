@@ -6,7 +6,7 @@ import {
   RootsListChangedNotificationSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -830,12 +830,73 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("keeps a relative runtime config distinct from a later project marker", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const originalCwd = process.cwd();
+    const directory = await mkdtemp(join(originalCwd, ".miftah-runtime-config-path-"));
+    const runtimeDirectory = join(directory, "runtime");
+    const projectDirectory = join(directory, "project");
+    let runtime: Awaited<ReturnType<typeof createMiftahRuntime>> | undefined;
+    let client: Client | undefined;
+
+    try {
+      await Promise.all([mkdir(runtimeDirectory), mkdir(projectDirectory)]);
+      await writeFile(
+        join(runtimeDirectory, "miftah.json"),
+        JSON.stringify({
+          version: "1",
+          name: "accounts",
+          defaultProfile: "work",
+          upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+          profiles: {
+            work: { env: { TEST_ACCOUNT_NAME: "work" } },
+            personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+          }
+        })
+      );
+      await writeFile(join(projectDirectory, "miftah.json"), JSON.stringify({ profiles: { accounts: "personal" } }));
+
+      process.chdir(runtimeDirectory);
+      runtime = await createMiftahRuntime("miftah.json");
+      process.chdir(projectDirectory);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      client = new Client(
+        { name: "relative-runtime-config-client", version: "1.0.0" },
+        { capabilities: { roots: {} } }
+      );
+      client.setRequestHandler(ListRootsRequestSchema, async () => ({
+        roots: [{ uri: pathToFileURL(projectDirectory).toString() }]
+      }));
+
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+    } finally {
+      await client?.close();
+      await runtime?.close();
+      process.chdir(originalCwd);
+      await rm(directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
   it("keeps fallback routing usable without roots and preserves direct-server empty context", async () => {
     const restoreProfile = withoutMiftahProfile();
     const routingFixture = await createRuntimeRoutingFixture();
     const runtime = await createMiftahRuntime(routingFixture.configPath);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "roots-disabled-client", version: "1.0.0" });
+    const capabilities: { roots?: Record<string, never> } = { roots: {} };
+    const client = new Client(
+      { name: "roots-disabled-client", version: "1.0.0" },
+      { capabilities }
+    );
+    let rootRequests = 0;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      return { roots: [] };
+    });
+    delete capabilities.roots;
 
     const config = validateConfig({
       version: "1",
@@ -862,6 +923,7 @@ describe("Miftah MCP wrapper", () => {
       expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
         content: [{ type: "text", text: "work" }]
       });
+      expect(rootRequests).toBe(0);
 
       await Promise.all([wrapper.connect(directServerTransport), directClient.connect(directClientTransport)]);
       expect(await directClient.callTool({ name: "whoami", arguments: {} })).toMatchObject({

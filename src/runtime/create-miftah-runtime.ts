@@ -1,4 +1,5 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig } from "../config/types.js";
 import { MiftahServer } from "../mcp/server/miftah-server.js";
 import { collectRoutingContext } from "../routing/context-collector.js";
@@ -16,7 +17,8 @@ export interface MiftahRuntime {
 
 /** Creates an MCP wrapper runtime without exposing its internal manager or server classes. */
 export async function createMiftahRuntime(configPath: string): Promise<MiftahRuntime> {
-  const runtime = await createRuntime(configPath);
+  const runtimeConfigPath = resolvePath(configPath);
+  const runtime = await createRuntime(runtimeConfigPath);
   const server = new MiftahServer(
     runtime.config,
     runtime.profileManager,
@@ -27,7 +29,7 @@ export async function createMiftahRuntime(configPath: string): Promise<MiftahRun
         knownProfileNames: Object.keys(runtime.config.profiles),
         cwd: process.cwd(),
         environment: process.env,
-        runtimeConfigPath: configPath,
+        runtimeConfigPath,
         mcpRoots
       })
   );
