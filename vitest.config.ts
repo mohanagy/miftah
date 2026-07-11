@@ -10,6 +10,8 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     restoreMocks: true,
     clearMocks: true,
+    // Real upstream fixtures have one-second startup limits; run files serially to prevent contention.
+    fileParallelism: false,
     coverage: {
       provider: "v8",
       include: [
