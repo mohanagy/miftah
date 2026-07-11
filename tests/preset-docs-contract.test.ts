@@ -25,6 +25,7 @@ describe("preset documentation contract", () => {
     const compatibility = readRepositoryFile("docs/presets-and-clients.md");
     const readme = readRepositoryFile("README.md");
     const cli = readRepositoryFile("docs/cli.md");
+    const claudeDesktop = readRepositoryFile("docs/claude-desktop.md");
     const changelog = readRepositoryFile("CHANGELOG.md");
     const packageManifest = parseRepositoryJson("package.json") as { version: string };
 
@@ -75,6 +76,8 @@ describe("preset documentation contract", () => {
 
     expect(readme).toContain("[Preset and client compatibility](docs/presets-and-clients.md)");
     expect(cli).toContain("[preset and client compatibility](presets-and-clients.md)");
+    expect(claudeDesktop).toContain("Merge the generated top-level `mcpServers` property");
+    expect(claudeDesktop).not.toContain("Paste the generated JSON into the `mcpServers` object");
     for (const option of [
       "--name",
       "--preset",
