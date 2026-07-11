@@ -1,4 +1,4 @@
-import { closeSync, openSync, truncateSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readdirSync, truncateSync, writeFileSync } from "node:fs";
 import {
   access,
   appendFile,
@@ -12,7 +12,7 @@ import {
   truncate,
   writeFile
 } from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
@@ -666,68 +666,53 @@ describe("audit JSONL reader", () => {
     });
   });
 
-  it("keeps a finite multi-block same-inode rewrite race transactional", async () => {
+  it("keeps a finite multi-block same-inode mid-snapshot rewrite transactional", async () => {
     await inSandbox(async (directory) => {
       const auditPath = join(directory, "audit.jsonl");
-      const records = Array.from(
-        { length: Math.ceil((AUDIT_READ_CHUNK_BYTES * 128) / 96) },
-        (_, sequence) => ({ sequence, padding: "x".repeat(64) })
+      const spoolRoot = join(directory, "spools");
+      const originalRecord = '{"generation":"original"}';
+      const replacementRecord = '{"generation":"replaced"}';
+      const recordCount = Math.floor(
+        (AUDIT_READ_CHUNK_BYTES * 3) / Buffer.byteLength(`${originalRecord}\n`)
       );
-      const originalContents = `${records
-        .map((record) => JSON.stringify({ ...record, generation: "original" }))
-        .join("\n")}\n`;
-      const replacementContents = `${records
-        .map((record) => JSON.stringify({ ...record, generation: "replaced" }))
-        .join("\n")}\n`;
+      const originalContents = `${Array.from({ length: recordCount }, () => originalRecord).join("\n")}\n`;
+      const replacementContents =
+        `${Array.from({ length: recordCount }, () => replacementRecord).join("\n")}\n`;
       expect(Buffer.byteLength(replacementContents)).toBe(Buffer.byteLength(originalContents));
+      expect(Buffer.byteLength(originalContents)).toBeGreaterThan(AUDIT_READ_CHUNK_BYTES * 2);
+      expect(Buffer.byteLength(originalContents)).toBeLessThanOrEqual(AUDIT_READ_CHUNK_BYTES * 3);
       await writeFile(auditPath, originalContents);
+      await mkdir(spoolRoot, { mode: 0o700 });
       const initialStats = await stat(auditPath);
-      let keepRewriting = true;
-      let rewriteCount = 0;
-      let signalFirstRewrite!: () => void;
-      const firstRewrite = new Promise<void>((resolve) => {
-        signalFirstRewrite = resolve;
-      });
-      const rewriter = (async () => {
-        while (keepRewriting) {
-          const replacementFile = openSync(auditPath, "r+");
-          try {
-            writeFileSync(replacementFile, replacementContents);
-          } finally {
-            closeSync(replacementFile);
-          }
-          rewriteCount += 1;
-          signalFirstRewrite();
-          await delay(0);
-        }
-      })();
-      await firstRewrite;
       const output: string[] = [];
-      let failure: unknown;
-
-      try {
-        await readAuditJsonl({
-          path: auditPath,
-          redactor: new SecretRedactor(),
-          write: (chunk) => output.push(chunk)
-        });
-      } catch (error) {
-        failure = error;
-      } finally {
-        keepRewriting = false;
-        await rewriter;
-      }
-
-      expect(rewriteCount).toBeGreaterThan(1);
-      expect((await stat(auditPath)).ino).toBe(initialStats.ino);
-      if (failure !== undefined) {
-        expect(failure).toBeInstanceOf(Error);
-        expect(output).toEqual([]);
-      } else {
-        expect(createHash("sha256").update(output.join("")).digest("hex")).toBe(
-          createHash("sha256").update(replacementContents).digest("hex")
+      const reader = readAuditJsonl({
+        path: auditPath,
+        redactor: new SecretRedactor(),
+        temporaryDirectory: spoolRoot,
+        write: (chunk) => output.push(chunk)
+      });
+      let observedSpoolDirectory: string | undefined;
+      await waitFor(() => {
+        observedSpoolDirectory = readdirSync(spoolRoot).find((entry) =>
+          entry.startsWith("miftah-audit-jsonl-")
         );
+        return observedSpoolDirectory !== undefined;
+      });
+      expect(observedSpoolDirectory).toBeDefined();
+      expect(output).toEqual([]);
+      const replacementFile = openSync(auditPath, "r+");
+      try {
+        writeFileSync(replacementFile, replacementContents);
+      } finally {
+        closeSync(replacementFile);
       }
+      expect(await readFile(auditPath, "utf8")).toBe(replacementContents);
+      expect((await stat(auditPath)).ino).toBe(initialStats.ino);
+      await reader;
+
+      expect(output.join("")).toBe(replacementContents);
+      expect(output.join("")).not.toContain('"generation":"original"');
+      expect(output).not.toContain(`${MALFORMED_AUDIT_RECORD}\n`);
     });
   });
 
