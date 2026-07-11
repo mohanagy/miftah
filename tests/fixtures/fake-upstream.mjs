@@ -24,6 +24,7 @@ const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
 const resourceUri = process.env.TEST_RESOURCE_URI ?? "account://current";
 const promptName = process.env.TEST_PROMPT_NAME ?? "account_prompt";
 const paginateCapabilities = process.env.TEST_PAGINATE_CAPABILITIES === "true";
+const paginateTools = process.env.TEST_PAGINATE_TOOLS === "true";
 const secondResourceName = process.env.TEST_SECOND_RESOURCE_NAME ?? "Second account";
 const secondResourceUri = process.env.TEST_SECOND_RESOURCE_URI ?? "account://second";
 const secondPromptName = process.env.TEST_SECOND_PROMPT_NAME ?? "second_prompt";
@@ -35,8 +36,7 @@ const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
 const failListResourcesPath = process.env.TEST_FAIL_LIST_RESOURCES_PATH;
 const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
 const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
-const crashAfterConnectPath = process.env.TEST_CRASH_AFTER_CONNECT_PATH;
-const crashAfterConnectDelayMs = Number(process.env.TEST_CRASH_AFTER_CONNECT_DELAY_MS ?? "10");
+const crashAfterInitializedPath = process.env.TEST_CRASH_AFTER_INITIALIZED_PATH;
 const startCountPath = process.env.TEST_START_COUNT_PATH;
 const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
 const clientInfoPath = process.env.TEST_CLIENT_INFO_PATH;
@@ -123,6 +123,11 @@ const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
+server.oninitialized = () => {
+  if (crashAfterInitializedPath && existsSync(crashAfterInitializedPath)) {
+    void delay(0).then(() => process.exit(1));
+  }
+};
 
 if (failInitialize || clientInfoPath) {
   server.setRequestHandler(InitializeRequestSchema, async (request) => {
@@ -140,7 +145,7 @@ if (failInitialize || clientInfoPath) {
   });
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
   }
@@ -153,34 +158,63 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (process.env.TEST_FAIL_LIST_TOOLS === "true") {
     throw new Error(`test tool list failure: ${process.env.TEST_ERROR_MESSAGE ?? process.env.API_TOKEN}`);
   }
+  const secondPage = paginateTools && request.params?.cursor === "next";
   return {
     tools: [
-      {
-        name: "whoami",
-        description:
-          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
-            ? `Return the injected account ${process.env.API_TOKEN}`
-            : "Return the injected account.",
-        inputSchema: whoamiInputSchema
-      },
-      {
-        name: "echo",
-        description: "Echo a message.",
-        inputSchema: {
-          type: "object",
-          properties: { message: { type: "string" } },
-          required: ["message"]
-        }
-      },
-      {
-        name: "create_item",
-        description: "Create an item.",
-        inputSchema: {
-          type: "object",
-          properties: { name: { type: "string" } },
-          required: ["name"]
-        }
-      },
+      ...(secondPage
+        ? [
+            {
+              name: "whoami_second",
+              description: "Return the second injected account.",
+              inputSchema: whoamiInputSchema
+            },
+            {
+              name: "echo_second",
+              description: "Echo a second message.",
+              inputSchema: {
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"]
+              }
+            },
+            {
+              name: "create_second_item",
+              description: "Create a second item.",
+              inputSchema: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"]
+              }
+            }
+          ]
+        : [
+            {
+              name: "whoami",
+              description:
+                process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+                  ? `Return the injected account ${process.env.API_TOKEN}`
+                  : "Return the injected account.",
+              inputSchema: whoamiInputSchema
+            },
+            {
+              name: "echo",
+              description: "Echo a message.",
+              inputSchema: {
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"]
+              }
+            },
+            {
+              name: "create_item",
+              description: "Create an item.",
+              inputSchema: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"]
+              }
+            }
+          ]),
       ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
         ? [
             {
@@ -199,7 +233,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           ]
         : [])
-    ]
+    ],
+    ...(paginateTools && !secondPage ? { nextCursor: "next" } : {})
   };
 });
 
@@ -348,6 +383,3 @@ server.setRequestHandler(GetPromptRequestSchema, async () => {
 });
 
 await server.connect(new StdioServerTransport());
-if (crashAfterConnectPath && existsSync(crashAfterConnectPath)) {
-  void delay(crashAfterConnectDelayMs).then(() => process.exit(1));
-}

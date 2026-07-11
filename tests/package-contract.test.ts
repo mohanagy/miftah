@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,7 @@ const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommandTimeoutMs = 25_000;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
 const publicRuntimeExports = [
   "MIFTAH_VERSION",
   "MiftahError",
@@ -320,6 +321,75 @@ describe("packed artifact contract", () => {
         expect(typecheck.status, typecheck.stderr || typecheck.stdout).toBe(0);
 
         const binary = join(directory, "node_modules", ".bin", process.platform === "win32" ? "miftah.cmd" : "miftah");
+        const writeDoctorConfig = async (name: string, config: Record<string, unknown>): Promise<string> => {
+          const path = join(directory, name);
+          await writeFile(path, JSON.stringify(config));
+          if (process.platform !== "win32") await chmod(path, 0o600);
+          return path;
+        };
+        const doctorConfig = (name: string, env: Record<string, string> = {}, args: string[] = [fakeStdioUpstreamFixture]) => ({
+          version: "1",
+          name,
+          defaultProfile: "work",
+          upstream: { transport: "stdio", command: process.execPath, args },
+          profiles: { work: { env } },
+          process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+        });
+        const healthyConfigPath = await writeDoctorConfig(
+          "doctor-healthy.json",
+          doctorConfig("packed-doctor-healthy")
+        );
+        const healthyDoctor = runInstalledBinary(binary, ["doctor", "--config", healthyConfigPath], directory);
+        expect(healthyDoctor.status, healthyDoctor.stderr || healthyDoctor.stdout).toBe(0);
+        expect(healthyDoctor.stderr).toBe("");
+        expect(healthyDoctor.stdout).toContain("Doctor: healthy");
+        expect(healthyDoctor.stdout).toContain("DOCTOR_CONFIGURATION");
+        expect(healthyDoctor.stdout).toContain("DOCTOR_STARTUP");
+        expect(healthyDoctor.stdout).toMatch(/\n$/u);
+
+        const degradedConfigPath = await writeDoctorConfig(
+          "doctor-degraded.json",
+          doctorConfig("packed-doctor-degraded", { TEST_FAIL_LIST_RESOURCES: "true" })
+        );
+        const degradedDoctor = runInstalledBinary(
+          binary,
+          ["doctor", "--json", "--config", degradedConfigPath],
+          directory
+        );
+        expect(degradedDoctor.status, degradedDoctor.stderr || degradedDoctor.stdout).toBe(0);
+        expect(degradedDoctor.stderr).toBe("");
+        expect(degradedDoctor.stdout).toMatch(/\n$/u);
+        expect(JSON.parse(degradedDoctor.stdout)).toMatchObject({ overallStatus: "degraded", ok: true });
+
+        const missingSecretReference = "secretref:env://MIFTAH_PACKED_DOCTOR_MISSING_SECRET";
+        const rawCommandArgument = "--packed-doctor-raw-command-argument";
+        const failedConfigPath = await writeDoctorConfig(
+          "doctor-failed.json",
+          doctorConfig(
+            "packed-doctor-failed",
+            { API_TOKEN: missingSecretReference },
+            [fakeStdioUpstreamFixture, rawCommandArgument]
+          )
+        );
+        const failedDoctor = runInstalledBinary(
+          binary,
+          ["doctor", "--config", failedConfigPath, "--json"],
+          directory
+        );
+        expect(failedDoctor.status).toBe(1);
+        expect(failedDoctor.stderr).toBe("");
+        expect(failedDoctor.stdout).toMatch(/\n$/u);
+        expect(JSON.parse(failedDoctor.stdout)).toMatchObject({ overallStatus: "failed", ok: false });
+        for (const value of [
+          missingSecretReference,
+          rawCommandArgument,
+          failedConfigPath,
+          fakeStdioUpstreamFixture,
+          process.execPath
+        ]) {
+          expect(`${failedDoctor.stdout}${failedDoctor.stderr}`).not.toContain(value);
+        }
+
         const schema = runInstalledBinary(binary, ["schema"], directory);
         expect(schema.status, schema.stderr || schema.stdout).toBe(0);
         expect(JSON.parse(schema.stdout)).toMatchObject({
@@ -329,6 +399,10 @@ describe("packed artifact contract", () => {
         const version = runInstalledBinary(binary, ["version"], directory);
         expect(version.status, version.stderr || version.stdout).toBe(0);
         expect(version.stdout.trim()).toBe(readPackageManifest().version);
+
+        const versionWithJson = runInstalledBinary(binary, ["version", "--json"], directory);
+        expect(versionWithJson.status, versionWithJson.stderr || versionWithJson.stdout).toBe(0);
+        expect(versionWithJson.stdout.trim()).toBe(readPackageManifest().version);
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

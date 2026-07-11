@@ -8,6 +8,8 @@ import { redactSecrets } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
 import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
 import { MIFTAH_VERSION } from "../version.js";
+import { runDoctor } from "./doctor.js";
+import { formatDoctorReport } from "./doctor-report.js";
 
 interface CliArgs {
   command?: string;
@@ -18,6 +20,7 @@ interface CliArgs {
   follow?: boolean;
   name?: string;
   version?: boolean;
+  json?: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -30,6 +33,8 @@ function parseArgs(argv: string[]): CliArgs {
     const value = values[index];
     if (value === "--follow") {
       result.follow = true;
+    } else if (value === "--json") {
+      result.json = true;
     } else if (value === "--version" || value === "-v") {
       result.version = true;
     } else if (value === "--config") {
@@ -79,7 +84,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (!args.config) {
-    throw new Error("Usage: miftah --config <file> | miftah <validate|doctor|list-tools|test-profile|logs|version> --config <file>");
+    throw new Error(
+      "Usage: miftah --config <file> | miftah doctor [--json] --config <file> | miftah <validate|list-tools|test-profile|logs|version> --config <file>"
+    );
   }
   if (command === "serve") {
     await serve(args.config);
@@ -91,22 +98,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const runtime = await createRuntime(args.config);
-    const commandName = runtime.config.upstream?.command;
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          ok: true,
-          config: runtime.config.name,
-          defaultProfile: runtime.config.defaultProfile,
-          upstreamCommand: commandName ?? null,
-          profiles: runtime.profileManager.list().map((profile) => profile.name)
-        },
-        null,
-        2
-      )}\n`
-    );
-    await runtime.manager.close();
+    const report = await runDoctor(args.config);
+    process.stdout.write(`${args.json ? JSON.stringify(report, null, 2) : formatDoctorReport(report)}\n`);
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
   if (command === "list-tools" || command === "test-profile") {

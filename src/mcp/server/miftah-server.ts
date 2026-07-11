@@ -20,7 +20,7 @@ import {
   type Resource,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
-import type { MiftahConfig } from "../../config/types.js";
+import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
@@ -63,6 +63,21 @@ const managementTools: Tool[] = [
   tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
   tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"])
 ];
+
+export function resolveClientVisibleToolName(
+  name: string,
+  upstreamName: string | undefined,
+  collisionStrategy: ToolingConfig["collisionStrategy"]
+): string {
+  if (upstreamName) return `${upstreamName}__${name}`;
+  if (managementTools.some((item) => item.name === name)) {
+    if ((collisionStrategy ?? "prefix-upstream") === "fail") {
+      throw new MiftahError("TOOL_COLLISION", `TOOL_COLLISION: upstream tool '${name}' is reserved by Miftah`);
+    }
+    return `upstream_${name}`;
+  }
+  return name;
+}
 
 function tool(name: string, description: string, required: string[] = []): Tool {
   return {
@@ -494,14 +509,7 @@ export class MiftahServer {
   }
 
   private exposedToolName(name: string, upstreamName?: string): string {
-    if (upstreamName) return `${upstreamName}__${name}`;
-    if (managementTools.some((item) => item.name === name)) {
-      if ((this.config.tooling?.collisionStrategy ?? "prefix-upstream") === "fail") {
-        throw new MiftahError("TOOL_COLLISION", `TOOL_COLLISION: upstream tool '${name}' is reserved by Miftah`);
-      }
-      return `upstream_${name}`;
-    }
-    return name;
+    return resolveClientVisibleToolName(name, upstreamName, this.config.tooling?.collisionStrategy);
   }
 
   private upstreamNames(): (string | undefined)[] {

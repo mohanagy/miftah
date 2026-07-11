@@ -513,8 +513,7 @@ describe("upstream process manager", () => {
         command: process.execPath,
         args: [fixture],
         env: {
-          TEST_CRASH_AFTER_CONNECT_PATH: crashPath,
-          TEST_CRASH_AFTER_CONNECT_DELAY_MS: "10",
+          TEST_CRASH_AFTER_INITIALIZED_PATH: crashPath,
           TEST_START_COUNT_PATH: startCountPath
         }
       },
@@ -813,7 +812,7 @@ describe("upstream process manager", () => {
         command: process.execPath,
         args: [fixture],
         env: {
-          TEST_CRASH_AFTER_CONNECT_PATH: crashPath,
+          TEST_CRASH_AFTER_INITIALIZED_PATH: crashPath,
           TEST_START_COUNT_PATH: startCountPath
         }
       },
