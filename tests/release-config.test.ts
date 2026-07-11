@@ -11,6 +11,12 @@ function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
+function readPackageScripts(): Record<string, string> {
+  const packageJson = JSON.parse(readRepositoryFile("package.json")) as { scripts?: Record<string, string> };
+  if (!packageJson.scripts) throw new Error("package.json does not define scripts.");
+  return packageJson.scripts;
+}
+
 function actionReferences(workflow: string): string[] {
   return [...workflow.matchAll(/^\s*uses:\s*(\S+)\s*$/gmu)].map((match) => match[1]!);
 }
@@ -32,11 +38,11 @@ describe("continuous integration workflow contract", () => {
     expect(workflow).toContain("permissions:\n  contents: read");
     expect(workflow).toContain("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}");
     expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
-    expect(actionReferences(workflow)).toEqual([checkoutPin, setupNodePin]);
+    expect([...new Set(actionReferences(workflow))]).toEqual([checkoutPin, setupNodePin]);
     expect(actionReferences(workflow).every((action) => /@[0-9a-f]{40}$/u.test(action))).toBe(true);
   });
 
-  it("runs the complete verification sequence including CLI and package smoke checks", () => {
+  it("runs the Linux quality sequence including coverage, CLI, and package smoke checks", () => {
     const workflow = readRepositoryFile(".github/workflows/ci.yml");
 
     for (const command of [
@@ -44,11 +50,62 @@ describe("continuous integration workflow contract", () => {
       "npm run lint",
       "npm run typecheck",
       "npm test",
+      "npm run test:coverage",
       "npm run build",
-      "node dist/cli/main.js schema",
+      "npm run smoke:cli",
       "npm run check:pack"
     ]) {
       expect(workflow).toContain(`run: ${command}`);
+    }
+  });
+
+  it("runs core and CLI compatibility checks across supported Node versions and operating systems", () => {
+    const workflow = readRepositoryFile(".github/workflows/ci.yml");
+
+    expect(workflow).toContain("linux-quality:");
+    expect(workflow).toContain("compatibility:");
+    expect(workflow).toMatch(/os:\s*\[ubuntu-latest,\s*macos-latest,\s*windows-latest\]/u);
+    expect(workflow).toMatch(/node:\s*\["20",\s*"22",\s*"24"\]/u);
+    expect(workflow).toContain("run: npm run test:core");
+    expect(workflow).toContain("run: npm run test:cli");
+    expect(workflow).toMatch(/verify:\s*\n\s+name: Verify[\s\S]*?needs: \[linux-quality, compatibility\]/u);
+  });
+
+  it("defines portable core, CLI, and coverage verification scripts", () => {
+    const scripts = readPackageScripts();
+
+    expect(scripts["test:core"]).toContain("vitest run");
+    expect(scripts["smoke:cli"]).toBe("node dist/cli/main.js schema");
+    expect(scripts["test:cli"]).toContain("npm run build");
+    expect(scripts["test:cli"]).toContain("npm run smoke:cli");
+    expect(scripts["test:coverage"]).toContain("vitest run --coverage");
+  });
+
+  it("keeps the packed-artifact npm helper executable on Windows", () => {
+    const packageContract = readRepositoryFile("tests/package-contract.test.ts");
+    const runNpm = packageContract.slice(
+      packageContract.indexOf("function runNpm"),
+      packageContract.indexOf("async function loadPackVerifier")
+    );
+
+    expect(runNpm).toContain('shell: process.platform === "win32"');
+  });
+
+  it("collects V8 coverage for the critical runtime boundaries", () => {
+    const config = readRepositoryFile("vitest.config.ts");
+
+    expect(config).toContain('provider: "v8"');
+    expect(config).toContain("thresholds:");
+    for (const module of [
+      "src/config/**/*.ts",
+      "src/secrets/**/*.ts",
+      "src/mcp/server/operation-pipeline.ts",
+      "src/mcp/server/tool-registry.ts",
+      "src/mcp/server/resource-prompt-registry.ts",
+      "src/upstream/upstream-process-manager.ts",
+      "src/upstream/remote-error.ts"
+    ]) {
+      expect(config).toContain(module);
     }
   });
 });

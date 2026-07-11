@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
-    name: Verify
+  linux-quality:
+    name: Linux quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -42,11 +42,58 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Enforce critical coverage
+        run: npm run test:coverage
+
       - name: Build
         run: npm run build
 
       - name: Smoke test CLI
-        run: node dist/cli/main.js schema
+        run: npm run smoke:cli
 
       - name: Check package contents
         run: npm run check:pack
+
+  compatibility:
+    name: Core and CLI (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["20", "22", "24"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test core contracts
+        run: npm run test:core
+
+      - name: Test CLI compatibility
+        run: npm run test:cli
+
+  verify:
+    name: Verify
+    if: ${{ always() }}
+    needs: [linux-quality, compatibility]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful prerequisite jobs
+        env:
+          LINUX_QUALITY_RESULT: ${{ needs.linux-quality.result }}
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
+        run: |
+          test "$LINUX_QUALITY_RESULT" = "success"
+          test "$COMPATIBILITY_RESULT" = "success"

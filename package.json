@@ -41,6 +41,10 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:core": "vitest run tests/config.test.ts tests/config-loader.test.ts tests/config-diagnostics.test.ts tests/config-public-contract.test.ts tests/config-runtime-parity.test.ts tests/config-schema-contract.test.ts tests/presets.test.ts tests/profile-manager.test.ts tests/routing-policy.test.ts tests/secrets.test.ts tests/tooling-config.test.ts",
+    "test:coverage": "vitest run --coverage",
+    "smoke:cli": "node dist/cli/main.js schema",
+    "test:cli": "npm run build && npm run smoke:cli",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -58,6 +62,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.15.30",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^10.6.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",

@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdtemp, rm } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PackageManifest {
@@ -17,6 +20,7 @@ interface PackVerifier {
 }
 
 interface PackResult {
+  filename: string;
   files: Array<{ path: string }>;
 }
 
@@ -38,13 +42,14 @@ function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
 }
 
-function runNpm(args: readonly string[]) {
+function runNpm(args: readonly string[], cwd = repositoryRoot) {
   const result = spawnSync(npmCommand, args, {
-    cwd: repositoryRoot,
+    cwd,
     encoding: "utf8",
     env: { ...process.env, npm_config_loglevel: "silent" },
     timeout: npmCommandTimeoutMs,
-    killSignal: "SIGTERM"
+    killSignal: "SIGTERM",
+    shell: process.platform === "win32"
   });
   if (result.error) {
     const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
@@ -165,4 +170,39 @@ describe("packed artifact contract", () => {
     expect(checked.status, checked.stderr || checked.stdout).toBe(0);
     expect(checked.stdout).toMatch(/Package contract verified \(\d+ files\)\./u);
   });
+
+  it(
+    "loads the installed entry point and runs the installed binary from a real tarball",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-packed-artifact-"));
+      try {
+        const packed = runNpm(["pack", "--json", "--pack-destination", directory]);
+        expect(packed.status, packed.stderr).toBe(0);
+        const [result] = JSON.parse(packed.stdout) as PackResult[];
+        if (!result) throw new Error("npm pack did not report an artifact.");
+
+        const install = runNpm(["install", "--ignore-scripts", "--no-package-lock", join(directory, result.filename)], directory);
+        expect(install.status, install.stderr || install.stdout).toBe(0);
+
+        const packageRoot = join(directory, "node_modules", "@lubab", "miftah");
+        const entryPoint = await import(pathToFileURL(join(packageRoot, "dist", "index.js")).href);
+        expect(entryPoint.validateConfig).toBeTypeOf("function");
+
+        const binary = join(directory, "node_modules", ".bin", process.platform === "win32" ? "miftah.cmd" : "miftah");
+        const schema = spawnSync(binary, ["schema"], {
+          cwd: directory,
+          encoding: "utf8",
+          shell: process.platform === "win32",
+          timeout: npmCommandTimeoutMs
+        });
+        expect(schema.status, schema.stderr || schema.stdout).toBe(0);
+        expect(JSON.parse(schema.stdout)).toMatchObject({
+          $schema: "https://json-schema.org/draft/2019-09/schema#"
+        });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    30_000
+  );
 });
