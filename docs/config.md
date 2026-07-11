@@ -10,6 +10,8 @@ miftah schema > miftah.schema.json
 
 Miftah accepts config version `"1"` only and does not silently migrate config files. A future migration must be explicit and documented; an unsupported version returns `UNSUPPORTED_CONFIG_VERSION` with remediation.
 
+For strict starter configurations, use the versioned `init` catalog rather than treating generic command examples as trusted upstream recommendations. The [preset and client compatibility matrix](presets-and-clients.md) records exact pins, required inputs, upstream provenance, and the validation boundary for every catalog entry.
+
 The generated JSON Schema enforces static structure, including exactly one of `upstream` or `upstreams`. References to names declared in dynamic maps cannot be represented by JSON Schema alone; run `miftah validate` in addition to editor validation to verify profile, policy, routing, lock, and per-profile upstream references.
 
 With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` under a named upstream. Miftah namespaces discovered tools as `<upstream>__<tool>` so one wrapper can safely expose several providers. Tool discovery uses the active profile. Clients receive `notifications/tools/list_changed` after a profile change, restart, or upstream recovery that changes the public tool surface and must re-run `tools/list` before relying on cached tools or schemas. If a routing rule selects another profile, Miftah forwards only tools with an identical client-visible schema in both profiles; otherwise it returns `TOOL_SCHEMA_MISMATCH` instead of forwarding a call whose schema the client did not see.

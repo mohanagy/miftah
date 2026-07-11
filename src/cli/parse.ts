@@ -1,5 +1,17 @@
-type ValueOptionName = "config" | "profile" | "output" | "preset" | "name";
-type BooleanOptionName = "follow" | "json";
+type ValueOptionName =
+  | "config"
+  | "profile"
+  | "output"
+  | "preset"
+  | "name"
+  | "client"
+  | "credentialEnv"
+  | "npmPackage"
+  | "dockerImage"
+  | "url"
+  | "headerName"
+  | "headerPrefix";
+type BooleanOptionName = "follow" | "json" | "interactive";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -8,8 +20,16 @@ export interface CliOptions {
   readonly output?: string;
   readonly preset?: string;
   readonly name?: string;
+  readonly client?: string;
+  readonly credentialEnv?: string;
+  readonly npmPackage?: string;
+  readonly dockerImage?: string;
+  readonly url?: string;
+  readonly headerName?: string;
+  readonly headerPrefix?: string;
   readonly follow?: true;
   readonly json?: true;
+  readonly interactive?: true;
 }
 
 interface CliCommandMetadata {
@@ -38,7 +58,19 @@ export const CLI_COMMANDS = {
   init: {
     description: "Create a starter Miftah configuration.",
     arguments: "[name]",
-    options: ["name", "preset", "output"]
+    options: [
+      "name",
+      "preset",
+      "output",
+      "interactive",
+      "client",
+      "credentialEnv",
+      "npmPackage",
+      "dockerImage",
+      "url",
+      "headerName",
+      "headerPrefix"
+    ]
   },
   "list-tools": {
     description: "List tools available for a profile.",
@@ -112,6 +144,48 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--name <name>",
     description: "Configuration name."
   },
+  client: {
+    name: "client",
+    takesValue: true,
+    usage: "--client <claude-desktop|claude-code|cursor|vscode|all>",
+    description: "Print client configuration snippets."
+  },
+  credentialEnv: {
+    name: "credentialEnv",
+    takesValue: true,
+    usage: "--credential-env <name>",
+    description: "Environment variable name for a credential reference."
+  },
+  npmPackage: {
+    name: "npmPackage",
+    takesValue: true,
+    usage: "--npm-package <package>",
+    description: "Exact npm package spec for the generic-npx preset."
+  },
+  dockerImage: {
+    name: "dockerImage",
+    takesValue: true,
+    usage: "--docker-image <image>",
+    description: "Digest-pinned Docker image for the generic-docker preset."
+  },
+  url: {
+    name: "url",
+    takesValue: true,
+    usage: "--url <url>",
+    description: "HTTPS URL for the streamable-http preset."
+  },
+  headerName: {
+    name: "headerName",
+    takesValue: true,
+    usage: "--header-name <name>",
+    description: "Credential header name for the streamable-http preset."
+  },
+  headerPrefix: {
+    name: "headerPrefix",
+    takesValue: true,
+    usage: "--header-prefix <prefix>",
+    description: "Credential header prefix for the streamable-http preset."
+  },
   follow: {
     name: "follow",
     takesValue: false,
@@ -123,6 +197,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--json",
     description: "Use machine-readable output when supported."
+  },
+  interactive: {
+    name: "interactive",
+    takesValue: false,
+    usage: "--interactive",
+    description: "Collect init settings through a TTY wizard."
   }
 };
 
@@ -132,8 +212,16 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--output": OPTION_DEFINITIONS.output,
   "--preset": OPTION_DEFINITIONS.preset,
   "--name": OPTION_DEFINITIONS.name,
+  "--client": OPTION_DEFINITIONS.client,
+  "--credential-env": OPTION_DEFINITIONS.credentialEnv,
+  "--npm-package": OPTION_DEFINITIONS.npmPackage,
+  "--docker-image": OPTION_DEFINITIONS.dockerImage,
+  "--url": OPTION_DEFINITIONS.url,
+  "--header-name": OPTION_DEFINITIONS.headerName,
+  "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--follow": OPTION_DEFINITIONS.follow,
   "--json": OPTION_DEFINITIONS.json,
+  "--interactive": OPTION_DEFINITIONS.interactive,
   "--help": "help",
   "-h": "help",
   "--version": "version",
@@ -170,7 +258,7 @@ function allowedOptions(command: CliCommand): ReadonlySet<CliOptionName> {
 }
 
 function formatOption(definition: CliOptionDefinition): string {
-  return `  ${definition.usage.padEnd(20)}${definition.description}`;
+  return `  ${definition.usage.padEnd(Math.max(20, definition.usage.length + 2))}${definition.description}`;
 }
 
 function commandUsage(command: CliCommand): string {

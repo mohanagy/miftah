@@ -1,45 +1,13 @@
 # GitHub
 
-Use the generic wrapper to run GitHub MCP with separate work and personal tokens:
+The strict GitHub catalog output is [`examples/github.miftah.json`](../../examples/github.miftah.json). Generate an equivalent configuration with:
 
-```json
-{
-  "version": "1",
-  "name": "github",
-  "defaultProfile": "work",
-  "upstream": {
-    "transport": "stdio",
-    "command": "docker",
-    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.5.0"]
-  },
-  "profiles": {
-    "work": {
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_WORK_TOKEN}"
-      },
-      "policy": "safe-write"
-    },
-    "personal": {
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_TOKEN}"
-      },
-      "policy": "readonly"
-    }
-  },
-  "policies": {
-    "readonly": {
-      "allowRisk": ["read"],
-      "denyRisk": ["write", "destructive"]
-    },
-    "safe-write": {
-      "allowRisk": ["read", "write"],
-      "denyRisk": ["destructive"],
-      "requireConfirmation": ["write"]
-    }
-  }
-}
+```sh
+miftah init github --preset github --output github.miftah.json
 ```
 
-This config contains references only. Set the variables in the shell that launches Claude Desktop.
+It runs Docker STDIO with the exact `ghcr.io/github/github-mcp-server:v1.5.0` tag, `--read-only`, and `--toolsets=repos,issues,pull_requests`. The example contains only `${GITHUB_WORK_TOKEN}` and `${GITHUB_PERSONAL_TOKEN}` references; provide least-privilege GitHub provider tokens outside the JSON.
 
-When upgrading the pinned image tag, review upstream release notes first, then run `miftah validate --config <file>` and test both profiles before adopting the new tag.
+The tag is intentionally not presented as a digest. Before reproducible production deployment, use an authenticated promotion process and record the resolved image digest in deployment records; do not invent one. Miftah’s local policy cannot make a write-capable provider token read-only.
+
+See the [preset and client compatibility matrix](../presets-and-clients.md) for upstream links, digest guidance, validation boundaries, and client snippets.

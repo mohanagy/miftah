@@ -23,84 +23,26 @@ Miftah runs locally by default. It has no cloud dependency or telemetry.
 Generate a safe template:
 
 ```bash
-miftah init github --preset github --output ~/.config/miftah/github.json
+miftah init github --preset github --output ~/.config/miftah/github.json --client claude-desktop
 ```
 
-Edit the profile environment to reference shell variables, then validate it:
+Set the generated profile environment references in the environment that launches your client, then validate the configuration:
 
 ```bash
-export GITHUB_WORK_TOKEN='...'
 miftah validate --config ~/.config/miftah/github.json
 ```
 
-Run a wrapped server directly:
+`init --client` prints a host-specific JSON snippet with absolute launcher paths. Copy that JSON to the appropriate client configuration; Miftah does not write a client file. See the [preset and client compatibility matrix](docs/presets-and-clients.md) for the catalog pin, client location, and security boundaries.
+
+Run a wrapped server directly when testing local STDIO:
 
 ```bash
 miftah --config ~/.config/miftah/github.json
 ```
 
-The same process can be configured in Claude Desktop:
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "miftah",
-      "args": ["--config", "/Users/me/.config/miftah/github.json"]
-    }
-  }
-}
-```
-
 ## Profiles
 
-Profiles are named credential environments. Keep secret values outside JSON whenever possible:
-
-```json
-{
-  "version": "1",
-  "name": "github",
-  "defaultProfile": "work",
-  "upstream": {
-    "transport": "stdio",
-    "command": "docker",
-    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v1.5.0"]
-  },
-  "profiles": {
-    "work": {
-      "description": "Work GitHub",
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_WORK_TOKEN}"
-      },
-      "policy": "safe-write"
-    },
-    "personal": {
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_TOKEN}"
-      },
-      "policy": "readonly"
-    }
-  },
-  "policies": {
-    "readonly": {
-      "allowRisk": ["read"],
-      "denyRisk": ["write", "destructive"]
-    },
-    "safe-write": {
-      "allowRisk": ["read", "write"],
-      "denyRisk": ["destructive"],
-      "requireConfirmation": ["write"]
-    }
-  },
-  "security": {
-    "allowPlaintextSecrets": false,
-    "allowProfileSwitchingFromMcp": true,
-    "requireExplicitProfileForDestructive": true
-  }
-}
-```
-
-The GitHub preset pins `ghcr.io/github/github-mcp-server:v1.5.0`. To upgrade safely, read the release notes first, update the tag in your config, run `miftah validate`, then smoke-test both profiles before rollout.
+Profiles are named credential environments. Keep secret values outside JSON and use the exact generated references in the checked-in [GitHub](examples/github.miftah.json), [Sentry](examples/sentry.miftah.json), or [generic reference](examples/generic.miftah.json) example. The strict catalog pins GitHub to `ghcr.io/github/github-mcp-server:v1.5.0` with its documented read-only tool configuration; it does not claim a digest. The [compatibility matrix](docs/presets-and-clients.md) describes safe promotion and deployment recording for that tag.
 
 Claude can call `miftah_list_profiles`, `miftah_current_profile`, `miftah_use_profile`, `miftah_profile_info`, `miftah_health`, `miftah_validate_config`, `miftah_list_upstream_tools`, `miftah_restart_profile`, and `miftah_route_preview`. Upstream tools are exposed unchanged unless they collide with a reserved management name. After a profile change, restart, upstream failure, or recovery that changes a public capability surface, MCP clients receive list-change notifications and should re-list the affected tools, resources, or prompts before relying on cached capabilities.
 
@@ -182,7 +124,7 @@ Use `miftah --help` for the generated command list and `miftah <command> --help`
 | `miftah --config <file>` / `miftah serve --config <file>` | Run the STDIO MCP wrapper. |
 | `miftah validate --config <file>` | Parse and validate JSON config; writes JSON. |
 | `miftah doctor --config <file> [--json]` | Report redacted configuration and upstream readiness. |
-| `miftah init [name] [--name <name>] [--preset <name>] [--output <file>]` | Generate a generic, GitHub, or Sentry template. |
+| `miftah init [name] [--name <name>] [--preset <name>] [--output <file>] [--interactive] [--client <client>] [--credential-env <name>] [--npm-package <package>] [--docker-image <image>] [--url <url>] [--header-name <name>] [--header-prefix <prefix>]` | Generate a strict catalog template and optionally print client JSON. |
 | `miftah schema` | Print the JSON Schema. |
 | `miftah list-tools --config <file> [--profile <name>]` | Discover upstream tools as JSON. |
 | `miftah test-profile --config <file> [--profile <name>]` | Start and initialize one profile; writes JSON. |
@@ -200,6 +142,7 @@ Structured success output is written to stdout with stderr empty. Stable nonzero
 - [CLI](docs/cli.md)
 - [Library API](docs/library-api.md)
 - [Claude Desktop](docs/claude-desktop.md)
+- [Preset and client compatibility](docs/presets-and-clients.md)
 - [GitHub example](docs/examples/github.md)
 - [Sentry example](docs/examples/sentry.md)
 - [Changelog and release policy](CHANGELOG.md)

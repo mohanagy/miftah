@@ -20,7 +20,7 @@ The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-
 | `miftah validate --config <file>` | `--config` | `--config <file>` | Validates the JSON configuration without starting an upstream. Writes a JSON object with `ok`, `name`, and `profiles`. |
 | `miftah doctor --config <file>` | `--config` | `--config <file>`, `--json` | Validates configuration and checks upstream readiness. Default output is a human-readable report; `--json` writes only the JSON report. A healthy or degraded report exits `0`; a failed report exits `1`. |
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
-| `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>` | Writes a starter configuration with exclusive creation. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
+| `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>`, `--interactive`, `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>`, `--credential-env <name>`, `--npm-package <package>`, `--docker-image <image>`, `--url <url>`, `--header-name <name>`, `--header-prefix <prefix>` | Writes a strict catalog configuration with exclusive creation and can print client JSON snippets. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
 | `miftah list-tools --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts the selected profile, discovers its upstream tools, writes a JSON array, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah test-profile --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts and initializes one profile, writes `{"ok":true,"profile":"…"}`, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah logs --config <file>` | `--config` | `--config <file>`, `--follow` | Reads the configured audit JSONL as normalized, redacted JSONL. `--follow` continues watching it. This command does not construct an upstream manager. |
@@ -30,12 +30,16 @@ Every command also accepts `--help` and `-h`; those generated per-command help s
 
 ### `init` presets and paths
 
-`--preset` defaults to `generic`. The named templates are `generic`, `github`, and `sentry`; an unrecognized preset name falls back to the generic template. `--output` defaults to `<name>.miftah.json`. Miftah resolves the output path from the current working directory, creates missing parent directories, and refuses to overwrite an existing file. Quote shell paths and names containing spaces:
+`--preset` defaults to `generic`. The strict catalog accepts `generic`, `github`, `sentry`, `generic-npx`, `generic-docker`, and `streamable-http`; an unrecognized preset is a usage error. `--output` defaults to `<name>.miftah.json`. Miftah resolves the output path from the current working directory, creates missing parent directories, and refuses to overwrite an existing file. Quote shell paths and names containing spaces:
 
 ```sh
 miftah init "work wrapper" --preset github --output "$HOME/Miftah configs/work wrapper.json"
 miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 ```
+
+`generic-npx` requires `--npm-package` with exact package SemVer; `generic-docker` requires a canonical digest in `--docker-image`; and `streamable-http` requires `--url` plus optional credential environment/header metadata. `--credential-env` is optional where supported. See [preset and client compatibility](presets-and-clients.md) for exact inputs, pins, provenance, and client snippets.
+
+`--interactive` uses a wizard only when both input and output are TTYs. EOF or Ctrl-C cancels without writing a config. It asks for variable names and safe metadata, never secret values. In noninteractive use, `init` creates only the config unless `--client` is supplied. `--client` prints JSON with absolute Node and compiled Miftah paths; it does not write a host config. Regenerate the snippet after moving or upgrading Miftah or changing the config path.
 
 ### `doctor`
 

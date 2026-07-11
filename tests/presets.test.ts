@@ -13,12 +13,17 @@ describe("preset config", () => {
       "--rm",
       "-e",
       "GITHUB_PERSONAL_ACCESS_TOKEN",
-      "ghcr.io/github/github-mcp-server:v1.5.0"
+      "ghcr.io/github/github-mcp-server:v1.5.0",
+      "stdio",
+      "--read-only",
+      "--toolsets=repos,issues,pull_requests"
     ]);
 
     expect(config.defaultProfile).toBe("work");
     expect(config.profiles.work?.env?.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("${GITHUB_WORK_TOKEN}");
     expect(config.profiles.personal?.env?.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("${GITHUB_PERSONAL_TOKEN}");
+    expect(config.profiles.work?.policy).toBe("readonly");
+    expect(config.profiles.personal?.policy).toBe("readonly");
 
     const refs = [
       config.profiles.work?.env?.GITHUB_PERSONAL_ACCESS_TOKEN,
@@ -38,9 +43,19 @@ describe("preset config", () => {
     expect(config).toMatchObject({
       description: "example wrapped by Miftah",
       defaultProfile: "default",
-      upstream: { transport: "stdio", command: "npx", args: ["-y", "your-mcp-server"] },
+      upstream: {
+        transport: "stdio",
+        command: "npx",
+        args: ["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]
+      },
       profiles: { default: { description: "Default account", env: {} } }
     });
+  });
+
+  it("retains the public generic fallback for unknown preset names", () => {
+    const config = presetConfig("example", "not-a-catalog-preset");
+
+    expect(config.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
   });
 
   it("uses the Sentry package with the shared preset defaults", () => {
@@ -49,8 +64,15 @@ describe("preset config", () => {
     expect(config).toMatchObject({
       description: "sentry wrapped by Miftah",
       defaultProfile: "default",
-      upstream: { transport: "stdio", command: "npx", args: ["-y", "@sentry/mcp-server"] },
-      profiles: { default: { description: "Default account", env: {} } }
+      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0", "--skills=inspect"] },
+      profiles: {
+        default: {
+          description: "Default account",
+          env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
+          policy: "readonly"
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] } }
     });
   });
 });
