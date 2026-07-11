@@ -1,5 +1,18 @@
 import type { PolicyAction, RiskLevel } from "../policy/policy-types.js";
 
+export type AuditFailureMode = "fail-open" | "fail-closed";
+
+export interface AuditWriteFailure {
+  timestamp: string;
+  errorCode: "AUDIT_WRITE_FAILED";
+  message: string;
+}
+
+export interface AuditHealth {
+  state: "healthy" | "failed";
+  lastFailure?: AuditWriteFailure;
+}
+
 export interface AuditEvent {
   wrapper: string;
   profile: string;

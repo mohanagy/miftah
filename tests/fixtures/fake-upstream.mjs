@@ -40,6 +40,7 @@ const crashAfterConnectDelayMs = Number(process.env.TEST_CRASH_AFTER_CONNECT_DEL
 const startCountPath = process.env.TEST_START_COUNT_PATH;
 const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
 const stderrMessage = process.env.TEST_STDERR_MESSAGE;
+const stderrSplitAt = Number(process.env.TEST_STDERR_SPLIT_AT ?? "0");
 const hangOnStartPath = process.env.TEST_HANG_ON_START_PATH;
 const hangOnStartReadyPath = process.env.TEST_HANG_ON_START_READY_PATH;
 const shutdownDelayMs = Number(process.env.TEST_SHUTDOWN_DELAY_MS ?? "0");
@@ -76,7 +77,13 @@ if (process.env.TEST_IGNORE_SIGTERM === "true") {
   process.on("SIGTERM", () => undefined);
 }
 if (stderrMessage) {
-  process.stderr.write(`${stderrMessage}\n`);
+  if (stderrSplitAt > 0 && stderrSplitAt < stderrMessage.length) {
+    process.stderr.write(stderrMessage.slice(0, stderrSplitAt));
+    await delay(0);
+    process.stderr.write(`${stderrMessage.slice(stderrSplitAt)}\n`);
+  } else {
+    process.stderr.write(`${stderrMessage}\n`);
+  }
 }
 if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
   throw new Error("test upstream configured to stay unavailable after an abrupt exit");

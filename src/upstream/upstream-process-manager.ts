@@ -7,7 +7,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
 import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expand.js";
-import { redactSecrets } from "../secrets/redact.js";
+import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
@@ -30,6 +30,7 @@ export interface UpstreamManagerOptions {
   maxRestarts?: number;
   maxConcurrentProfiles?: number;
   secretValues?: readonly string[];
+  redactor?: SecretRedactor;
   onStderr?: (profile: string, message: string) => void;
 }
 
@@ -110,7 +111,7 @@ export class UpstreamProcessManager {
   private readonly stabilityTimers = new Map<string, NodeJS.Timeout>();
   private readonly generations = new Map<string, number>();
   private readonly startEpochs = new Map<string, number>();
-  private readonly secretValuesSet = new Set<string>();
+  private readonly redactor: SecretRedactor;
   private readonly automaticRestartCounts = new Map<string, number>();
   private readonly consecutiveRestartAttempts = new Map<string, number>();
   private readonly restartExhausted = new Set<string>();
@@ -135,6 +136,8 @@ export class UpstreamProcessManager {
       restartOnCrash: options.restartOnCrash ?? false,
       maxRestarts: options.maxRestarts ?? defaultMaxRestarts
     };
+    this.redactor = options.redactor ?? new SecretRedactor();
+    this.redactor.addAll(options.secretValues ?? []);
     this.limiter = limiter ?? new ProfileSessionLimiter(options.maxConcurrentProfiles);
   }
 
@@ -161,7 +164,11 @@ export class UpstreamProcessManager {
 
   /** Returns every configured or dynamically resolved value that must be redacted from upstream output. */
   getSecretValues(): string[] {
-    return [...new Set([...this.secretValuesSet, ...(this.options.secretValues ?? [])])];
+    return this.redactor.values();
+  }
+
+  getRedactor(): SecretRedactor {
+    return this.redactor;
   }
 
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
@@ -404,11 +411,11 @@ export class UpstreamProcessManager {
       ...(upstreamHeaders?.secretValues ?? []),
       ...(profileHeaders?.secretValues ?? [])
     ]) {
-      this.secretValuesSet.add(value);
+      this.redactor.add(value);
     }
     for (const [key, value] of Object.entries({ ...environment, ...headers })) {
       if (credentialKeyPattern.test(key) && value.length > 0) {
-        this.secretValuesSet.add(value);
+        this.redactor.add(value);
       }
     }
     return { environment, headers };
@@ -416,14 +423,20 @@ export class UpstreamProcessManager {
 
   /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
   private attachStderr(profile: string, stderr: Stream | null): void {
+    const streamRedactor = this.redactor.createTextStream();
+    const emit = (value: string): void => {
+      if (value.length > 0) this.options.onStderr?.(profile, value);
+    };
     stderr?.on("data", (chunk: Buffer) => {
-      this.options.onStderr?.(profile, this.redactProcessOutput(chunk.toString("utf8")));
+      emit(streamRedactor.write(chunk.toString("utf8")));
     });
+    stderr?.once("end", () => emit(streamRedactor.flush()));
+    stderr?.once("close", () => emit(streamRedactor.flush()));
   }
 
   /** Redacts process-originated text using static and dynamically resolved secret values. */
   private redactProcessOutput(value: string): string {
-    return redactSecrets(value, [...this.secretValuesSet, ...(this.options.secretValues ?? [])]);
+    return this.redactor.redactText(value);
   }
 
   /** Handles an unexpected close only when it belongs to the current live session generation. */

@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/load-config.js";
 import { ProfileManager } from "../profiles/profile-manager.js";
 import { SecretResolver } from "../secrets/secret-resolver.js";
+import { SecretRedactor } from "../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
 
@@ -66,10 +67,11 @@ export async function createRuntime(configPath: string) {
         headers: resolveMap(resolvedConfig.upstream.headers)
       }
     : undefined;
-  const managerOptions = { ...config.process, secretValues: [...secretValues] };
+  const redactor = new SecretRedactor([...secretValues]);
+  const managerOptions = { ...config.process, secretValues: [...secretValues], redactor };
   const manager = resolvedConfig.upstreams
     ? new MultiUpstreamProcessManager(resolvedConfig, managerOptions)
     : new UpstreamProcessManager(upstream!, profiles, managerOptions);
   const profileManager = new ProfileManager(resolvedConfig, resolvedConfig.security);
-  return { config: resolvedConfig, manager, profileManager };
+  return { config: resolvedConfig, manager, profileManager, redactor };
 }

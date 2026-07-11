@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { SecretRedactor } from "../src/secrets/redact.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
@@ -122,6 +123,43 @@ describe("upstream process manager", () => {
       if (typeof cause !== "string") throw new Error("Expected a redacted diagnostic cause");
       expect(cause).not.toContain(secret);
       expect(cause).toContain("[REDACTED]");
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("shares dynamically resolved values with split stderr redaction", async () => {
+    const secret = "split-stderr-secret";
+    const message = `upstream stderr: ${secret}`;
+    const stderr: string[] = [];
+    const redactor = new SecretRedactor();
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: {
+          env: {
+            API_TOKEN: secret,
+            TEST_STDERR_MESSAGE: message,
+            TEST_STDERR_SPLIT_AT: String(message.indexOf(secret) + 5)
+          }
+        }
+      },
+      {
+        startupTimeoutMs: 1_000,
+        redactor,
+        onStderr: (_profile, output) => stderr.push(output)
+      }
+    );
+
+    try {
+      await manager.get("work");
+      await waitFor(() => stderr.join(""), (output) => output.includes("[REDACTED]"));
+      expect(stderr.join("")).not.toContain(secret);
+      expect(redactor.redact({ secret })).toEqual({ secret: "[REDACTED]" });
     } finally {
       await manager.close();
     }

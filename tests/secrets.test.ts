@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRedactor, redactSecrets, redactUri } from "../src/secrets/redact.js";
+import { SecretRedactor, createRedactor, redactSecrets, redactUri } from "../src/secrets/redact.js";
 
 const opaqueInvalidUriPattern = /^miftah-invalid-uri:[a-f0-9]{64}$/;
 
@@ -16,6 +16,22 @@ describe("secret redaction", () => {
       token: "[REDACTED]",
       message: "Authorization: [REDACTED]",
       nested: ["[REDACTED]"]
+    });
+  });
+
+  it("shares newly resolved secret values with every later redaction", () => {
+    const redactor = new SecretRedactor(["initial-secret"]);
+
+    redactor.add("later-secret");
+
+    expect(
+      redactor.redact({
+        initial: "initial-secret",
+        nested: { later: "prefix later-secret suffix" }
+      })
+    ).toEqual({
+      initial: "[REDACTED]",
+      nested: { later: "prefix [REDACTED] suffix" }
     });
   });
 

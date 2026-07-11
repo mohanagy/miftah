@@ -71,9 +71,82 @@ function redactValue(value: unknown, secretValues: readonly string[], key?: stri
   return value;
 }
 
+/** Shares a mutable set of known secret values across runtime output boundaries. */
+export class SecretRedactor {
+  private readonly secretValues = new Set<string>();
+
+  constructor(secretValues: readonly string[] = []) {
+    this.addAll(secretValues);
+  }
+
+  add(value: string): void {
+    if (value.length > 0) this.secretValues.add(value);
+  }
+
+  addAll(values: readonly string[]): void {
+    for (const value of values) this.add(value);
+  }
+
+  values(): string[] {
+    return [...this.secretValues];
+  }
+
+  redact<T>(value: T): T {
+    return redactValue(value, this.values()) as T;
+  }
+
+  redactText(value: string): string {
+    return this.redact(redactUrisInText(value));
+  }
+
+  redactUri(uri: string): string {
+    return this.redact(redactUri(uri));
+  }
+
+  createTextStream(): { write(value: string): string; flush(): string } {
+    let pending = "";
+    return {
+      write: (value) => {
+        pending += value;
+        const lastLineBreak = pending.lastIndexOf("\n");
+        if (lastLineBreak >= 0) {
+          const completeLines = pending.slice(0, lastLineBreak + 1);
+          pending = pending.slice(lastLineBreak + 1);
+          return this.redactText(completeLines);
+        }
+        const retainedLength = Math.max(1_024, ...[...this.secretValues].map((secret) => secret.length));
+        if (pending.length <= retainedLength) return "";
+        const requestedBoundary = pending.length - retainedLength;
+        const boundary = this.safeTextBoundary(pending, requestedBoundary);
+        const completeText = pending.slice(0, boundary);
+        pending = pending.slice(boundary);
+        return this.redactText(completeText);
+      },
+      flush: () => {
+        const completeText = this.redactText(pending);
+        pending = "";
+        return completeText;
+      }
+    };
+  }
+
+  private safeTextBoundary(value: string, requestedBoundary: number): number {
+    let boundary = requestedBoundary;
+    for (const secret of this.secretValues) {
+      let index = value.indexOf(secret);
+      while (index >= 0) {
+        if (index < boundary && index + secret.length > boundary) boundary = index;
+        index = value.indexOf(secret, index + 1);
+      }
+    }
+    return boundary;
+  }
+}
+
 /** Creates a reusable deep redactor for a fixed collection of secret values. */
 export function createRedactor(secretValues: readonly string[] = []): <T>(value: T) => T {
-  return <T>(value: T) => redactValue(value, secretValues) as T;
+  const redactor = new SecretRedactor(secretValues);
+  return <T>(value: T) => redactor.redact(value);
 }
 
 /** Produces a safe public representation of a URI while retaining only its non-sensitive identity. */

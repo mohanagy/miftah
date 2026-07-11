@@ -9,18 +9,28 @@ import {
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
+import { SecretRedactor } from "../secrets/redact.js";
 
 /** Coordinates named upstream managers while sharing profile-capacity accounting across the bundle. */
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
   private readonly limiter: ProfileSessionLimiter;
+  private readonly redactor: SecretRedactor;
 
   constructor(config: MiftahConfig, options: UpstreamManagerOptions = {}) {
     this.limiter = new ProfileSessionLimiter(options.maxConcurrentProfiles);
+    this.redactor = options.redactor ?? new SecretRedactor();
+    this.redactor.addAll(options.secretValues ?? []);
     this.managers = Object.fromEntries(
       Object.entries(config.upstreams ?? {}).map(([name, upstream]) => {
-        const manager = new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options, name, this.limiter);
+        const manager = new UpstreamProcessManager(
+          upstream,
+          scopedProfiles(config.profiles, name),
+          { ...options, redactor: this.redactor },
+          name,
+          this.limiter
+        );
         manager.addHealthListener((health) => this.publishHealth(health));
         return [name, manager];
       })
@@ -75,7 +85,11 @@ export class MultiUpstreamProcessManager {
   }
 
   getSecretValues(): string[] {
-    return [...new Set(Object.values(this.managers).flatMap((manager) => manager.getSecretValues()))];
+    return this.redactor.values();
+  }
+
+  getRedactor(): SecretRedactor {
+    return this.redactor;
   }
 
   async close(): Promise<void> {
