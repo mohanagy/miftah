@@ -198,6 +198,50 @@ describe("doctor readiness runner", () => {
     await waitForFile(defaultShutdownPath);
   });
 
+  it("fails strict tool discovery readiness when profile capacity cannot support every profile", async () => {
+    const alternateShutdownPath = join(fixtureDirectory, "strict-capacity", "alternate-upstream-ended");
+    const defaultShutdownPath = join(fixtureDirectory, "strict-capacity", "default-upstream-ended");
+    const { configPath } = await writeConfig("strict-capacity", {
+      version: "1",
+      name: "doctor-strict-capacity",
+      defaultProfile: "default-profile-identifier",
+      upstreams: { primary: stdioUpstream() },
+      profiles: {
+        "alternate-profile-identifier": {
+          upstreams: {
+            primary: { env: { TEST_SHUTDOWN_END_PATH: alternateShutdownPath } }
+          }
+        },
+        "default-profile-identifier": {
+          upstreams: {
+            primary: { env: { TEST_SHUTDOWN_END_PATH: defaultShutdownPath } }
+          }
+        }
+      },
+      tooling: { toolDiscoveryMode: "strict" },
+      process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000, maxConcurrentProfiles: 1 }
+    });
+
+    const report = await runDoctor(configPath);
+    const strictCapacityCheck = report.checks.find(
+      (item) => item.code === DOCTOR_CODES.TOOLS_DISCOVERY && item.status === "error"
+    );
+
+    expect(report).toMatchObject({ overallStatus: "failed", ok: false });
+    expect(strictCapacityCheck).toMatchObject({
+      target: "strict tool discovery",
+      explanation: "Strict tool discovery requires all profiles to be available at the same time.",
+      remediation: "Increase maxConcurrentProfiles or use permissive tool discovery."
+    });
+    expect(report.checks.filter((item) => item.code === DOCTOR_CODES.STARTUP)).toHaveLength(2);
+    expect(report.checks.filter((item) => item.code === DOCTOR_CODES.TOOLS_DISCOVERY && item.status === "pass")).toHaveLength(2);
+    expect(check(report, DOCTOR_CODES.CLEAN_SHUTDOWN).status).toBe("pass");
+    expect(JSON.stringify(strictCapacityCheck)).not.toContain("alternate-profile-identifier");
+    expect(JSON.stringify(strictCapacityCheck)).not.toContain("default-profile-identifier");
+    await waitForFile(alternateShutdownPath);
+    await waitForFile(defaultShutdownPath);
+  });
+
   it("accepts a relative executable resolved from its configured working directory", async () => {
     if (process.platform === "win32") return;
 

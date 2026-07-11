@@ -173,6 +173,25 @@ function configurationFailure(error: unknown): DoctorCheck {
   );
 }
 
+function strictToolDiscoveryCapacityCheck(config: MiftahConfig): DoctorCheck | undefined {
+  const maximumProfiles = config.process?.maxConcurrentProfiles;
+  if (
+    config.tooling?.toolDiscoveryMode !== "strict" ||
+    maximumProfiles === undefined ||
+    !Number.isFinite(maximumProfiles) ||
+    maximumProfiles >= Object.keys(config.profiles).length
+  ) {
+    return undefined;
+  }
+  return check(
+    DOCTOR_CODES.TOOLS_DISCOVERY,
+    "error",
+    "strict tool discovery",
+    "Strict tool discovery requires all profiles to be available at the same time.",
+    "Increase maxConcurrentProfiles or use permissive tool discovery."
+  );
+}
+
 function recordCollision(
   checks: DoctorCheck[],
   target: DoctorTarget,
@@ -368,6 +387,9 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       ),
       runRedactionCanary(runtime.redactor)
     );
+
+    const strictCapacityCheck = strictToolDiscoveryCapacityCheck(runtime.config);
+    if (strictCapacityCheck) checks.push(strictCapacityCheck);
 
     for (const envFile of runtime.config.secrets?.envFiles ?? []) {
       checks.push(await diagnosePathPermissions("env", envFile));
