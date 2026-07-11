@@ -1,5 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolRequestSchema,
   GetPromptRequestSchema,
@@ -10,40 +12,104 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
+const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
+if (failOnRestartPath) {
+  if (existsSync(failOnRestartPath)) {
+    throw new Error("test upstream configured to fail after its initial start");
+  }
+  writeFileSync(failOnRestartPath, "started");
+}
+const restartBlockPath = process.env.TEST_BLOCK_ON_RESTART_PATH;
+if (restartBlockPath) {
+  const isRestart = existsSync(restartBlockPath);
+  writeFileSync(restartBlockPath, "started");
+  if (isRestart) {
+    const readyPath = process.env.TEST_BLOCK_ON_RESTART_READY_PATH;
+    const releasePath = process.env.TEST_BLOCK_ON_RESTART_RELEASE_PATH;
+    if (!readyPath || !releasePath) {
+      throw new Error("test restart block requires ready and release paths");
+    }
+    writeFileSync(readyPath, "ready");
+    while (!existsSync(releasePath)) {
+      await delay(5);
+    }
+  }
+}
+const whoamiInputSchema =
+  process.env.TEST_WHOAMI_SCHEMA === "account"
+    ? {
+        type: "object",
+        properties: { account: { type: "string" } },
+        required: ["account"]
+      }
+    : { type: "object", properties: {} };
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "whoami",
-      description: "Return the injected account.",
-      inputSchema: { type: "object", properties: {} }
-    },
-    {
-      name: "echo",
-      description: "Echo a message.",
-      inputSchema: {
-        type: "object",
-        properties: { message: { type: "string" } },
-        required: ["message"]
-      }
-    },
-    {
-      name: "create_item",
-      description: "Create an item.",
-      inputSchema: {
-        type: "object",
-        properties: { name: { type: "string" } },
-        required: ["name"]
-      }
-    }
-  ]
-}));
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
+    writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
+  }
+  if (process.env.TEST_LIST_TOOLS_COUNT_PATH) {
+    appendFileSync(process.env.TEST_LIST_TOOLS_COUNT_PATH, "1\n");
+  }
+  if (listToolsDelayMs > 0) {
+    await delay(listToolsDelayMs);
+  }
+  return {
+    tools: [
+      {
+        name: "whoami",
+        description: "Return the injected account.",
+        inputSchema: whoamiInputSchema
+      },
+      {
+        name: "echo",
+        description: "Echo a message.",
+        inputSchema: {
+          type: "object",
+          properties: { message: { type: "string" } },
+          required: ["message"]
+        }
+      },
+      {
+        name: "create_item",
+        description: "Create an item.",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"]
+        }
+      },
+      ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
+        ? [
+            {
+              name: "miftah_health",
+              description: "Collides with a reserved Miftah management tool.",
+              inputSchema: { type: "object", properties: {} }
+            }
+          ]
+        : []),
+      ...(process.env.TEST_INCLUDE_MIFTAH_PREFIX_TOOL === "true"
+        ? [
+            {
+              name: "miftah_custom",
+              description: "An upstream tool with a Miftah-looking name.",
+              inputSchema: { type: "object", properties: {} }
+            }
+          ]
+        : [])
+    ]
+  };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (process.env.TEST_CALL_TOOL_COUNT_PATH) {
+    appendFileSync(process.env.TEST_CALL_TOOL_COUNT_PATH, "1\n");
+  }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: account }] };
   }

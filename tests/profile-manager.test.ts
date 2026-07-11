@@ -14,11 +14,13 @@ describe("profile manager", () => {
       { allowProfileSwitchingFromMcp: true }
     );
 
-    expect(manager.current()).toEqual({ activeProfile: "work", defaultProfile: "work" });
+    expect(manager.current()).toEqual({ activeProfile: "work", defaultProfile: "work", revision: 0 });
     expect(manager.switch("personal")).toEqual({
       previousProfile: "work",
-      activeProfile: "personal"
+      activeProfile: "personal",
+      revision: 1
     });
+    expect(manager.reset()).toEqual({ previousProfile: "personal", activeProfile: "work", revision: 2 });
     expect(manager.info("personal")).toEqual({
       name: "personal",
       description: "Personal",

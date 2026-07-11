@@ -20,6 +20,7 @@ export interface ProfileInfo {
 
 export class ProfileManager {
   private activeProfile: string;
+  private revision = 0;
   private readonly collection: ProfileCollection;
   private readonly options: ProfileManagerOptions;
 
@@ -29,24 +30,26 @@ export class ProfileManager {
     this.options = options;
   }
 
-  current(): { activeProfile: string; defaultProfile: string } {
-    return { activeProfile: this.activeProfile, defaultProfile: this.collection.defaultProfile };
+  current(): { activeProfile: string; defaultProfile: string; revision: number } {
+    return { activeProfile: this.activeProfile, defaultProfile: this.collection.defaultProfile, revision: this.revision };
   }
 
-  switch(profile: string): { previousProfile: string; activeProfile: string } {
+  switch(profile: string): { previousProfile: string; activeProfile: string; revision: number } {
     if (this.options.allowProfileSwitchingFromMcp === false || this.options.lockToProfile) {
       throw new MiftahError("PROFILE_SWITCH_DISABLED", "PROFILE_SWITCH_DISABLED: profile switching is disabled");
     }
     this.ensureExists(profile);
     const previousProfile = this.activeProfile;
     this.activeProfile = profile;
-    return { previousProfile, activeProfile: profile };
+    this.revision += 1;
+    return { previousProfile, activeProfile: profile, revision: this.revision };
   }
 
-  reset(): { previousProfile: string; activeProfile: string } {
+  reset(): { previousProfile: string; activeProfile: string; revision: number } {
     const previousProfile = this.activeProfile;
     this.activeProfile = this.collection.defaultProfile;
-    return { previousProfile, activeProfile: this.activeProfile };
+    this.revision += 1;
+    return { previousProfile, activeProfile: this.activeProfile, revision: this.revision };
   }
 
   get(profile = this.activeProfile): ProfileConfig {
