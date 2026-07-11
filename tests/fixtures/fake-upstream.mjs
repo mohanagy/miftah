@@ -20,6 +20,22 @@ if (failOnRestartPath) {
   }
   writeFileSync(failOnRestartPath, "started");
 }
+const restartBlockPath = process.env.TEST_BLOCK_ON_RESTART_PATH;
+if (restartBlockPath) {
+  const isRestart = existsSync(restartBlockPath);
+  writeFileSync(restartBlockPath, "started");
+  if (isRestart) {
+    const readyPath = process.env.TEST_BLOCK_ON_RESTART_READY_PATH;
+    const releasePath = process.env.TEST_BLOCK_ON_RESTART_RELEASE_PATH;
+    if (!readyPath || !releasePath) {
+      throw new Error("test restart block requires ready and release paths");
+    }
+    writeFileSync(readyPath, "ready");
+    while (!existsSync(releasePath)) {
+      await delay(5);
+    }
+  }
+}
 const whoamiInputSchema =
   process.env.TEST_WHOAMI_SCHEMA === "account"
     ? {

@@ -4,9 +4,9 @@ import { CallToolResultSchema, ToolListChangedNotificationSchema } from "@modelc
 import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { expectExactlyOneToolListChanged } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
@@ -14,14 +14,7 @@ import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
-const notificationSettleMs = 50;
 const toolCollisionPattern = /TOOL_COLLISION/;
-
-async function expectExactlyOneToolListChanged(count: () => number): Promise<void> {
-  await expect.poll(count).toBe(1);
-  await delay(notificationSettleMs);
-  expect(count()).toBe(1);
-}
 
 describe("Miftah MCP wrapper", () => {
   it("exposes management and upstream capabilities while routing calls by active profile", async () => {

@@ -33,7 +33,10 @@ export class MultiUpstreamProcessManager {
   }
 
   async restartProfile(profile: string): Promise<void> {
-    await Promise.all(Object.values(this.managers).map((manager) => manager.restart(profile)));
+    const results = await Promise.allSettled(Object.values(this.managers).map((manager) => manager.restart(profile)));
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
   }
 
   listHealth(): UpstreamHealth[] {

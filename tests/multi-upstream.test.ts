@@ -8,12 +8,13 @@ import {
   ReadResourceResultSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { expectExactlyOneToolListChanged } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
@@ -21,14 +22,7 @@ import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-proc
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
-const notificationSettleMs = 50;
 const upstreamToolListFailedPattern = /UPSTREAM_TOOL_LIST_FAILED/;
-
-async function expectExactlyOneToolListChanged(count: () => number): Promise<void> {
-  await expect.poll(count).toBe(1);
-  await delay(notificationSettleMs);
-  expect(count()).toBe(1);
-}
 
 describe("multi-upstream wrapper", () => {
   it("does not proxy resources or prompts when no upstream is configured", async () => {
@@ -467,6 +461,82 @@ describe("multi-upstream wrapper", () => {
       await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
       await expectExactlyOneToolListChanged(() => notifications);
     } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("waits for every bundled restart to settle before returning a restart failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-bundle-restart-settle-"));
+    const githubFailurePath = join(directory, "github-restart-failure");
+    const sentryBlockPath = join(directory, "sentry-restart-block");
+    const sentryReadyPath = join(directory, "sentry-restart-ready");
+    const sentryReleasePath = join(directory, "sentry-restart-release");
+    const config = validateConfig({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github-work",
+                TEST_FAIL_ON_RESTART_PATH: githubFailurePath
+              }
+            },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry-work",
+                TEST_BLOCK_ON_RESTART_PATH: sentryBlockPath,
+                TEST_BLOCK_ON_RESTART_READY_PATH: sentryReadyPath,
+                TEST_BLOCK_ON_RESTART_RELEASE_PATH: sentryReleasePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools();
+      const restart = client.callTool(
+        { name: "miftah_restart_profile", arguments: { profile: "work" } },
+        CallToolResultSchema
+      );
+      await expect
+        .poll(async () => {
+          try {
+            await access(sentryReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+
+      const restartState = await Promise.race([
+        restart.then(() => "settled"),
+        delay(50).then(() => "pending")
+      ]);
+      expect(restartState).toBe("pending");
+
+      await writeFile(sentryReleasePath, "release");
+      const result = CallToolResultSchema.parse(await restart);
+      expect(result.isError).toBe(true);
+      await expect(client.listTools()).rejects.toThrow(upstreamToolListFailedPattern);
+    } finally {
+      await writeFile(sentryReleasePath, "release");
       await client.close();
       await wrapper.close();
     }
