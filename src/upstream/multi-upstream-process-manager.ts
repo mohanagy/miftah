@@ -6,17 +6,20 @@ import {
   type UpstreamHealth,
   type UpstreamManagerOptions
 } from "./upstream-process-manager.js";
+import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
 
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
+  private readonly limiter: ProfileSessionLimiter;
 
   constructor(config: MiftahConfig, options: UpstreamManagerOptions = {}) {
+    this.limiter = new ProfileSessionLimiter(options.maxConcurrentProfiles);
     this.managers = Object.fromEntries(
       Object.entries(config.upstreams ?? {}).map(([name, upstream]) => {
-        const manager = new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options, name);
+        const manager = new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options, name, this.limiter);
         manager.addHealthListener((health) => this.publishHealth(health));
         return [name, manager];
       })

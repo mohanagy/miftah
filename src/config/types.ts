@@ -65,6 +65,11 @@ export interface SecurityConfig {
 
 export interface ProcessConfig {
   startupTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  restartOnCrash?: boolean;
+  maxRestarts?: number;
+  maxConcurrentProfiles?: number;
 }
 
 export interface AuditConfig {

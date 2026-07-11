@@ -101,7 +101,14 @@ describe("published config schema", () => {
     expect(profileUpstreamOverride.properties).not.toHaveProperty("transport");
     expect(profileUpstreamOverride.properties).not.toHaveProperty("command");
     expect(profileUpstreamOverride.properties).not.toHaveProperty("url");
-    expect(Object.keys(process ?? {})).toEqual(["startupTimeoutMs"]);
+    expect(Object.keys(process ?? {})).toEqual([
+      "startupTimeoutMs",
+      "shutdownTimeoutMs",
+      "idleTimeoutMs",
+      "restartOnCrash",
+      "maxRestarts",
+      "maxConcurrentProfiles"
+    ]);
     expect(security).toMatchObject({ redactSecrets: { const: true } });
     expect(security).not.toHaveProperty("requireProfileSwitchConfirmation");
     expect(audit).toMatchObject({ format: { const: "jsonl" }, redact: { const: true } });
