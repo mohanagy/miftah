@@ -130,7 +130,7 @@ Routing can use the active profile or rules matching tool arguments:
 }
 ```
 
-When several profiles match, Miftah refuses to guess. Use explicit profile switching for write and destructive actions. Local policies can deny risky tools or return a confirmation-needed result. Provider token scopes still matter: local policy cannot make a write-capable provider token read-only. Profiles that set a policy name must reference an existing entry in `policies`, while profiles with no `policy` field keep the default allow behavior.
+When several profiles match, Miftah refuses to guess. Use explicit profile switching for write and destructive actions. The same routing, policy, redaction, and audit pipeline applies to upstream tool calls, resource reads, and prompt retrieval. Policy patterns use each upstream tool's original name for tools, `resources/read` for reads, and `prompts/get` for prompt retrieval. A deny, confirmation-required, blocked, or ambiguous decision is returned before Miftah forwards the read or prompt request. Provider token scopes still matter: local policy cannot make a write-capable provider token read-only. Profiles that set a policy name must reference an existing entry in `policies`, while profiles with no `policy` field keep the default allow behavior.
 
 ## Secret handling
 

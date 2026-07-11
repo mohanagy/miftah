@@ -656,4 +656,78 @@ describe("Miftah MCP wrapper", () => {
       await wrapper.close();
     }
   });
+
+  it("blocks denied resource reads before forwarding them upstream", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-policy-deny-"));
+    const readCountPath = join(directory, "resource-read-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_READ_RESOURCE_COUNT_PATH: readCountPath
+          },
+          policy: "readonly"
+        }
+      },
+      policies: {
+        readonly: { deny: ["resources/read"] }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.readResource({ uri: "account://current" })).rejects.toThrow(/POLICY_BLOCKED/);
+      await expect(access(readCountPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("blocks denied prompt retrieval before forwarding it upstream", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-prompt-policy-deny-"));
+    const getCountPath = join(directory, "prompt-get-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_GET_PROMPT_COUNT_PATH: getCountPath
+          },
+          policy: "readonly"
+        }
+      },
+      policies: {
+        readonly: { deny: ["prompts/get"] }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.getPrompt({ name: "account_prompt" })).rejects.toThrow(/POLICY_BLOCKED/);
+      await expect(access(getCountPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
 });

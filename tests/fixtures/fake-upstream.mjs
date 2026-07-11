@@ -12,7 +12,11 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
+const responseText =
+  process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const readResourceDelayMs = Number(process.env.TEST_READ_RESOURCE_DELAY_MS ?? "0");
+const getPromptDelayMs = Number(process.env.TEST_GET_PROMPT_DELAY_MS ?? "0");
 const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
 const resourceUri = process.env.TEST_RESOURCE_URI ?? "account://current";
 const promptName = process.env.TEST_PROMPT_NAME ?? "account_prompt";
@@ -131,6 +135,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (process.env.TEST_CALL_TOOL_COUNT_PATH) {
     appendFileSync(process.env.TEST_CALL_TOOL_COUNT_PATH, "1\n");
   }
+  if (process.env.TEST_FAIL_CALL_TOOL === "true") {
+    throw new Error(`test tool call failure: ${process.env.API_TOKEN}`);
+  }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: account }] };
   }
@@ -141,6 +148,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+  if (process.env.TEST_LIST_RESOURCES_COUNT_PATH) {
+    appendFileSync(process.env.TEST_LIST_RESOURCES_COUNT_PATH, "1\n");
+  }
   if (process.env.TEST_FAIL_LIST_RESOURCES === "true" || (failListResourcesPath && existsSync(failListResourcesPath))) {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
   }
@@ -165,18 +175,27 @@ server.setRequestHandler(ReadResourceRequestSchema, async () => {
   if (process.env.TEST_READ_RESOURCE_COUNT_PATH) {
     appendFileSync(process.env.TEST_READ_RESOURCE_COUNT_PATH, "1\n");
   }
+  if (process.env.TEST_READ_RESOURCE_STARTED_PATH) {
+    writeFileSync(process.env.TEST_READ_RESOURCE_STARTED_PATH, "started");
+  }
+  if (readResourceDelayMs > 0) {
+    await delay(readResourceDelayMs);
+  }
   if (process.env.TEST_FAIL_READ_RESOURCE === "true") {
     throw new Error(`test resource read failure: ${process.env.API_TOKEN}`);
   }
   return {
     contents: [
-      { uri: resourceUri, text: account, mimeType: "text/plain" },
-      ...(additionalResourceUri ? [{ uri: additionalResourceUri, text: account, mimeType: "text/plain" }] : [])
+      { uri: resourceUri, text: responseText, mimeType: "text/plain" },
+      ...(additionalResourceUri ? [{ uri: additionalResourceUri, text: responseText, mimeType: "text/plain" }] : [])
     ]
   };
 });
 
 server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+  if (process.env.TEST_LIST_PROMPTS_COUNT_PATH) {
+    appendFileSync(process.env.TEST_LIST_PROMPTS_COUNT_PATH, "1\n");
+  }
   if (process.env.TEST_FAIL_LIST_PROMPTS === "true" || (failListPromptsPath && existsSync(failListPromptsPath))) {
     throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);
   }
@@ -200,13 +219,19 @@ server.setRequestHandler(GetPromptRequestSchema, async () => {
   if (process.env.TEST_GET_PROMPT_COUNT_PATH) {
     appendFileSync(process.env.TEST_GET_PROMPT_COUNT_PATH, "1\n");
   }
+  if (process.env.TEST_GET_PROMPT_STARTED_PATH) {
+    writeFileSync(process.env.TEST_GET_PROMPT_STARTED_PATH, "started");
+  }
+  if (getPromptDelayMs > 0) {
+    await delay(getPromptDelayMs);
+  }
   if (process.env.TEST_FAIL_GET_PROMPT === "true") {
     throw new Error(`test prompt get failure: ${process.env.API_TOKEN}`);
   }
   return {
     description: promptName,
     messages: [
-      { role: "user", content: { type: "text", text: account } },
+      { role: "user", content: { type: "text", text: responseText } },
       ...(promptResourceUri
         ? [
             {
@@ -222,7 +247,7 @@ server.setRequestHandler(GetPromptRequestSchema, async () => {
               role: "assistant",
               content: {
                 type: "resource",
-                resource: { uri: promptResourceUri, text: account, mimeType: "text/plain" }
+                resource: { uri: promptResourceUri, text: responseText, mimeType: "text/plain" }
               }
             }
           ]
