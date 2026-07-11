@@ -7,6 +7,7 @@ const GENERIC_MCP_PACKAGE = "@modelcontextprotocol/server-everything@2026.7.4";
 const SENTRY_MCP_PACKAGE = "@sentry/mcp-server@0.36.0";
 const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const headerName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+const authSchemePrefix = /^[A-Za-z][A-Za-z0-9-]* $/u;
 const exactNpmPackageSpec =
   /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const canonicalDigestImage =
@@ -42,6 +43,12 @@ function environmentReference(name: string): string {
   return `\${${name}}`;
 }
 
+function validateCredentialEnv(credentialEnv: string | undefined): void {
+  if (credentialEnv !== undefined && !environmentVariableName.test(credentialEnv)) {
+    catalogError(`Invalid credential environment variable name '${credentialEnv}'.`);
+  }
+}
+
 /** Builds fresh shared runtime defaults so generated configs never share mutable state. */
 function buildSharedDefaults(): SharedDefaults {
   return {
@@ -74,7 +81,7 @@ function buildReadonlyPolicies(): NonNullable<MiftahConfig["policies"]> {
 function buildCredentialProfile(credentialEnv?: string): ProfileConfig {
   return {
     description: "Default account",
-    env: credentialEnv ? { [credentialEnv]: environmentReference(credentialEnv) } : {}
+    env: credentialEnv === undefined ? {} : { [credentialEnv]: environmentReference(credentialEnv) }
   };
 }
 
@@ -191,7 +198,7 @@ function requireCanonicalDigestImage(value: string | undefined): string {
 }
 
 function buildGenericDockerPreset(name: string, options: PresetBuildOptions): MiftahConfig {
-  const credentialArgs = options.credentialEnv ? ["-e", options.credentialEnv] : [];
+  const credentialArgs = options.credentialEnv === undefined ? [] : ["-e", options.credentialEnv];
   return buildStandardPreset(
     name,
     {
@@ -220,33 +227,23 @@ function requireHttpsUrl(value: string | undefined): string {
   return value;
 }
 
-function hasInvalidHeaderValueControl(value: string): boolean {
-  return [...value].some((character) => {
-    const codePoint = character.codePointAt(0);
-    return codePoint !== undefined && (codePoint <= 0x08 || (codePoint >= 0x0a && codePoint <= 0x1f) || codePoint === 0x7f);
-  });
-}
-
 function buildCredentialHeaders(options: PresetBuildOptions): Record<string, string> | undefined {
   const hasHeaderName = options.headerName !== undefined;
   const hasHeaderPrefix = options.headerPrefix !== undefined;
-  if (!hasHeaderName && !hasHeaderPrefix && !options.credentialEnv) return undefined;
+  if (!hasHeaderName && !hasHeaderPrefix && options.credentialEnv === undefined) return undefined;
 
-  if (!options.credentialEnv || options.headerName === undefined || options.headerPrefix === undefined) {
-    catalogError("Streamable HTTP credentials require credentialEnv, headerName, and headerPrefix together.");
+  if (options.credentialEnv === undefined || options.headerName === undefined) {
+    catalogError("Streamable HTTP credentials require credentialEnv and headerName together.");
   }
   if (!headerName.test(options.headerName)) {
     catalogError(`Invalid HTTP header name '${options.headerName}'.`);
   }
-  if (
-    hasInvalidHeaderValueControl(options.headerPrefix) ||
-    options.headerPrefix.includes("${") ||
-    options.headerPrefix.toLowerCase().includes("secretref:")
-  ) {
-    catalogError("HTTP header prefix must not contain CR, LF, ${...}, or secretref: values.");
+  const headerPrefix = options.headerPrefix ?? "";
+  if (headerPrefix !== "" && !authSchemePrefix.test(headerPrefix)) {
+    catalogError("HTTP header prefix must be empty or an auth scheme token followed by exactly one ASCII space.");
   }
 
-  return { [options.headerName]: `${options.headerPrefix}${environmentReference(options.credentialEnv)}` };
+  return { [options.headerName]: `${headerPrefix}${environmentReference(options.credentialEnv)}` };
 }
 
 function buildStreamableHttpPreset(name: string, options: PresetBuildOptions): MiftahConfig {
@@ -305,6 +302,7 @@ export type PresetCatalogName = keyof typeof PRESET_CATALOG.presets;
 
 /** Builds a catalog preset strictly, rejecting unknown names instead of falling back. */
 export function buildPresetConfig(name: string, preset: string, options: PresetBuildOptions = {}): MiftahConfig {
+  validateCredentialEnv(options.credentialEnv);
   if (!Object.prototype.hasOwnProperty.call(PRESET_CATALOG.presets, preset)) {
     catalogError(`Unknown preset '${preset}'. Supported presets: ${Object.keys(PRESET_CATALOG.presets).join(", ")}.`);
   }

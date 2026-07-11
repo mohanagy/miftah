@@ -144,6 +144,68 @@ describe("preset catalog", () => {
     })).toThrow(PresetCatalogError);
   });
 
+  it.each([
+    ["Bearer ", "Bearer ${REMOTE_TOKEN}"],
+    ["Sentry ", "Sentry ${REMOTE_TOKEN}"]
+  ])("constructs an Authorization header from the supported %s auth scheme", (headerPrefix, expectedHeader) => {
+    const config = buildPresetConfig("remote", "streamable-http", {
+      url: "https://mcp.example.com/v1",
+      credentialEnv: "REMOTE_TOKEN",
+      headerName: "Authorization",
+      headerPrefix
+    });
+
+    expect(config.upstream?.headers).toEqual({ Authorization: expectedHeader });
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("uses no default scheme when a streamable HTTP header prefix is empty or omitted", () => {
+    const emptyPrefix = buildPresetConfig("remote", "streamable-http", {
+      url: "https://mcp.example.com/v1",
+      credentialEnv: "REMOTE_TOKEN",
+      headerName: "Authorization",
+      headerPrefix: ""
+    });
+    const omittedPrefix = buildPresetConfig("remote", "streamable-http", {
+      url: "https://mcp.example.com/v1",
+      credentialEnv: "REMOTE_TOKEN",
+      headerName: "Authorization"
+    });
+
+    expect(emptyPrefix.upstream?.headers).toEqual({ Authorization: "${REMOTE_TOKEN}" });
+    expect(omittedPrefix.upstream?.headers).toEqual({ Authorization: "${REMOTE_TOKEN}" });
+    expect(() => validateConfig(emptyPrefix)).not.toThrow();
+    expect(() => validateConfig(omittedPrefix)).not.toThrow();
+  });
+
+  it("rejects literal header prefixes before returning a streamable HTTP config", () => {
+    expect(() => buildPresetConfig("remote", "streamable-http", {
+      url: "https://mcp.example.com/v1",
+      credentialEnv: "REMOTE_TOKEN",
+      headerName: "Authorization",
+      headerPrefix: "super-secret-value"
+    })).toThrow(PresetCatalogError);
+  });
+
+  it.each([
+    ["generic", {}, ""],
+    ["generic", {}, "INVALID-NAME"],
+    ["generic-npx", { npmPackage: "server@1.2.3" }, ""],
+    ["generic-npx", { npmPackage: "server@1.2.3" }, "INVALID-NAME"],
+    [
+      "generic-docker",
+      { dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+      ""
+    ],
+    [
+      "generic-docker",
+      { dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+      "INVALID-NAME"
+    ]
+  ] as const)("rejects a supplied %s credential environment name of %j", (preset, options, credentialEnv) => {
+    expect(() => buildPresetConfig("test", preset, { ...options, credentialEnv })).toThrow(PresetCatalogError);
+  });
+
   it("rejects unknown strict catalog presets with a clear typed error", () => {
     expect(() => buildPresetConfig("test", "unknown")).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("test", "unknown")).toThrow(/Unknown preset 'unknown'/);
