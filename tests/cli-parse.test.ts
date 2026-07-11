@@ -33,6 +33,14 @@ describe("CLI parser", () => {
     });
   });
 
+  it("accepts a leading dash in an explicitly assigned option value", () => {
+    expect(parseCli(["--config=-leading.json", "validate"])).toEqual({
+      kind: "run",
+      command: "validate",
+      options: { config: "-leading.json" }
+    });
+  });
+
   it("gives init's positional name and name option unambiguous results", () => {
     expect(parseCli(["init", "example", "--preset=generic", "--output", "example.json"])).toEqual({
       kind: "run",

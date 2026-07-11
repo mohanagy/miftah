@@ -260,7 +260,7 @@ export function parseCli(argv: readonly string[]): CliInvocation {
       }
 
       const value = assignedValue ?? argv[++index];
-      if (value === undefined || value.startsWith("-")) {
+      if (value === undefined || (assignedValue === undefined && value.startsWith("-"))) {
         usageError(`Option '${flag}' requires a value.`);
       }
       if (value.length === 0) usageError(`Option '${flag}' requires a value.`);
