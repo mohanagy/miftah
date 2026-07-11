@@ -50,12 +50,15 @@ async function loadPackVerifier(): Promise<PackVerifier> {
   return import("../scripts/check-pack.mjs") as Promise<PackVerifier>;
 }
 
-beforeAll(() => {
-  const build = runNpm(["run", "build"]);
-  if (build.status !== 0) {
-    throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
-  }
-});
+beforeAll(
+  () => {
+    const build = runNpm(["run", "build"]);
+    if (build.status !== 0) {
+      throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
+    }
+  },
+  30_000
+);
 
 describe("package metadata contract", () => {
   it("identifies the public repository and package support URLs", () => {

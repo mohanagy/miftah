@@ -27,6 +27,11 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-
 const promptCollisionPattern = /PROMPT_COLLISION/;
 const resourceCollisionPattern = /RESOURCE_COLLISION/;
 const upstreamToolListFailedPattern = /UPSTREAM_TOOL_LIST_FAILED/;
+const resourceCursorInvalidPattern = /RESOURCE_CURSOR_INVALID/;
+const promptCursorInvalidPattern = /PROMPT_CURSOR_INVALID/;
+const githubResourceRoutePattern = /^miftah:\/\/resource\/github\?/;
+const resourceNotFoundPattern = /RESOURCE_NOT_FOUND/;
+const promptNotFoundPattern = /PROMPT_NOT_FOUND/;
 
 describe("multi-upstream wrapper", () => {
   it("does not proxy resources or prompts when no upstream is configured", async () => {
@@ -371,8 +376,8 @@ describe("multi-upstream wrapper", () => {
         messages: [{ content: { text: "github-personal" } }]
       });
       await client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } });
-      await expect(client.listResources({ cursor: workResources.nextCursor })).rejects.toThrow(/RESOURCE_CURSOR_INVALID/);
-      await expect(client.listPrompts({ cursor: workPrompts.nextCursor })).rejects.toThrow(/PROMPT_CURSOR_INVALID/);
+      await expect(client.listResources({ cursor: workResources.nextCursor })).rejects.toThrow(resourceCursorInvalidPattern);
+      await expect(client.listPrompts({ cursor: workPrompts.nextCursor })).rejects.toThrow(promptCursorInvalidPattern);
     } finally {
       await client.close();
       await wrapper.close();
@@ -436,7 +441,7 @@ describe("multi-upstream wrapper", () => {
       const read = await client.readResource({ uri: githubResource.uri });
       expect(read.contents[0]).toMatchObject({ uri: githubResource.uri, text: "github-work" });
       const additionalResourceUri = read.contents[1]?.uri;
-      expect(additionalResourceUri).toMatch(/^miftah:\/\/resource\/github\?/);
+      expect(additionalResourceUri).toMatch(githubResourceRoutePattern);
       const publicRead = JSON.stringify(read);
       for (const value of [secret, username, password, queryValue, fragment]) {
         expect(publicRead).not.toContain(value);
@@ -518,9 +523,9 @@ describe("multi-upstream wrapper", () => {
         messages: [{ content: { text: "github-work" } }]
       });
       await expect(client.readResource({ uri: "miftah://resource/github?uri=account%3A%2F%2Funknown" })).rejects.toThrow(
-        /RESOURCE_NOT_FOUND/
+        resourceNotFoundPattern
       );
-      await expect(client.getPrompt({ name: "github__unknown_prompt" })).rejects.toThrow(/PROMPT_NOT_FOUND/);
+      await expect(client.getPrompt({ name: "github__unknown_prompt" })).rejects.toThrow(promptNotFoundPattern);
       expect((await readFile(githubReadPath, "utf8")).trim().split("\n")).toEqual(["1"]);
       expect((await readFile(githubPromptPath, "utf8")).trim().split("\n")).toEqual(["1"]);
       await expect(access(sentryReadPath)).rejects.toThrow();

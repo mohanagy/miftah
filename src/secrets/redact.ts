@@ -1,3 +1,5 @@
+import { createHmac, randomUUID } from "node:crypto";
+
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 const providerTokenPatterns = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
@@ -5,6 +7,7 @@ const providerTokenPatterns = [
 ];
 const camelCaseBoundaryPattern = /([a-z0-9])([A-Z])/g;
 const nonAlphanumericPattern = /[^a-z0-9]+/;
+const invalidUriRedactionKey = randomUUID();
 const secretKeyTerms = new Set([
   "token",
   "tokens",
@@ -84,7 +87,7 @@ export function redactUri(uri: string): string {
     value.hash = "";
     return value.toString();
   } catch {
-    return "[REDACTED]";
+    return `miftah-invalid-uri:${createHmac("sha256", invalidUriRedactionKey).update(uri).digest("hex")}`;
   }
 }
 
