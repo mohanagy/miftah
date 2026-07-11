@@ -31,7 +31,7 @@ const managementTools: Tool[] = [
   tool("miftah_health", "Show redacted wrapper and upstream health."),
   tool("miftah_validate_config", "Validate the loaded wrapper configuration."),
   tool("miftah_list_upstream_tools", "List tools discovered from an upstream profile.", ["profile"]),
-  tool("miftah_restart_profile", "Restart the upstream process for a profile.", ["profile"]),
+  tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
   tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"])
 ];
 
@@ -300,7 +300,11 @@ export class MiftahServer {
       }
       if (name === "miftah_restart_profile") {
         const profile = requiredString(args, "profile");
-        await this.upstreams.restart(profile);
+        if (this.upstreams instanceof MultiUpstreamProcessManager) {
+          await this.upstreams.restartProfile(profile);
+        } else {
+          await this.upstreams.restart(profile);
+        }
         this.toolRegistry.invalidate(profile);
         if (profile === this.profiles.current().activeProfile) {
           await this.notifyToolListChanged(undefined, undefined);

@@ -32,6 +32,10 @@ export class MultiUpstreamProcessManager {
     return this.manager(upstreamName).restart(profile);
   }
 
+  async restartProfile(profile: string): Promise<void> {
+    await Promise.all(Object.values(this.managers).map((manager) => manager.restart(profile)));
+  }
+
   listHealth(): UpstreamHealth[] {
     return Object.values(this.managers).flatMap((manager) => manager.listHealth());
   }
