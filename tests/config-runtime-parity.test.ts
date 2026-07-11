@@ -136,7 +136,14 @@ describe("config runtime parity", () => {
         lockToProfile: null
       },
       process: { startupTimeoutMs: 1_000 },
-      audit: { enabled: true, path: "audit.jsonl", format: "jsonl", includeArguments: false, redact: true },
+      audit: {
+        enabled: true,
+        path: "audit.jsonl",
+        format: "jsonl",
+        includeArguments: false,
+        redact: true,
+        failureMode: "fail-open"
+      },
       tooling: { collisionStrategy: "prefix-upstream", toolRiskOverrides: { write_tool: "write" } },
       secrets: { envFiles: [".env"], allowPlaintextSecrets: false }
     });
@@ -145,6 +152,7 @@ describe("config runtime parity", () => {
     expect(config.process?.startupTimeoutMs).toBe(1_000);
     expect(config.security?.redactSecrets).toBe(true);
     expect(config.audit?.redact).toBe(true);
+    expect(config.audit?.failureMode).toBe("fail-open");
   });
 
   it("accepts implemented lifecycle controls", () => {

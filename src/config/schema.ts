@@ -158,7 +158,8 @@ const publicAuditSchema = z
     path: z.string().optional(),
     format: z.literal("jsonl").optional(),
     includeArguments: z.boolean().optional(),
-    redact: z.literal(true).optional()
+    redact: z.literal(true).optional(),
+    failureMode: z.enum(["fail-open", "fail-closed"]).optional()
   })
   .strict();
 
@@ -168,7 +169,8 @@ const auditSchema = z
     path: z.string().optional(),
     format: z.literal("jsonl").optional(),
     includeArguments: z.boolean().optional(),
-    redact: z.boolean().optional()
+    redact: z.boolean().optional(),
+    failureMode: z.enum(["fail-open", "fail-closed"]).optional()
   })
   .strict();
 

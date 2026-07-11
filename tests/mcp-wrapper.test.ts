@@ -210,6 +210,7 @@ describe("Miftah MCP wrapper", () => {
   it("retries tool discovery when the active profile changes during listing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-tool-list-race-"));
     const startedPath = join(directory, "tools-list-started");
+    const auditPath = join(directory, "audit.jsonl");
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -229,7 +230,8 @@ describe("Miftah MCP wrapper", () => {
             TEST_WHOAMI_SCHEMA: "account"
           }
         }
-      }
+      },
+      audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -258,6 +260,14 @@ describe("Miftah MCP wrapper", () => {
           properties: { account: { type: "string" } },
           required: ["account"]
         }
+      });
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.find((event) => event.kind === "operation" && event.operation === "tools/list")).toMatchObject({
+        sourceProfile: "work",
+        profile: "personal"
       });
     } finally {
       await client.close();

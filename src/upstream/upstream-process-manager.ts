@@ -7,7 +7,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
 import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expand.js";
-import { redactSecrets } from "../secrets/redact.js";
+import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
@@ -30,6 +30,7 @@ export interface UpstreamManagerOptions {
   maxRestarts?: number;
   maxConcurrentProfiles?: number;
   secretValues?: readonly string[];
+  redactor?: SecretRedactor;
   onStderr?: (profile: string, message: string) => void;
 }
 
@@ -40,6 +41,17 @@ export type UpstreamState = UpstreamProcessState | "degraded";
 type ShutdownFailureReason = "shutdown-timeout" | "shutdown-error";
 /** Identifies an intentional reason a profile's upstream process stopped. */
 export type UpstreamStopReason = "idle" | "manual" | "restart" | "shutdown" | ShutdownFailureReason;
+
+export type UpstreamLifecycleType = "start" | "start-failure" | "crash" | "restart" | "restart-failure" | "idle" | "shutdown";
+
+/** Describes an observable upstream lifecycle transition. */
+export interface UpstreamLifecycleEvent {
+  type: UpstreamLifecycleType;
+  profile: string;
+  upstreamName: string;
+  status: "success" | "failure";
+  errorCode?: string;
+}
 
 export interface UpstreamCapabilityHealth {
   state: UpstreamCapabilityState;
@@ -110,12 +122,13 @@ export class UpstreamProcessManager {
   private readonly stabilityTimers = new Map<string, NodeJS.Timeout>();
   private readonly generations = new Map<string, number>();
   private readonly startEpochs = new Map<string, number>();
-  private readonly secretValuesSet = new Set<string>();
+  private readonly redactor: SecretRedactor;
   private readonly automaticRestartCounts = new Map<string, number>();
   private readonly consecutiveRestartAttempts = new Map<string, number>();
   private readonly restartExhausted = new Set<string>();
   private readonly processErrors = new Map<string, string>();
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
+  private readonly lifecycleListeners = new Set<(event: UpstreamLifecycleEvent) => void>();
   private readonly options: ResolvedOptions;
   private readonly limiter: ProfileSessionLimiter;
   private nextToken = 0;
@@ -135,6 +148,8 @@ export class UpstreamProcessManager {
       restartOnCrash: options.restartOnCrash ?? false,
       maxRestarts: options.maxRestarts ?? defaultMaxRestarts
     };
+    this.redactor = options.redactor ?? new SecretRedactor();
+    this.redactor.addAll(options.secretValues ?? []);
     this.limiter = limiter ?? new ProfileSessionLimiter(options.maxConcurrentProfiles);
   }
 
@@ -161,12 +176,21 @@ export class UpstreamProcessManager {
 
   /** Returns every configured or dynamically resolved value that must be redacted from upstream output. */
   getSecretValues(): string[] {
-    return [...new Set([...this.secretValuesSet, ...(this.options.secretValues ?? [])])];
+    return this.redactor.values();
+  }
+
+  getRedactor(): SecretRedactor {
+    return this.redactor;
   }
 
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
     this.healthListeners.add(listener);
     return () => this.healthListeners.delete(listener);
+  }
+
+  addLifecycleListener(listener: (event: UpstreamLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
   }
 
   recordCapabilitySuccess(profile: string, capability: UpstreamCapability, _upstreamName?: string): void {
@@ -356,6 +380,12 @@ export class UpstreamProcessManager {
       this.setProcessState(profile, "running", { pid });
       this.scheduleIdleShutdown(profile, entry);
       if (source === "automatic") this.scheduleStabilityWindow(profile, entry);
+      this.publishLifecycle({
+        type: source === "demand" ? "start" : "restart",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "success"
+      });
       return session;
     } catch (error) {
       const pid = stdioTransport?.pid ?? null;
@@ -367,6 +397,13 @@ export class UpstreamProcessManager {
         : new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
       if (current) {
         this.setProcessState(profile, "failed", { error: failure.message, resetCapabilities: true, pid: null });
+        this.publishLifecycle({
+          type: source === "demand" ? "start-failure" : "restart-failure",
+          profile,
+          upstreamName: this.upstreamName,
+          status: "failure",
+          errorCode: failure.code
+        });
       }
       if (source !== "automatic" || !this.canAutomaticallyRetry(profile)) {
         this.limiter.release(profile, this.upstreamName);
@@ -404,11 +441,11 @@ export class UpstreamProcessManager {
       ...(upstreamHeaders?.secretValues ?? []),
       ...(profileHeaders?.secretValues ?? [])
     ]) {
-      this.secretValuesSet.add(value);
+      this.redactor.add(value);
     }
     for (const [key, value] of Object.entries({ ...environment, ...headers })) {
       if (credentialKeyPattern.test(key) && value.length > 0) {
-        this.secretValuesSet.add(value);
+        this.redactor.add(value);
       }
     }
     return { environment, headers };
@@ -416,14 +453,20 @@ export class UpstreamProcessManager {
 
   /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
   private attachStderr(profile: string, stderr: Stream | null): void {
+    const streamRedactor = this.redactor.createTextStream();
+    const emit = (value: string): void => {
+      if (value.length > 0) this.options.onStderr?.(profile, value);
+    };
     stderr?.on("data", (chunk: Buffer) => {
-      this.options.onStderr?.(profile, this.redactProcessOutput(chunk.toString("utf8")));
+      emit(streamRedactor.write(chunk.toString("utf8")));
     });
+    stderr?.once("end", () => emit(streamRedactor.flush()));
+    stderr?.once("close", () => emit(streamRedactor.flush()));
   }
 
   /** Redacts process-originated text using static and dynamically resolved secret values. */
   private redactProcessOutput(value: string): string {
-    return redactSecrets(value, [...this.secretValuesSet, ...(this.options.secretValues ?? [])]);
+    return this.redactor.redactText(value);
   }
 
   /** Handles an unexpected close only when it belongs to the current live session generation. */
@@ -440,6 +483,13 @@ export class UpstreamProcessManager {
       error: "UPSTREAM_START_FAILED: upstream process closed unexpectedly",
       resetCapabilities: true,
       pid: null
+    });
+    this.publishLifecycle({
+      type: "crash",
+      profile,
+      upstreamName: this.upstreamName,
+      status: "failure",
+      errorCode: "UPSTREAM_START_FAILED"
     });
     if (this.options.restartOnCrash) {
       this.scheduleAutomaticRestart(profile, generation);
@@ -462,6 +512,13 @@ export class UpstreamProcessManager {
         resetCapabilities: true,
         pid: null,
         restartLimitReached: true
+      });
+      this.publishLifecycle({
+        type: "restart-failure",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "failure",
+        errorCode: "UPSTREAM_RESTART_LIMIT_EXCEEDED"
       });
       this.limiter.release(profile, this.upstreamName);
       return;
@@ -589,6 +646,26 @@ export class UpstreamProcessManager {
       resetCapabilities: true,
       lastStopReason: shutdownFailure ?? reason
     });
+    const failureCode =
+      shutdownFailure === "shutdown-timeout" ? "UPSTREAM_SHUTDOWN_TIMEOUT" : "UPSTREAM_SHUTDOWN_FAILED";
+    if (reason === "restart" && shutdownFailure !== undefined) {
+      this.publishLifecycle({
+        type: "restart-failure",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "failure",
+        errorCode: failureCode
+      });
+    } else if (reason !== "restart") {
+      const failed = shutdownFailure !== undefined;
+      this.publishLifecycle({
+        type: reason === "idle" ? "idle" : "shutdown",
+        profile,
+        upstreamName: this.upstreamName,
+        status: failed ? "failure" : "success",
+        ...(failed ? { errorCode: failureCode } : {})
+      });
+    }
   }
 
   /** Finalizes a session after a timeout or close error so lifecycle capacity is never stranded. */
@@ -801,7 +878,27 @@ export class UpstreamProcessManager {
 
   private publishHealth(health: UpstreamHealth): void {
     this.health.set(health.profile, health);
-    for (const listener of this.healthListeners) listener(structuredClone(health));
+    this.notifyListeners(this.healthListeners, health, "health");
+  }
+
+  private publishLifecycle(event: UpstreamLifecycleEvent): void {
+    this.notifyListeners(this.lifecycleListeners, event, "lifecycle");
+  }
+
+  private notifyListeners<Event>(
+    listeners: ReadonlySet<(event: Event) => void>,
+    event: Event,
+    kind: "health" | "lifecycle"
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        process.emitWarning(`MIFTAH_LISTENER_FAILED: ignored a failing ${kind} listener`, {
+          code: "MIFTAH_LISTENER_FAILED"
+        });
+      }
+    }
   }
 }
 

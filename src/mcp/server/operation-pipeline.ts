@@ -1,10 +1,10 @@
-import type { AuditEvent } from "../../audit/audit-types.js";
+import type { AuditScope } from "../../audit/audit-trail.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import type { RoutingDecision } from "../../routing/routing-types.js";
-import { redactSecrets, redactUri, redactUrisInText } from "../../secrets/redact.js";
+import { SecretRedactor } from "../../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
@@ -36,12 +36,11 @@ export interface ProxiedOperation<Result> {
 }
 
 interface PipelineOptions {
-  readonly wrapper: string;
   readonly profiles: ProfileManager;
   readonly routing: RoutingEngine;
   readonly policy: PolicyEngine;
   readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager;
-  readonly writeAudit: (event: AuditEvent) => Promise<void>;
+  readonly redactor: SecretRedactor;
 }
 
 /**
@@ -50,53 +49,35 @@ interface PipelineOptions {
 export class OperationPipeline {
   constructor(private readonly options: PipelineOptions) {}
 
-  async execute<Result>(operation: ProxiedOperation<Result>): Promise<Result> {
-    const startedAt = Date.now();
-    let profile = operation.source.activeProfile;
-    let route: RoutingDecision | undefined;
-    let decision: PolicyDecision | undefined;
-    let name = operation.name;
-    let result: Result;
-
+  async execute<Result>(operation: ProxiedOperation<Result>, audit: AuditScope): Promise<Result> {
     try {
-      route = this.options.routing.resolve(
+      const route = this.options.routing.resolve(
         { toolName: operation.routingName, args: operation.args },
         operation.source.activeProfile
       );
-      profile = route.profile;
-      decision = this.options.policy.evaluate(this.options.profiles.get(profile).policy, operation.policyName);
+      const profile = route.profile;
+      const profileConfig = this.options.profiles.get(profile);
+      const decision = this.options.policy.evaluate(profileConfig.policy, operation.policyName);
+      audit.update({
+        profile,
+        routingReason: route.reason,
+        routingSource: routingSource(route),
+        policyName: profileConfig.policy ?? "default",
+        policyDecision: decision.action,
+        risk: decision.risk
+      });
       this.assertPolicyAllows(operation, route, decision, profile);
 
       const target = await operation.resolveTarget(profile);
-      name = target.name;
-      const session = await this.options.upstreams.get(profile, target.upstreamName);
-      result = target.redact(await target.execute(session));
-      result = redactSecrets(result, this.options.upstreams.getSecretValues());
-    } catch (error) {
-      const safeError = this.toSafeError(error);
-      await this.writeAudit({
-        operation,
-        profile,
-        name,
-        startedAt,
-        route,
-        decision,
-        status: this.failureStatus(safeError),
-        errorCode: safeError.code
+      audit.update({
+        name: this.auditName(operation, target.name),
+        ...(target.upstreamName === undefined ? {} : { upstream: target.upstreamName })
       });
-      throw safeError;
+      const session = await this.options.upstreams.get(profile, target.upstreamName);
+      return this.options.redactor.redact(target.redact(await target.execute(session)));
+    } catch (error) {
+      throw this.toSafeError(error);
     }
-
-    await this.writeAudit({
-      operation,
-      profile,
-      name,
-      startedAt,
-      route,
-      decision,
-      status: "success"
-    });
-    return result;
   }
 
   private assertPolicyAllows(
@@ -129,51 +110,21 @@ export class OperationPipeline {
     }
   }
 
-  private async writeAudit(input: {
-    operation: ProxiedOperation<unknown>;
-    profile: string;
-    name: string;
-    startedAt: number;
-    route?: RoutingDecision;
-    decision?: PolicyDecision;
-    status: AuditEvent["status"];
-    errorCode?: string;
-  }): Promise<void> {
-    await this.options.writeAudit({
-      wrapper: this.options.wrapper,
-      profile: input.profile,
-      operation: input.operation.operation,
-      name: this.auditName(input.operation, input.name),
-      status: input.status,
-      durationMs: Date.now() - input.startedAt,
-      ...(input.route ? { routingReason: input.route.reason } : {}),
-      ...(input.decision ? { policyDecision: input.decision.action, risk: input.decision.risk } : {}),
-      arguments: this.auditArguments(input.operation),
-      ...(input.errorCode ? { errorCode: input.errorCode } : {})
-    });
-  }
-
   private auditName(operation: ProxiedOperation<unknown>, name: string): string {
-    return operation.operation === "resources/read" ? redactUri(name) : name;
-  }
-
-  private auditArguments(operation: ProxiedOperation<unknown>): Record<string, unknown> {
-    if (operation.operation !== "resources/read" || typeof operation.args.uri !== "string") {
-      return operation.args;
-    }
-    return { ...operation.args, uri: redactUri(operation.args.uri) };
-  }
-
-  private failureStatus(error: MiftahError): AuditEvent["status"] {
-    return error.code === "POLICY_BLOCKED" || error.code === "POLICY_CONFIRMATION_REQUIRED" ? "blocked" : "failure";
+    return operation.operation === "resources/read" ? this.options.redactor.redactUri(name) : name;
   }
 
   private toSafeError(error: unknown): MiftahError {
-    const message = redactSecrets(
-      redactUrisInText(error instanceof Error ? error.message : String(error)),
-      this.options.upstreams.getSecretValues()
-    );
-    if (error instanceof MiftahError) return new MiftahError(error.code, message, error.details);
+    const message = this.options.redactor.redactText(error instanceof Error ? error.message : String(error));
+    if (error instanceof MiftahError) {
+      return new MiftahError(error.code, message, this.options.redactor.redact(error.details));
+    }
     return new MiftahError("UPSTREAM_CALL_FAILED", `UPSTREAM_CALL_FAILED: ${message}`);
   }
+}
+
+function routingSource(route: RoutingDecision): "rule" | "active-profile" | "default-profile" | undefined {
+  if (route.reason.startsWith("rule:")) return "rule";
+  if (route.reason === "active-profile" || route.reason === "default-profile") return route.reason;
+  return undefined;
 }

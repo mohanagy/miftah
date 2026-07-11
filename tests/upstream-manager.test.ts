@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { SecretRedactor } from "../src/secrets/redact.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
@@ -34,6 +35,92 @@ async function waitFor<Value>(
 }
 
 describe("upstream process manager", () => {
+  it("isolates lifecycle listener failures from upstream state transitions", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } }
+      },
+      { startupTimeoutMs: 1_000 }
+    );
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    manager.addLifecycleListener((event) => {
+      if (event.type === "start") throw new Error("listener failure");
+    });
+
+    try {
+      await expect(manager.get("work")).resolves.toMatchObject({ profile: "work" });
+      expect(manager.listHealth()).toMatchObject([{ profile: "work", processState: "running" }]);
+      expect(emitWarning).toHaveBeenCalledWith("MIFTAH_LISTENER_FAILED: ignored a failing lifecycle listener", {
+        code: "MIFTAH_LISTENER_FAILED"
+      });
+    } finally {
+      emitWarning.mockRestore();
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("isolates multi-upstream lifecycle listeners from each other's mutations", async () => {
+    const manager = new MultiUpstreamProcessManager({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: { work: {} }
+    });
+    const received: Array<{ type: string; status: string }> = [];
+    manager.addLifecycleListener((event) => {
+      event.status = "failure";
+    });
+    manager.addLifecycleListener((event) => {
+      received.push(event);
+    });
+
+    try {
+      await manager.get("work", "github");
+      expect(received).toEqual(expect.arrayContaining([expect.objectContaining({ type: "start", status: "success" })]));
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("continues multi-upstream lifecycle delivery after a listener fails", async () => {
+    const manager = new MultiUpstreamProcessManager({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: { work: {} }
+    });
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const received: Array<{ type: string; status: string }> = [];
+    manager.addLifecycleListener((event) => {
+      if (event.type === "start") throw new Error("listener failure");
+    });
+    manager.addLifecycleListener((event) => {
+      received.push(event);
+    });
+
+    try {
+      await manager.get("work", "github");
+      expect(received).toEqual(expect.arrayContaining([expect.objectContaining({ type: "start", status: "success" })]));
+      expect(emitWarning).toHaveBeenCalledWith("MIFTAH_LISTENER_FAILED: ignored a failing lifecycle listener", {
+        code: "MIFTAH_LISTENER_FAILED"
+      });
+    } finally {
+      emitWarning.mockRestore();
+      await manager.close();
+    }
+  });
+
   it("starts one cached upstream per profile and forwards MCP operations", async () => {
     const manager = new UpstreamProcessManager(
       {
@@ -122,6 +209,43 @@ describe("upstream process manager", () => {
       if (typeof cause !== "string") throw new Error("Expected a redacted diagnostic cause");
       expect(cause).not.toContain(secret);
       expect(cause).toContain("[REDACTED]");
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("shares dynamically resolved values with split stderr redaction", async () => {
+    const secret = "split-stderr-secret";
+    const message = `upstream stderr: ${secret}`;
+    const stderr: string[] = [];
+    const redactor = new SecretRedactor();
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: {
+          env: {
+            API_TOKEN: secret,
+            TEST_STDERR_MESSAGE: message,
+            TEST_STDERR_SPLIT_AT: String(message.indexOf(secret) + 5)
+          }
+        }
+      },
+      {
+        startupTimeoutMs: 1_000,
+        redactor,
+        onStderr: (_profile, output) => stderr.push(output)
+      }
+    );
+
+    try {
+      await manager.get("work");
+      await waitFor(() => stderr.join(""), (output) => output.includes("[REDACTED]"));
+      expect(stderr.join("")).not.toContain(secret);
+      expect(redactor.redact({ secret })).toEqual({ secret: "[REDACTED]" });
     } finally {
       await manager.close();
     }
@@ -559,6 +683,38 @@ describe("upstream process manager", () => {
     } finally {
       await manager.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records a failed restart teardown before starting a replacement session", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture],
+        env: { TEST_SHUTDOWN_DELAY_MS: "500" }
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 50 }
+    );
+    const events: Array<{ type: string; status: string; errorCode?: string }> = [];
+    manager.addLifecycleListener((event) => events.push(event));
+
+    try {
+      await manager.get("work");
+      await manager.restart("work");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "restart-failure",
+            status: "failure",
+            errorCode: "UPSTREAM_SHUTDOWN_TIMEOUT"
+          }),
+          expect.objectContaining({ type: "restart", status: "success" })
+        ])
+      );
+    } finally {
+      await manager.close();
     }
   });
 

@@ -4,24 +4,37 @@ import {
   UpstreamProcessManager,
   type UpstreamCapability,
   type UpstreamHealth,
+  type UpstreamLifecycleEvent,
   type UpstreamManagerOptions
 } from "./upstream-process-manager.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
+import { SecretRedactor } from "../secrets/redact.js";
 
 /** Coordinates named upstream managers while sharing profile-capacity accounting across the bundle. */
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
+  private readonly lifecycleListeners = new Set<(event: UpstreamLifecycleEvent) => void>();
   private readonly limiter: ProfileSessionLimiter;
+  private readonly redactor: SecretRedactor;
 
   constructor(config: MiftahConfig, options: UpstreamManagerOptions = {}) {
     this.limiter = new ProfileSessionLimiter(options.maxConcurrentProfiles);
+    this.redactor = options.redactor ?? new SecretRedactor();
+    this.redactor.addAll(options.secretValues ?? []);
     this.managers = Object.fromEntries(
       Object.entries(config.upstreams ?? {}).map(([name, upstream]) => {
-        const manager = new UpstreamProcessManager(upstream, scopedProfiles(config.profiles, name), options, name, this.limiter);
+        const manager = new UpstreamProcessManager(
+          upstream,
+          scopedProfiles(config.profiles, name),
+          { ...options, redactor: this.redactor },
+          name,
+          this.limiter
+        );
         manager.addHealthListener((health) => this.publishHealth(health));
+        manager.addLifecycleListener((event) => this.publishLifecycle(event));
         return [name, manager];
       })
     );
@@ -46,6 +59,11 @@ export class MultiUpstreamProcessManager {
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
     this.healthListeners.add(listener);
     return () => this.healthListeners.delete(listener);
+  }
+
+  addLifecycleListener(listener: (event: UpstreamLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
   }
 
   recordCapabilitySuccess(profile: string, capability: UpstreamCapability, upstreamName?: string): void {
@@ -75,7 +93,11 @@ export class MultiUpstreamProcessManager {
   }
 
   getSecretValues(): string[] {
-    return [...new Set(Object.values(this.managers).flatMap((manager) => manager.getSecretValues()))];
+    return this.redactor.values();
+  }
+
+  getRedactor(): SecretRedactor {
+    return this.redactor;
   }
 
   async close(): Promise<void> {
@@ -96,7 +118,27 @@ export class MultiUpstreamProcessManager {
   }
 
   private publishHealth(health: UpstreamHealth): void {
-    for (const listener of this.healthListeners) listener(health);
+    this.notifyListeners(this.healthListeners, health, "health");
+  }
+
+  private publishLifecycle(event: UpstreamLifecycleEvent): void {
+    this.notifyListeners(this.lifecycleListeners, event, "lifecycle");
+  }
+
+  private notifyListeners<Event>(
+    listeners: ReadonlySet<(event: Event) => void>,
+    event: Event,
+    kind: "health" | "lifecycle"
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        process.emitWarning(`MIFTAH_LISTENER_FAILED: ignored a failing ${kind} listener`, {
+          code: "MIFTAH_LISTENER_FAILED"
+        });
+      }
+    }
   }
 }
 

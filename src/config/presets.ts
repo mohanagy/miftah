@@ -22,7 +22,8 @@ function buildSharedDefaults(): SharedDefaults {
       path: "~/.local/state/miftah/audit.jsonl",
       format: "jsonl",
       includeArguments: false,
-      redact: true
+      redact: true,
+      failureMode: "fail-closed"
     },
     tooling: { collisionStrategy: "prefix-upstream" }
   };

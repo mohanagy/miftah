@@ -63,13 +63,14 @@ describe("operation pipeline", () => {
       const events = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
       expect(events).toHaveLength(3);
       expect(events).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ operation: "tools/call", status: "blocked", policyDecision: "confirm" }),
-          expect.objectContaining({ operation: "resources/read", status: "blocked", policyDecision: "confirm" }),
-          expect.objectContaining({ operation: "prompts/get", status: "blocked", policyDecision: "confirm" })
+          expect.objectContaining({ operation: "tools/call", status: "confirmation-required", policyDecision: "confirm" }),
+          expect.objectContaining({ operation: "resources/read", status: "confirmation-required", policyDecision: "confirm" }),
+          expect.objectContaining({ operation: "prompts/get", status: "confirmation-required", policyDecision: "confirm" })
         ])
       );
     } finally {
@@ -114,25 +115,26 @@ describe("operation pipeline", () => {
       const events = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
       expect(events).toHaveLength(3);
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             operation: "tools/call",
-            status: "blocked",
+            status: "denied",
             policyDecision: "deny",
             routingReason: "active-profile"
           }),
           expect.objectContaining({
             operation: "resources/read",
-            status: "blocked",
+            status: "denied",
             policyDecision: "deny",
             routingReason: "active-profile"
           }),
           expect.objectContaining({
             operation: "prompts/get",
-            status: "blocked",
+            status: "denied",
             policyDecision: "deny",
             routingReason: "active-profile"
           })
@@ -211,13 +213,14 @@ describe("operation pipeline", () => {
       const events = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
       expect(events).toHaveLength(3);
       expect(events).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ operation: "tools/call", status: "failure", errorCode: "ROUTING_AMBIGUOUS" }),
-          expect.objectContaining({ operation: "resources/read", status: "failure", errorCode: "ROUTING_AMBIGUOUS" }),
-          expect.objectContaining({ operation: "prompts/get", status: "failure", errorCode: "ROUTING_AMBIGUOUS" })
+          expect.objectContaining({ operation: "tools/call", status: "ambiguous", errorCode: "ROUTING_AMBIGUOUS" }),
+          expect.objectContaining({ operation: "resources/read", status: "ambiguous", errorCode: "ROUTING_AMBIGUOUS" }),
+          expect.objectContaining({ operation: "prompts/get", status: "ambiguous", errorCode: "ROUTING_AMBIGUOUS" })
         ])
       );
     } finally {
@@ -291,7 +294,8 @@ describe("operation pipeline", () => {
       const events = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
       expect(events).toHaveLength(3);
       expect(events).toEqual(
         expect.arrayContaining([
@@ -300,6 +304,7 @@ describe("operation pipeline", () => {
             name: "whoami",
             status: "success",
             profile: "work",
+            upstream: "default",
             routingReason: "active-profile",
             policyDecision: "allow",
             risk: "read",
@@ -310,6 +315,7 @@ describe("operation pipeline", () => {
             name: "account://current",
             status: "success",
             profile: "work",
+            upstream: "default",
             routingReason: "active-profile",
             policyDecision: "allow",
             risk: "read",
@@ -320,6 +326,7 @@ describe("operation pipeline", () => {
             name: "account_prompt",
             status: "success",
             profile: "work",
+            upstream: "default",
             routingReason: "active-profile",
             policyDecision: "allow",
             risk: "read",
@@ -417,7 +424,8 @@ describe("operation pipeline", () => {
       const events = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
       expect(events).toHaveLength(3);
       expect(events).toEqual(
         expect.arrayContaining([
