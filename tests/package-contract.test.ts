@@ -47,7 +47,12 @@ function runNpm(args: readonly string[]) {
     killSignal: "SIGTERM"
   });
   if (result.error) {
-    throw new Error(`npm ${args.join(" ")} did not complete within ${npmCommandTimeoutMs}ms: ${result.error.message}`);
+    const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
+    const reason =
+      timedOut
+        ? `timed out after ${npmCommandTimeoutMs}ms`
+        : `could not start: ${result.error.message}`;
+    throw new Error(`npm ${args.join(" ")} ${reason}`);
   }
   return result;
 }
