@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -191,7 +191,7 @@ async function findProjectMarker(
       const file = await readKnownJson(path);
       if (!file.found) continue;
       const profile = strictMarkerProfile(file.value, wrapperName);
-      if (profile === undefined) return undefined;
+      if (profile === undefined) continue;
       assertKnownProfile(profile, knownProfileNames);
       return { profile, path };
     }
@@ -234,11 +234,26 @@ async function readKnownJson(path: string): Promise<KnownJsonFile> {
     return { found: false };
   }
   if (!stats.isFile() || stats.size > MAX_ROUTING_CONTEXT_JSON_BYTES) return { found: true };
+
+  let file: FileHandle | undefined;
   try {
-    const source = await readFile(path, "utf8");
+    file = await open(path, "r");
+    const openedStats = await file.stat();
+    // Do not read through a symlink swapped in after the path was inspected.
+    if (
+      !openedStats.isFile() ||
+      openedStats.size > MAX_ROUTING_CONTEXT_JSON_BYTES ||
+      openedStats.dev !== stats.dev ||
+      openedStats.ino !== stats.ino
+    ) {
+      return { found: true };
+    }
+    const source = await file.readFile({ encoding: "utf8" });
     return { found: true, value: JSON.parse(source) as unknown };
   } catch {
     return { found: true };
+  } finally {
+    await file?.close();
   }
 }
 
@@ -313,9 +328,11 @@ async function findGitOrigin(
     const resolvedGitDirectory = await realpath(resolve(cwd, gitDirectory.trim()));
     if (!isWithin(boundary, resolvedGitDirectory)) return undefined;
 
-    const { stdout } = await execFile(executable, ["remote", "get-url", "origin"], {
-      ...gitExecutionOptions(cwd, boundary)
-    });
+    const { stdout } = await execFile(
+      executable,
+      ["config", "--local", "--no-includes", "--get", "remote.origin.url"],
+      gitExecutionOptions(cwd, boundary)
+    );
     const origin = stdout.trim();
     return origin.length === 0 ? undefined : redactUri(origin);
   } catch {

@@ -185,6 +185,39 @@ describe("routing context collector", () => {
     expect(unavailableGit.evidence.git).toBeUndefined();
   });
 
+  it("reads only a local Git origin rather than a global configuration value", async () => {
+    const root = await createProject();
+    const gitHome = await createProject();
+    await execFile("git", ["init"], { cwd: root });
+    await execFile("git", ["remote", "add", "origin", "https://source.example/repository"], { cwd: root });
+    await writeFile(
+      join(gitHome, ".gitconfig"),
+      '[url "https://global.example/rewritten"]\n\tinsteadOf = https://source.example/\n'
+    );
+    const originalHome = process.env.HOME;
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    process.env.HOME = gitHome;
+    process.env.XDG_CONFIG_HOME = join(gitHome, "config");
+
+    try {
+      const snapshot = await collectRoutingContext({
+        wrapperName: "github",
+        knownProfileNames: [],
+        cwd: root,
+        environment: {},
+        mcpRoots: [fileUri(root)]
+      });
+
+      expect(snapshot.context.git).toEqual({ origin: "https://source.example/repository" });
+      expect(snapshot.evidence.git).toEqual({ origin: "https://source.example/repository" });
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    }
+  });
+
   it("fails safely when an explicit profile hint is not configured", async () => {
     const root = await createProject();
 
@@ -235,6 +268,46 @@ describe("routing context collector", () => {
 
     expect(snapshot.context.marker).toBeUndefined();
     expect(snapshot.profileHints).toEqual([]);
+  });
+
+  it("does not follow a marker symlink outside the metadata boundary", async () => {
+    const root = await createProject();
+    const outside = await createProject();
+    const externalMarker = join(outside, "marker.json");
+    await writeJson(externalMarker, { profiles: { github: "work" } });
+    await symlink(externalMarker, join(root, ".miftahrc.json"));
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: ["work"],
+      cwd: root,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.context.marker).toBeUndefined();
+    expect(snapshot.profileHints).toEqual([]);
+  });
+
+  it("ignores an irrelevant child marker while searching enclosing metadata", async () => {
+    const root = await createProject();
+    const child = join(root, "packages", "app");
+    await mkdir(child, { recursive: true });
+    await writeJson(join(root, ".miftahrc.json"), { profiles: { github: "work" } });
+    await writeJson(join(child, ".miftahrc.json"), { profiles: { other: "personal" } });
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: ["work", "personal"],
+      cwd: child,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.context.marker).toEqual({ profile: "work" });
+    expect(snapshot.profileHints).toEqual([
+      { profile: "work", source: "project-marker", evidence: { kind: "marker", path: join(root, ".miftahrc.json") } }
+    ]);
   });
 
   it("exposes no fields outside the explicit marker and package schemas", async () => {
