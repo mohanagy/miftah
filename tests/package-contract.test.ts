@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PackageManifest {
@@ -106,6 +106,18 @@ function runInstalledBinary(binary: string, args: readonly string[], cwd: string
       timeout: npmCommandTimeoutMs
     }
   );
+}
+
+function quoteForPosixShell(value: string): string {
+  return `'${value.replace(/'/gu, "'\"'\"'")}'`;
+}
+
+function runInstalledBinaryThroughPosixShell(binary: string, args: readonly string[], cwd: string) {
+  return spawnSync("/bin/sh", ["-c", [binary, ...args].map(quoteForPosixShell).join(" ")], {
+    cwd,
+    encoding: "utf8",
+    timeout: npmCommandTimeoutMs
+  });
 }
 
 async function loadPackVerifier(): Promise<PackVerifier> {
@@ -403,6 +415,290 @@ describe("packed artifact contract", () => {
         const versionWithJson = runInstalledBinary(binary, ["version", "--json"], directory);
         expect(versionWithJson.status, versionWithJson.stderr || versionWithJson.stdout).toBe(0);
         expect(versionWithJson.stdout.trim()).toBe(readPackageManifest().version);
+
+        const cliContractDirectory = join(directory, "CLI contract hierarchy with spaces");
+        const configDirectory = join(cliContractDirectory, "configuration files with spaces");
+        await mkdir(configDirectory, { recursive: true });
+        const writeCliConfig = async (name: string, config: Record<string, unknown>): Promise<string> => {
+          const path = join(configDirectory, name);
+          await writeFile(path, JSON.stringify(config));
+          if (process.platform !== "win32") await chmod(path, 0o600);
+          return path;
+        };
+        const cliConfig = (
+          name: string,
+          profiles: Record<string, unknown>,
+          args: string[] = [fakeStdioUpstreamFixture],
+          extras: Record<string, unknown> = {}
+        ) => ({
+          version: "1",
+          name,
+          defaultProfile: "work",
+          upstream: { transport: "stdio", command: process.execPath, args },
+          profiles,
+          process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
+          ...extras
+        });
+
+        const rootHelp = runInstalledBinary(binary, ["--help"], cliContractDirectory);
+        expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
+        expect(rootHelp.stderr).toBe("");
+        expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
+        const commandOptions = {
+          serve: ["--config <file>"],
+          validate: ["--config <file>"],
+          doctor: ["--config <file>", "--json"],
+          schema: [],
+          init: ["--name <name>", "--preset <name>", "--output <file>"],
+          "list-tools": ["--config <file>", "--profile <name>"],
+          "test-profile": ["--config <file>", "--profile <name>"],
+          logs: ["--config <file>", "--follow"],
+          version: ["--json"]
+        } as const;
+        for (const [command, options] of Object.entries(commandOptions)) {
+          expect(rootHelp.stdout).toContain(command);
+          const help = runInstalledBinary(binary, [command, "--help"], cliContractDirectory);
+          expect(help.status, help.stderr || help.stdout).toBe(0);
+          expect(help.stderr).toBe("");
+          expect(help.stdout).toContain(`Usage: miftah ${command}`);
+          for (const option of options) expect(help.stdout).toContain(option);
+        }
+
+        for (const args of [["--version"], ["-v"], ["version"], ["version", "--json"]] as const) {
+          const command = runInstalledBinary(binary, args, cliContractDirectory);
+          expect(command.status, command.stderr || command.stdout).toBe(0);
+          expect(command.stderr).toBe("");
+          expect(command.stdout.trim()).toBe(readPackageManifest().version);
+        }
+
+        const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
+        const initialized =
+          process.platform === "win32"
+            ? runInstalledBinary(
+                binary,
+                ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
+                cliContractDirectory
+              )
+            : runInstalledBinaryThroughPosixShell(
+                binary,
+                ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
+                cliContractDirectory
+              );
+        expect(initialized.status, initialized.stderr || initialized.stdout).toBe(0);
+        expect(initialized.stderr).toBe("");
+        expect(initialized.stdout).toContain(initOutputPath);
+        expect(JSON.parse(await readFile(initOutputPath, "utf8"))).toMatchObject({ name: "starter config with spaces" });
+        const validatedInit = runInstalledBinary(binary, ["validate", "--config", initOutputPath], cliContractDirectory);
+        expect(validatedInit.status, validatedInit.stderr || validatedInit.stdout).toBe(0);
+        expect(validatedInit.stderr).toBe("");
+        expect(JSON.parse(validatedInit.stdout)).toMatchObject({ ok: true, name: "starter config with spaces" });
+
+        const automationConfigPath = await writeCliConfig(
+          "automation config with spaces.json",
+          cliConfig("packed-cli-automation", {
+            work: { env: { TEST_ACCOUNT_NAME: "automation-account" } }
+          })
+        );
+        const schemaAutomation = runInstalledBinary(binary, ["schema"], cliContractDirectory);
+        expect(schemaAutomation.status, schemaAutomation.stderr || schemaAutomation.stdout).toBe(0);
+        expect(schemaAutomation.stderr).toBe("");
+        expect(JSON.parse(schemaAutomation.stdout)).toMatchObject({
+          $schema: "https://json-schema.org/draft/2019-09/schema#"
+        });
+        const validateAutomation = runInstalledBinary(
+          binary,
+          ["validate", "--config", automationConfigPath],
+          cliContractDirectory
+        );
+        expect(validateAutomation.status, validateAutomation.stderr || validateAutomation.stdout).toBe(0);
+        expect(validateAutomation.stderr).toBe("");
+        expect(JSON.parse(validateAutomation.stdout)).toMatchObject({ ok: true, name: "packed-cli-automation" });
+        const doctorAutomation = runInstalledBinary(
+          binary,
+          ["doctor", "--json", "--config", automationConfigPath],
+          cliContractDirectory
+        );
+        expect(doctorAutomation.status, doctorAutomation.stderr || doctorAutomation.stdout).toBe(0);
+        expect(doctorAutomation.stderr).toBe("");
+        expect(JSON.parse(doctorAutomation.stdout)).toMatchObject({ ok: true, overallStatus: "healthy" });
+        const listedTools = runInstalledBinary(
+          binary,
+          ["list-tools", "--config", automationConfigPath, "--profile", "work"],
+          cliContractDirectory
+        );
+        expect(listedTools.status, listedTools.stderr || listedTools.stdout).toBe(0);
+        expect(listedTools.stderr).toBe("");
+        expect(JSON.parse(listedTools.stdout)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "whoami" })])
+        );
+        const testedProfile = runInstalledBinary(
+          binary,
+          ["test-profile", "--config", automationConfigPath, "--profile", "work"],
+          cliContractDirectory
+        );
+        expect(testedProfile.status, testedProfile.stderr || testedProfile.stdout).toBe(0);
+        expect(testedProfile.stderr).toBe("");
+        expect(JSON.parse(testedProfile.stdout)).toEqual({ ok: true, profile: "work" });
+
+        const noRuntimeStartPath = join(cliContractDirectory, "runtime must not start");
+        const unavailableSecretName = "MIFTAH_PACKED_CONTRACT_MISSING_SECRET";
+        const unavailableConfigPath = await writeCliConfig(
+          "unavailable secret config.json",
+          cliConfig(
+            "packed-cli-unavailable-secret",
+            { work: { env: { API_TOKEN: `secretref:env://${unavailableSecretName}` } } },
+            [
+              "--eval",
+              `require("node:fs").writeFileSync(${JSON.stringify(noRuntimeStartPath)}, "started")`
+            ]
+          )
+        );
+        for (const args of [
+          ["list-tools", "--config", unavailableConfigPath, "--unknown"],
+          ["list-tools", "--config", unavailableConfigPath, "--profile"],
+          ["schema", "--config", unavailableConfigPath]
+        ]) {
+          const invalid = runInstalledBinary(binary, args, cliContractDirectory);
+          expect(invalid.status).toBe(2);
+          expect(invalid.stdout).toBe("");
+          expect(invalid.stderr).not.toContain(unavailableSecretName);
+          expect(invalid.stderr).not.toContain("SECRET_ENV_MISSING");
+          expect(invalid.stderr).not.toContain("UPSTREAM_");
+        }
+        await expect(readFile(noRuntimeStartPath, "utf8")).rejects.toThrow();
+
+        const missingConfigPath = join(configDirectory, "missing config with spaces.json");
+        const missingConfig = runInstalledBinary(binary, ["validate", "--config", missingConfigPath], cliContractDirectory);
+        expect(missingConfig.status).toBe(3);
+        expect(missingConfig.stdout).toBe("");
+        expect(missingConfig.stderr).toContain("CONFIG_NOT_FOUND");
+
+        const missingSecretStartPath = join(cliContractDirectory, "missing secret must not start");
+        const missingSecretConfigPath = await writeCliConfig(
+          "missing secret config.json",
+          cliConfig(
+            "packed-cli-missing-secret",
+            { work: { env: { API_TOKEN: `secretref:env://${unavailableSecretName}` } } },
+            [
+              "--eval",
+              `require("node:fs").writeFileSync(${JSON.stringify(missingSecretStartPath)}, "started")`
+            ]
+          )
+        );
+        const missingSecret = runInstalledBinary(
+          binary,
+          ["test-profile", "--config", missingSecretConfigPath],
+          cliContractDirectory
+        );
+        expect(missingSecret.status).toBe(4);
+        expect(missingSecret.stdout).toBe("");
+        expect(missingSecret.stderr).toContain("SECRET_ENV_MISSING");
+        expect(missingSecret.stderr).not.toContain(`secretref:env://${unavailableSecretName}`);
+        await expect(readFile(missingSecretStartPath, "utf8")).rejects.toThrow();
+
+        const failedInitSecret = "packed-cli-init-secret";
+        const upstreamShutdownPath = join(cliContractDirectory, "failed upstream shutdown");
+        const failedInitConfigPath = await writeCliConfig(
+          "failed upstream config.json",
+          cliConfig(
+            "packed-cli-failed-init",
+            {
+              work: {
+                env: {
+                  API_TOKEN: `secretref:plain://${failedInitSecret}`,
+                  TEST_FAIL_INITIALIZE: "true",
+                  TEST_SHUTDOWN_END_PATH: upstreamShutdownPath
+                }
+              }
+            },
+            [fakeStdioUpstreamFixture],
+            { secrets: { allowPlaintextSecrets: true } }
+          )
+        );
+        const failedInit = runInstalledBinary(
+          binary,
+          ["test-profile", "--config", failedInitConfigPath],
+          cliContractDirectory
+        );
+        expect(failedInit.status).toBe(5);
+        expect(failedInit.stdout).toBe("");
+        expect(failedInit.stderr).toContain("UPSTREAM_INIT_FAILED");
+        expect(`${failedInit.stdout}${failedInit.stderr}`).not.toContain(failedInitSecret);
+        expect(await readFile(upstreamShutdownPath, "utf8")).toBe("ended");
+
+        const auditPath = join(cliContractDirectory, "audit output with spaces", "events with spaces.jsonl");
+        const auditUsername = ["user", "name"].join("");
+        const auditPassword = ["pass", "word"].join("");
+        await mkdir(dirname(auditPath), { recursive: true });
+        await writeFile(
+          auditPath,
+          `${JSON.stringify({
+            callbackUrl: `https://${auditUsername}:${auditPassword}@example.test/callback?access_token=uri-query-secret&tenant=private-tenant`,
+            message: "non-default-profile-secret"
+          })}\n`
+        );
+        const logsConfigPath = await writeCliConfig(
+          "logs config with spaces.json",
+          cliConfig(
+            "packed-cli-logs",
+            {
+              work: {},
+              archival: {
+                env: { WORK_ENV: "secretref:plain://non-default-profile-secret" }
+              }
+            },
+            [fakeStdioUpstreamFixture],
+            {
+              audit: { path: auditPath },
+              secrets: { allowPlaintextSecrets: true }
+            }
+          )
+        );
+        const logs = runInstalledBinary(binary, ["logs", "--config", logsConfigPath], cliContractDirectory);
+        expect(logs.status, logs.stderr || logs.stdout).toBe(0);
+        expect(logs.stderr).toBe("");
+        for (const secret of ["username", "password", "uri-query-secret", "private-tenant", "non-default-profile-secret"]) {
+          expect(logs.stdout).not.toContain(secret);
+        }
+        const logRecords = logs.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, string>);
+        expect(logRecords).toEqual([
+          {
+            callbackUrl: "https://example.test/callback?access_token=%5BREDACTED%5D&tenant=%5BREDACTED%5D",
+            message: "[REDACTED]"
+          }
+        ]);
+
+        const installedCliReference = await readFile(
+          join(directory, "node_modules", "@lubab", "miftah", "docs", "cli.md"),
+          "utf8"
+        );
+        expect(installedCliReference).toContain("## Help");
+        for (const command of Object.keys(commandOptions)) {
+          expect(installedCliReference).toContain(`\`miftah ${command}`);
+        }
+        for (const option of [
+          "--help",
+          "-h",
+          "--version",
+          "-v",
+          "--config",
+          "--profile",
+          "--output",
+          "--preset",
+          "--name",
+          "--json",
+          "--follow"
+        ]) {
+          expect(installedCliReference).toContain(`\`${option}`);
+        }
+        expect(installedCliReference).toContain("| `2` | Usage");
+        expect(installedCliReference).toContain("| `3` | Configuration");
+        expect(installedCliReference).toContain("| `4` | Secret resolution");
+        expect(installedCliReference).toContain("| `5` | Upstream");
+        expect(installedCliReference).toContain("| `6` | Policy");
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
