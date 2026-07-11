@@ -309,6 +309,7 @@ async function stageAuditSnapshot(
       resetState(candidate);
     }
 
+    // Rehash [0,cursor): portable metadata cannot distinguish normal append from same-inode copytruncate/rewrite to equal-or-larger size, protecting rotation integrity before emitting delta.
     let prefixHash = await hashFromHandle(handle, 0, candidate.cursor, hashChunk, signal);
     if (prefixHash === undefined) {
       return signal?.aborted ? { kind: "aborted" } : { kind: "unstable" };
