@@ -10,6 +10,7 @@ import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expan
 import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
+import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
 
 const defaultStartupTimeoutMs = 30_000;
@@ -20,6 +21,18 @@ const maximumRestartDelayMs = 5_000;
 const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
 const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
+
+function mergeHeaders(
+  ...headerSets: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const merged = new Map<string, string>();
+  for (const headers of headerSets) {
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      merged.set(name.toLowerCase(), value);
+    }
+  }
+  return Object.fromEntries(merged);
+}
 
 /** Configures lifecycle behavior, capacity, and redacted diagnostics for an upstream manager. */
 export interface UpstreamManagerOptions {
@@ -335,11 +348,16 @@ export class UpstreamProcessManager {
         if (!this.upstream.url) {
           throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: remote upstream requires a url");
         }
-        const options = Object.keys(headers).length > 0 ? { requestInit: { headers } } : undefined;
-        transport =
-          this.upstream.transport === "sse"
-            ? new SSEClientTransport(new URL(this.upstream.url), options)
-            : new StreamableHTTPClientTransport(new URL(this.upstream.url), options);
+        if (this.upstream.transport === "sse") {
+          const options = {
+            ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
+            fetch: fetchSsePostWithStatusOnly
+          };
+          transport = new SSEClientTransport(new URL(this.upstream.url), options);
+        } else {
+          const options = Object.keys(headers).length > 0 ? { requestInit: { headers } } : undefined;
+          transport = new StreamableHTTPClientTransport(new URL(this.upstream.url), options);
+        }
       }
 
       transport.onclose = () => this.handleTransportClosed(profile, token, generation);
@@ -362,10 +380,19 @@ export class UpstreamProcessManager {
         throw new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
       }
 
-      const session = new UpstreamSession(profile, client, () => client.close(), {
-        begin: () => this.beginOperation(profile, token, entry),
-        end: () => this.endOperation(profile, token, entry)
-      });
+      const upstreamTransport = this.upstream.transport;
+      const mapRequestError =
+        upstreamTransport === "stdio" ? undefined : (error: unknown) => asRemoteError(profile, upstreamTransport, error);
+      const session = new UpstreamSession(
+        profile,
+        client,
+        () => client.close(),
+        {
+          begin: () => this.beginOperation(profile, token, entry),
+          end: () => this.endOperation(profile, token, entry)
+        },
+        mapRequestError
+      );
       const entry: ManagedSession = {
         session,
         transport,
@@ -431,10 +458,7 @@ export class UpstreamProcessManager {
       ...(upstreamEnvironment?.values ?? {}),
       ...(profileEnvironment?.values ?? {})
     };
-    const headers = {
-      ...(upstreamHeaders?.values ?? {}),
-      ...(profileHeaders?.values ?? {})
-    };
+    const headers = mergeHeaders(upstreamHeaders?.values, profileHeaders?.values);
     for (const value of [
       ...(upstreamEnvironment?.secretValues ?? []),
       ...(profileEnvironment?.secretValues ?? []),
@@ -672,7 +696,7 @@ export class UpstreamProcessManager {
   private async closeSession(
     entry: ManagedSession
   ): Promise<ShutdownFailureReason | undefined> {
-    const close = entry.session.close();
+    const close = this.closeManagedSession(entry);
     void close.catch(() => undefined);
     try {
       await withTimeout(
@@ -683,8 +707,8 @@ export class UpstreamProcessManager {
       );
       return undefined;
     } catch (error) {
-      // Send SIGKILL before releasing capacity, but never let best-effort transport cleanup exceed the shutdown deadline.
-      void this.terminateTransport(entry.transport, entry.pid).catch(() => undefined);
+      // Abort a hung remote session deletion before returning lifecycle capacity.
+      await this.forceCloseTransport(entry.transport, entry.pid);
       return error instanceof MiftahError && error.code === "UPSTREAM_SHUTDOWN_TIMEOUT"
         ? "shutdown-timeout"
         : "shutdown-error";
@@ -692,6 +716,19 @@ export class UpstreamProcessManager {
   }
 
   private async terminateTransport(transport: Transport, pid: number | null): Promise<void> {
+    if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
+      await withTimeout(
+        transport.terminateSession(),
+        this.options.shutdownTimeoutMs,
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: remote session termination timed out after ${this.options.shutdownTimeoutMs}ms`
+      ).catch(() => undefined);
+    }
+    await this.forceCloseTransport(transport, pid);
+  }
+
+  /** Forcibly tears down a local transport without waiting for remote session cleanup. */
+  private async forceCloseTransport(transport: Transport, pid: number | null): Promise<void> {
     if (pid !== null) {
       try {
         process.kill(pid, "SIGKILL");
@@ -700,6 +737,24 @@ export class UpstreamProcessManager {
       }
     }
     await transport.close().catch(() => undefined);
+  }
+
+  /** Deletes a remote Streamable HTTP session before closing its local client transport. */
+  private async closeManagedSession(entry: ManagedSession): Promise<void> {
+    let terminationError: unknown;
+    if (entry.transport instanceof StreamableHTTPClientTransport && entry.transport.sessionId) {
+      try {
+        await entry.transport.terminateSession();
+      } catch (error) {
+        terminationError = error;
+      }
+    }
+    try {
+      await entry.session.close();
+    } catch (error) {
+      if (terminationError === undefined) throw error;
+    }
+    if (terminationError !== undefined) throw terminationError;
   }
 
   /** Prevents an idle timer from closing a session after the activity callback has admitted an operation. */
@@ -774,6 +829,10 @@ export class UpstreamProcessManager {
 
   private asStartFailure(profile: string, error: unknown): MiftahError {
     if (error instanceof MiftahError) return error;
+    if (this.upstream.transport !== "stdio") {
+      const remoteError = asRemoteError(profile, this.upstream.transport, error);
+      if (remoteError) return remoteError;
+    }
     return new MiftahError("UPSTREAM_INIT_FAILED", `UPSTREAM_INIT_FAILED: could not initialize profile '${profile}'`, {
       cause: this.redactProcessOutput(error instanceof Error ? error.message : String(error))
     });

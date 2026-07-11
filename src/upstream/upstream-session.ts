@@ -10,6 +10,7 @@ import type {
   ListToolsResult,
   ReadResourceRequest
 } from "@modelcontextprotocol/sdk/types.js";
+import { MiftahError } from "../utils/errors.js";
 
 /** Lets the process manager bracket upstream work so idle shutdown cannot interrupt an active request. */
 export interface UpstreamSessionActivity {
@@ -17,13 +18,16 @@ export interface UpstreamSessionActivity {
   end(): void;
 }
 
+export type UpstreamRequestErrorMapper = (error: unknown) => MiftahError | undefined;
+
 /** Provides profile-bound MCP operations while reporting their activity to lifecycle management. */
 export class UpstreamSession {
   constructor(
     readonly profile: string,
     private readonly client: Client,
     private readonly closeTransport: () => Promise<void>,
-    private readonly activity?: UpstreamSessionActivity
+    private readonly activity?: UpstreamSessionActivity,
+    private readonly mapRequestError?: UpstreamRequestErrorMapper
   ) {}
 
   listTools(): Promise<ListToolsResult> {
@@ -58,6 +62,8 @@ export class UpstreamSession {
     this.activity?.begin();
     try {
       return await operation();
+    } catch (error) {
+      throw this.mapRequestError?.(error) ?? error;
     } finally {
       this.activity?.end();
     }

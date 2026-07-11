@@ -33,7 +33,32 @@ const upstreamSchema = z.object(upstreamBaseShape).strict().superRefine((value, 
   if (value.transport !== "stdio" && !value.url) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["url"], message: "remote upstream requires url" });
   }
+  if (value.transport !== "stdio" && value.url) {
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["url"],
+        params: {
+          miftahCode: "CONFIG_SCHEMA_INVALID",
+          remediation: "Use an https URL, or http only for a loopback development endpoint."
+        },
+        message: "CONFIG_SCHEMA_INVALID: remote upstream URL must use https unless it targets loopback"
+      });
+    }
+  }
 });
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (normalized === "localhost" || normalized === "::1") return true;
+  const octets = normalized.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
+  );
+}
 
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),

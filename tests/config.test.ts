@@ -106,4 +106,57 @@ describe("config foundation", () => {
     expect(thrown).toBeInstanceOf(MiftahError);
     expect(thrown).toMatchObject({ code: "POLICY_NOT_FOUND" });
   });
+
+  it.each([
+    ["http://mcp.example.test/mcp", "http://localhost:3000/mcp"],
+    ["http://mcp.example.test/mcp", "http://127.0.0.1:3000/mcp"],
+    ["ftp://mcp.example.test/mcp", "http://[::1]:3000/mcp"]
+  ])("requires HTTPS for remote upstream URLs while allowing loopback HTTP", (insecureUrl, loopbackUrl) => {
+    const baseConfig = {
+      version: "1",
+      name: "remote",
+      defaultProfile: "work",
+      profiles: { work: {} }
+    };
+
+    expect(() =>
+      validateConfig({
+        ...baseConfig,
+        upstream: { transport: "streamable-http", url: insecureUrl }
+      })
+    ).toThrow(/CONFIG_SCHEMA_INVALID.*upstream\.url/u);
+    expect(() =>
+      validateConfig({
+        ...baseConfig,
+        upstream: { transport: "streamable-http", url: loopbackUrl }
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateConfig({
+        ...baseConfig,
+        upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+      })
+    ).not.toThrow();
+  });
+
+  it("reports an insecure named remote upstream at its exact URL path", () => {
+    let thrown: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "named-remote",
+        defaultProfile: "work",
+        upstreams: { provider: { transport: "streamable-http", url: "http://mcp.example.test/mcp" } },
+        profiles: { work: {} }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    if (!(thrown instanceof MiftahError)) throw new Error("Expected an insecure remote URL validation error");
+    expect(thrown.details?.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "upstreams.provider.url" })])
+    );
+  });
 });
