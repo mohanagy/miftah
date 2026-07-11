@@ -128,7 +128,7 @@ function runInstalledBinaryThroughShell(binary: string, args: readonly string[],
 
 async function loadPackVerifier(): Promise<PackVerifier> {
   // @ts-expect-error The production verifier is intentionally plain Node ESM.
-  return import("../scripts/check-pack.mjs") as Promise<PackVerifier>;
+  return import("../scripts/pack-verifier.mjs") as Promise<PackVerifier>;
 }
 
 beforeAll(
@@ -180,6 +180,15 @@ describe("package metadata contract", () => {
 });
 
 describe("packed artifact contract", () => {
+  it("loads its verifier from a shebang-free ESM module", async () => {
+    const verifierSource = readFileSync(new URL("../scripts/pack-verifier.mjs", import.meta.url), "utf8");
+
+    expect(verifierSource).not.toMatch(/^#!/u);
+    await expect(loadPackVerifier()).resolves.toEqual(
+      expect.objectContaining({ verifyPackPaths: expect.any(Function) })
+    );
+  });
+
   it("contains required runtime, documentation, and example files from a real dry run", () => {
     const packed = runNpm(["pack", "--dry-run", "--json"]);
 
