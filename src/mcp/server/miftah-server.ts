@@ -8,6 +8,8 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
   type CallToolResult,
+  type GetPromptRequest,
+  type ReadResourceRequest,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig } from "../../config/types.js";
@@ -20,6 +22,7 @@ import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { ResourcePromptRegistry } from "./resource-prompt-registry.js";
 import { ToolRegistry, type ToolSnapshot } from "./tool-registry.js";
 
 const managementTools: Tool[] = [
@@ -73,6 +76,7 @@ export class MiftahServer {
   private readonly audit?: AuditLogger;
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private readonly toolRegistry: ToolRegistry;
+  private readonly resourcePromptRegistry?: ResourcePromptRegistry;
 
   constructor(
     private readonly config: MiftahConfig,
@@ -83,10 +87,16 @@ export class MiftahServer {
     this.server = new Server(
       { name: `miftah-${config.name}`, version: "0.1.1" },
       {
-        debouncedNotificationMethods: ["notifications/tools/list_changed"],
+        debouncedNotificationMethods: [
+          "notifications/tools/list_changed",
+          "notifications/resources/list_changed",
+          "notifications/prompts/list_changed"
+        ],
         capabilities: {
           tools: { listChanged: true },
-          ...(this.resourcePromptProxy.available ? { resources: {}, prompts: {} } : {})
+          ...(this.resourcePromptProxy.available
+            ? { resources: { listChanged: true }, prompts: { listChanged: true } }
+            : {})
         },
         instructions: [
           "Miftah wraps an upstream MCP and routes requests through local credential profiles.",
@@ -108,6 +118,17 @@ export class MiftahServer {
         ),
       (name, upstreamName) => this.exposedToolName(name, upstreamName)
     );
+    if (this.upstreams instanceof MultiUpstreamProcessManager && this.upstreams.listUpstreams().length > 1) {
+      const multiUpstreams = this.upstreams;
+      this.resourcePromptRegistry = new ResourcePromptRegistry(
+        () => multiUpstreams.listUpstreams(),
+        (profile, upstreamName, params) =>
+          this.callUpstream(profile, upstreamName, (session) => session.listResources(params)),
+        (profile, upstreamName, params) =>
+          this.callUpstream(profile, upstreamName, (session) => session.listPrompts(params)),
+        (value) => redactSecrets(value, this.upstreams.getSecretValues())
+      );
+    }
     if (config.audit?.enabled !== false && config.audit?.path) {
       this.audit = new AuditLogger(config.audit.path, {
         includeArguments: config.audit.includeArguments,
@@ -141,20 +162,28 @@ export class MiftahServer {
 
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
-      this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-        return this.proxyResourcePrompt(upstreamName, (session) => session.listResources());
+      this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+        const profile = this.profiles.current().activeProfile;
+        if (this.resourcePromptRegistry) return this.resourcePromptRegistry.listResources(profile, request.params?.cursor);
+        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.listResources(request.params));
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-        return this.proxyResourcePrompt(upstreamName, (session) => session.readResource(request.params));
+        const profile = this.profiles.current().activeProfile;
+        if (this.resourcePromptRegistry) return this.readAggregatedResource(profile, request.params);
+        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.readResource(request.params));
       });
 
-      this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
-        return this.proxyResourcePrompt(upstreamName, (session) => session.listPrompts());
+      this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+        const profile = this.profiles.current().activeProfile;
+        if (this.resourcePromptRegistry) return this.resourcePromptRegistry.listPrompts(profile, request.params?.cursor);
+        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.listPrompts(request.params));
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-        return this.proxyResourcePrompt(upstreamName, (session) => session.getPrompt(request.params));
+        const profile = this.profiles.current().activeProfile;
+        if (this.resourcePromptRegistry) return this.getAggregatedPrompt(profile, request.params);
+        return this.proxyResourcePrompt(profile, upstreamName, (session) => session.getPrompt(request.params));
       });
     }
   }
@@ -269,14 +298,18 @@ export class MiftahServer {
         const profile = requiredString(args, "profile");
         const switched = this.profiles.switch(profile);
         this.routing.setActiveProfile(switched.activeProfile);
+        this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
+        await this.notifyResourcePromptListChanged();
         return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
       }
       if (name === "miftah_reset_profile") {
         const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
         const reset = this.profiles.reset();
         this.routing.setActiveProfile(reset.activeProfile);
+        this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
+        await this.notifyResourcePromptListChanged();
         return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
       }
       if (name === "miftah_profile_info") return textResult(JSON.stringify(this.profiles.info(requiredString(args, "profile"))));
@@ -308,8 +341,10 @@ export class MiftahServer {
           }
         } finally {
           this.toolRegistry.invalidate(profile);
+          this.resourcePromptRegistry?.invalidate(profile);
           if (profile === this.profiles.current().activeProfile) {
             await this.notifyToolListChanged(undefined, undefined);
+            await this.notifyResourcePromptListChanged();
           }
         }
         return textResult("Profile restarted.");
@@ -352,19 +387,25 @@ export class MiftahServer {
     if (upstreamNames.length === 0) {
       return { available: false, reason: "No upstream is configured, so resource and prompt proxying is unavailable." };
     }
-    return {
-      available: false,
-      reason: "Resource and prompt proxying is unavailable for multi-upstream bundles until namespaced aggregation is available."
-    };
+    return { available: true };
   }
 
   private async proxyResourcePrompt<Result>(
+    profile: string,
+    upstreamName: string | undefined,
+    operation: (session: UpstreamSession) => Promise<Result>
+  ): Promise<Result> {
+    return redactSecrets(await this.callUpstream(profile, upstreamName, operation), this.upstreams.getSecretValues());
+  }
+
+  private async callUpstream<Result>(
+    profile: string,
     upstreamName: string | undefined,
     operation: (session: UpstreamSession) => Promise<Result>
   ): Promise<Result> {
     try {
-      const session = await this.upstreams.get(this.profiles.current().activeProfile, upstreamName);
-      return redactSecrets(await operation(session), this.upstreams.getSecretValues());
+      const session = await this.upstreams.get(profile, upstreamName);
+      return await operation(session);
     } catch (error) {
       const safeMessage = redactSecrets(
         error instanceof Error ? error.message : String(error),
@@ -372,6 +413,50 @@ export class MiftahServer {
       );
       throw new Error(safeMessage, { cause: error });
     }
+  }
+
+  private async readAggregatedResource(profile: string, params: ReadResourceRequest["params"]) {
+    if (!this.resourcePromptRegistry) throw new Error("Resource aggregation is unavailable");
+    const epoch = this.resourcePromptRegistry.captureEpoch(profile);
+    let route = this.resourcePromptRegistry.resolveResource(profile, params.uri);
+    if (!route) {
+      await this.resourcePromptRegistry.listResources(profile);
+      this.resourcePromptRegistry.assertResourceEpoch(profile, epoch);
+      route = this.resourcePromptRegistry.resolveResource(profile, params.uri);
+    }
+    if (!route) {
+      throw new MiftahError(
+        "RESOURCE_NOT_FOUND",
+        `RESOURCE_NOT_FOUND: resource '${params.uri}' is not exposed for profile '${profile}'`
+      );
+    }
+    this.resourcePromptRegistry.assertResourceEpoch(profile, epoch);
+    const result = await this.callUpstream(profile, route.upstreamName, (session) =>
+      session.readResource({ ...params, uri: route.originalUri })
+    );
+    return this.resourcePromptRegistry.redactReadResult(route, result, epoch);
+  }
+
+  private async getAggregatedPrompt(profile: string, params: GetPromptRequest["params"]) {
+    if (!this.resourcePromptRegistry) throw new Error("Prompt aggregation is unavailable");
+    const epoch = this.resourcePromptRegistry.captureEpoch(profile);
+    let route = this.resourcePromptRegistry.resolvePrompt(profile, params.name);
+    if (!route) {
+      await this.resourcePromptRegistry.listPrompts(profile);
+      this.resourcePromptRegistry.assertPromptEpoch(profile, epoch);
+      route = this.resourcePromptRegistry.resolvePrompt(profile, params.name);
+    }
+    if (!route) {
+      throw new MiftahError(
+        "PROMPT_NOT_FOUND",
+        `PROMPT_NOT_FOUND: prompt '${params.name}' is not exposed for profile '${profile}'`
+      );
+    }
+    this.resourcePromptRegistry.assertPromptEpoch(profile, epoch);
+    const result = await this.callUpstream(profile, route.upstreamName, (session) =>
+      session.getPrompt({ ...params, name: route.originalName })
+    );
+    return this.resourcePromptRegistry.redactPromptResult(route, result, epoch);
   }
 
   private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
@@ -392,6 +477,18 @@ export class MiftahServer {
   ): Promise<void> {
     if (!this.toolRegistry.hasSameTools(previous, next) && this.server.transport) {
       await this.server.sendToolListChanged();
+    }
+  }
+
+  private async notifyResourcePromptListChanged(): Promise<void> {
+    if (this.resourcePromptProxy.available && this.server.transport) {
+      await Promise.all([this.server.sendResourceListChanged(), this.server.sendPromptListChanged()]);
+    }
+  }
+
+  private invalidateResourcePromptProfiles(...profiles: string[]): void {
+    for (const profile of new Set(profiles)) {
+      this.resourcePromptRegistry?.invalidate(profile);
     }
   }
 }

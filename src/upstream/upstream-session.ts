@@ -4,7 +4,9 @@ import type {
   CallToolResult,
   GetPromptRequest,
   ListPromptsResult,
+  ListPromptsRequest,
   ListResourcesResult,
+  ListResourcesRequest,
   ListToolsResult,
   ReadResourceRequest
 } from "@modelcontextprotocol/sdk/types.js";
@@ -24,16 +26,16 @@ export class UpstreamSession {
     return this.client.callTool(params) as Promise<CallToolResult>;
   }
 
-  listResources(): Promise<ListResourcesResult> {
-    return this.client.listResources();
+  listResources(params?: ListResourcesRequest["params"]): Promise<ListResourcesResult> {
+    return this.client.listResources(params);
   }
 
   readResource(params: ReadResourceRequest["params"]) {
     return this.client.readResource(params);
   }
 
-  listPrompts(): Promise<ListPromptsResult> {
-    return this.client.listPrompts();
+  listPrompts(params?: ListPromptsRequest["params"]): Promise<ListPromptsResult> {
+    return this.client.listPrompts(params);
   }
 
   getPrompt(params: GetPromptRequest["params"]) {

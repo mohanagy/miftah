@@ -22,6 +22,7 @@ interface PackResult {
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommandTimeoutMs = 25_000;
 const requiredPackPaths = [
   "LICENSE",
   "README.md",
@@ -38,11 +39,22 @@ function readPackageManifest(): PackageManifest {
 }
 
 function runNpm(args: readonly string[]) {
-  return spawnSync(npmCommand, args, {
+  const result = spawnSync(npmCommand, args, {
     cwd: repositoryRoot,
     encoding: "utf8",
-    env: { ...process.env, npm_config_loglevel: "silent" }
+    env: { ...process.env, npm_config_loglevel: "silent" },
+    timeout: npmCommandTimeoutMs,
+    killSignal: "SIGTERM"
   });
+  if (result.error) {
+    const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
+    const reason =
+      timedOut
+        ? `timed out after ${npmCommandTimeoutMs}ms`
+        : `could not start: ${result.error.message}`;
+    throw new Error(`npm ${args.join(" ")} ${reason}`);
+  }
+  return result;
 }
 
 async function loadPackVerifier(): Promise<PackVerifier> {
@@ -50,12 +62,15 @@ async function loadPackVerifier(): Promise<PackVerifier> {
   return import("../scripts/check-pack.mjs") as Promise<PackVerifier>;
 }
 
-beforeAll(() => {
-  const build = runNpm(["run", "build"]);
-  if (build.status !== 0) {
-    throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
-  }
-});
+beforeAll(
+  () => {
+    const build = runNpm(["run", "build"]);
+    if (build.status !== 0) {
+      throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
+    }
+  },
+  30_000
+);
 
 describe("package metadata contract", () => {
   it("identifies the public repository and package support URLs", () => {

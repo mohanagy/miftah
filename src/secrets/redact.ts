@@ -1,3 +1,5 @@
+import { createHmac, randomUUID } from "node:crypto";
+
 const bearerPattern = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 const providerTokenPatterns = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
@@ -5,6 +7,7 @@ const providerTokenPatterns = [
 ];
 const camelCaseBoundaryPattern = /([a-z0-9])([A-Z])/g;
 const nonAlphanumericPattern = /[^a-z0-9]+/;
+const invalidUriRedactionKey = randomUUID();
 const secretKeyTerms = new Set([
   "token",
   "tokens",
@@ -70,6 +73,22 @@ function redactValue(value: unknown, secretValues: readonly string[], key?: stri
 /** Creates a reusable deep redactor for a fixed collection of secret values. */
 export function createRedactor(secretValues: readonly string[] = []): <T>(value: T) => T {
   return <T>(value: T) => redactValue(value, secretValues) as T;
+}
+
+/** Produces a safe public representation of a URI while retaining only its non-sensitive identity. */
+export function redactUri(uri: string): string {
+  try {
+    const value = new URL(uri);
+    value.username = "";
+    value.password = "";
+    for (const key of new Set(value.searchParams.keys())) {
+      value.searchParams.set(key, "[REDACTED]");
+    }
+    value.hash = "";
+    return value.toString();
+  } catch {
+    return `miftah-invalid-uri:${createHmac("sha256", invalidUriRedactionKey).update(uri).digest("hex")}`;
+  }
 }
 
 /** Redacts secret values and secret-bearing keys from an arbitrary value. */
