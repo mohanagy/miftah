@@ -1,4 +1,6 @@
-export const CLIENT_NAMES = ["claude-desktop", "claude-code", "cursor", "vscode"] as const;
+import { posix, win32 } from "node:path";
+
+export const CLIENT_NAMES = Object.freeze(["claude-desktop", "claude-code", "cursor", "vscode"] as const);
 
 export type ClientName = (typeof CLIENT_NAMES)[number];
 export type ClientSelection = ClientName | "all";
@@ -44,25 +46,44 @@ function isClientName(value: string): value is ClientName {
   return (CLIENT_NAMES as readonly string[]).includes(value);
 }
 
-function isAbsoluteConfigPath(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(path) || /^\\\\[^\\]+\\[^\\]+/u.test(path);
+function isAbsolutePath(path: string): boolean {
+  return posix.isAbsolute(path) || win32.isAbsolute(path);
 }
 
 function validateInput(input: ClientSnippetInput): void {
+  if (input === null || typeof input !== "object") {
+    inputError("A snippet input object is required.");
+  }
   if (typeof input.serverName !== "string" || input.serverName.length === 0) {
     inputError("A non-empty server name is required.");
   }
   if (typeof input.configPath !== "string" || input.configPath.includes("\0")) {
     inputError("Config path must not contain a NUL character.");
   }
-  if (!isAbsoluteConfigPath(input.configPath)) {
+  if (!isAbsolutePath(input.configPath)) {
     inputError("Config path must be absolute.");
+  }
+  if (input.launcher === null || typeof input.launcher !== "object") {
+    inputError("A launcher object is required.");
   }
   if (typeof input.launcher?.command !== "string" || input.launcher.command.length === 0) {
     inputError("A non-empty launcher command is required.");
   }
+  if (input.launcher.command.includes("\0")) {
+    inputError("Launcher command must not contain a NUL character.");
+  }
+  if (!isAbsolutePath(input.launcher.command)) {
+    inputError("Launcher command must be absolute.");
+  }
   if (!Array.isArray(input.launcher.args) || input.launcher.args.length === 0 || input.launcher.args.some((argument) => typeof argument !== "string" || argument.length === 0)) {
     inputError("Every launcher argument must be a non-empty string.");
+  }
+  if (input.launcher.args.some((argument) => argument.includes("\0"))) {
+    inputError("Launcher arguments must not contain a NUL character.");
+  }
+  const entrypoint = input.launcher.args[0];
+  if (entrypoint === undefined || !isAbsolutePath(entrypoint)) {
+    inputError("Miftah CLI entrypoint must be absolute.");
   }
 }
 

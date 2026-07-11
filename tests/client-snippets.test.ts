@@ -82,6 +82,19 @@ describe("client snippets", () => {
     expect(snippets.map((snippet) => snippet.client)).toEqual(CLIENT_NAMES);
   });
 
+  it("keeps supported client membership immutable and canonical", () => {
+    const mutableNames = CLIENT_NAMES as unknown as string[];
+
+    expect(Object.isFrozen(CLIENT_NAMES)).toBe(true);
+    expect(() => mutableNames.push("unsupported")).toThrow(TypeError);
+    expect(renderClientSnippets("all", posixInput).map((snippet) => snippet.client)).toEqual([
+      "claude-desktop",
+      "claude-code",
+      "cursor",
+      "vscode"
+    ]);
+  });
+
   it("preserves Windows paths and launcher values exactly in JSON arrays", () => {
     const command = String.raw`C:\Program Files\nodejs\node.exe`;
     const configPath = String.raw`C:\Users\Ada Lovelace\Miftah\config.json`;
@@ -109,27 +122,36 @@ describe("client snippets", () => {
     const snippet = renderClientSnippet("vscode", {
       ...posixInput,
       serverName,
-      launcher: { command: "node\"quoted", args: ["line\nbreak", "\\slash"] }
+      launcher: { command: "/opt/node\"quoted", args: ["/opt/line\nbreak", "\\slash"] }
     });
     const parsed = JSON.parse(snippet.json) as { servers: Record<string, { command: string; args: string[] }> };
 
     expect(parsed.servers[serverName]).toEqual({
       type: "stdio",
-      command: "node\"quoted",
-      args: ["line\nbreak", "\\slash", "--config", posixInput.configPath]
+      command: "/opt/node\"quoted",
+      args: ["/opt/line\nbreak", "\\slash", "--config", posixInput.configPath]
     });
   });
 
   it.each([
     [{ ...posixInput, serverName: "" }, "server name"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, command: "" } }, "launcher command"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, command: "node" } }, "absolute"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, command: "/safe\u0000node" } }, "NUL"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [] } }, "launcher argument"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [""] } }, "launcher argument"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, args: ["dist/cli/main.js"] } }, "absolute"],
+    [{ ...posixInput, launcher: { ...posixInput.launcher, args: ["/safe\u0000cli.js"] } }, "NUL"],
     [{ ...posixInput, configPath: "relative/config.json" }, "absolute"],
     [{ ...posixInput, configPath: "/safe\u0000path/config.json" }, "NUL"]
   ])("rejects invalid input %#", (input, message) => {
     expect(() => renderClientSnippet("cursor", input)).toThrow(ClientSnippetError);
     expect(() => renderClientSnippet("cursor", input)).toThrow(message);
+  });
+
+  it.each([null, undefined, true, "not an object"])("rejects malformed top-level input %#", (input) => {
+    expect(() => renderClientSnippet("cursor", input as never)).toThrow(ClientSnippetError);
+    expect(() => renderClientSnippet("cursor", input as never)).toThrow("snippet input");
   });
 
   it("accepts UNC paths and rejects unrecognized client names at runtime", () => {
@@ -143,5 +165,22 @@ describe("client snippets", () => {
     );
     expect(() => renderClientSnippet("unsupported" as never, posixInput)).toThrow(ClientSnippetError);
     expect(() => renderClientSnippet("unsupported" as never, posixInput)).toThrow("Unsupported client");
+  });
+
+  it("accepts Windows extended-length absolute paths", () => {
+    const command = String.raw`\\?\C:\Program Files\nodejs\node.exe`;
+    const entrypoint = String.raw`\\?\C:\Program Files\Miftah\dist\cli\main.js`;
+    const configPath = String.raw`\\?\C:\Users\Ada Lovelace\Miftah\config.json`;
+    const snippet = renderClientSnippet("cursor", {
+      serverName: "Miftah",
+      configPath,
+      launcher: { command, args: [entrypoint] }
+    });
+
+    expect(JSON.parse(snippet.json).mcpServers.Miftah).toEqual({
+      type: "stdio",
+      command,
+      args: [entrypoint, "--config", configPath]
+    });
   });
 });
