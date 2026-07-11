@@ -3,6 +3,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
   GetPromptRequestSchema,
+  RootsListChangedNotificationSchema,
   ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
@@ -24,6 +25,10 @@ import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
+import type {
+  RoutingContextMcpRoot,
+  RoutingContextSnapshot
+} from "../../routing/routing-types.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
@@ -63,6 +68,17 @@ const managementTools: Tool[] = [
   tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
   tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"])
 ];
+
+const EMPTY_MCP_ROOTS: readonly RoutingContextMcpRoot[] = Object.freeze([]);
+const emptyRoutingContext: RoutingContextSnapshot = {
+  context: Object.freeze({}),
+  evidence: Object.freeze({ cwd: "", fileRoots: Object.freeze([]) }),
+  profileHints: Object.freeze([])
+};
+
+export type RoutingContextCollector = (
+  roots: readonly RoutingContextMcpRoot[]
+) => Promise<RoutingContextSnapshot>;
 
 export function resolveClientVisibleToolName(
   name: string,
@@ -143,11 +159,24 @@ export class MiftahServer {
   private readonly restartingProfiles = new Map<string, Promise<void>>();
   private readonly pendingResourceListChanges = new Set<string>();
   private readonly pendingPromptListChanges = new Set<string>();
+  private mcpRoots: readonly RoutingContextMcpRoot[] = EMPTY_MCP_ROOTS;
+  private mcpRootsReady: Promise<void> = Promise.resolve();
+  private resolveMcpRootsReady: () => void = () => undefined;
+  private mcpRootsRefresh?: Promise<void>;
+  private mcpRootsRefreshRequested = false;
+  private mcpRootsConnection = 0;
+  private mcpRootsInitialized = false;
+  private readonly provideRoutingContext = async (): Promise<RoutingContextSnapshot> => {
+    if (this.routingContextCollector === undefined) return emptyRoutingContext;
+    await this.mcpRootsReady;
+    return this.routingContextCollector(this.mcpRoots);
+  };
 
   constructor(
     private readonly config: MiftahConfig,
     private readonly profiles: ProfileManager,
-    private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager
+    private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager,
+    private readonly routingContextCollector?: RoutingContextCollector
   ) {
     this.redactor = upstreams.getRedactor();
     this.resourcePromptProxy = this.resourcePromptProxyAvailability();
@@ -205,12 +234,28 @@ export class MiftahServer {
       routing: this.routing,
       policy: this.policy,
       upstreams,
-      redactor: this.redactor
+      redactor: this.redactor,
+      routingContext: this.provideRoutingContext
+    });
+    this.server.oninitialized = () => this.handleClientInitialized();
+    this.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+      if (
+        this.routingContextCollector === undefined ||
+        !this.mcpRootsInitialized ||
+        this.server.getClientCapabilities()?.roots?.listChanged !== true
+      ) {
+        return;
+      }
+      void this.refreshMcpRoots().then(
+        () => undefined,
+        () => undefined
+      );
     });
     this.registerHandlers();
   }
 
   async connect(transport: Transport): Promise<void> {
+    this.resetMcpRoots();
     await this.server.connect(transport);
     await this.auditTrail.writeLifecycle({
       operation: "wrapper/start",
@@ -230,6 +275,75 @@ export class MiftahServer {
       profile: this.profiles.current().activeProfile,
       status: "success"
     }).catch(() => undefined);
+  }
+
+  private resetMcpRoots(): void {
+    this.mcpRootsConnection += 1;
+    this.mcpRoots = EMPTY_MCP_ROOTS;
+    this.mcpRootsRefresh = undefined;
+    this.mcpRootsRefreshRequested = false;
+    this.mcpRootsInitialized = false;
+    this.mcpRootsReady = new Promise<void>((resolve) => {
+      this.resolveMcpRootsReady = resolve;
+    });
+  }
+
+  private handleClientInitialized(): void {
+    this.mcpRootsInitialized = true;
+    if (this.routingContextCollector === undefined || this.server.getClientCapabilities()?.roots === undefined) {
+      this.resolveMcpRootsReady();
+      return;
+    }
+    void this.refreshMcpRoots().then(
+      () => this.resolveMcpRootsReady(),
+      () => this.resolveMcpRootsReady()
+    );
+  }
+
+  private refreshMcpRoots(): Promise<void> {
+    const pending = this.mcpRootsRefresh;
+    if (pending) {
+      this.mcpRootsRefreshRequested = true;
+      return pending;
+    }
+
+    const connection = this.mcpRootsConnection;
+    const refresh = this.refreshMcpRootsUntilCurrent(connection);
+    this.mcpRootsRefresh = refresh;
+    void refresh.then(
+      () => {
+        if (this.mcpRootsRefresh === refresh) this.mcpRootsRefresh = undefined;
+      },
+      () => {
+        if (this.mcpRootsRefresh === refresh) this.mcpRootsRefresh = undefined;
+      }
+    );
+    return refresh;
+  }
+
+  private async refreshMcpRootsUntilCurrent(connection: number): Promise<void> {
+    do {
+      this.mcpRootsRefreshRequested = false;
+      await this.fetchMcpRoots(connection);
+    } while (connection === this.mcpRootsConnection && this.mcpRootsRefreshRequested);
+  }
+
+  private async fetchMcpRoots(connection: number): Promise<void> {
+    if (
+      this.routingContextCollector === undefined ||
+      !this.mcpRootsInitialized ||
+      this.server.getClientCapabilities()?.roots === undefined
+    ) {
+      if (connection === this.mcpRootsConnection) this.mcpRoots = EMPTY_MCP_ROOTS;
+      return;
+    }
+    try {
+      const result = await this.server.listRoots();
+      if (connection !== this.mcpRootsConnection) return;
+      this.mcpRoots = Object.freeze(result.roots.map(({ uri }) => Object.freeze({ uri })));
+    } catch {
+      if (connection === this.mcpRootsConnection) this.mcpRoots = EMPTY_MCP_ROOTS;
+    }
   }
 
   private registerHandlers(): void {

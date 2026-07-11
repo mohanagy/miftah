@@ -1,20 +1,73 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  CallToolResultSchema,
+  ListRootsRequestSchema,
+  RootsListChangedNotificationSchema,
+  ToolListChangedNotificationSchema
+} from "@modelcontextprotocol/sdk/types.js";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { expectExactlyOneNotification } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
+import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
+import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
+
+interface RuntimeRoutingFixture {
+  readonly directory: string;
+  readonly configPath: string;
+  readonly matchingRoot: string;
+  readonly changedRoot: string;
+}
+
+async function createRuntimeRoutingFixture(workEnvironment: Record<string, string> = {}): Promise<RuntimeRoutingFixture> {
+  const directory = await mkdtemp(join(process.cwd(), ".miftah-routing-context-"));
+  const matchingRoot = pathToFileURL(join(directory, "matching-root")).toString();
+  const changedRoot = pathToFileURL(join(directory, "changed-root")).toString();
+  const configPath = join(directory, "miftah.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", ...workEnvironment } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      routing: {
+        rules: [
+          {
+            name: "matching-root",
+            when: { "context.fileRoots": matchingRoot },
+            profile: "personal"
+          }
+        ]
+      }
+    })
+  );
+  return { directory, configPath, matchingRoot, changedRoot };
+}
+
+function withoutMiftahProfile(): () => void {
+  const profile = process.env.MIFTAH_PROFILE;
+  delete process.env.MIFTAH_PROFILE;
+  return () => {
+    if (profile === undefined) delete process.env.MIFTAH_PROFILE;
+    else process.env.MIFTAH_PROFILE = profile;
+  };
+}
 
 describe("Miftah MCP wrapper", () => {
   it("exposes management and upstream capabilities while routing calls by active profile", async () => {
@@ -738,6 +791,337 @@ describe("Miftah MCP wrapper", () => {
     } finally {
       await client.close();
       await wrapper.close();
+    }
+  });
+
+  it("collects runtime roots once and routes repeated proxied calls from the cached context", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const fixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "root-capable-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let rootRequests = 0;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      return {
+        roots: [{ uri: fixture.matchingRoot, name: "matching", _meta: { ignored: true } }]
+      };
+    });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(rootRequests).toBe(1);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(rootRequests).toBe(1);
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("keeps fallback routing usable without roots and preserves direct-server empty context", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const routingFixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(routingFixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "roots-disabled-client", version: "1.0.0" });
+
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [directClientTransport, directServerTransport] = InMemoryTransport.createLinkedPair();
+    const directClient = new Client(
+      { name: "direct-root-capable-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let directRootRequests = 0;
+    directClient.setRequestHandler(ListRootsRequestSchema, async () => {
+      directRootRequests += 1;
+      return { roots: [] };
+    });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+
+      await Promise.all([wrapper.connect(directServerTransport), directClient.connect(directClientTransport)]);
+      expect(await directClient.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+      expect(directRootRequests).toBe(0);
+    } finally {
+      await client.close();
+      await runtime.close();
+      await directClient.close();
+      await wrapper.close();
+      await rm(routingFixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("falls back after a failed runtime roots request without retrying per operation", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const fixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "failing-roots-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let rootRequests = 0;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      throw new Error("roots unavailable");
+    });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+      expect(rootRequests).toBe(1);
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("refreshes advertised roots once and ignores unadvertised roots changes", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const fixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "root-change-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let currentRoot = fixture.matchingRoot;
+    let rootRequests = 0;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      return { roots: [{ uri: currentRoot }] };
+    });
+
+    const unchangedFixture = await createRuntimeRoutingFixture();
+    const unchangedRuntime = await createMiftahRuntime(unchangedFixture.configPath);
+    const [unchangedClientTransport, unchangedServerTransport] = InMemoryTransport.createLinkedPair();
+    const unchangedClient = new Client(
+      { name: "unadvertised-root-change-client", version: "1.0.0" },
+      { capabilities: { roots: {} } }
+    );
+    let unchangedRoot = unchangedFixture.matchingRoot;
+    let unchangedRootRequests = 0;
+    unchangedClient.setRequestHandler(ListRootsRequestSchema, async () => {
+      unchangedRootRequests += 1;
+      return { roots: [{ uri: unchangedRoot }] };
+    });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(rootRequests).toBe(1);
+
+      currentRoot = fixture.changedRoot;
+      await client.notification({ method: "notifications/roots/list_changed" });
+      await expect.poll(() => rootRequests).toBe(2);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+
+      await Promise.all([
+        unchangedRuntime.connect(unchangedServerTransport),
+        unchangedClient.connect(unchangedClientTransport)
+      ]);
+      expect(await unchangedClient.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(unchangedRootRequests).toBe(1);
+
+      unchangedRoot = unchangedFixture.changedRoot;
+      const rootsChanged = RootsListChangedNotificationSchema.parse({
+        method: "notifications/roots/list_changed"
+      });
+      await unchangedClientTransport.send({ jsonrpc: "2.0", ...rootsChanged });
+      expect(await unchangedClient.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(unchangedRootRequests).toBe(1);
+    } finally {
+      await client.close();
+      await runtime.close();
+      await unchangedClient.close();
+      await unchangedRuntime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      await rm(unchangedFixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("refreshes again when roots change during an in-flight roots request", async () => {
+    const restoreProfile = withoutMiftahProfile();
+    const fixture = await createRuntimeRoutingFixture();
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "overlapping-root-change-client", version: "1.0.0" },
+      { capabilities: { roots: { listChanged: true } } }
+    );
+    let firstRequestStarted!: () => void;
+    const firstRequest = new Promise<void>((resolve) => {
+      firstRequestStarted = resolve;
+    });
+    let releaseFirstRequest!: () => void;
+    const firstRequestReleased = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    let rootRequests = 0;
+    let currentRoot = fixture.matchingRoot;
+    client.setRequestHandler(ListRootsRequestSchema, async () => {
+      rootRequests += 1;
+      const responseRoot = currentRoot;
+      if (rootRequests === 1) {
+        firstRequestStarted();
+        await firstRequestReleased;
+      }
+      return { roots: [{ uri: responseRoot }] };
+    });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+      await firstRequest;
+
+      currentRoot = fixture.changedRoot;
+      await client.notification({ method: "notifications/roots/list_changed" });
+      releaseFirstRequest();
+      await expect.poll(() => rootRequests).toBe(2);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      restoreProfile();
+    }
+  });
+
+  it("uses exactly one routing context snapshot per proxied operation", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      routing: {
+        rules: [{ name: "context-profile", when: { "context.project": "personal" }, profile: "personal" }]
+      }
+    });
+    const snapshots: RoutingContextSnapshot[] = [
+      {
+        context: { project: "personal" },
+        evidence: { cwd: process.cwd(), fileRoots: [] },
+        profileHints: []
+      },
+      {
+        context: {},
+        evidence: { cwd: process.cwd(), fileRoots: [] },
+        profileHints: [
+          {
+            profile: "personal",
+            source: "environment",
+            evidence: { kind: "environment", variable: "MIFTAH_PROFILE" }
+          }
+        ]
+      }
+    ];
+    let snapshotsCollected = 0;
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(
+      config,
+      new ProfileManager(config),
+      manager,
+      async () => {
+        const snapshot = snapshots[snapshotsCollected];
+        snapshotsCollected += 1;
+        if (!snapshot) throw new Error("Unexpected routing context collection");
+        return snapshot;
+      }
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "counting-context-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(snapshotsCollected).toBe(0);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+      expect(snapshotsCollected).toBe(2);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("returns unknown context profile errors without forwarding the proxied call", async () => {
+    const originalProfile = process.env.MIFTAH_PROFILE;
+    process.env.MIFTAH_PROFILE = "missing-profile";
+    const callCountPath = join(process.cwd(), ".miftah-routing-context-call-count");
+    const fixture = await createRuntimeRoutingFixture({ TEST_CALL_TOOL_COUNT_PATH: callCountPath });
+    const runtime = await createMiftahRuntime(fixture.configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "invalid-context-profile-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("ROUTING_PROFILE_NOT_FOUND") }]
+      });
+      await expect(access(callCountPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(fixture.directory, { recursive: true, force: true });
+      await rm(callCountPath, { force: true });
+      if (originalProfile === undefined) delete process.env.MIFTAH_PROFILE;
+      else process.env.MIFTAH_PROFILE = originalProfile;
     }
   });
 });

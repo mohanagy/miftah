@@ -3,7 +3,7 @@ import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
-import type { RoutingDecision } from "../../routing/routing-types.js";
+import type { RoutingContextSnapshot, RoutingDecision } from "../../routing/routing-types.js";
 import { SecretRedactor } from "../../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
@@ -35,12 +35,15 @@ export interface ProxiedOperation<Result> {
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
 }
 
+export type RoutingContextProvider = () => Promise<RoutingContextSnapshot>;
+
 interface PipelineOptions {
   readonly profiles: ProfileManager;
   readonly routing: RoutingEngine;
   readonly policy: PolicyEngine;
   readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager;
   readonly redactor: SecretRedactor;
+  readonly routingContext: RoutingContextProvider;
 }
 
 /**
@@ -51,8 +54,14 @@ export class OperationPipeline {
 
   async execute<Result>(operation: ProxiedOperation<Result>, audit: AuditScope): Promise<Result> {
     try {
+      const snapshot = await this.options.routingContext();
       const route = this.options.routing.resolve(
-        { toolName: operation.routingName, args: operation.args },
+        {
+          toolName: operation.routingName,
+          args: operation.args,
+          context: snapshot.context,
+          profileHints: snapshot.profileHints
+        },
         operation.source.activeProfile
       );
       const profile = route.profile;
