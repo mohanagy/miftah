@@ -128,15 +128,8 @@ async function isExecutableAvailable(
 }
 
 async function listTools(session: UpstreamSession): Promise<{ tools: Tool[]; truncated: boolean }> {
-  let cursor: string | undefined;
-  const tools: Tool[] = [];
-  for (let page = 0; page < discoveryPageLimit; page += 1) {
-    const result = await session.listTools(cursor === undefined ? undefined : { cursor });
-    tools.push(...result.tools);
-    if (!result.nextCursor) return { tools, truncated: false };
-    cursor = result.nextCursor;
-  }
-  return { tools, truncated: true };
+  const result = await session.listTools();
+  return { tools: result.tools, truncated: Boolean(result.nextCursor) };
 }
 
 async function listResources(session: UpstreamSession): Promise<{ count: number; truncated: boolean }> {
@@ -390,7 +383,8 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
 
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
-    for (const target of configuredTargets(runtime.config)) {
+    const targets = configuredTargets(runtime.config);
+    const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
       if (target.upstream.transport === "stdio") {
         const available = await isExecutableAvailable(
@@ -447,7 +441,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
           skippedDiscoveryCheck(DOCTOR_CODES.RESOURCES_DISCOVERY, targetText, "Resource"),
           skippedDiscoveryCheck(DOCTOR_CODES.PROMPTS_DISCOVERY, targetText, "Prompt")
         );
-        continue;
+        return;
       }
 
       try {
@@ -459,9 +453,11 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             result.truncated ? "warning" : "pass",
             targetText,
             result.truncated
-              ? "Tool discovery reached the bounded page limit."
+              ? "Tool discovery returned a cursor. Additional tool pages are not currently exposed by the wrapper."
               : `Tool discovery completed with ${result.tools.length} item(s).`,
-            result.truncated ? "Reduce tool pages or verify the upstream cursor." : noAction()
+            result.truncated
+              ? "Use only the currently exposed tools until the wrapper supports additional tool pages."
+              : noAction()
           )
         );
         const fingerprints = visibleTools.get(target.profile) ?? new Map<string, string>();
@@ -535,6 +531,42 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             "Review upstream prompt discovery before relying on this capability."
           )
         );
+      }
+    };
+
+    for (const [profileIndex, profile] of Object.keys(runtime.config.profiles).sort().entries()) {
+      try {
+        for (const target of targets) {
+          if (target.profile === profile) await probeTarget(target);
+        }
+      } finally {
+        let closed = false;
+        try {
+          await runtime.manager.closeProfile(profile);
+          const health = runtime.manager.listHealth().filter((entry) => entry.profile === profile);
+          closed =
+            health.length > 0 &&
+            health.every(
+              (entry) =>
+                entry.processState === "stopped" &&
+                entry.pid == null &&
+                entry.lastStopReason !== "shutdown-timeout" &&
+                entry.lastStopReason !== "shutdown-error"
+            );
+        } catch {
+          // The safe failure below records an unsuccessful per-profile shutdown.
+        }
+        if (!closed) {
+          checks.push(
+            check(
+              DOCTOR_CODES.CLEAN_SHUTDOWN,
+              "error",
+              `profile ${profileIndex + 1}`,
+              "Upstream profile shutdown did not complete cleanly.",
+              "Stop remaining upstream processes before starting the wrapper."
+            )
+          );
+        }
       }
     }
 

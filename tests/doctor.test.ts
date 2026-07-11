@@ -134,18 +134,68 @@ describe("doctor readiness runner", () => {
     await waitForFile(shutdownPath);
   });
 
-  it("discovers every bounded page of real upstream tools", async () => {
+  it("uses only the wrapper-visible first page of paginated upstream tools", async () => {
+    const toolCountPath = join(fixtureDirectory, "tools-pages", "tool-list-count");
     const { configPath } = await writeConfig(
       "tools-pages",
-      baseConfig(stdioUpstream({ TEST_PAGINATE_TOOLS: "true" }))
+      baseConfig(stdioUpstream({ TEST_PAGINATE_TOOLS: "true", TEST_LIST_TOOLS_COUNT_PATH: toolCountPath }))
     );
 
     const report = await runDoctor(configPath);
 
+    await expect(readFile(toolCountPath, "utf8")).resolves.toBe("1\n");
     expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY)).toMatchObject({
-      status: "pass",
-      explanation: "Tool discovery completed with 6 item(s)."
+      status: "warning",
+      explanation: "Tool discovery returned a cursor. Additional tool pages are not currently exposed by the wrapper.",
+      remediation: "Use only the currently exposed tools until the wrapper supports additional tool pages."
     });
+    expect(report.overallStatus).toBe("degraded");
+  });
+
+  it("probes constrained profiles sequentially and closes every child", async () => {
+    const alternateToolCountPath = join(fixtureDirectory, "sequential-profiles", "alternate-tool-list-count");
+    const defaultToolCountPath = join(fixtureDirectory, "sequential-profiles", "default-tool-list-count");
+    const alternateShutdownPath = join(fixtureDirectory, "sequential-profiles", "alternate-upstream-ended");
+    const defaultShutdownPath = join(fixtureDirectory, "sequential-profiles", "default-upstream-ended");
+    const { configPath } = await writeConfig("sequential-profiles", {
+      version: "1",
+      name: "doctor-sequential-profiles",
+      defaultProfile: "default",
+      upstreams: { primary: stdioUpstream() },
+      profiles: {
+        alternate: {
+          upstreams: {
+            primary: {
+              env: {
+                TEST_LIST_TOOLS_COUNT_PATH: alternateToolCountPath,
+                TEST_SHUTDOWN_END_PATH: alternateShutdownPath
+              }
+            }
+          }
+        },
+        default: {
+          upstreams: {
+            primary: {
+              env: {
+                TEST_LIST_TOOLS_COUNT_PATH: defaultToolCountPath,
+                TEST_SHUTDOWN_END_PATH: defaultShutdownPath
+              }
+            }
+          }
+        }
+      },
+      process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000, maxConcurrentProfiles: 1 }
+    });
+
+    const report = await runDoctor(configPath);
+
+    expect(report.checks.filter((item) => item.code === DOCTOR_CODES.STARTUP)).toHaveLength(2);
+    expect(report.checks.filter((item) => item.code === DOCTOR_CODES.STARTUP).every((item) => item.status === "pass")).toBe(true);
+    await expect(readFile(alternateToolCountPath, "utf8")).resolves.toBe("1\n");
+    await expect(readFile(defaultToolCountPath, "utf8")).resolves.toBe("1\n");
+    expect(check(report, DOCTOR_CODES.CLEAN_SHUTDOWN).status).toBe("pass");
+    await waitForFile(alternateShutdownPath);
+    await waitForFile(defaultShutdownPath);
   });
 
   it("accepts a relative executable resolved from its configured working directory", async () => {

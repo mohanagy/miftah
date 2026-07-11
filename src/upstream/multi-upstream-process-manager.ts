@@ -86,6 +86,13 @@ export class MultiUpstreamProcessManager {
     }
   }
 
+  async closeProfile(profile: string): Promise<void> {
+    const results = await Promise.allSettled(Object.values(this.managers).map((manager) => manager.closeProfile(profile)));
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
+  }
+
   listHealth(): UpstreamHealth[] {
     return Object.values(this.managers)
       .flatMap((manager) => manager.listHealth())

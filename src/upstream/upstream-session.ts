@@ -7,7 +7,6 @@ import type {
   ListPromptsRequest,
   ListResourcesResult,
   ListResourcesRequest,
-  ListToolsRequest,
   ListToolsResult,
   ReadResourceRequest
 } from "@modelcontextprotocol/sdk/types.js";
@@ -31,8 +30,8 @@ export class UpstreamSession {
     private readonly mapRequestError?: UpstreamRequestErrorMapper
   ) {}
 
-  listTools(params?: ListToolsRequest["params"]): Promise<ListToolsResult> {
-    return this.request(() => this.client.listTools(params));
+  listTools(): Promise<ListToolsResult> {
+    return this.request(() => this.client.listTools());
   }
 
   callTool(params: CallToolRequest["params"]): Promise<CallToolResult> {
