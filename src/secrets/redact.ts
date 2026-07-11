@@ -50,21 +50,21 @@ function redactString(value: string, secretValues: readonly string[]): string {
 }
 
 /** Recursively redacts secrets while preserving the input's data shape. */
-function redactValue(value: unknown, secretValues: readonly string[], key?: string): unknown {
+function redactValue(value: unknown, secretValues: readonly string[], key?: string, redactUris = false): unknown {
   if (key && isSecretKey(key)) {
     return "[REDACTED]";
   }
   if (typeof value === "string") {
-    return redactString(value, secretValues);
+    return redactString(redactUris ? redactUrisInText(value) : value, secretValues);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactValue(item, secretValues));
+    return value.map((item) => redactValue(item, secretValues, undefined, redactUris));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([entryKey, entryValue]) => [
         entryKey,
-        redactValue(entryValue, secretValues, entryKey)
+        redactValue(entryValue, secretValues, entryKey, redactUris)
       ])
     );
   }
@@ -93,6 +93,11 @@ export class SecretRedactor {
 
   redact<T>(value: T): T {
     return redactValue(value, this.values()) as T;
+  }
+
+  /** Redacts structured audit values, including URI credentials embedded in arbitrary string arguments. */
+  redactForAudit<T>(value: T): T {
+    return redactValue(value, this.values(), undefined, true) as T;
   }
 
   redactText(value: string): string {

@@ -79,6 +79,7 @@ export interface AuditConfig {
   format?: "jsonl";
   includeArguments?: boolean;
   redact?: true;
+  failureMode?: "fail-open" | "fail-closed";
 }
 
 export interface ToolingConfig {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,6 +30,29 @@ describe("audit logger", () => {
     });
   });
 
+  it("redacts credential-bearing URI arguments when argument logging is enabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-uri-arguments-"));
+    const path = join(directory, "audit.jsonl");
+    const secret = "audit-uri-secret";
+    const logger = new AuditLogger(path, { includeArguments: true });
+
+    await logger.log({
+      wrapper: "github",
+      profile: "work",
+      operation: "tools/call",
+      name: "open_callback",
+      status: "success",
+      durationMs: 4,
+      arguments: { callbackUrl: `https://example.test/callback?access_token=${secret}` }
+    });
+
+    const line = await readFile(path, "utf8");
+    expect(line).not.toContain(secret);
+    expect(JSON.parse(line)).toMatchObject({
+      arguments: { callbackUrl: "https://example.test/callback?access_token=%5BREDACTED%5D" }
+    });
+  });
+
   it.skipIf(process.platform === "win32")("creates audit directories and files with owner-only permissions", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-audit-permissions-"));
     const directory = join(root, "private");
@@ -46,6 +69,27 @@ describe("audit logger", () => {
     });
 
     expect((await stat(directory)).mode & 0o077).toBe(0);
+    expect((await stat(path)).mode & 0o077).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("does not tighten an existing audit parent directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-audit-existing-parent-"));
+    const directory = join(root, "shared");
+    const path = join(directory, "audit.jsonl");
+    await mkdir(directory, { mode: 0o755 });
+    await chmod(directory, 0o755);
+    const logger = new AuditLogger(path);
+
+    await logger.log({
+      wrapper: "github",
+      profile: "work",
+      operation: "tools/call",
+      name: "whoami",
+      status: "success",
+      durationMs: 4
+    });
+
+    expect((await stat(directory)).mode & 0o777).toBe(0o755);
     expect((await stat(path)).mode & 0o077).toBe(0);
   });
 

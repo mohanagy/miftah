@@ -42,6 +42,17 @@ type ShutdownFailureReason = "shutdown-timeout" | "shutdown-error";
 /** Identifies an intentional reason a profile's upstream process stopped. */
 export type UpstreamStopReason = "idle" | "manual" | "restart" | "shutdown" | ShutdownFailureReason;
 
+export type UpstreamLifecycleType = "start" | "start-failure" | "crash" | "restart" | "restart-failure" | "idle" | "shutdown";
+
+/** Describes an observable upstream lifecycle transition. */
+export interface UpstreamLifecycleEvent {
+  type: UpstreamLifecycleType;
+  profile: string;
+  upstreamName: string;
+  status: "success" | "failure";
+  errorCode?: string;
+}
+
 export interface UpstreamCapabilityHealth {
   state: UpstreamCapabilityState;
   lastTransition: string;
@@ -117,6 +128,7 @@ export class UpstreamProcessManager {
   private readonly restartExhausted = new Set<string>();
   private readonly processErrors = new Map<string, string>();
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
+  private readonly lifecycleListeners = new Set<(event: UpstreamLifecycleEvent) => void>();
   private readonly options: ResolvedOptions;
   private readonly limiter: ProfileSessionLimiter;
   private nextToken = 0;
@@ -174,6 +186,11 @@ export class UpstreamProcessManager {
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
     this.healthListeners.add(listener);
     return () => this.healthListeners.delete(listener);
+  }
+
+  addLifecycleListener(listener: (event: UpstreamLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
   }
 
   recordCapabilitySuccess(profile: string, capability: UpstreamCapability, _upstreamName?: string): void {
@@ -363,6 +380,12 @@ export class UpstreamProcessManager {
       this.setProcessState(profile, "running", { pid });
       this.scheduleIdleShutdown(profile, entry);
       if (source === "automatic") this.scheduleStabilityWindow(profile, entry);
+      this.publishLifecycle({
+        type: source === "demand" ? "start" : "restart",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "success"
+      });
       return session;
     } catch (error) {
       const pid = stdioTransport?.pid ?? null;
@@ -374,6 +397,13 @@ export class UpstreamProcessManager {
         : new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
       if (current) {
         this.setProcessState(profile, "failed", { error: failure.message, resetCapabilities: true, pid: null });
+        this.publishLifecycle({
+          type: source === "demand" ? "start-failure" : "restart-failure",
+          profile,
+          upstreamName: this.upstreamName,
+          status: "failure",
+          errorCode: failure.code
+        });
       }
       if (source !== "automatic" || !this.canAutomaticallyRetry(profile)) {
         this.limiter.release(profile, this.upstreamName);
@@ -454,6 +484,13 @@ export class UpstreamProcessManager {
       resetCapabilities: true,
       pid: null
     });
+    this.publishLifecycle({
+      type: "crash",
+      profile,
+      upstreamName: this.upstreamName,
+      status: "failure",
+      errorCode: "UPSTREAM_START_FAILED"
+    });
     if (this.options.restartOnCrash) {
       this.scheduleAutomaticRestart(profile, generation);
     } else {
@@ -475,6 +512,13 @@ export class UpstreamProcessManager {
         resetCapabilities: true,
         pid: null,
         restartLimitReached: true
+      });
+      this.publishLifecycle({
+        type: "restart-failure",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "failure",
+        errorCode: "UPSTREAM_RESTART_LIMIT_EXCEEDED"
       });
       this.limiter.release(profile, this.upstreamName);
       return;
@@ -602,6 +646,26 @@ export class UpstreamProcessManager {
       resetCapabilities: true,
       lastStopReason: shutdownFailure ?? reason
     });
+    const failureCode =
+      shutdownFailure === "shutdown-timeout" ? "UPSTREAM_SHUTDOWN_TIMEOUT" : "UPSTREAM_SHUTDOWN_FAILED";
+    if (reason === "restart" && shutdownFailure !== undefined) {
+      this.publishLifecycle({
+        type: "restart-failure",
+        profile,
+        upstreamName: this.upstreamName,
+        status: "failure",
+        errorCode: failureCode
+      });
+    } else if (reason !== "restart") {
+      const failed = shutdownFailure !== undefined;
+      this.publishLifecycle({
+        type: reason === "idle" ? "idle" : "shutdown",
+        profile,
+        upstreamName: this.upstreamName,
+        status: failed ? "failure" : "success",
+        ...(failed ? { errorCode: failureCode } : {})
+      });
+    }
   }
 
   /** Finalizes a session after a timeout or close error so lifecycle capacity is never stranded. */
@@ -814,7 +878,27 @@ export class UpstreamProcessManager {
 
   private publishHealth(health: UpstreamHealth): void {
     this.health.set(health.profile, health);
-    for (const listener of this.healthListeners) listener(structuredClone(health));
+    this.notifyListeners(this.healthListeners, health, "health");
+  }
+
+  private publishLifecycle(event: UpstreamLifecycleEvent): void {
+    this.notifyListeners(this.lifecycleListeners, event, "lifecycle");
+  }
+
+  private notifyListeners<Event>(
+    listeners: ReadonlySet<(event: Event) => void>,
+    event: Event,
+    kind: "health" | "lifecycle"
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        process.emitWarning(`MIFTAH_LISTENER_FAILED: ignored a failing ${kind} listener`, {
+          code: "MIFTAH_LISTENER_FAILED"
+        });
+      }
+    }
   }
 }
 

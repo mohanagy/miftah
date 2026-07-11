@@ -111,7 +111,11 @@ describe("published config schema", () => {
     ]);
     expect(security).toMatchObject({ redactSecrets: { const: true } });
     expect(security).not.toHaveProperty("requireProfileSwitchConfirmation");
-    expect(audit).toMatchObject({ format: { const: "jsonl" }, redact: { const: true } });
+    expect(audit).toMatchObject({
+      format: { const: "jsonl" },
+      redact: { const: true },
+      failureMode: { enum: ["fail-open", "fail-closed"] }
+    });
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
     expect(tooling).toMatchObject({ toolDiscoveryMode: { enum: ["permissive", "strict"] } });

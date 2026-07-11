@@ -138,6 +138,12 @@ Supported local references include environment variables (`${NAME}` and `secretr
 
 Use `miftah doctor` to inspect config and upstream readiness without printing process environment values.
 
+## Audit logging
+
+Set `audit.path` to record one terminal JSONL event for every supported MCP operation, including discovery, management, tool, resource, and prompt requests. Events include a per-process session ID, request/event ID, source and selected profiles, upstream, routing and policy metadata where applicable, terminal outcome, stable error code, and duration. Wrapper and upstream lifecycle transitions are recorded separately. Arguments are omitted unless `audit.includeArguments` is `true`.
+
+New audit directories and files use owner-only permissions where the platform supports them. `audit.failureMode` defaults to `"fail-closed"`, which verifies the audit sink before dispatch and refuses the request if it cannot be prepared. Set it to `"fail-open"` only when availability outweighs that guarantee; the original operation remains available and `miftah_health` reports a redacted `AUDIT_WRITE_FAILED` audit-health entry.
+
 ## CLI
 
 | Command | Purpose |

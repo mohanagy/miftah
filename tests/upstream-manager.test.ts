@@ -35,6 +35,92 @@ async function waitFor<Value>(
 }
 
 describe("upstream process manager", () => {
+  it("isolates lifecycle listener failures from upstream state transitions", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } }
+      },
+      { startupTimeoutMs: 1_000 }
+    );
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    manager.addLifecycleListener((event) => {
+      if (event.type === "start") throw new Error("listener failure");
+    });
+
+    try {
+      await expect(manager.get("work")).resolves.toMatchObject({ profile: "work" });
+      expect(manager.listHealth()).toMatchObject([{ profile: "work", processState: "running" }]);
+      expect(emitWarning).toHaveBeenCalledWith("MIFTAH_LISTENER_FAILED: ignored a failing lifecycle listener", {
+        code: "MIFTAH_LISTENER_FAILED"
+      });
+    } finally {
+      emitWarning.mockRestore();
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("isolates multi-upstream lifecycle listeners from each other's mutations", async () => {
+    const manager = new MultiUpstreamProcessManager({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: { work: {} }
+    });
+    const received: Array<{ type: string; status: string }> = [];
+    manager.addLifecycleListener((event) => {
+      event.status = "failure";
+    });
+    manager.addLifecycleListener((event) => {
+      received.push(event);
+    });
+
+    try {
+      await manager.get("work", "github");
+      expect(received).toEqual(expect.arrayContaining([expect.objectContaining({ type: "start", status: "success" })]));
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("continues multi-upstream lifecycle delivery after a listener fails", async () => {
+    const manager = new MultiUpstreamProcessManager({
+      version: "1",
+      name: "bundle",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: { work: {} }
+    });
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const received: Array<{ type: string; status: string }> = [];
+    manager.addLifecycleListener((event) => {
+      if (event.type === "start") throw new Error("listener failure");
+    });
+    manager.addLifecycleListener((event) => {
+      received.push(event);
+    });
+
+    try {
+      await manager.get("work", "github");
+      expect(received).toEqual(expect.arrayContaining([expect.objectContaining({ type: "start", status: "success" })]));
+      expect(emitWarning).toHaveBeenCalledWith("MIFTAH_LISTENER_FAILED: ignored a failing lifecycle listener", {
+        code: "MIFTAH_LISTENER_FAILED"
+      });
+    } finally {
+      emitWarning.mockRestore();
+      await manager.close();
+    }
+  });
+
   it("starts one cached upstream per profile and forwards MCP operations", async () => {
     const manager = new UpstreamProcessManager(
       {
@@ -597,6 +683,38 @@ describe("upstream process manager", () => {
     } finally {
       await manager.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records a failed restart teardown before starting a replacement session", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture],
+        env: { TEST_SHUTDOWN_DELAY_MS: "500" }
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 50 }
+    );
+    const events: Array<{ type: string; status: string; errorCode?: string }> = [];
+    manager.addLifecycleListener((event) => events.push(event));
+
+    try {
+      await manager.get("work");
+      await manager.restart("work");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "restart-failure",
+            status: "failure",
+            errorCode: "UPSTREAM_SHUTDOWN_TIMEOUT"
+          }),
+          expect.objectContaining({ type: "restart", status: "success" })
+        ])
+      );
+    } finally {
+      await manager.close();
     }
   });
 

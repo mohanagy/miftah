@@ -21,12 +21,18 @@ import {
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig } from "../../config/types.js";
-import { redactSecrets, redactUri, redactUrisInText } from "../../secrets/redact.js";
+import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
-import { UpstreamProcessManager, type UpstreamHealth } from "../../upstream/upstream-process-manager.js";
+import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
+import type { AuditStatus } from "../../audit/audit-types.js";
+import {
+  UpstreamProcessManager,
+  type UpstreamHealth,
+  type UpstreamLifecycleEvent
+} from "../../upstream/upstream-process-manager.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
@@ -76,6 +82,23 @@ function textResult(text: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
+function managementOperation(name: string): string {
+  if (name === "miftah_use_profile") return "profiles/switch";
+  if (name === "miftah_reset_profile") return "profiles/reset";
+  if (name === "miftah_restart_profile") return "upstreams/restart";
+  return `management/${name.replace(/^miftah_/, "").replaceAll("_", "-")}`;
+}
+
+function managementName(name: string, args: Record<string, unknown>): string {
+  if (name === "miftah_use_profile" || name === "miftah_restart_profile" || name === "miftah_profile_info") {
+    return typeof args.profile === "string" ? args.profile : "profile";
+  }
+  if (name === "miftah_reset_profile") return "default";
+  if (name === "miftah_list_profiles") return "profiles";
+  if (name === "miftah_list_upstream_tools") return typeof args.profile === "string" ? args.profile : "active-profile";
+  return name;
+}
+
 interface ResourcePromptProxyAvailable {
   available: true;
   upstreamName?: string;
@@ -94,6 +117,8 @@ export class MiftahServer {
   private readonly routing: RoutingEngine;
   private readonly policy: PolicyEngine;
   private readonly audit?: AuditLogger;
+  private readonly auditTrail: AuditTrail;
+  private readonly redactor: SecretRedactor;
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private readonly toolRegistry: ToolRegistry;
   private readonly operationPipeline: OperationPipeline;
@@ -108,6 +133,7 @@ export class MiftahServer {
     private readonly profiles: ProfileManager,
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager
   ) {
+    this.redactor = upstreams.getRedactor();
     this.resourcePromptProxy = this.resourcePromptProxyAvailability();
     this.server = new Server(
       { name: `miftah-${config.name}`, version: "0.1.1" },
@@ -143,7 +169,7 @@ export class MiftahServer {
         () => multiUpstreams.listUpstreams(),
         (profile, upstreamName, params) => this.discoverResources(profile, upstreamName, params),
         (profile, upstreamName, params) => this.discoverPrompts(profile, upstreamName, params),
-        (value) => redactSecrets(value, this.upstreams.getSecretValues()),
+        (value) => this.redactor.redact(value),
         undefined,
         config.tooling?.toolDiscoveryMode ?? "permissive"
       );
@@ -152,118 +178,200 @@ export class MiftahServer {
     if (config.audit?.enabled !== false && config.audit?.path) {
       this.audit = new AuditLogger(config.audit.path, {
         includeArguments: config.audit.includeArguments,
-        secretValues: []
+        redactor: this.redactor,
+        failureMode: config.audit.failureMode
       });
     }
+    this.auditTrail = new AuditTrail(config.name, this.audit);
+    this.upstreams.addLifecycleListener((event) => this.recordUpstreamLifecycle(event));
     this.operationPipeline = new OperationPipeline({
-      wrapper: config.name,
       profiles,
       routing: this.routing,
       policy: this.policy,
       upstreams,
-      writeAudit: (event) => this.writeAudit(event)
+      redactor: this.redactor
     });
     this.registerHandlers();
   }
 
-  connect(transport: Transport): Promise<void> {
-    return this.server.connect(transport);
+  async connect(transport: Transport): Promise<void> {
+    await this.server.connect(transport);
+    await this.auditTrail.writeLifecycle({
+      operation: "wrapper/start",
+      name: this.config.name,
+      profile: this.profiles.current().activeProfile,
+      lockToProfile: this.config.security?.lockToProfile ?? undefined,
+      status: "success"
+    }).catch(() => undefined);
   }
 
   async close(): Promise<void> {
     await this.server.close();
     await this.upstreams.close();
+    await this.auditTrail.writeLifecycle({
+      operation: "wrapper/shutdown",
+      name: this.config.name,
+      profile: this.profiles.current().activeProfile,
+      status: "success"
+    }).catch(() => undefined);
   }
 
   private registerHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const snapshot = await this.activeToolSnapshot();
-      return { tools: [...managementTools, ...snapshot.getTools()] };
+      const source = this.profiles.current();
+      return this.runAudited(
+        { operation: "tools/list", name: "tools", sourceProfile: source.activeProfile },
+        async (audit) => {
+          const upstream = this.auditUpstreamName();
+          if (upstream) audit.update({ upstream });
+          const { profile, snapshot } = await this.activeToolSnapshot();
+          audit.update({ profile });
+          return { tools: [...managementTools, ...snapshot.getTools()] };
+        }
+      );
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name;
       const args = request.params.arguments ?? {};
-      if (managementTools.some((tool) => tool.name === name)) return this.handleManagement(name, args);
-      return this.handleUpstreamTool(name, args);
+      const source = this.profiles.current();
+      const isManagementTool = managementTools.some((tool) => tool.name === name);
+      return this.runAudited(
+        {
+          operation: isManagementTool ? managementOperation(name) : "tools/call",
+          name: isManagementTool ? managementName(name, args) : name,
+          sourceProfile: source.activeProfile,
+          arguments: args
+        },
+        (audit) =>
+          isManagementTool ? this.handleManagement(name, args, audit) : this.handleUpstreamTool(name, args, audit, source),
+        (error) => textResult(error.message, true),
+        (result) =>
+          result.isError
+            ? { status: "failure", errorCode: "UPSTREAM_CALL_FAILED" }
+            : { status: "success" }
+      );
     });
 
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
       this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
-        const profile = this.profiles.current().activeProfile;
-        if (this.resourcePromptRegistry) {
-          try {
-            return await this.resourcePromptRegistry.listResources(profile, request.params?.cursor);
-          } finally {
-            await this.notifyResourceAvailabilityChange(profile);
+        const source = this.profiles.current();
+        return this.runAudited(
+          {
+            operation: "resources/list",
+            name: "resources",
+            sourceProfile: source.activeProfile,
+            arguments: request.params ?? {}
+          },
+          async (audit) => {
+            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+            if (upstream) audit.update({ upstream });
+            if (this.resourcePromptRegistry) {
+              try {
+                return await this.resourcePromptRegistry.listResources(source.activeProfile, request.params?.cursor);
+              } finally {
+                await this.notifyResourceAvailabilityChange(source.activeProfile);
+              }
+            }
+            return redactDirectResourceList(await this.discoverResources(source.activeProfile, upstreamName, request.params));
           }
-        }
-        return redactSecrets(
-          redactDirectResourceList(await this.discoverResources(profile, upstreamName, request.params)),
-          this.upstreams.getSecretValues()
         );
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         const source = this.profiles.current();
-        if (this.resourcePromptRegistry) {
-          try {
-            return await this.executeResourceRead(source, upstreamName, request.params);
-          } finally {
-            await this.notifyResourceAvailabilityChange(source.activeProfile);
+        return this.runAudited(
+          {
+            operation: "resources/read",
+            name: this.redactor.redactUri(request.params.uri),
+            sourceProfile: source.activeProfile,
+            arguments: { uri: this.redactor.redactUri(request.params.uri) }
+          },
+          async (audit) => {
+            if (this.resourcePromptRegistry) {
+              try {
+                return await this.executeResourceRead(source, upstreamName, request.params, audit);
+              } finally {
+                await this.notifyResourceAvailabilityChange(source.activeProfile);
+              }
+            }
+            return this.executeResourceRead(source, upstreamName, request.params, audit);
           }
-        }
-        return this.executeResourceRead(source, upstreamName, request.params);
+        );
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
-        const profile = this.profiles.current().activeProfile;
-        if (this.resourcePromptRegistry) {
-          try {
-            return await this.resourcePromptRegistry.listPrompts(profile, request.params?.cursor);
-          } finally {
-            await this.notifyPromptAvailabilityChange(profile);
+        const source = this.profiles.current();
+        return this.runAudited(
+          {
+            operation: "prompts/list",
+            name: "prompts",
+            sourceProfile: source.activeProfile,
+            arguments: request.params ?? {}
+          },
+          async (audit) => {
+            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+            if (upstream) audit.update({ upstream });
+            if (this.resourcePromptRegistry) {
+              try {
+                return await this.resourcePromptRegistry.listPrompts(source.activeProfile, request.params?.cursor);
+              } finally {
+                await this.notifyPromptAvailabilityChange(source.activeProfile);
+              }
+            }
+            return redactDirectPromptList(await this.discoverPrompts(source.activeProfile, upstreamName, request.params));
           }
-        }
-        return redactSecrets(
-          redactDirectPromptList(await this.discoverPrompts(profile, upstreamName, request.params)),
-          this.upstreams.getSecretValues()
         );
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
         const source = this.profiles.current();
-        if (this.resourcePromptRegistry) {
-          try {
-            return await this.executePromptGet(source, upstreamName, request.params);
-          } finally {
-            await this.notifyPromptAvailabilityChange(source.activeProfile);
+        return this.runAudited(
+          {
+            operation: "prompts/get",
+            name: request.params.name,
+            sourceProfile: source.activeProfile,
+            arguments: { ...(request.params.arguments ?? {}), name: request.params.name }
+          },
+          async (audit) => {
+            if (this.resourcePromptRegistry) {
+              try {
+                return await this.executePromptGet(source, upstreamName, request.params, audit);
+              } finally {
+                await this.notifyPromptAvailabilityChange(source.activeProfile);
+              }
+            }
+            return this.executePromptGet(source, upstreamName, request.params, audit);
           }
-        }
-        return this.executePromptGet(source, upstreamName, request.params);
+        );
       });
     }
   }
 
-  private async handleUpstreamTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    try {
-      const sourceState = this.profiles.current();
-      const sourceProfile = sourceState.activeProfile;
-      const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
-      const sourceSnapshot = await this.toolRegistry.get(sourceProfile);
-      if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
-        await this.notifyToolListChanged(previous, sourceSnapshot);
-        this.invalidatedToolSnapshots.delete(sourceProfile);
-      }
-      const mapped = sourceSnapshot.resolve(name);
-      if (!mapped) {
-        throw new MiftahError(
-          "TOOL_NOT_FOUND",
-          `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
-        );
-      }
-      return await this.operationPipeline.execute({
+  private async handleUpstreamTool(
+    name: string,
+    args: Record<string, unknown>,
+    audit: AuditScope,
+    sourceState: CapturedProfileState
+  ): Promise<CallToolResult> {
+    const sourceProfile = sourceState.activeProfile;
+    const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
+    const sourceSnapshot = await this.toolRegistry.get(sourceProfile);
+    if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
+      await this.notifyToolListChanged(previous, sourceSnapshot);
+      this.invalidatedToolSnapshots.delete(sourceProfile);
+    }
+    const mapped = sourceSnapshot.resolve(name);
+    if (!mapped) {
+      throw new MiftahError(
+        "TOOL_NOT_FOUND",
+        `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
+      );
+    }
+    audit.update({ name: mapped.originalName });
+    return this.operationPipeline.execute(
+      {
         source: sourceState,
         operation: "tools/call",
         routingName: mapped.originalName,
@@ -286,100 +394,102 @@ export class MiftahServer {
             );
           }
           return {
-            upstreamName: target.upstreamName,
+            upstreamName: this.auditUpstreamName(target.upstreamName),
             name: target.originalName,
             execute: (session) => session.callTool({ name: target.originalName, arguments: args }),
             redact: (result) => result
           };
         }
-      });
-    } catch (error) {
-      const safeMessage = redactSecrets(
-        redactUrisInText(error instanceof Error ? error.message : String(error)),
-        this.upstreams.getSecretValues()
-      );
-      if (error instanceof MiftahError) {
-        return textResult(safeMessage, true);
-      }
-      return textResult(`UPSTREAM_CALL_FAILED: ${safeMessage}`, true);
-    }
+      },
+      audit
+    );
   }
 
-  private async handleManagement(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    try {
-      if (name === "miftah_list_profiles") {
-        const activeProfile = this.profiles.current().activeProfile;
-        return textResult(JSON.stringify(this.profiles.list().map((profile) => ({
-          ...profile,
-          active: profile.name === activeProfile
-        }))));
-      }
-      if (name === "miftah_current_profile") {
-        const current = this.profiles.current();
-        return textResult(
-          JSON.stringify({
-            activeProfile: current.activeProfile,
-            defaultProfile: current.defaultProfile,
-            routingMode: this.config.routing?.mode ?? "hybrid"
-          })
-        );
-      }
-      if (name === "miftah_use_profile") {
-        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
-        const profile = requiredString(args, "profile");
-        const switched = this.profiles.switch(profile);
-        this.routing.setActiveProfile(switched.activeProfile);
-        this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
-        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
-        await this.notifyResourcePromptListChanged();
-        return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
-      }
-      if (name === "miftah_reset_profile") {
-        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
-        const reset = this.profiles.reset();
-        this.routing.setActiveProfile(reset.activeProfile);
-        this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
-        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
-        await this.notifyResourcePromptListChanged();
-        return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
-      }
-      if (name === "miftah_profile_info") return textResult(JSON.stringify(this.profiles.info(requiredString(args, "profile"))));
-      if (name === "miftah_health") {
-        return textResult(
-          JSON.stringify({
-            configValid: true,
-            activeProfile: this.profiles.current().activeProfile,
-            resourcePromptProxy: this.resourcePromptProxy.available
-              ? { available: true }
-              : { available: false, reason: this.resourcePromptProxy.reason },
-            upstreams: this.upstreams.listHealth()
-          })
-        );
-      }
-      if (name === "miftah_validate_config") return textResult(JSON.stringify({ ok: true, errors: [] }));
-      if (name === "miftah_list_upstream_tools") {
-        const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
-        const tools = (await this.toolRegistry.get(profile)).getTools();
-        return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
-      }
-      if (name === "miftah_restart_profile") {
-        const profile = requiredString(args, "profile");
-        await this.restartUpstreamProfile(profile);
-        return textResult("Profile restarted.");
-      }
-      if (name === "miftah_route_preview") {
-        const route = this.routing.resolve({
-          toolName: requiredString(args, "toolName"),
-          args: isRecord(args.args) ? args.args : {}
-        });
-        const profile = this.profiles.get(route.profile);
-        return textResult(JSON.stringify({ ...route, policy: this.policy.evaluate(profile.policy, requiredString(args, "toolName")) }));
-      }
-      return textResult(`Unknown management tool '${name}'`, true);
-    } catch (error) {
-      const message = error instanceof MiftahError ? `${error.code}: ${error.message}` : String(error);
-      return textResult(redactSecrets(message, this.upstreams.getSecretValues()), true);
+  private async handleManagement(
+    name: string,
+    args: Record<string, unknown>,
+    audit: AuditScope
+  ): Promise<CallToolResult> {
+    if (name === "miftah_list_profiles") {
+      const activeProfile = this.profiles.current().activeProfile;
+      return textResult(JSON.stringify(this.profiles.list().map((profile) => ({
+        ...profile,
+        active: profile.name === activeProfile
+      }))));
     }
+    if (name === "miftah_current_profile") {
+      const current = this.profiles.current();
+      return textResult(
+        JSON.stringify({
+          activeProfile: current.activeProfile,
+          defaultProfile: current.defaultProfile,
+          routingMode: this.config.routing?.mode ?? "hybrid"
+        })
+      );
+    }
+    if (name === "miftah_use_profile") {
+      const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
+      const profile = requiredString(args, "profile");
+      const switched = this.profiles.switch(profile);
+      audit.update({ name: switched.activeProfile, profile: switched.activeProfile });
+      this.routing.setActiveProfile(switched.activeProfile);
+      this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
+      await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
+      await this.notifyResourcePromptListChanged();
+      return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
+    }
+    if (name === "miftah_reset_profile") {
+      const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
+      const reset = this.profiles.reset();
+      audit.update({ name: reset.activeProfile, profile: reset.activeProfile });
+      this.routing.setActiveProfile(reset.activeProfile);
+      this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
+      await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
+      await this.notifyResourcePromptListChanged();
+      return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
+    }
+    if (name === "miftah_profile_info") {
+      const profile = requiredString(args, "profile");
+      const info = this.profiles.info(profile);
+      audit.update({ name: profile, profile });
+      return textResult(JSON.stringify(info));
+    }
+    if (name === "miftah_health") {
+      return textResult(
+        JSON.stringify({
+          configValid: true,
+          activeProfile: this.profiles.current().activeProfile,
+          resourcePromptProxy: this.resourcePromptProxy.available
+            ? { available: true }
+            : { available: false, reason: this.resourcePromptProxy.reason },
+          audit: this.auditTrail.health(),
+          upstreams: this.upstreams.listHealth()
+        })
+      );
+    }
+    if (name === "miftah_validate_config") return textResult(JSON.stringify({ ok: true, errors: [] }));
+    if (name === "miftah_list_upstream_tools") {
+      const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
+      audit.update({ name: profile, profile });
+      const tools = (await this.toolRegistry.get(profile)).getTools();
+      return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
+    }
+    if (name === "miftah_restart_profile") {
+      const profile = requiredString(args, "profile");
+      audit.update({ name: profile, profile });
+      await this.restartUpstreamProfile(profile);
+      return textResult("Profile restarted.");
+    }
+    if (name === "miftah_route_preview") {
+      const route = this.routing.resolve({
+        toolName: requiredString(args, "toolName"),
+        args: isRecord(args.args) ? args.args : {}
+      });
+      const profile = this.profiles.get(route.profile);
+      audit.update({ profile: route.profile });
+      return textResult(JSON.stringify({ ...route, policy: this.policy.evaluate(profile.policy, requiredString(args, "toolName")) }));
+    }
+    throw new MiftahError("TOOL_NOT_FOUND", `TOOL_NOT_FOUND: management tool '${name}' is not registered`);
   }
 
   private exposedToolName(name: string, upstreamName?: string): string {
@@ -396,6 +506,13 @@ export class MiftahServer {
   private upstreamNames(): (string | undefined)[] {
     if (this.upstreams instanceof MultiUpstreamProcessManager) return this.upstreams.listUpstreams();
     return [undefined];
+  }
+
+  private auditUpstreamName(upstreamName?: string): string | undefined {
+    if (upstreamName !== undefined) return upstreamName;
+    if (!(this.upstreams instanceof MultiUpstreamProcessManager)) return "default";
+    const names = this.upstreams.listUpstreams();
+    return names.length === 1 ? names[0] : undefined;
   }
 
   private async discoverTools(profile: string): Promise<ToolDiscoveryResult> {
@@ -460,7 +577,7 @@ export class MiftahServer {
           {
             upstreamName: upstreamNames[index] ?? "default",
             code,
-            message: redactSecrets(error instanceof Error ? error.message : String(error), this.upstreams.getSecretValues())
+            message: this.redactor.redactText(error instanceof Error ? error.message : String(error))
           }
         ];
       })
@@ -531,49 +648,59 @@ export class MiftahServer {
   private async executeResourceRead(
     source: CapturedProfileState,
     upstreamName: string | undefined,
-    params: ReadResourceRequest["params"]
+    params: ReadResourceRequest["params"],
+    audit: AuditScope
   ): Promise<ReadResourceResult> {
-    return this.operationPipeline.execute({
-      source,
-      operation: "resources/read",
-      routingName: "resources/read",
-      policyName: "resources/read",
-      name: params.uri,
-      args: { uri: params.uri },
-      resolveTarget: async (profile) => {
-        if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
-        return {
-          ...(upstreamName === undefined ? {} : { upstreamName }),
-          name: params.uri,
-          execute: (session) => session.readResource(params),
-          redact: redactDirectReadResult
-        };
-      }
-    });
+    return this.operationPipeline.execute(
+      {
+        source,
+        operation: "resources/read",
+        routingName: "resources/read",
+        policyName: "resources/read",
+        name: params.uri,
+        args: { uri: params.uri },
+        resolveTarget: async (profile) => {
+          if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
+          const auditUpstream = this.auditUpstreamName(upstreamName);
+          return {
+            ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
+            name: params.uri,
+            execute: (session) => session.readResource(params),
+            redact: redactDirectReadResult
+          };
+        }
+      },
+      audit
+    );
   }
 
   private async executePromptGet(
     source: CapturedProfileState,
     upstreamName: string | undefined,
-    params: GetPromptRequest["params"]
+    params: GetPromptRequest["params"],
+    audit: AuditScope
   ): Promise<GetPromptResult> {
-    return this.operationPipeline.execute({
-      source,
-      operation: "prompts/get",
-      routingName: "prompts/get",
-      policyName: "prompts/get",
-      name: params.name,
-      args: { ...(params.arguments ?? {}), name: params.name },
-      resolveTarget: async (profile) => {
-        if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
-        return {
-          ...(upstreamName === undefined ? {} : { upstreamName }),
-          name: params.name,
-          execute: (session) => session.getPrompt(params),
-          redact: redactDirectPromptResult
-        };
-      }
-    });
+    return this.operationPipeline.execute(
+      {
+        source,
+        operation: "prompts/get",
+        routingName: "prompts/get",
+        policyName: "prompts/get",
+        name: params.name,
+        args: { ...(params.arguments ?? {}), name: params.name },
+        resolveTarget: async (profile) => {
+          if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
+          const auditUpstream = this.auditUpstreamName(upstreamName);
+          return {
+            ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
+            name: params.name,
+            execute: (session) => session.getPrompt(params),
+            redact: redactDirectPromptResult
+          };
+        }
+      },
+      audit
+    );
   }
 
   private async discoverResources(
@@ -615,11 +742,7 @@ export class MiftahServer {
       const session = await this.upstreams.get(profile, upstreamName);
       return await operation(session);
     } catch (error) {
-      const safeMessage = redactSecrets(
-        redactUrisInText(error instanceof Error ? error.message : String(error)),
-        this.upstreams.getSecretValues()
-      );
-      throw new Error(safeMessage, { cause: error });
+      throw this.toSafeError(error);
     }
   }
 
@@ -703,11 +826,59 @@ export class MiftahServer {
     }
   }
 
-  private async writeAudit(event: Parameters<AuditLogger["log"]>[0]): Promise<void> {
-    if (this.audit) await this.audit.log(redactSecrets(event, this.upstreams.getSecretValues()));
+  private async runAudited<Result>(
+    input: {
+      operation: string;
+      name: string;
+      sourceProfile: string;
+      arguments?: Record<string, unknown>;
+    },
+    operation: (audit: AuditScope) => Promise<Result>,
+    errorResult?: (error: MiftahError) => Result,
+    resultAudit?: (result: Result) => AuditScopeResult
+  ): Promise<Result> {
+    const audit = this.auditTrail.beginOperation(input);
+    try {
+      await this.auditTrail.ensureWritable();
+      const result = await operation(audit);
+      await audit.finish(resultAudit?.(result) ?? { status: "success" });
+      return this.redactor.redact(result);
+    } catch (error) {
+      let safeError = this.toSafeError(error);
+      if (!audit.isFinalized) {
+        try {
+          await audit.finish({ status: this.auditStatus(safeError), errorCode: safeError.code });
+        } catch (auditError) {
+          safeError = this.toSafeError(auditError);
+        }
+      }
+      if (errorResult) return errorResult(safeError);
+      throw safeError;
+    }
   }
 
-  private async activeToolSnapshot(): Promise<ToolSnapshot> {
+  private auditStatus(error: MiftahError): AuditStatus {
+    if (
+      error.code === "POLICY_BLOCKED" ||
+      error.code === "ROUTING_BLOCKED" ||
+      error.code === "PROFILE_SWITCH_DISABLED"
+    ) {
+      return "denied";
+    }
+    if (error.code === "POLICY_CONFIRMATION_REQUIRED") return "confirmation-required";
+    if (error.code === "ROUTING_AMBIGUOUS") return "ambiguous";
+    return "failure";
+  }
+
+  private toSafeError(error: unknown): MiftahError {
+    const message = this.redactor.redactText(error instanceof Error ? error.message : String(error));
+    if (error instanceof MiftahError) {
+      return new MiftahError(error.code, message, this.redactor.redact(error.details));
+    }
+    return new MiftahError("UPSTREAM_CALL_FAILED", `UPSTREAM_CALL_FAILED: ${message}`);
+  }
+
+  private async activeToolSnapshot(): Promise<{ profile: string; snapshot: ToolSnapshot }> {
     for (;;) {
       const state = this.profiles.current();
       const previous =
@@ -716,7 +887,7 @@ export class MiftahServer {
       if (this.profiles.current().revision === state.revision) {
         if (previous !== undefined) await this.notifyToolListChanged(previous, snapshot);
         this.invalidatedToolSnapshots.delete(state.activeProfile);
-        return snapshot;
+        return { profile: state.activeProfile, snapshot };
       }
     }
   }
@@ -763,6 +934,7 @@ export class MiftahServer {
         if (snapshot?.isComplete()) this.invalidatedToolSnapshots.set(profile, snapshot);
         this.toolRegistry.invalidate(profile);
       }
+
       if (health.profile === this.profiles.current().activeProfile) {
         this.invalidateResourcePromptAfterUpstreamFailure(health.profile);
       }
@@ -773,6 +945,17 @@ export class MiftahServer {
     this.invalidatedToolSnapshots.set(health.profile, snapshot);
     this.toolRegistry.invalidate(health.profile);
     this.invalidateResourcePromptAfterUpstreamFailure(health.profile);
+  }
+
+  private recordUpstreamLifecycle(event: UpstreamLifecycleEvent): void {
+    this.auditTrail.recordLifecycle({
+      operation: `upstream/${event.type}`,
+      name: event.upstreamName,
+      profile: event.profile,
+      upstream: event.upstreamName,
+      status: event.status,
+      errorCode: event.errorCode
+    });
   }
 
   private invalidateResourcePromptAfterUpstreamFailure(profile: string): void {

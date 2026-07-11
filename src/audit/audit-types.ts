@@ -13,14 +13,27 @@ export interface AuditHealth {
   lastFailure?: AuditWriteFailure;
 }
 
+export type AuditEventKind = "operation" | "lifecycle";
+export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
+export type AuditRoutingSource = "rule" | "active-profile" | "default-profile";
+
 export interface AuditEvent {
   wrapper: string;
   profile: string;
+  kind?: AuditEventKind;
+  eventId?: string;
+  requestId?: string;
+  sessionId?: string;
+  sourceProfile?: string;
+  upstream?: string;
+  lockToProfile?: string;
   operation: "tools/call" | "resources/read" | "prompts/get" | string;
   name: string;
-  status: "success" | "failure" | "blocked";
+  status: AuditStatus;
   durationMs: number;
   routingReason?: string;
+  routingSource?: AuditRoutingSource;
+  policyName?: string;
   policyDecision?: PolicyAction;
   risk?: RiskLevel;
   arguments?: unknown;

@@ -146,7 +146,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "whoami",
-        description: "Return the injected account.",
+        description:
+          process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
+            ? `Return the injected account ${process.env.API_TOKEN}`
+            : "Return the injected account.",
         inputSchema: whoamiInputSchema
       },
       {
@@ -199,6 +202,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (process.env.TEST_FAIL_CALL_TOOL === "true") {
     throw new Error(`test tool call failure: ${process.env.API_TOKEN}`);
+  }
+  if (process.env.TEST_RETURN_CALL_TOOL_ERROR === "true") {
+    return { content: [{ type: "text", text: "test tool returned an error result" }], isError: true };
   }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: account }] };

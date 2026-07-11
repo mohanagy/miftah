@@ -4,6 +4,7 @@ import {
   UpstreamProcessManager,
   type UpstreamCapability,
   type UpstreamHealth,
+  type UpstreamLifecycleEvent,
   type UpstreamManagerOptions
 } from "./upstream-process-manager.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
@@ -15,6 +16,7 @@ import { SecretRedactor } from "../secrets/redact.js";
 export class MultiUpstreamProcessManager {
   private readonly managers: Record<string, UpstreamProcessManager>;
   private readonly healthListeners = new Set<(health: UpstreamHealth) => void>();
+  private readonly lifecycleListeners = new Set<(event: UpstreamLifecycleEvent) => void>();
   private readonly limiter: ProfileSessionLimiter;
   private readonly redactor: SecretRedactor;
 
@@ -32,6 +34,7 @@ export class MultiUpstreamProcessManager {
           this.limiter
         );
         manager.addHealthListener((health) => this.publishHealth(health));
+        manager.addLifecycleListener((event) => this.publishLifecycle(event));
         return [name, manager];
       })
     );
@@ -56,6 +59,11 @@ export class MultiUpstreamProcessManager {
   addHealthListener(listener: (health: UpstreamHealth) => void): () => void {
     this.healthListeners.add(listener);
     return () => this.healthListeners.delete(listener);
+  }
+
+  addLifecycleListener(listener: (event: UpstreamLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
   }
 
   recordCapabilitySuccess(profile: string, capability: UpstreamCapability, upstreamName?: string): void {
@@ -110,7 +118,27 @@ export class MultiUpstreamProcessManager {
   }
 
   private publishHealth(health: UpstreamHealth): void {
-    for (const listener of this.healthListeners) listener(health);
+    this.notifyListeners(this.healthListeners, health, "health");
+  }
+
+  private publishLifecycle(event: UpstreamLifecycleEvent): void {
+    this.notifyListeners(this.lifecycleListeners, event, "lifecycle");
+  }
+
+  private notifyListeners<Event>(
+    listeners: ReadonlySet<(event: Event) => void>,
+    event: Event,
+    kind: "health" | "lifecycle"
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        process.emitWarning(`MIFTAH_LISTENER_FAILED: ignored a failing ${kind} listener`, {
+          code: "MIFTAH_LISTENER_FAILED"
+        });
+      }
+    }
   }
 }
 
