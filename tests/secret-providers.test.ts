@@ -67,6 +67,17 @@ function fakeProviderEnvironment(
   };
 }
 
+function windowsProviderBootstrapEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot ?? process.env.windir,
+    windir: process.env.windir,
+    ComSpec: process.env.ComSpec,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP
+  };
+}
+
 async function installFakeProviderExecutable(directory: string, name: string): Promise<string> {
   const executable = join(directory, name);
   await copyFile(fakeProviderPath, executable);
@@ -175,7 +186,7 @@ function activePipeCount(): number {
 async function runWindowsCompressedBootstrap(
   source: string,
   environment: NodeJS.ProcessEnv = {},
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; inheritEnvironment?: boolean } = {}
 ): Promise<{
   code: number | null;
   stdout: string;
@@ -213,7 +224,7 @@ try {
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
       {
         env: {
-          ...process.env,
+          ...(options.inheritEnvironment === false ? {} : process.env),
           ...environment,
           MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
         },
@@ -879,6 +890,24 @@ describe("secret command runner", () => {
         code: 0,
         stdout: "bootstrap-ready\r\n",
         stderr: expect.any(String)
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "executes the compressed bootstrap with the provider environment at process start",
+    async () => {
+      const result = await runWindowsCompressedBootstrap(
+        "Write-Output 'narrow-bootstrap-ready'\nexit 0",
+        windowsProviderBootstrapEnvironment(),
+        { timeoutMs: 5_000, inheritEnvironment: false }
+      );
+
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: "narrow-bootstrap-ready\r\n",
+        timedOut: false
       });
     },
     20_000
