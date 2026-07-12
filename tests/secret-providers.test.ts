@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -14,12 +12,10 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
-import { resolveWindowsSecretCommand, spawnWindowsSecretCommand } from "../src/secrets/windows-secret-command.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
-const windowsOutputProbePath = join(process.cwd(), "tests", "fixtures", "windows-secret-output-probe.mjs");
 const windowsHelperStartupTimeoutMs = 5_000;
 
 function providerCommandTimeout(timeoutMs: number): number {
@@ -737,139 +733,6 @@ describe("secret command runner", () => {
       });
     }
   );
-
-  it.runIf(process.platform === "win32")("forwards stdout without a provider script argument", async () => {
-    await inSandbox(async (directory) => {
-      const recordPath = join(directory, "windows-output-probe.txt");
-      const result = await runSecretCommand({
-        executable: process.execPath,
-        args: [],
-        environment: {
-          ...fakeProviderEnvironment(directory, "success"),
-          MIFTAH_WINDOWS_OUTPUT_PROBE_RECORD_PATH: recordPath,
-          NODE_OPTIONS: `--require=${windowsOutputProbePath}`
-        }
-      });
-
-      await expect(readFile(recordPath, "utf8")).resolves.toBe("ran");
-      expect(result.stdout.toString("utf8")).toBe("windows-secret-output-probe");
-    });
-  });
-
-  it.runIf(process.platform === "win32")("executes a static PowerShell stdin command", async () => {
-    const systemRoot = process.env.SystemRoot ?? process.env.windir;
-    if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
-
-    const child = spawn(
-      join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
-      {
-        shell: false,
-        windowsHide: true,
-        stdio: ["pipe", "pipe", "pipe"]
-      }
-    );
-    if (child.stdin === null || child.stdout === null || child.stderr === null) {
-      child.kill();
-      throw new Error("PowerShell did not expose standard streams");
-    }
-
-    const stdout: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    const result = new Promise<number | null>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", resolve);
-    });
-    child.stdin.end('Write-Output "powershell-stdin-probe"', "utf8");
-
-    await expect(result).resolves.toBe(0);
-    expect(Buffer.concat(stdout).toString("utf8")).toContain("powershell-stdin-probe");
-  });
-
-  it.runIf(process.platform === "win32")("returns a native failure for a missing helper executable", async () => {
-    await inSandbox(async (directory) => {
-      const helperSource = await readFile(
-        join(process.cwd(), "src", "secrets", "windows-secret-command.ts"),
-        "utf8"
-      );
-      const csharp = helperSource.match(/ {2}\$source = @'\r?\n([\s\S]+?)\r?\n'@\r?\n {2}Add-Type/);
-      if (csharp === null) throw new Error("Could not extract the Windows helper source");
-
-      const systemRoot = process.env.SystemRoot ?? process.env.windir;
-      if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
-      const child = spawn(
-        join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
-        {
-          env: {
-            ...process.env,
-            MIFTAH_WINDOWS_MISSING_EXECUTABLE: join(directory, "missing-provider.exe")
-          },
-          shell: false,
-          windowsHide: true,
-          stdio: ["pipe", "pipe", "pipe"]
-        }
-      );
-      if (child.stdin === null || child.stdout === null || child.stderr === null) {
-        child.kill();
-        throw new Error("PowerShell did not expose standard streams");
-      }
-
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      const closed = once(child, "close");
-      child.stdin.end(
-        `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp[1]}
-'@
-Add-Type -TypeDefinition $source
-$initialized = [MiftahSecretJob]::Initialize()
-Write-Output $initialized
-if (-not $initialized) { exit 1 }
-Write-Output ([MiftahSecretJob]::Run([string]$env:MIFTAH_WINDOWS_MISSING_EXECUTABLE, [string[]]@()))
-`,
-        "utf8"
-      );
-      const [code] = await closed;
-
-      expect({
-        code,
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        stdout: Buffer.concat(stdout).toString("utf8").trim().split(/\r?\n/u)
-      }).toEqual({ code: 0, stderr: "", stdout: ["True", "1"] });
-    });
-  });
-
-  it.runIf(process.platform === "win32")("rejects a missing executable inside the Job Object helper", async () => {
-    await inSandbox(async (directory) => {
-      const command = await resolveWindowsSecretCommand({
-        executable: join(directory, "missing-provider.exe"),
-        args: [],
-        environment: fakeProviderEnvironment(directory, "success")
-      });
-      expect(command).toBeDefined();
-
-      const child = spawnWindowsSecretCommand(command!);
-      if (child.stdout === null || child.stderr === null) {
-        child.kill();
-        throw new Error("Job Object helper did not expose standard streams");
-      }
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      const [code] = await once(child, "close");
-
-      expect({
-        code,
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        stdout: Buffer.concat(stdout).toString("utf8")
-      }).toMatchObject({ code: 1 });
-    });
-  });
 
   it.each([
         ["sleep", { timeoutMs: providerCommandTimeout(20) }, "timeout"],

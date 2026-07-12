@@ -17,6 +17,12 @@ export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
   readonly launcher: string;
 }
 
+const windowsJobBootstrap = String.raw`$ErrorActionPreference = 'Stop'
+$source = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrEmpty($source)) { exit 1 }
+& ([ScriptBlock]::Create($source))`;
+const encodedWindowsJobBootstrap = Buffer.from(windowsJobBootstrap, "utf16le").toString("base64");
+
 /**
  * Resolves Windows provider executables before spawn so Node never performs a
  * current-directory lookup for a bare command.
@@ -42,7 +48,7 @@ export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand)
 
   const child = spawn(
     command.launcher,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedWindowsJobBootstrap],
     {
       env: helperEnvironment(command.environment, request),
       shell: false,
@@ -92,7 +98,7 @@ function encodeRequest(command: ResolvedWindowsSecretCommand): string | undefine
   const request = Buffer.from(
     JSON.stringify({
       executable: command.executable,
-      argv: command.args
+      arguments: command.args
     }),
     "utf8"
   );
@@ -140,9 +146,7 @@ try {
   $requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
   $request = $requestJson | ConvertFrom-Json
-  if ($null -eq $request -or $null -eq $request.executable) { exit 1 }
-  $argvProperty = $request.PSObject.Properties['argv']
-  if ($null -eq $argvProperty) { exit 1 }
+  if ($null -eq $request -or $null -eq $request.executable -or $null -eq $request.arguments) { exit 1 }
   $source = @'
 using System;
 using System.IO;
@@ -329,14 +333,14 @@ public static class MiftahSecretJob
         }
     }
 
-    public static int Run(string executable, string[] argv)
+    public static int Run(string executable, string[] arguments)
     {
         if (String.IsNullOrEmpty(executable) || executable.IndexOf('\0') >= 0 || !Path.IsPathRooted(executable)) return 1;
         string extension = Path.GetExtension(executable);
         if (String.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase) ||
             String.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase)) return 1;
-        if (argv == null) return 1;
-        foreach (string argument in argv)
+        if (arguments == null) return 1;
+        foreach (string argument in arguments)
         {
             if (argument == null || argument.IndexOf('\0') >= 0) return 1;
         }
@@ -384,7 +388,7 @@ public static class MiftahSecretJob
             startupInfo.StartupInfo.hStdError = standardError;
             startupInfo.lpAttributeList = attributeList;
 
-            StringBuilder commandLine = BuildCommandLine(executable, argv);
+            StringBuilder commandLine = BuildCommandLine(executable, arguments);
             if (!CreateProcessW(
                 executable,
                 commandLine,
@@ -421,11 +425,11 @@ public static class MiftahSecretJob
         return handle != IntPtr.Zero && handle != InvalidHandleValue;
     }
 
-    private static StringBuilder BuildCommandLine(string executable, string[] argv)
+    private static StringBuilder BuildCommandLine(string executable, string[] arguments)
     {
         StringBuilder commandLine = new StringBuilder();
         AppendArgument(commandLine, executable);
-        foreach (string argument in argv)
+        foreach (string argument in arguments)
         {
             commandLine.Append(' ');
             AppendArgument(commandLine, argument);
@@ -469,11 +473,11 @@ public static class MiftahSecretJob
 '@
   Add-Type -TypeDefinition $source
   if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-  $argv = @($argvProperty.Value | ForEach-Object {
+  $arguments = @($request.arguments | ForEach-Object {
     if ($null -eq $_) { throw 'Invalid argument' }
     [string]$_
   })
-  $exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$argv)
+  $exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$arguments)
   exit $exitCode
 } catch {
   exit 1
