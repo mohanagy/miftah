@@ -72,7 +72,7 @@ describe("identity verification documentation contract", () => {
     expect(identityConfig).toContain(`maximum ${maxAgeMs?.replace(digitGroupPattern, ",")} ms (24 hours)`);
     expect(identityConfig).toContain("positive integer");
     expect(identityConfig).toContain("exactly one MCP text content item");
-    expect(identityConfig).toContain(`maximum ${responseLimit?.replace(/\B(?=(\d{3})+(?!\d))/gu, ",")} JavaScript characters`);
+    expect(identityConfig).toContain(`maximum ${responseLimit?.replace(digitGroupPattern, ",")} JavaScript characters`);
     expect(identityConfig).toMatch(beforeParsingPattern);
     expect(identityConfig).toContain("JSON object");
     expect(identityConfig).toContain("allowed string fields");
@@ -125,7 +125,7 @@ describe("identity verification documentation contract", () => {
     }
 
     expect(doctorReport).toContain('IDENTITY: "DOCTOR_IDENTITY"');
-    expect(doctor).toContain('identityCheck(\n                "skipped"');
+    expect(doctor).toMatch(/identityCheck\(\s*"skipped"/u);
     expect(doctor).toContain('required ? "error" : "warning"');
     for (const claim of [
       "`DOCTOR_IDENTITY` as `skipped`",
