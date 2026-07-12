@@ -310,6 +310,27 @@ describe("routing context collector", () => {
     ]);
   });
 
+  it("uses the nearest valid marker without combining ancestor profiles", async () => {
+    const root = await createProject();
+    const child = join(root, "packages", "app");
+    await mkdir(child, { recursive: true });
+    await writeJson(join(root, ".miftahrc.json"), { profiles: { github: "work" } });
+    await writeJson(join(child, "miftah.json"), { profiles: { github: "personal" } });
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: ["work", "personal"],
+      cwd: child,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.context.marker).toEqual({ profile: "personal" });
+    expect(snapshot.profileHints).toEqual([
+      { profile: "personal", source: "project-marker", evidence: { kind: "marker", path: join(child, "miftah.json") } }
+    ]);
+  });
+
   it("exposes no fields outside the explicit marker and package schemas", async () => {
     const root = await createProject();
     await writeJson(join(root, ".miftahrc.json"), {

@@ -22,9 +22,13 @@ describe("routing context documentation contract", () => {
 
     expect(readme).toContain("[routing context](docs/config.md#routing-context)");
     expect(config).toContain("## Routing context");
+    expect(config).toContain("only runtime configuration authority");
+    expect(config).toContain('"profiles": {');
+    expect(config).toContain("does not merge with runtime configuration");
     expect(config).toContain("`MIFTAH_PROFILE`");
     expect(config).toContain("`MIFTAH_PROJECT`");
     expect(config).toContain("environment hint, project-marker hint, configured rule, then fallback");
+    expect(config).toContain("The nearest valid project marker wins");
     expect(config).toContain("`notifications/roots/list_changed`");
     expect(config).toContain("does not poll roots");
     expect(config).toContain("`miftah_route_preview`");
@@ -32,6 +36,7 @@ describe("routing context documentation contract", () => {
     expect(architecture).toContain("metadata-only routing context collector");
     expect(architecture).toContain("one immutable snapshot");
     expect(security).toContain("Project markers cannot");
+    expect(security).toContain("cannot add credentials");
     expect(security).toContain("never contains the raw `MIFTAH_PROJECT` value");
     expect(unreleasedSection(changelog)).toMatch(/\[#20\][\s\S]*routing context[\s\S]*audit/iu);
   });

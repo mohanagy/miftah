@@ -66,7 +66,7 @@ The explicit `--config` file is the only runtime configuration authority. Miftah
 }
 ```
 
-`<wrapper-name>` is the trusted runtime configuration's `name`, and `<profile-name>` must name one of its configured profiles. A marker cannot configure an upstream, policy, header, environment value, audit setting, secret source, or any other Miftah option; it does not merge with runtime configuration. Miftah reads only bounded known metadata files while walking from the process working directory to an applicable local boundary and ignores malformed, irrelevant, oversized, or out-of-boundary files.
+`<wrapper-name>` is the trusted runtime configuration's `name`, and `<profile-name>` must name one of its configured profiles. A marker cannot configure an upstream, policy, header, environment value, audit setting, secret source, or any other Miftah option; it does not merge with runtime configuration. Miftah reads only bounded known metadata files while walking from the process working directory to an applicable local boundary and ignores malformed, irrelevant, oversized, or out-of-boundary files. The nearest valid project marker wins; in one directory, `.miftahrc.json` is checked before `miftah.json`, and markers are not combined.
 
 The metadata-only collector can provide rules with `context.*` values from:
 
@@ -78,7 +78,7 @@ The metadata-only collector can provide rules with `context.*` values from:
 
 `MIFTAH_PROFILE` must name a configured profile or routing fails closed. `MIFTAH_PROJECT` is contextual metadata only: Miftah does not interpret it as a path or probe the filesystem from it. URI-like project and repository values, Git origins, and roots are structurally sanitized before evidence crosses an MCP or audit boundary.
 
-Selection order is environment hint, project-marker hint, configured rule, then fallback. A distinct set of marker profiles or matching rule profiles returns `ROUTING_AMBIGUOUS`; Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
+Selection order is environment hint, project-marker hint, configured rule, then fallback. The marker stage is the one nearest valid marker above; matching rules that select different profiles return `ROUTING_AMBIGUOUS`, and Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
 
 MCP roots are optional client metadata. After initialization, Miftah calls `roots/list` only when the client advertises `roots` capability, stores a URI-only snapshot for that connection, and refreshes it only on an advertised `notifications/roots/list_changed`. An unsupported or failed roots request yields an empty-root snapshot; Miftah does not poll roots or request them for every operation.
 
