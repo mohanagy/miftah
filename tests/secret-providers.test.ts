@@ -792,7 +792,7 @@ describe("secret command runner", () => {
         join(process.cwd(), "src", "secrets", "windows-secret-command.ts"),
         "utf8"
       );
-      const csharp = helperSource.match(/ {2}\$source = @'\n([\s\S]+?)\n'@\n {2}Add-Type/);
+      const csharp = helperSource.match(/ {2}\$source = @'\r?\n([\s\S]+?)\r?\n'@\r?\n {2}Add-Type/);
       if (csharp === null) throw new Error("Could not extract the Windows helper source");
 
       const systemRoot = process.env.SystemRoot ?? process.env.windir;
