@@ -823,6 +823,25 @@ exit 0`);
   );
 
   it.runIf(process.platform === "win32")(
+    "initializes the embedded Job Object before starting providers",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+Add-Type -TypeDefinition $source
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+Write-Output 'native-job-ready'
+exit 0`);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("native-job-ready\r\n");
+    },
+    60_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "preserves provider arguments and output through the Job Object helper",
     async () => {
       await inSandbox(async (directory) => {
