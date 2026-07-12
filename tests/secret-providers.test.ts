@@ -856,6 +856,29 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
+    "runs an immediate Node child through the embedded Job Object",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+Add-Type -TypeDefinition $source
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', 'process.exit(0)'))
+Write-Output "native-run-exit=$exitCode"
+exit 0`,
+        { MIFTAH_TEST_EXECUTABLE: process.execPath }
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("native-run-exit=0\r\n");
+    },
+    60_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "initializes the embedded Job Object before starting providers",
     async () => {
       const csharp = await embeddedWindowsJobCSharp();
