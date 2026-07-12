@@ -1,4 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
+import {
+  resolveWindowsSecretCommand,
+  spawnWindowsSecretCommand,
+  type ResolvedWindowsSecretCommand
+} from "./windows-secret-command.js";
 
 const defaultTimeoutMs = 10_000;
 const maximumStdoutBytes = 64 * 1024;
@@ -39,19 +44,46 @@ export function runSecretCommand(
   command: SecretCommand,
   options: SecretCommandOptions = {}
 ): Promise<SecretCommandResult> {
-  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   if (options.signal?.aborted) {
     return Promise.reject(new SecretProcessError("cancelled"));
   }
+  if (process.platform !== "win32") return runPreparedSecretCommand(command, options);
 
+  return resolveWindowsSecretCommand(command).then(
+    (resolved) =>
+      resolved === undefined
+        ? Promise.reject(new SecretProcessError("unavailable"))
+        : runPreparedSecretCommand(resolved, options),
+    () => Promise.reject(new SecretProcessError("unavailable"))
+  );
+}
+
+function runPreparedSecretCommand(
+  command: SecretCommand | ResolvedWindowsSecretCommand,
+  options: SecretCommandOptions
+): Promise<SecretCommandResult> {
+  if (options.signal?.aborted) {
+    return Promise.reject(new SecretProcessError("cancelled"));
+  }
+  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve, reject) => {
-    const child = spawn(command.executable, command.args, {
-      env: command.environment,
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
+    const child = isWindowsSecretCommand(command)
+      ? spawnWindowsSecretCommand(command)
+      : spawn(command.executable, command.args, {
+          env: command.environment,
+          shell: false,
+          windowsHide: true,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"]
+        });
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      child.once("error", () => undefined);
+      child.kill();
+      reject(new SecretProcessError("unavailable"));
+      return;
+    }
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -104,38 +136,19 @@ export function runSecretCommand(
     };
 
     const terminateWindowsProcessTree = (): Promise<void> => {
-      const pid = child.pid;
-      if (pid === undefined) return Promise.resolve();
-      return new Promise((resolve) => {
-        let settled = false;
-        let taskkill: ChildProcess | undefined;
-        const settle = () => {
-          if (settled) return;
-          settled = true;
-          taskkill?.removeListener("error", settle);
-          taskkill?.removeListener("close", settle);
-          resolve();
-        };
-        try {
-          taskkill = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
-            shell: false,
-            windowsHide: true,
-            stdio: "ignore"
-          });
-        } catch {
-          resolve();
-          return;
-        }
-        taskkill.once("error", settle);
-        taskkill.once("close", settle);
-      });
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The job object closes when the helper has already exited.
+      }
+      return Promise.resolve();
     };
 
     const terminate = (kind: SecretProcessFailureKind) => {
       if (terminalKind !== undefined) return;
       terminalKind = kind;
       terminationComplete = false;
-      const cleanup = process.platform === "win32" ? terminateWindowsProcessTree() : terminatePosixProcessGroup();
+      const cleanup = isWindowsSecretCommand(command) ? terminateWindowsProcessTree() : terminatePosixProcessGroup();
       void cleanup.then(
         () => {
           terminationComplete = true;
@@ -152,7 +165,7 @@ export function runSecretCommand(
     options.signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
 
-    child.stdout.on("data", (value: Buffer) => {
+    stdout.on("data", (value: Buffer) => {
       if (terminalKind !== undefined) return;
       if (stdoutBytes + value.length > maximumStdoutBytes) {
         terminate("output_limit");
@@ -161,7 +174,7 @@ export function runSecretCommand(
       stdoutBytes += value.length;
       stdoutChunks.push(value);
     });
-    child.stderr.on("data", (value: Buffer) => {
+    stderr.on("data", (value: Buffer) => {
       if (stderrBytes >= maximumStderrBytes) return;
       const retained = value.subarray(0, maximumStderrBytes - stderrBytes);
       stderrBytes += retained.length;
@@ -183,6 +196,12 @@ export function runSecretCommand(
       finish({ stdout: Buffer.concat(stdoutChunks) });
     });
   });
+}
+
+function isWindowsSecretCommand(
+  command: SecretCommand | ResolvedWindowsSecretCommand
+): command is ResolvedWindowsSecretCommand {
+  return "launcher" in command;
 }
 
 function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {

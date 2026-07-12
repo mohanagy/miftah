@@ -41,6 +41,8 @@ void invalidAuditConfig;
 
 interface SchemaNode {
   const?: boolean | string;
+  minimum?: number;
+  maximum?: number;
   properties?: Record<string, SchemaNode>;
   items?: SchemaNode;
   additionalProperties?: boolean | SchemaNode;
@@ -80,6 +82,7 @@ describe("published config schema", () => {
     const security = root?.security?.properties;
     const audit = root?.audit?.properties;
     const tooling = root?.tooling?.properties;
+    const secrets = root?.secrets?.properties;
 
     expect(schema).toMatchObject({
       $schema: "https://json-schema.org/draft/2019-09/schema#",
@@ -119,6 +122,9 @@ describe("published config schema", () => {
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
     expect(tooling).toMatchObject({ toolDiscoveryMode: { enum: ["permissive", "strict"] } });
+    expect(secrets).toMatchObject({
+      providerTimeoutMs: { minimum: 100, maximum: 120_000 }
+    });
     expect(root?.routing?.additionalProperties).toBe(false);
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);

@@ -155,6 +155,13 @@ export interface ToolingConfig {
   toolRiskOverrides?: Record<string, RiskLevel>;
 }
 
+/** Configures provider-backed secret resolution. */
+export interface SecretsConfig {
+  envFiles?: string[];
+  allowPlaintextSecrets?: boolean;
+  providerTimeoutMs?: number;
+}
+
 export interface MiftahConfig {
   version: "1";
   name: string;
@@ -169,5 +176,5 @@ export interface MiftahConfig {
   process?: ProcessConfig;
   audit?: AuditConfig;
   tooling?: ToolingConfig;
-  secrets?: { envFiles?: string[]; allowPlaintextSecrets?: boolean };
+  secrets?: SecretsConfig;
 }

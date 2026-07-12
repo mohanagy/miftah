@@ -107,11 +107,43 @@ describe("doctor readiness runner", () => {
     ]) {
       expect(check(report, code).status).toBe("pass");
     }
+    expect(check(report, DOCTOR_CODES.SECRET_PROVIDERS).status).toBe("skipped");
     await waitForFile(shutdownPath);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain(configPath);
     expect(serialized).not.toContain(auditPath);
     expect(serialized).not.toContain("ready-account");
+  });
+
+  it("continues healthy target checks when another profile has an unresolved secret", async () => {
+    const missingSecret = "MIFTAH_DOCTOR_UNRELATED_MISSING_SECRET";
+    const { configPath } = await writeConfig("scoped-secret-resolution", {
+      version: "1",
+      name: "doctor-scoped-secret-resolution",
+      defaultProfile: "healthy",
+      upstream: stdioUpstream(),
+      profiles: {
+        healthy: {},
+        broken: {
+          env: { API_TOKEN: `\${${missingSecret}}` }
+        }
+      },
+      process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+    });
+
+    const report = await runDoctor(configPath);
+    const serialized = JSON.stringify(report);
+    const healthyStartup = report.checks.find(
+      (item) => item.code === DOCTOR_CODES.STARTUP && item.target === "profile 2, upstream default"
+    );
+    const brokenSecretResolution = report.checks.find(
+      (item) => item.code === DOCTOR_CODES.SECRET_REFERENCES && item.target === "profile 1, upstream default"
+    );
+
+    expect(healthyStartup).toMatchObject({ status: "pass" });
+    expect(brokenSecretResolution).toMatchObject({ status: "error" });
+    expect(serialized).not.toContain(missingSecret);
+    expect(serialized).not.toContain(configPath);
   });
 
   it("skips identity verification for an unconfigured real stdio upstream", async () => {

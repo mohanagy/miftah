@@ -9,6 +9,8 @@ import {
   SecretProcessError,
   type SecretCommandOptions
 } from "./secret-process-runner.js";
+import { resolveExecutablePath } from "./executable-resolver.js";
+import { diagnoseConfiguredSecretProviders } from "./secret-provider-availability.js";
 import type { SecretProvider } from "./secret-provider.js";
 
 const defaultTimeoutMs = 10_000;
@@ -91,7 +93,15 @@ export function createKeychainSecretProvider(
           "is unavailable on this platform"
         );
       }
-      const descriptor = options.commands?.[platform] ?? defaultKeychainCommand(platform);
+      const descriptor = options.commands?.[platform] ?? (await defaultKeychainCommand(platform, environment));
+      if (descriptor === undefined) {
+        throw providerError(
+          "SECRET_PROVIDER_UNAVAILABLE",
+          "keychain",
+          reference.canonicalReference,
+          "is unavailable"
+        );
+      }
       try {
         const result = await runSecretCommand(
           {
@@ -111,7 +121,11 @@ export function createKeychainSecretProvider(
       }
     },
     async diagnose(context) {
-      return { reference: context.reference, available: context.reference.provider === "keychain" && isKeychainPlatform(platform) };
+      const [availability] = await diagnoseConfiguredSecretProviders(["keychain"], { platform, environment });
+      return {
+        reference: context.reference,
+        available: context.reference.provider === "keychain" && availability?.available === true
+      };
     }
   };
 }
@@ -141,7 +155,15 @@ export function createOnePasswordSecretProvider(
           );
         }
       }
-      const descriptor = options.command ?? { executable: "op" };
+      const descriptor = options.command ?? (await defaultOnePasswordCommand(environment));
+      if (descriptor === undefined) {
+        throw providerError(
+          "SECRET_PROVIDER_UNAVAILABLE",
+          "op",
+          reference.canonicalReference,
+          "is unavailable"
+        );
+      }
       try {
         const result = await runSecretCommand(
           {
@@ -161,7 +183,11 @@ export function createOnePasswordSecretProvider(
       }
     },
     async diagnose(context) {
-      return { reference: context.reference, available: context.reference.provider === "op" };
+      const [availability] = await diagnoseConfiguredSecretProviders(["op"], { environment });
+      return {
+        reference: context.reference,
+        available: context.reference.provider === "op" && availability?.available === true
+      };
     }
   };
 }
@@ -170,10 +196,21 @@ function isKeychainPlatform(platform: NodeJS.Platform): platform is KeychainPlat
   return platform === "darwin" || platform === "linux" || platform === "win32";
 }
 
-function defaultKeychainCommand(platform: KeychainPlatform): SecretCommandDescriptor {
+async function defaultKeychainCommand(
+  platform: KeychainPlatform,
+  environment: NodeJS.ProcessEnv
+): Promise<SecretCommandDescriptor | undefined> {
   if (platform === "darwin") return { executable: "/usr/bin/security" };
-  if (platform === "linux") return { executable: "secret-tool" };
+  if (platform === "linux") {
+    const executable = await resolveExecutablePath("secret-tool", { environment, platform });
+    return executable === undefined ? undefined : { executable };
+  }
   return { executable: "powershell.exe" };
+}
+
+async function defaultOnePasswordCommand(environment: NodeJS.ProcessEnv): Promise<SecretCommandDescriptor | undefined> {
+  const executable = await resolveExecutablePath("op", { environment });
+  return executable === undefined ? undefined : { executable };
 }
 
 function keychainArguments(

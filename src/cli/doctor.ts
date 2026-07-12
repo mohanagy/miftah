@@ -3,13 +3,20 @@ import { constants } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AuditLogger } from "../audit/audit-logger.js";
+import { loadConfig } from "../config/load-config.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, ProfileConfig, ToolingConfig, UpstreamConfig } from "../config/types.js";
 import { IdentityManager } from "../identity/identity-manager.js";
 import { canonicalJson } from "../mcp/server/tool-registry.js";
 import { resolveClientVisibleToolName } from "../mcp/server/miftah-server.js";
+import {
+  diagnoseConfiguredSecretProviders,
+  scanConfiguredExternalSecretProviders,
+  type SecretProviderAvailability
+} from "../secrets/secret-provider-availability.js";
 import type { UpstreamSession } from "../upstream/upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
+import { SecretRedactor } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
 import {
   DOCTOR_CODES,
@@ -66,6 +73,34 @@ function identityCheck(
   remediation: string
 ): DoctorCheck {
   return check(DOCTOR_CODES.IDENTITY, status, target, explanation, remediation);
+}
+
+function secretProviderAvailabilityCheck(availability: readonly SecretProviderAvailability[]): DoctorCheck {
+  if (availability.length === 0) {
+    return check(
+      DOCTOR_CODES.SECRET_PROVIDERS,
+      "skipped",
+      "secret providers",
+      "No external secret providers are configured.",
+      "Configure a keychain or 1Password reference to check external provider availability."
+    );
+  }
+  if (availability.every((provider) => provider.available)) {
+    return check(
+      DOCTOR_CODES.SECRET_PROVIDERS,
+      "pass",
+      "secret providers",
+      "Configured external secret providers are available.",
+      noAction()
+    );
+  }
+  return check(
+    DOCTOR_CODES.SECRET_PROVIDERS,
+    "error",
+    "secret providers",
+    "One or more configured external secret providers are unavailable.",
+    "Install or configure the required secret provider before retrying doctor."
+  );
 }
 
 function configuredUpstreams(config: MiftahConfig): Array<{ name?: string; upstream: UpstreamConfig }> {
@@ -371,14 +406,18 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     );
   }
 
-  let runtime: Awaited<ReturnType<typeof createRuntime>>;
+  let config: MiftahConfig;
   try {
-    runtime = await createRuntime(configPath);
+    config = await loadConfig(configPath);
   } catch (error) {
     checks.push(configurationFailure(error));
     return normalizeDoctorReport(checks);
   }
 
+  let runtime: Awaited<ReturnType<typeof createRuntime>>;
+  const runtimes = new Map<string, Array<Awaited<ReturnType<typeof createRuntime>>>>();
+  const redactor = new SecretRedactor();
+  const providerAvailability = await diagnoseConfiguredSecretProviders(scanConfiguredExternalSecretProviders(config));
   try {
     checks.push(
       check(
@@ -392,32 +431,33 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         DOCTOR_CODES.SECRET_REFERENCES,
         "pass",
         "secret references",
-        "Secret references initialized safely.",
+        "Secret references will be resolved for each readiness target.",
         noAction()
       ),
-      runRedactionCanary(runtime.redactor)
+      secretProviderAvailabilityCheck(providerAvailability),
+      runRedactionCanary(redactor)
     );
 
-    const strictCapacityCheck = strictToolDiscoveryCapacityCheck(runtime.config);
+    const strictCapacityCheck = strictToolDiscoveryCapacityCheck(config);
     if (strictCapacityCheck) checks.push(strictCapacityCheck);
 
-    for (const envFile of runtime.config.secrets?.envFiles ?? []) {
+    for (const envFile of config.secrets?.envFiles ?? []) {
       checks.push(await diagnosePathPermissions("env", envFile));
     }
 
-    await addAuditChecks(checks, runtime.config, runtime.redactor);
+    await addAuditChecks(checks, config, redactor);
 
-    for (const target of configuredTargets(runtime.config)) {
+    for (const target of configuredTargets(config)) {
       checks.push(
-        diagnoseCommandPinning(basename(target.upstream.command ?? ""), effectiveTargetOptions(runtime.config, target).args)
+        diagnoseCommandPinning(basename(target.upstream.command ?? ""), effectiveTargetOptions(config, target).args)
       );
     }
 
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
-    const targets = configuredTargets(runtime.config);
-    const identities = new IdentityManager(runtime.config);
-    const discoveryFailureStatus = runtime.config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
+    const targets = configuredTargets(config);
+    const identities = new IdentityManager(config);
+    const discoveryFailureStatus = config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
     const identityRequired = (target: DoctorTarget): boolean =>
       identities.requiresVerification(target.profile, target.upstreamName, "write") ||
       identities.requiresVerification(target.profile, target.upstreamName, "destructive");
@@ -446,8 +486,8 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       if (target.upstream.transport === "stdio") {
         const available = await isExecutableAvailable(
           target.upstream.command,
-          pathForTarget(runtime.config, target),
-          effectiveTargetOptions(runtime.config, target).cwd
+          pathForTarget(config, target),
+          effectiveTargetOptions(config, target).cwd
         );
         checks.push(
           check(
@@ -470,6 +510,39 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             "Startup will verify remote connectivity."
           )
         );
+      }
+
+      try {
+        runtime = await createRuntime(configPath, {
+          profile: target.profile,
+          upstreamName: target.upstreamName
+        });
+        const profileRuntimes = runtimes.get(target.profile) ?? [];
+        profileRuntimes.push(runtime);
+        runtimes.set(target.profile, profileRuntimes);
+      } catch {
+        incompleteProfiles.add(target.profile);
+        checks.push(
+          check(
+            DOCTOR_CODES.SECRET_REFERENCES,
+            "error",
+            targetText,
+            "Target secret references could not be resolved safely.",
+            "Correct target secret provider configuration and retry doctor."
+          ),
+          check(
+            DOCTOR_CODES.STARTUP,
+            "skipped",
+            targetText,
+            "Upstream startup was skipped because target secret resolution did not complete.",
+            "Correct target secret provider configuration before retrying doctor."
+          ),
+          skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
+          unavailableIdentityCheck(target, targetText, "startup"),
+          skippedDiscoveryCheck(DOCTOR_CODES.RESOURCES_DISCOVERY, targetText, "Resource"),
+          skippedDiscoveryCheck(DOCTOR_CODES.PROMPTS_DISCOVERY, targetText, "Prompt")
+        );
+        return;
       }
 
       let session: UpstreamSession;
@@ -521,7 +594,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         );
         const fingerprints = visibleTools.get(target.profile) ?? new Map<string, string>();
         visibleTools.set(target.profile, fingerprints);
-        if (recordCollision(checks, target, fingerprints, result.tools, runtime.config.tooling?.collisionStrategy)) {
+        if (recordCollision(checks, target, fingerprints, result.tools, config.tooling?.collisionStrategy)) {
           incompleteProfiles.add(target.profile);
         }
         discoveryCompleted = true;
@@ -631,7 +704,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       }
     };
 
-    for (const [profileIndex, profile] of Object.keys(runtime.config.profiles).sort().entries()) {
+    for (const [profileIndex, profile] of Object.keys(config.profiles).sort().entries()) {
       try {
         for (const target of targets) {
           if (target.profile === profile) await probeTarget(target);
@@ -639,10 +712,13 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       } finally {
         let closed = false;
         try {
-          await runtime.manager.closeProfile(profile);
-          const health = runtime.manager.listHealth().filter((entry) => entry.profile === profile);
+          const profileRuntimes = runtimes.get(profile) ?? [];
+          const results = await Promise.allSettled(profileRuntimes.map((scopedRuntime) => scopedRuntime.manager.close()));
+          const health = profileRuntimes.flatMap((scopedRuntime) =>
+            scopedRuntime.manager.listHealth().filter((entry) => entry.profile === profile)
+          );
           closed =
-            health.length > 0 &&
+            results.every((result) => result.status === "fulfilled") &&
             health.every(
               (entry) =>
                 entry.processState === "stopped" &&
@@ -667,19 +743,22 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       }
     }
 
-    addSchemaDifferenceCheck(checks, runtime.config, visibleTools, incompleteProfiles);
+    addSchemaDifferenceCheck(checks, config, visibleTools, incompleteProfiles);
   } finally {
     try {
-      await runtime.manager.close();
-      const closed = runtime.manager
-        .listHealth()
-        .every(
-          (health) =>
-            health.processState === "stopped" &&
-            health.pid == null &&
-            health.lastStopReason !== "shutdown-timeout" &&
-            health.lastStopReason !== "shutdown-error"
-        );
+      const allRuntimes = [...runtimes.values()].flat();
+      const results = await Promise.allSettled(allRuntimes.map((scopedRuntime) => scopedRuntime.manager.close()));
+      const closed =
+        results.every((result) => result.status === "fulfilled") &&
+        allRuntimes
+          .flatMap((scopedRuntime) => scopedRuntime.manager.listHealth())
+          .every(
+            (health) =>
+              health.processState === "stopped" &&
+              health.pid == null &&
+              health.lastStopReason !== "shutdown-timeout" &&
+              health.lastStopReason !== "shutdown-error"
+          );
       checks.push(
         check(
           DOCTOR_CODES.CLEAN_SHUTDOWN,

@@ -16,6 +16,7 @@ export interface SecretResolverOptions {
   environment?: NodeJS.ProcessEnv;
   envFiles?: string[];
   allowPlaintextSecrets?: boolean;
+  providerTimeoutMs?: number;
   redactor?: SecretRedactor;
   /** Internal injection point for provider integration tests and runtime composition. */
   providers?: Partial<BuiltinSecretProviders>;
@@ -43,7 +44,10 @@ export class SecretResolver {
       Object.entries(this.environment).filter((entry): entry is [string, string] => entry[1] !== undefined)
     );
     this.redactor = options.redactor ?? new SecretRedactor();
-    this.providers = { ...createBuiltinSecretProviders(), ...options.providers };
+    this.providers = {
+      ...createBuiltinSecretProviders({ providerTimeoutMs: options.providerTimeoutMs }),
+      ...options.providers
+    };
   }
 
   async load(): Promise<void> {

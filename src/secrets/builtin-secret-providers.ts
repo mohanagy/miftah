@@ -125,12 +125,16 @@ export interface BuiltinSecretProviders {
   readonly op: SecretProvider<OnePasswordSecretReference>;
 }
 
-export function createBuiltinSecretProviders(): BuiltinSecretProviders {
+export interface BuiltinSecretProviderOptions {
+  readonly providerTimeoutMs?: number;
+}
+
+export function createBuiltinSecretProviders(options: BuiltinSecretProviderOptions = {}): BuiltinSecretProviders {
   return {
     environment: new EnvironmentSecretProvider(),
     dotenv: new DotenvSecretProvider(),
     plaintext: new PlaintextSecretProvider(),
-    keychain: createKeychainSecretProvider(),
-    op: createOnePasswordSecretProvider()
+    keychain: createKeychainSecretProvider({ timeoutMs: options.providerTimeoutMs }),
+    op: createOnePasswordSecretProvider({ timeoutMs: options.providerTimeoutMs })
   };
 }

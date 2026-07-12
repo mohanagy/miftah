@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseExternalSecretReference } from "../src/secrets/external-secret-reference.js";
@@ -15,6 +15,11 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
+const windowsHelperStartupTimeoutMs = 5_000;
+
+function providerCommandTimeout(timeoutMs: number): number {
+  return process.platform === "win32" ? Math.max(timeoutMs, windowsHelperStartupTimeoutMs) : timeoutMs;
+}
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -355,6 +360,21 @@ describe("external secret providers", () => {
           expect(`${unsupportedError.message} ${JSON.stringify(unsupportedError.details)}`).not.toContain("missing-secret-tool");
 });
 
+        it("diagnoses a missing 1Password executable without resolving its reference", async () => {
+          const provider = createOnePasswordSecretProvider({
+            environment: { PATH: "/definitely/not/a/provider/bin" }
+          });
+          const reference = provider.parse("secretref:op://vault/item/field");
+
+          const diagnostic = await provider.diagnose({
+            reference: reference!,
+            availableNames: new Set(),
+            allowPlaintextSecrets: false
+          });
+          expect(diagnostic.available).toBe(false);
+          expect(diagnostic.available).toBe(false);
+        });
+
 it.each([
           ["locked", "SECRET_PROVIDER_LOCKED"],
           ["missing", "SECRET_ITEM_MISSING"],
@@ -461,6 +481,33 @@ it.each([
           });
         });
 
+        it.runIf(process.platform === "win32")("does not use a current-directory 1Password executable", async () => {
+          await inSandbox(async (directory) => {
+            const shadowedExecutable = join(directory, "op.exe");
+            await copyFile(process.execPath, shadowedExecutable);
+            const originalDirectory = process.cwd();
+            process.chdir(directory);
+            try {
+              const provider = createOnePasswordSecretProvider({
+                environment: {
+                  ...fakeProviderEnvironment(directory, "success"),
+                  PATH: join(directory, "empty-path"),
+                  OP_SERVICE_ACCOUNT_TOKEN: "shadowed-op-token"
+                },
+                isInteractive: false
+              });
+              const error = await rejectedMiftahError(async () =>
+                provider.resolve(provider.parse("secretref:op://vault/item/field")!, providerContext())
+              );
+
+              expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
+              expect(`${error.message} ${JSON.stringify(error.details)}`).not.toContain("shadowed-op-token");
+            } finally {
+              process.chdir(originalDirectory);
+            }
+          });
+        });
+
         it("registers the 1Password token before safely reporting a locked vault", async () => {
           await inSandbox(async (directory) => {
             const redactor = new SecretRedactor();
@@ -537,7 +584,7 @@ describe("secret command runner", () => {
   it.each([
         ["sleep", { timeoutMs: 20 }, "timeout"],
         ["sleep", { signal: AbortSignal.abort() }, "cancelled"],
-        ["large", { timeoutMs: 100 }, "output_limit"]
+        ["large", { timeoutMs: providerCommandTimeout(100) }, "output_limit"]
       ] as const)("reports %s process termination as %s", async (mode, options, expectedKind) => {
         await inSandbox(async (directory) => {
           await expect(
@@ -566,7 +613,7 @@ describe("secret command runner", () => {
           args: [fakeProviderPath],
           environment: fakeProviderEnvironment(directory, "descendant", inheritedSecret)
         },
-        termination === "timeout" ? { timeoutMs: 200 } : { signal: controller.signal }
+        termination === "timeout" ? { timeoutMs: providerCommandTimeout(200) } : { signal: controller.signal }
       );
       const descendantPid = await readDescendantPid(directory);
 
@@ -600,35 +647,62 @@ describe("secret command runner", () => {
               args: [fakeProviderPath],
               environment: fakeProviderEnvironment(directory, "descendant")
             },
-            { timeoutMs: 100 }
+            { timeoutMs: providerCommandTimeout(100) }
           )
         ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
 
-        expect(Date.now() - startedAt).toBeLessThan(250);
+        if (process.platform !== "win32") expect(Date.now() - startedAt).toBeLessThan(250);
       });
       });
 
-  it("settles a timeout after a direct child already exited with retained descendant streams", async () => {
+  it("settles after a direct child exits with retained descendant streams", async () => {
     await inSandbox(async (directory) => {
       const pipesBefore = activePipeCount();
       const startedAt = Date.now();
 
-      await expect(
-        runSecretCommand(
-          {
-            executable: process.execPath,
-            args: [fakeProviderPath],
-            environment: fakeProviderEnvironment(directory, "early-exit-descendant")
-          },
-          { timeoutMs: 100 }
-        )
-      ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+      const pending = runSecretCommand(
+        {
+          executable: process.execPath,
+          args: [fakeProviderPath],
+          environment: fakeProviderEnvironment(directory, "early-exit-descendant")
+        },
+        { timeoutMs: 100 }
+      );
+      if (process.platform === "win32") {
+        await expect(pending).resolves.toEqual({ stdout: Buffer.alloc(0) });
+      } else {
+        await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+      }
 
       expect(Date.now() - startedAt).toBeLessThan(250);
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
       expect(activePipeCount()).toBeLessThanOrEqual(pipesBefore);
     });
   });
+
+  it.runIf(process.platform === "win32")(
+    "closes an orphaned descendant when its direct provider process exits",
+    async () => {
+      await inSandbox(async (directory) => {
+        const pending = runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath],
+            environment: fakeProviderEnvironment(directory, "early-exit-descendant")
+          },
+          { timeoutMs: providerCommandTimeout(200) }
+        );
+        const descendantPid = await readDescendantPid(directory);
+
+        try {
+          await expect(pending).resolves.toEqual({ stdout: Buffer.alloc(0) });
+          await waitForProcessExit(descendantPid);
+        } finally {
+          await terminateTestProcess(descendantPid);
+        }
+      });
+    }
+  );
     });
 
 describe("external secret-reference grammar", () => {
