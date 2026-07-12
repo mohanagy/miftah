@@ -786,6 +786,63 @@ describe("secret command runner", () => {
     expect(Buffer.concat(stdout).toString("utf8")).toContain("powershell-stdin-probe");
   });
 
+  it.runIf(process.platform === "win32")("returns a native failure for a missing helper executable", async () => {
+    await inSandbox(async (directory) => {
+      const helperSource = await readFile(
+        join(process.cwd(), "src", "secrets", "windows-secret-command.ts"),
+        "utf8"
+      );
+      const csharp = helperSource.match(/ {2}\$source = @'\n([\s\S]+?)\n'@\n {2}Add-Type/);
+      if (csharp === null) throw new Error("Could not extract the Windows helper source");
+
+      const systemRoot = process.env.SystemRoot ?? process.env.windir;
+      if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
+      const child = spawn(
+        join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
+        {
+          env: {
+            ...process.env,
+            MIFTAH_WINDOWS_MISSING_EXECUTABLE: join(directory, "missing-provider.exe")
+          },
+          shell: false,
+          windowsHide: true,
+          stdio: ["pipe", "pipe", "pipe"]
+        }
+      );
+      if (child.stdin === null || child.stdout === null || child.stderr === null) {
+        child.kill();
+        throw new Error("PowerShell did not expose standard streams");
+      }
+
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      const closed = once(child, "close");
+      child.stdin.end(
+        `$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp[1]}
+'@
+Add-Type -TypeDefinition $source
+$initialized = [MiftahSecretJob]::Initialize()
+Write-Output $initialized
+if (-not $initialized) { exit 1 }
+Write-Output ([MiftahSecretJob]::Run([string]$env:MIFTAH_WINDOWS_MISSING_EXECUTABLE, [string[]]@()))
+`,
+        "utf8"
+      );
+      const [code] = await closed;
+
+      expect({
+        code,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: Buffer.concat(stdout).toString("utf8").trim().split(/\r?\n/u)
+      }).toEqual({ code: 0, stderr: "", stdout: ["True", "1"] });
+    });
+  });
+
   it.runIf(process.platform === "win32")("rejects a missing executable inside the Job Object helper", async () => {
     await inSandbox(async (directory) => {
       const command = await resolveWindowsSecretCommand({
