@@ -66,7 +66,7 @@ The explicit `--config` file is the only runtime configuration authority. Miftah
 }
 ```
 
-`<wrapper-name>` is the trusted runtime configuration's `name`, and `<profile-name>` must name one of its configured profiles. A marker cannot configure an upstream, policy, header, environment value, audit setting, secret source, or any other Miftah option; it does not merge with runtime configuration. Miftah reads only bounded known metadata files while walking from the process working directory to an applicable local boundary and ignores malformed, irrelevant, oversized, or out-of-boundary files. The nearest valid project marker wins; in one directory, `.miftahrc.json` is checked before `miftah.json`, and markers are not combined.
+The marker's only top-level key must be `profiles`, and all values are strings. It may contain mappings for other wrapper names, but only `<wrapper-name>` is selected; that name is the trusted runtime configuration's `name`, and its `<profile-name>` must name one of the configured profiles. A marker cannot configure an upstream, policy, header, environment value, audit setting, secret source, or any other Miftah option; it does not merge with runtime configuration. Miftah reads only bounded known metadata files while walking from the process working directory to an applicable local boundary and ignores malformed, irrelevant, oversized, or out-of-boundary files. The nearest valid project marker wins; in one directory, `.miftahrc.json` is checked before `miftah.json`, and markers are not combined.
 
 The metadata-only collector can provide rules with `context.*` values from:
 
