@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -16,7 +17,7 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
-const windowsOutputProbePath = join(process.cwd(), "tests", "fixtures", "windows-secret-output-probe.cjs");
+const windowsOutputProbePath = join(process.cwd(), "tests", "fixtures", "windows-secret-output-probe.mjs");
 const windowsHelperStartupTimeoutMs = 5_000;
 
 function providerCommandTimeout(timeoutMs: number): number {
@@ -737,17 +738,50 @@ describe("secret command runner", () => {
 
   it.runIf(process.platform === "win32")("forwards stdout without a provider script argument", async () => {
     await inSandbox(async (directory) => {
+      const recordPath = join(directory, "windows-output-probe.txt");
       const result = await runSecretCommand({
         executable: process.execPath,
         args: [],
         environment: {
           ...fakeProviderEnvironment(directory, "success"),
+          MIFTAH_WINDOWS_OUTPUT_PROBE_RECORD_PATH: recordPath,
           NODE_OPTIONS: `--require=${windowsOutputProbePath}`
         }
       });
 
+      await expect(readFile(recordPath, "utf8")).resolves.toBe("ran");
       expect(result.stdout.toString("utf8")).toBe("windows-secret-output-probe");
     });
+  });
+
+  it.runIf(process.platform === "win32")("executes a static PowerShell stdin command", async () => {
+    const systemRoot = process.env.SystemRoot ?? process.env.windir;
+    if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
+
+    const child = spawn(
+      join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"]
+      }
+    );
+    if (child.stdin === null || child.stdout === null || child.stderr === null) {
+      child.kill();
+      throw new Error("PowerShell did not expose standard streams");
+    }
+
+    const stdout: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    const result = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    child.stdin.end('Write-Output "powershell-stdin-probe"', "utf8");
+
+    await expect(result).resolves.toBe(0);
+    expect(Buffer.concat(stdout).toString("utf8")).toContain("powershell-stdin-probe");
   });
 
   it.each([
