@@ -9,6 +9,9 @@ const defaultTimeoutMs = 10_000;
 const maximumStdoutBytes = 64 * 1024;
 const maximumStderrBytes = 8 * 1024;
 const forceKillDelayMs = 250;
+const lockedStderrPattern = /(locked|authentication|authorization|not signed in|sign in|unauthorized|invalid token)/iu;
+const noninteractiveStderrPattern = /(interaction.*not allowed|non-interactive|cannot prompt|no tty)/iu;
+const missingStderrPattern = /(not found|not exist|no matching|could not be found)/iu;
 
 export type SecretProcessFailureKind = "unavailable" | "timeout" | "cancelled" | "output_limit" | "exit";
 export type SecretProcessExitClassification = "locked" | "noninteractive" | "missing" | "other";
@@ -163,7 +166,7 @@ function runPreparedSecretCommand(
 
     const onAbort = () => terminate("cancelled");
     options.signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
+    const timeout = setTimeout(terminate, timeoutMs, "timeout");
 
     stdout.on("data", (value: Buffer) => {
       if (terminalKind !== undefined) return;
@@ -227,13 +230,13 @@ function isErrorCode(error: unknown, code: string): boolean {
 
 function classifyStderr(stderr: Buffer): SecretProcessExitClassification {
   const text = stderr.toString("utf8");
-  if (/(locked|authentication|authorization|not signed in|sign in|unauthorized|invalid token)/iu.test(text)) {
+  if (lockedStderrPattern.test(text)) {
     return "locked";
   }
-  if (/(interaction.*not allowed|non-interactive|cannot prompt|no tty)/iu.test(text)) {
+  if (noninteractiveStderrPattern.test(text)) {
     return "noninteractive";
   }
-  if (/(not found|not exist|no matching|could not be found)/iu.test(text)) {
+  if (missingStderrPattern.test(text)) {
     return "missing";
   }
   return "other";

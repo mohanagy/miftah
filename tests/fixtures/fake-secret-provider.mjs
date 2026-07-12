@@ -49,6 +49,9 @@ if (mode === "sleep") {
 } else if (mode === "locked") {
   process.stderr.write("fixture locked raw provider detail\n");
   process.exitCode = 1;
+} else if (mode === "noninteractive") {
+  process.stderr.write("fixture interaction not allowed in non-interactive mode\n");
+  process.exitCode = 1;
 } else if (mode === "missing") {
   process.stderr.write("fixture item not found raw provider detail\n");
   process.exitCode = 1;
@@ -58,6 +61,9 @@ if (mode === "sleep") {
   process.stdout.write("value\u0000with-nul");
 } else if (mode === "large") {
   process.stdout.write("x".repeat(70 * 1024));
+} else if (mode === "large-stderr") {
+  process.stderr.write("x".repeat(16 * 1024));
+  process.exitCode = 1;
 } else if (mode === "newline") {
   process.stdout.write(`${process.env.MIFTAH_FAKE_VALUE ?? "fixture-secret"}\r\n`);
 } else {

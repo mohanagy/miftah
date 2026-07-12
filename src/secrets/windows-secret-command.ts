@@ -132,7 +132,7 @@ function setEnvironmentValue(environment: NodeJS.ProcessEnv, name: string, value
   environment[name] = value;
 }
 
-const windowsJobHelper = `$ErrorActionPreference = 'Stop'
+const windowsJobHelper = String.raw`$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
 try {
   $encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)

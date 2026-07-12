@@ -1,5 +1,5 @@
 import { copyFile, mkdir, rm } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveExecutablePath } from "../src/secrets/executable-resolver.js";
@@ -49,6 +49,54 @@ describe("secret executable resolution", () => {
           environment: { PATH: join(directory, "empty-path") + delimiter }
         })
       ).resolves.toBeUndefined();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the selected Windows platform delimiter instead of the host delimiter",
+    async () => {
+      await inSandbox(async (directory) => {
+        const firstBinDirectory = join(directory, "first-bin");
+        const secondBinDirectory = join(directory, "second-bin");
+        const executable = win32.join(firstBinDirectory, "provider");
+        await mkdir(firstBinDirectory);
+        await mkdir(secondBinDirectory);
+        await copyFile(process.execPath, executable);
+
+        try {
+          await expect(
+            resolveExecutablePath("provider", {
+              platform: "win32",
+              environment: { PATH: `${firstBinDirectory};${secondBinDirectory}`, PATHEXT: "" }
+            })
+          ).resolves.toBe(executable);
+        } finally {
+          await rm(executable, { force: true });
+        }
+      });
+    }
+  );
+
+  it("resolves explicit relative paths and case-insensitive quoted PATH entries", async () => {
+    await inSandbox(async (directory) => {
+      const binDirectory = join(directory, "bin");
+      const executable = join(binDirectory, "provider");
+      await mkdir(binDirectory);
+      await copyFile(process.execPath, executable);
+
+      await expect(
+        resolveExecutablePath("./provider", {
+          cwd: binDirectory,
+          environment: {}
+        })
+      ).resolves.toBe(executable);
+      await expect(
+        resolveExecutablePath("provider", {
+          environment: { Path: `"${binDirectory}"` }
+        })
+      ).resolves.toBe(executable);
+      await expect(resolveExecutablePath("", { environment: {} })).resolves.toBeUndefined();
+      await expect(resolveExecutablePath("provider\u0000", { environment: {} })).resolves.toBeUndefined();
     });
   });
 });

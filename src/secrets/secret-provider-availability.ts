@@ -71,7 +71,7 @@ async function isProviderAvailable(
   if (platform === "linux") {
     return (await resolveExecutablePath("secret-tool", { platform, environment })) !== undefined;
   }
-  if (platform === "win32") return isExecutable(windowsPowerShellPath());
+  if (platform === "win32") return isExecutable(windowsPowerShellPath(environment));
   return false;
 }
 
@@ -85,8 +85,8 @@ async function isExecutable(path: string | undefined): Promise<boolean> {
   }
 }
 
-function windowsPowerShellPath(): string | undefined {
-  const systemRoot = environmentValue(process.env, "SystemRoot") ?? environmentValue(process.env, "windir") ?? "C:\\Windows";
+function windowsPowerShellPath(environment: NodeJS.ProcessEnv): string | undefined {
+  const systemRoot = environmentValue(environment, "SystemRoot") ?? environmentValue(environment, "windir") ?? "C:\\Windows";
   if (!win32.isAbsolute(systemRoot)) return undefined;
   return win32.join(win32.resolve(systemRoot), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }

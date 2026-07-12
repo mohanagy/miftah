@@ -202,9 +202,7 @@ async function listPrompts(session: UpstreamSession): Promise<{ count: number; t
 }
 
 function configurationFailure(error: unknown): DoctorCheck {
-  const code = error instanceof MiftahError && error.code.startsWith("SECRET_")
-    ? DOCTOR_CODES.SECRET_REFERENCES
-    : DOCTOR_CODES.CONFIGURATION;
+  const code = isSecretResolutionFailure(error) ? DOCTOR_CODES.SECRET_REFERENCES : DOCTOR_CODES.CONFIGURATION;
   return check(
     code,
     "error",
@@ -216,6 +214,10 @@ function configurationFailure(error: unknown): DoctorCheck {
       ? "Correct secret reference configuration and retry doctor."
       : "Correct configuration and retry doctor."
   );
+}
+
+function isSecretResolutionFailure(error: unknown): boolean {
+  return error instanceof MiftahError && error.code.startsWith("SECRET_");
 }
 
 function strictToolDiscoveryCapacityCheck(config: MiftahConfig): DoctorCheck | undefined {
@@ -414,7 +416,6 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     return normalizeDoctorReport(checks);
   }
 
-  let runtime: Awaited<ReturnType<typeof createRuntime>>;
   const runtimes = new Map<string, Array<Awaited<ReturnType<typeof createRuntime>>>>();
   const redactor = new SecretRedactor();
   const providerAvailability = await diagnoseConfiguredSecretProviders(scanConfiguredExternalSecretProviders(config));
@@ -483,6 +484,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     };
     const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
+      let runtime: Awaited<ReturnType<typeof createRuntime>>;
       if (target.upstream.transport === "stdio") {
         const available = await isExecutableAvailable(
           target.upstream.command,
@@ -520,22 +522,31 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         const profileRuntimes = runtimes.get(target.profile) ?? [];
         profileRuntimes.push(runtime);
         runtimes.set(target.profile, profileRuntimes);
-      } catch {
+      } catch (error) {
         incompleteProfiles.add(target.profile);
+        const secretResolutionFailure = isSecretResolutionFailure(error);
         checks.push(
           check(
-            DOCTOR_CODES.SECRET_REFERENCES,
+            secretResolutionFailure ? DOCTOR_CODES.SECRET_REFERENCES : DOCTOR_CODES.CONFIGURATION,
             "error",
             targetText,
-            "Target secret references could not be resolved safely.",
-            "Correct target secret provider configuration and retry doctor."
+            secretResolutionFailure
+              ? "Target secret references could not be resolved safely."
+              : "Target configuration could not be resolved safely.",
+            secretResolutionFailure
+              ? "Correct target secret provider configuration and retry doctor."
+              : "Correct target configuration and retry doctor."
           ),
           check(
             DOCTOR_CODES.STARTUP,
             "skipped",
             targetText,
-            "Upstream startup was skipped because target secret resolution did not complete.",
-            "Correct target secret provider configuration before retrying doctor."
+            secretResolutionFailure
+              ? "Upstream startup was skipped because target secret resolution did not complete."
+              : "Upstream startup was skipped because target configuration could not be resolved.",
+            secretResolutionFailure
+              ? "Correct target secret provider configuration before retrying doctor."
+              : "Correct target configuration before retrying doctor."
           ),
           skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
           unavailableIdentityCheck(target, targetText, "startup"),

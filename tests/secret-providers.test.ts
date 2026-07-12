@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseExternalSecretReference } from "../src/secrets/external-secret-reference.js";
 import {
@@ -8,6 +8,7 @@ import {
   createOnePasswordSecretProvider,
   type SecretCommandDescriptor
 } from "../src/secrets/external-secret-providers.js";
+import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-providers.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
@@ -60,6 +61,13 @@ function fakeProviderEnvironment(
   };
 }
 
+async function installFakeProviderExecutable(directory: string, name: string): Promise<string> {
+  const executable = join(directory, name);
+  await copyFile(fakeProviderPath, executable);
+  await chmod(executable, 0o700);
+  return executable;
+}
+
 async function readFakeRecord(directory: string): Promise<{
   argv: string[];
   mode: string;
@@ -82,8 +90,12 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-async function waitForCondition(condition: () => Promise<boolean> | boolean, description: string): Promise<void> {
-  const deadline = Date.now() + 1_000;
+async function waitForCondition(
+  condition: () => Promise<boolean> | boolean,
+  description: string,
+  timeoutMs = providerCommandTimeout(1_000)
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await condition()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -189,9 +201,43 @@ describe("built-in secret providers", () => {
       ).toBe("[REDACTED] [REDACTED] prefix-[REDACTED]-suffix [REDACTED]");
     });
   });
+
+  it("diagnoses the local providers using metadata only", async () => {
+    const providers = createBuiltinSecretProviders();
+    const availableNames = new Set(["PRESENT"]);
+    const environment = providers.environment.parse("secretref:env://PRESENT")!;
+    const dotenv = providers.dotenv.parse("secretref:dotenv://MISSING")!;
+    const plaintext = providers.plaintext.parse("secretref:plain://diagnostic-value")!;
+
+    await expect(
+      providers.environment.diagnose({
+        reference: environment,
+        availableNames,
+        allowPlaintextSecrets: false
+      })
+    ).resolves.toEqual({ reference: environment, available: true });
+    await expect(
+      providers.dotenv.diagnose({
+        reference: dotenv,
+        availableNames,
+        allowPlaintextSecrets: false
+      })
+    ).resolves.toEqual({ reference: dotenv, available: false });
+    await expect(
+      providers.plaintext.diagnose({
+        reference: plaintext,
+        availableNames,
+        allowPlaintextSecrets: true
+      })
+    ).resolves.toEqual({ reference: plaintext, available: true });
+  });
 });
 
 describe("external secret-reference grammar", () => {
+  it("leaves non-external values for the remaining resolver providers", () => {
+    expect(parseExternalSecretReference("not-a-secret-reference")).toBeUndefined();
+  });
+
   it("canonicalizes decoded keychain and 1Password components exactly once", () => {
     expect(parseExternalSecretReference("secretref:keychain://service%20name/account%252Fname")).toEqual({
       provider: "keychain",
@@ -205,6 +251,12 @@ describe("external secret-reference grammar", () => {
       item: "item",
       field: "field",
       canonicalReference: "secretref:op://vault%20name/item/field"
+    });
+    expect(parseExternalSecretReference("secretref:keychain://service/%F0%9F%94%90")).toEqual({
+      provider: "keychain",
+      service: "service",
+      account: "🔐",
+      canonicalReference: "secretref:keychain://service/%F0%9F%94%90"
     });
   });
 
@@ -258,7 +310,7 @@ describe("secret command runner", () => {
               args: [fakeProviderPath],
               environment: fakeProviderEnvironment(directory, "success")
             },
-            { timeoutMs: 100 }
+            { timeoutMs: providerCommandTimeout(100) }
           );
 
           expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
@@ -348,6 +400,7 @@ describe("external secret providers", () => {
             commands: { linux: { executable: join(testRoot, "missing-secret-tool") } },
             environment: {}
           });
+
           const unsupportedError = await rejectedMiftahError(async () =>
             unsupported.resolve(unsupported.parse("secretref:keychain://service/account")!, providerContext())
           );
@@ -359,6 +412,49 @@ describe("external secret providers", () => {
           expect(unavailableError.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
           expect(`${unsupportedError.message} ${JSON.stringify(unsupportedError.details)}`).not.toContain("missing-secret-tool");
 });
+
+        it.runIf(process.platform !== "win32")(
+          "resolves default keychain and 1Password commands from absolute PATH entries",
+          async () => {
+            await inSandbox(async (directory) => {
+              await installFakeProviderExecutable(directory, "secret-tool");
+              await installFakeProviderExecutable(directory, "op");
+              const environment = {
+                ...fakeProviderEnvironment(directory, "success"),
+                PATH: `${directory}${delimiter}${process.env.PATH}`,
+                OP_SERVICE_ACCOUNT_TOKEN: "default-op-service-token"
+              };
+              const keychain = createKeychainSecretProvider({ platform: "linux", environment });
+              const op = createOnePasswordSecretProvider({ environment, isInteractive: false });
+
+              await expect(
+                keychain.resolve(keychain.parse("secretref:keychain://service/account")!, providerContext())
+              ).resolves.toEqual({ value: "fixture-provider-secret" });
+              await expect(
+                op.resolve(op.parse("secretref:op://vault/item/field")!, providerContext())
+              ).resolves.toEqual({ value: "fixture-provider-secret" });
+              expect((await readFakeRecord(directory)).argv).toEqual(["read", "--no-newline", "op://vault/item/field"]);
+            });
+          }
+        );
+
+        it("fails closed when default external provider executables are unavailable", async () => {
+          await inSandbox(async (directory) => {
+            const environment = {
+              PATH: join(directory, "empty-provider-path"),
+              OP_SERVICE_ACCOUNT_TOKEN: "token-for-unavailable-provider"
+            };
+            const keychain = createKeychainSecretProvider({ platform: "linux", environment });
+            const op = createOnePasswordSecretProvider({ environment, isInteractive: false });
+
+            await expect(
+              keychain.resolve(keychain.parse("secretref:keychain://service/account")!, providerContext())
+            ).rejects.toMatchObject({ code: "SECRET_PROVIDER_UNAVAILABLE" });
+            await expect(
+              op.resolve(op.parse("secretref:op://vault/item/field")!, providerContext())
+            ).rejects.toMatchObject({ code: "SECRET_PROVIDER_UNAVAILABLE" });
+          });
+        });
 
         it("diagnoses a missing 1Password executable without resolving its reference", async () => {
           const provider = createOnePasswordSecretProvider({
@@ -375,6 +471,47 @@ describe("external secret providers", () => {
           expect(diagnostic.available).toBe(false);
         });
 
+        it("ignores values that do not belong to an external provider", () => {
+          const keychain = createKeychainSecretProvider();
+          const op = createOnePasswordSecretProvider();
+
+          expect(keychain.parse("secretref:env://TOKEN")).toBeUndefined();
+          expect(op.parse("secretref:keychain://service/account")).toBeUndefined();
+        });
+
+        it("uses the process interaction mode when 1Password has no explicit override", async () => {
+          await inSandbox(async (directory) => {
+            const provider = createOnePasswordSecretProvider({
+              command: fakeCommand,
+              environment: {
+                ...fakeProviderEnvironment(directory, "success"),
+                OP_SERVICE_ACCOUNT_TOKEN: "default-interaction-token"
+              }
+            });
+
+            await expect(
+              provider.resolve(provider.parse("secretref:op://vault/item/field")!, providerContext())
+            ).resolves.toEqual({ value: "fixture-provider-secret" });
+          });
+        });
+
+        it.each([
+          ["empty", "SECRET_ITEM_MISSING"],
+          ["noninteractive", "SECRET_PROVIDER_NONINTERACTIVE"]
+        ] as const)("maps 1Password %s output to a stable error", async (mode, expectedCode) => {
+          await inSandbox(async (directory) => {
+            const provider = createOnePasswordSecretProvider({
+              command: fakeCommand,
+              environment: fakeProviderEnvironment(directory, mode),
+              isInteractive: true
+            });
+
+            await expect(
+              provider.resolve(provider.parse("secretref:op://vault/item/field")!, providerContext())
+            ).rejects.toMatchObject({ code: expectedCode });
+          });
+        });
+
 it.each([
           ["locked", "SECRET_PROVIDER_LOCKED"],
           ["missing", "SECRET_ITEM_MISSING"],
@@ -388,7 +525,7 @@ it.each([
               platform: "linux",
               commands: { linux: fakeCommand },
               environment: fakeProviderEnvironment(directory, mode, "keychain-secret-that-must-not-leak"),
-              timeoutMs: mode === "sleep" ? 20 : undefined
+              timeoutMs: mode === "sleep" ? providerCommandTimeout(20) : undefined
             });
             const error = await rejectedMiftahError(async () =>
               provider.resolve(provider.parse("secretref:keychain://service/account")!, providerContext())
@@ -536,7 +673,7 @@ it.each([
               command: fakeCommand,
               environment: fakeProviderEnvironment(directory, "sleep"),
               isInteractive: true,
-              timeoutMs: 20
+              timeoutMs: providerCommandTimeout(20)
             });
             const error = await rejectedMiftahError(async () =>
               provider.resolve(provider.parse("secretref:op://vault/item/field")!, providerContext())
@@ -582,7 +719,7 @@ it.each([
 
 describe("secret command runner", () => {
   it.each([
-        ["sleep", { timeoutMs: 20 }, "timeout"],
+        ["sleep", { timeoutMs: providerCommandTimeout(20) }, "timeout"],
         ["sleep", { signal: AbortSignal.abort() }, "cancelled"],
         ["large", { timeoutMs: providerCommandTimeout(100) }, "output_limit"]
       ] as const)("reports %s process termination as %s", async (mode, options, expectedKind) => {
@@ -599,6 +736,34 @@ describe("secret command runner", () => {
           ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: expectedKind }));
         });
       });
+
+  it("classifies a missing executable without retaining its path", async () => {
+    await inSandbox(async (directory) => {
+      const missingExecutable = join(directory, "missing-provider");
+
+      await expect(
+        runSecretCommand({
+          executable: missingExecutable,
+          args: [],
+          environment: {}
+        })
+      ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "unavailable" }));
+    });
+  });
+
+  it("bounds stderr before classifying an unsuccessful provider process", async () => {
+    await inSandbox(async (directory) => {
+      await expect(
+        runSecretCommand({
+          executable: process.execPath,
+          args: [fakeProviderPath],
+          environment: fakeProviderEnvironment(directory, "large-stderr")
+        })
+      ).rejects.toEqual(
+        expect.objectContaining<Partial<SecretProcessError>>({ kind: "exit", classification: "other" })
+      );
+    });
+  });
 
   it.each([
     ["timeout", "timeout"],
@@ -666,7 +831,7 @@ describe("secret command runner", () => {
           args: [fakeProviderPath],
           environment: fakeProviderEnvironment(directory, "early-exit-descendant")
         },
-        { timeoutMs: 100 }
+        { timeoutMs: providerCommandTimeout(100) }
       );
       if (process.platform === "win32") {
         await expect(pending).resolves.toEqual({ stdout: Buffer.alloc(0) });
@@ -674,7 +839,7 @@ describe("secret command runner", () => {
         await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
       }
 
-      expect(Date.now() - startedAt).toBeLessThan(250);
+      expect(Date.now() - startedAt).toBeLessThan(providerCommandTimeout(250));
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
       expect(activePipeCount()).toBeLessThanOrEqual(pipesBefore);
     });
@@ -714,6 +879,7 @@ describe("external secret-reference grammar", () => {
       "secretref:keychain://service%2Fpart/account",
       "secretref:keychain://service%5Cpart/account",
       "secretref:keychain://service%00part/account",
+      "secretref:keychain://service%C2%80part/account",
       "secretref:keychain://./account",
       "secretref:keychain://../account",
       "secretref:keychain://user@service/account",

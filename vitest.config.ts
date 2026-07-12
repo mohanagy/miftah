@@ -24,6 +24,7 @@ export default defineConfig({
         "src/upstream/remote-error.ts"
       ],
       reporter: ["text", "json-summary"],
+      exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"],
       thresholds: {
         "src/config/**/*.ts": { lines: 95, functions: 95, branches: 85 },
         "src/secrets/**/*.ts": { lines: 93, functions: 95, branches: 90 },

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config/load-config.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
 
+const plaintextReferencePattern = /PLAINTEXT/u;
+
 describe("config loading and secret resolution", () => {
   it("loads JSON configs and resolves profile secrets from an env file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-config-"));
@@ -30,6 +32,6 @@ describe("config loading and secret resolution", () => {
 
   it("rejects plaintext secret references unless explicitly enabled", async () => {
     const resolver = new SecretResolver({ environment: {}, allowPlaintextSecrets: false });
-    await expect(resolver.resolveValue("secretref:plain://visible")).rejects.toThrow(/PLAINTEXT/);
+    await expect(resolver.resolveValue("secretref:plain://visible")).rejects.toThrow(plaintextReferencePattern);
   });
 });

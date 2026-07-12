@@ -1,5 +1,5 @@
 import { access, constants } from "node:fs/promises";
-import { delimiter, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 
 export interface ExecutableResolverOptions {
   readonly environment?: NodeJS.ProcessEnv;
@@ -45,7 +45,7 @@ function bareCommandCandidates(
   const pathValue = environmentValue(environment, "PATH");
   if (pathValue === undefined) return [];
   const extensions = platform === "win32" ? windowsExtensions(command, environment) : [""];
-  const separator = platform === "win32" ? ";" : delimiter;
+  const separator = paths.delimiter;
   const candidates: string[] = [];
 
   for (const entry of pathValue.split(separator)) {

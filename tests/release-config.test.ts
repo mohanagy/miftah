@@ -75,6 +75,9 @@ describe("continuous integration workflow contract", () => {
     const scripts = readPackageScripts();
 
     expect(scripts["test:core"]).toContain("vitest run");
+    expect(scripts["test:core"]).toContain("tests/executable-resolver.test.ts");
+    expect(scripts["test:core"]).toContain("tests/secret-provider-availability.test.ts");
+    expect(scripts["test:core"]).toContain("tests/secret-providers.test.ts");
     expect(scripts["test:package"]).toBe("vitest run tests/package-contract.test.ts");
     expect(scripts["smoke:cli"]).toBe("node dist/cli/main.js schema");
     expect(scripts["test:cli"]).toContain("npm run test:package");
@@ -115,6 +118,9 @@ describe("continuous integration workflow contract", () => {
     ]) {
       expect(config).toContain(module);
     }
+    expect(config).toContain(
+      'exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"]'
+    );
   });
 });
 
