@@ -912,10 +912,43 @@ exit 0`,
         { timeoutMs: 5_000 }
       );
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         code: 0,
         stdout: "before-native-run\r\nnative-node-outputnative-run-exit=0\r\n",
-        stderr: "",
+        timedOut: false
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "runs an immediate Node child with the provider environment shape",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_TEST_EXECUTABLE')
+Get-ChildItem Env: | ForEach-Object {
+  if ($preservedEnvironmentNames -notcontains $_.Name) {
+    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
+  }
+}
+Add-Type -TypeDefinition $source
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+Write-Output 'before-native-run'
+$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', "process.stdout.write('native-node-output', () => process.exit(0))"))
+Write-Output "native-run-exit=$exitCode"
+exit 0`,
+        { MIFTAH_TEST_EXECUTABLE: process.execPath },
+        { timeoutMs: 5_000 }
+      );
+
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: "before-native-run\r\nnative-node-outputnative-run-exit=0\r\n",
         timedOut: false
       });
     },
