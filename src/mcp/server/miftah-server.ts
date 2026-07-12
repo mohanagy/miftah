@@ -106,7 +106,7 @@ function tool(name: string, description: string, required: string[] = [], option
     inputSchema: {
       type: "object",
       properties: fields.reduce<Record<string, { type: string }>>((result, key) => {
-        result[key] = { type: key === "toolName" ? "string" : "string" };
+        result[key] = { type: "string" };
         return result;
       }, {}),
       required

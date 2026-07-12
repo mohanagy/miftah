@@ -48,7 +48,15 @@ const hangOnStartReadyPath = process.env.TEST_HANG_ON_START_READY_PATH;
 const shutdownDelayMs = Number(process.env.TEST_SHUTDOWN_DELAY_MS ?? "0");
 const shutdownEndPath = process.env.TEST_SHUTDOWN_END_PATH;
 const includeIdentityTool = process.env.TEST_INCLUDE_IDENTITY_TOOL === "true";
-const identityResponse = process.env.TEST_IDENTITY_RESPONSE ?? JSON.stringify({ login: account });
+const oversizedIdentityResponseRepeat = Number(process.env.TEST_OVERSIZED_IDENTITY_RESPONSE_REPEAT ?? "0");
+const oversizedIdentityLogin =
+  Number.isSafeInteger(oversizedIdentityResponseRepeat) && oversizedIdentityResponseRepeat > 0
+    ? "identity-response-secret".repeat(oversizedIdentityResponseRepeat)
+    : undefined;
+const identityResponse =
+  oversizedIdentityLogin === undefined
+    ? (process.env.TEST_IDENTITY_RESPONSE ?? JSON.stringify({ login: account }))
+    : JSON.stringify({ login: oversizedIdentityLogin });
 const identityInputSchema =
   process.env.TEST_IDENTITY_SCHEMA === "min-properties"
     ? { type: "object", properties: { account: { type: "string" } }, minProperties: 1 }
@@ -278,7 +286,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: "test tool returned an error result" }], isError: true };
   }
   if (request.params.name === "whoami") {
-    return { content: [{ type: "text", text: account }] };
+    return { content: [{ type: "text", text: oversizedIdentityLogin ?? account }] };
   }
   if (request.params.name === "identity") {
     return { content: [{ type: "text", text: identityResponse }] };

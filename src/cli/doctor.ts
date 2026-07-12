@@ -502,6 +502,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         return;
       }
 
+      let discoveryCompleted = false;
       try {
         const result = await listTools(session);
         runtime.manager.recordCapabilitySuccess(target.profile, "tools", target.upstreamName);
@@ -523,35 +524,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         if (recordCollision(checks, target, fingerprints, result.tools, runtime.config.tooling?.collisionStrategy)) {
           incompleteProfiles.add(target.profile);
         }
-        const configuredIdentity = identities.status(target.profile, target.upstreamName);
-        if (configuredIdentity.status === "unconfigured") {
-          checks.push(
-            identityCheck(
-              "skipped",
-              targetText,
-              "No upstream identity verification is configured.",
-              "Configure profile identity verification to validate risky operations."
-            )
-          );
-        } else {
-          const identity = await identities.verify(target.profile, target.upstreamName, session);
-          const required = identityRequired(target);
-          checks.push(
-            identity.status === "verified"
-              ? identityCheck(
-                  "pass",
-                  targetText,
-                  "Configured upstream identity verification completed.",
-                  noAction()
-                )
-              : identityCheck(
-                  required ? "error" : "warning",
-                  targetText,
-                  "Configured upstream identity verification did not complete.",
-                  "Review the configured expected fingerprint and identity probe before relying on risky operations."
-                )
-          );
-        }
+        discoveryCompleted = true;
       } catch (error) {
         incompleteProfiles.add(target.profile);
         runtime.manager.recordCapabilityFailure(target.profile, "tools", error, target.upstreamName);
@@ -565,6 +538,42 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
           ),
           unavailableIdentityCheck(target, targetText, "discovery")
         );
+      }
+
+      if (discoveryCompleted) {
+        try {
+          const configuredIdentity = identities.status(target.profile, target.upstreamName);
+          if (configuredIdentity.status === "unconfigured") {
+            checks.push(
+              identityCheck(
+                "skipped",
+                targetText,
+                "No upstream identity verification is configured.",
+                "Configure profile identity verification to validate risky operations."
+              )
+            );
+          } else {
+            const identity = await identities.verify(target.profile, target.upstreamName, session);
+            const required = identityRequired(target);
+            checks.push(
+              identity.status === "verified"
+                ? identityCheck(
+                    "pass",
+                    targetText,
+                    "Configured upstream identity verification completed.",
+                    noAction()
+                  )
+                : identityCheck(
+                    required ? "error" : "warning",
+                    targetText,
+                    "Configured upstream identity verification did not complete.",
+                    "Review the configured expected fingerprint and identity probe before relying on risky operations."
+                  )
+            );
+          }
+        } catch {
+          checks.push(unavailableIdentityCheck(target, targetText, "discovery"));
+        }
       }
 
       try {

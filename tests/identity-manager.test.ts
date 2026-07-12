@@ -249,10 +249,7 @@ describe("identity verifier", () => {
     }
   });
 
-  it.each([
-    ["text", "identity-response-secret".repeat(20_000)],
-    ["json", JSON.stringify({ login: "identity-response-secret".repeat(20_000) })]
-  ] as const)("fails safely for an oversized %s probe response", async (resultFormat, response) => {
+  it.each(["text", "json"] as const)("fails safely for an oversized %s probe response", async (resultFormat) => {
     const config = validateConfig({
       version: "1",
       name: "identity-test",
@@ -260,9 +257,10 @@ describe("identity verifier", () => {
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: {
         work: {
-          env: resultFormat === "text" ? { TEST_ACCOUNT_NAME: response } : {
-            TEST_INCLUDE_IDENTITY_TOOL: "true",
-            TEST_IDENTITY_RESPONSE: response
+          env: {
+            TEST_ACCOUNT_NAME: "mona",
+            TEST_OVERSIZED_IDENTITY_RESPONSE_REPEAT: "300",
+            ...(resultFormat === "json" ? { TEST_INCLUDE_IDENTITY_TOOL: "true" } : {})
           },
           identity: {
             expected: { login: "mona" },

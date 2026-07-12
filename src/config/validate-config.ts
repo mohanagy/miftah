@@ -8,6 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Post-Zod narrowing only; miftahPublicConfigSchema owns runtime identity acceptance and rejection. */
 function isIdentityConfig(value: unknown): value is MiftahConfig["profiles"][string]["identity"] {
   if (!isRecord(value) || !isRecord(value.expected) || !isRecord(value.probe)) return false;
   const { expected, probe } = value;

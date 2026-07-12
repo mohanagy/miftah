@@ -5,6 +5,10 @@ import type { IdentityConfig } from "../src/config/types.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const policyNotFoundPattern = /POLICY_NOT_FOUND/u;
+const duplicateIdentityRiskPattern = /profiles\.work\.identity\.requiredForRisk/u;
+const identityProbeProviderPattern = /profiles\.work\.identity\.probe\.provider/u;
+const identityExpectedLoginPattern = /profiles\.work\.identity\.expected\.login/u;
+const insecureRemoteUrlPattern = /CONFIG_SCHEMA_INVALID.*upstream\.url/u;
 
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
@@ -70,7 +74,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.identity\.requiredForRisk/u);
+    ).toThrow(duplicateIdentityRiskPattern);
   });
 
   it.each([
@@ -116,7 +120,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.identity\.probe\.provider/u);
+    ).toThrow(identityProbeProviderPattern);
   });
 
   it("rejects a static provider on a JSON identity probe", () => {
@@ -136,7 +140,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.identity\.probe\.provider/u);
+    ).toThrow(identityProbeProviderPattern);
   });
 
   it("rejects a text identity probe that has no response-derived expected field", () => {
@@ -156,7 +160,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.identity\.expected\.login/u);
+    ).toThrow(identityExpectedLoginPattern);
   });
 
   it("tracks values resolved from environment references regardless of their configuration key", () => {
@@ -258,7 +262,7 @@ describe("config foundation", () => {
         ...baseConfig,
         upstream: { transport: "streamable-http", url: insecureUrl }
       })
-    ).toThrow(/CONFIG_SCHEMA_INVALID.*upstream\.url/u);
+    ).toThrow(insecureRemoteUrlPattern);
     expect(() =>
       validateConfig({
         ...baseConfig,

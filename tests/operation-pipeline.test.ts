@@ -55,8 +55,15 @@ describe("operation pipeline", () => {
       });
       await expect(access(createCountPath)).rejects.toThrow();
     } finally {
-      await client.close();
-      await wrapper.close();
+      try {
+        await client.close();
+      } finally {
+        try {
+          await wrapper.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
     }
   });
 
@@ -113,8 +120,15 @@ describe("operation pipeline", () => {
       });
       expect(JSON.stringify(operation)).not.toContain("must-not-be-audited");
     } finally {
-      await client.close();
-      await wrapper.close();
+      try {
+        await client.close();
+      } finally {
+        try {
+          await wrapper.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
     }
   });
 

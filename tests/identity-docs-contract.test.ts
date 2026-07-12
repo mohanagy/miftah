@@ -1,21 +1,36 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+const unreleasedHeadingPattern = /^## \[Unreleased\]\s*$/mu;
+const releaseHeadingPattern = /^## \[/mu;
+const identityVerificationHeadingPattern = /^## Identity verification\s*$/mu;
+const sectionHeadingPattern = /^## /mu;
+const identityFingerprintFieldPattern = /^\s+(\w+)\?: string;$/gmu;
+const documentedFingerprintFieldPattern = /^\| `([^`]+)` \|/gmu;
+const fieldLimitPattern = /const maxIdentityFieldLength = (\d+);/u;
+const responseLimitPattern = /const maxIdentityResponseLength = ([\d_]+);/u;
+const maxAgePattern = /maxAgeMs: z\.number\(\)\.int\(\)\.positive\(\)\.max\(([\d_]+)\)/u;
+const digitGroupPattern = /\B(?=(\d{3})+(?!\d))/gu;
+const beforeParsingPattern = /before parsing or normalization/iu;
+const identityStatusPattern = /^\s*\|\s+"([^"]+)"/gmu;
+const identityStatusFieldPattern = /^\s+(\w+)\??:/gmu;
+const unreleasedIdentityPattern = /\[#21\][\s\S]*identity/iu;
+
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
 function unreleasedSection(changelog: string): string {
-  const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
+  const afterHeading = changelog.split(unreleasedHeadingPattern)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
-  const nextRelease = afterHeading.search(/^## \[/mu);
+  const nextRelease = afterHeading.search(releaseHeadingPattern);
   return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
 }
 
 function identityVerificationSection(config: string): string {
-  const afterHeading = config.split(/^## Identity verification\s*$/mu)[1];
+  const afterHeading = config.split(identityVerificationHeadingPattern)[1];
   if (afterHeading === undefined) throw new Error("docs/config.md must contain an Identity verification section.");
-  const nextSection = afterHeading.search(/^## /mu);
+  const nextSection = afterHeading.search(sectionHeadingPattern);
   return nextSection === -1 ? afterHeading : afterHeading.slice(0, nextSection);
 }
 
@@ -29,23 +44,21 @@ describe("identity verification documentation contract", () => {
     const identityConfig = identityVerificationSection(config);
 
     const identityFingerprint = types.split("export interface IdentityFingerprint {")[1]?.split("\n}")[0] ?? "";
-    const authoritativeFingerprintFields = [...identityFingerprint.matchAll(/^\s+(\w+)\?: string;$/gmu)]
-      .map((match) => match[1])
+    const authoritativeFingerprintFields = Array.from(identityFingerprint.matchAll(identityFingerprintFieldPattern), (match) => match[1])
       .sort();
-    const documentedFingerprintFields = [...identityConfig.matchAll(/^\| `([^`]+)` \|/gmu)]
-      .map((match) => match[1])
+    const documentedFingerprintFields = Array.from(identityConfig.matchAll(documentedFingerprintFieldPattern), (match) => match[1])
       .sort();
     expect(documentedFingerprintFields).toEqual(authoritativeFingerprintFields);
 
-    const fieldLimit = manager.match(/const maxIdentityFieldLength = (\d+);/u)?.[1];
-    const responseLimit = manager.match(/const maxIdentityResponseLength = ([\d_]+);/u)?.[1]?.replaceAll("_", "");
-    const maxAgeMs = schema.match(/maxAgeMs: z\.number\(\)\.int\(\)\.positive\(\)\.max\(([\d_]+)\)/u)?.[1]?.replaceAll("_", "");
+    const fieldLimit = manager.match(fieldLimitPattern)?.[1];
+    const responseLimit = manager.match(responseLimitPattern)?.[1]?.replaceAll("_", "");
+    const maxAgeMs = schema.match(maxAgePattern)?.[1]?.replaceAll("_", "");
     expect(fieldLimit).toBeDefined();
     expect(responseLimit).toBeDefined();
     expect(maxAgeMs).toBeDefined();
     expect(schema).toContain(`z.string().trim().min(1).max(${fieldLimit})`);
     expect(schema).toContain(`tool: z.string().trim().min(1).max(${fieldLimit})`);
-    expect(schema).toContain(`maxAgeMs: z.number().int().positive().max(${maxAgeMs?.replace(/\B(?=(\d{3})+(?!\d))/gu, "_")})`);
+    expect(schema).toContain(`maxAgeMs: z.number().int().positive().max(${maxAgeMs?.replace(digitGroupPattern, "_")})`);
     expect(manager).toContain("const normalized = value.trim();");
     expect(manager).toContain("content.length !== 1");
     expect(manager).toContain('content[0]?.type !== "text"');
@@ -56,14 +69,14 @@ describe("identity verification documentation contract", () => {
 
     expect(identityConfig).toContain(`maximum ${fieldLimit} JavaScript characters`);
     expect(identityConfig).toContain("trimmed and must be nonempty");
-    expect(identityConfig).toContain(`maximum ${maxAgeMs?.replace(/\B(?=(\d{3})+(?!\d))/gu, ",")} ms (24 hours)`);
+    expect(identityConfig).toContain(`maximum ${maxAgeMs?.replace(digitGroupPattern, ",")} ms (24 hours)`);
     expect(identityConfig).toContain("positive integer");
     expect(identityConfig).toContain("exactly one MCP text content item");
     expect(identityConfig).toContain(`maximum ${responseLimit?.replace(/\B(?=(\d{3})+(?!\d))/gu, ",")} JavaScript characters`);
-    expect(identityConfig).toMatch(/before parsing or normalization/iu);
+    expect(identityConfig).toMatch(beforeParsingPattern);
     expect(identityConfig).toContain("JSON object");
     expect(identityConfig).toContain("allowed string fields");
-    expect(security).toMatch(/before parsing or normalization/iu);
+    expect(security).toMatch(beforeParsingPattern);
   });
 
   it("keeps gating, statuses, management targeting, doctor mapping, and safe-output claims aligned", () => {
@@ -80,9 +93,9 @@ describe("identity verification documentation contract", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const identityConfig = identityVerificationSection(config);
 
-    const statuses = [...statusTypes.matchAll(/^\s*\|\s+"([^"]+)"/gmu)].map((match) => match[1]);
+    const statuses = Array.from(statusTypes.matchAll(identityStatusPattern), (match) => match[1]);
     const identityStatus = statusTypes.split("export interface IdentityStatus {")[1]?.split("\n}")[0] ?? "";
-    const identityStatusFields = [...identityStatus.matchAll(/^\s+(\w+)\??:/gmu)].map((match) => match[1]).sort();
+    const identityStatusFields = Array.from(identityStatus.matchAll(identityStatusFieldPattern), (match) => match[1]).sort();
     expect(statuses).not.toHaveLength(0);
     for (const status of statuses) expect(security).toContain(`\`${status}\``);
     expect(identityStatusFields).toEqual(["actual", "errorCode", "expected", "profile", "status", "upstream", "verifiedAt"]);
@@ -112,7 +125,7 @@ describe("identity verification documentation contract", () => {
     }
 
     expect(doctorReport).toContain('IDENTITY: "DOCTOR_IDENTITY"');
-    expect(doctor).toContain('identityCheck(\n              "skipped"');
+    expect(doctor).toContain('identityCheck(\n                "skipped"');
     expect(doctor).toContain('required ? "error" : "warning"');
     for (const claim of [
       "`DOCTOR_IDENTITY` as `skipped`",
@@ -139,6 +152,6 @@ describe("identity verification documentation contract", () => {
     ]) {
       expect(security).toContain(claim);
     }
-    expect(unreleasedSection(changelog)).toMatch(/\[#21\][\s\S]*identity/iu);
+    expect(unreleasedSection(changelog)).toMatch(unreleasedIdentityPattern);
   });
 });
