@@ -914,6 +914,24 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
+    "executes the compressed bootstrap when the provider environment preserves PSModulePath",
+    async () => {
+      const result = await runWindowsCompressedBootstrap(
+        "Write-Output 'module-path-bootstrap-ready'\nexit 0",
+        { ...windowsProviderBootstrapEnvironment(), PSModulePath: process.env.PSModulePath },
+        { timeoutMs: 5_000, inheritEnvironment: false }
+      );
+
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: "module-path-bootstrap-ready\r\n",
+        timedOut: false
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "compiles the embedded Job Object type before starting providers",
     async () => {
       const csharp = await embeddedWindowsJobCSharp();
