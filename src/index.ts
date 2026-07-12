@@ -8,6 +8,7 @@ export { validateConfig } from "./config/validate-config.js";
 export { generateConfigSchema } from "./config/generate-json-schema.js";
 export { presetConfig } from "./config/presets.js";
 export type {
+  ActiveProfileStateScope,
   AuditConfig,
   IdentityConfig,
   IdentityFingerprint,
@@ -22,6 +23,7 @@ export type {
   RoutingRule,
   SecurityConfig,
   SecretsConfig,
+  StateConfig,
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,

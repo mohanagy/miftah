@@ -162,6 +162,20 @@ export interface SecretsConfig {
   providerTimeoutMs?: number;
 }
 
+/** Selects the isolation boundary for the active-profile selection. */
+export type ActiveProfileStateScope = "process" | "session" | "workspace" | "global";
+
+/** Opt-in active-profile persistence. Durable scopes never accept a caller-provided path. */
+export type StateConfig =
+  | {
+      persistActiveProfile?: false;
+      scope?: "process" | "session";
+    }
+  | {
+      persistActiveProfile: true;
+      scope: "workspace" | "global";
+    };
+
 export interface MiftahConfig {
   version: "1";
   name: string;
@@ -177,4 +191,5 @@ export interface MiftahConfig {
   audit?: AuditConfig;
   tooling?: ToolingConfig;
   secrets?: SecretsConfig;
+  state?: StateConfig;
 }

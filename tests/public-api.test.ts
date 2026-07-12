@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as api from "../src/index.js";
 import type {
+  ActiveProfileStateScope,
   AuditConfig,
   ConfigDiagnostic,
   IdentityConfig,
@@ -25,6 +26,7 @@ import type {
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
+  StateConfig,
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,
@@ -58,6 +60,7 @@ const internalRuntimeExports = [
 ] as const;
 
 const supportedTypeExports = [
+  "ActiveProfileStateScope",
   "AuditConfig",
   "ConfigDiagnostic",
   "IdentityConfig",
@@ -75,6 +78,7 @@ const supportedTypeExports = [
   "RoutingConfig",
   "RoutingRule",
   "SecurityConfig",
+  "StateConfig",
   "ToolDiscoveryMode",
   "ToolingConfig",
   "TransportType",
@@ -83,6 +87,7 @@ const supportedTypeExports = [
 ] as const;
 
 type PublicTypeImportCoverage = [
+  ActiveProfileStateScope,
   AuditConfig,
   ConfigDiagnostic,
   IdentityConfig,
@@ -100,6 +105,7 @@ type PublicTypeImportCoverage = [
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
+  StateConfig,
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,

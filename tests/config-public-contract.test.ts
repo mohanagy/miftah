@@ -29,7 +29,8 @@ describe("public configuration contract", () => {
       rules: [{ when: { "args.profile": "default" }, profile: "default" }]
     },
     security: { redactSecrets: true },
-    audit: { redact: true, format: "jsonl" }
+    audit: { redact: true, format: "jsonl" },
+    state: { persistActiveProfile: true, scope: "workspace" }
   };
 
   it("shares supported structural acceptance between public and runtime schemas", () => {
@@ -46,6 +47,14 @@ describe("public configuration contract", () => {
     expect(() => validateConfig(misspelledSecuritySetting)).toThrow(/CONFIG_UNKNOWN_OPTION/u);
   });
 
+  it("does not advertise durable profile scopes without an explicit persistence opt-in", () => {
+    const publicSchema: PublicConfigSchema = miftahPublicConfigSchema;
+    const invalidState = { ...supportedConfig, state: { scope: "workspace" } };
+
+    expect(publicSchema.safeParse(invalidState).success).toBe(false);
+    expect(() => validateConfig(invalidState)).toThrow(/state\.persistActiveProfile/u);
+  });
+
   it("generates a strict draft 2019-09 schema from the public contract", () => {
     const schema = generateConfigSchema() as unknown as GeneratedConfigSchema;
 
@@ -54,8 +63,8 @@ describe("public configuration contract", () => {
       title: "Miftah configuration",
       additionalProperties: false
     });
-    expect(schema.properties).not.toHaveProperty("state");
     expect(schema.properties).not.toHaveProperty("ui");
+    expect(schema.properties?.state).toMatchObject({ additionalProperties: false });
     expect(schema.properties?.security).toMatchObject({ additionalProperties: false });
     expect(schema.properties?.routing?.properties?.rules?.additionalProperties).toBeUndefined();
   });

@@ -26,7 +26,9 @@ await runtime.connect(new StdioServerTransport());
 
 ## Type exports
 
-The configuration contract exposes `AuditConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `MiftahConfig`, `PolicyConfig`, `ProcessConfig`, `ProfileConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SecretsConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `MiftahConfig`, `PolicyConfig`, `ProcessConfig`, `ProfileConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SecretsConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+
+`StateConfig` makes active-profile persistence explicit. Its durable `workspace` and `global` scopes require `persistActiveProfile: true`; custom state-file paths are intentionally not part of the public API.
 
 For identity configurations, format-dependent structural constraints and unique `requiredForRisk` tuples are static. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 

@@ -62,6 +62,10 @@ When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as 
 
 `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose configured or cached identity status but do not start an upstream or run a probe.
 
+### MCP profile management
+
+`miftah_current_profile` returns the active/default profile plus safe selection metadata: `selectionSource`, `selectedAt`, and `scope`. When stored active-profile state is corrupt, stale, or unavailable, it additionally returns a stable `stateDiagnostic`; it never returns the state-file path or raw state contents. `miftah_use_profile` changes the active profile according to the configured scope. `miftah_reset_profile` returns to the configured default and writes that default when the scope is durable.
+
 ## Global version options
 
 These forms all print the package SemVer to stdout and nothing to stderr:

@@ -61,7 +61,7 @@ import {
 const managementTools: Tool[] = [
   tool("miftah_list_profiles", "List configured profiles without exposing secrets."),
   tool("miftah_current_profile", "Show the active and default profile."),
-  tool("miftah_use_profile", "Switch the active profile for this MCP session.", ["profile"]),
+  tool("miftah_use_profile", "Switch the active profile according to the configured state scope.", ["profile"]),
   tool("miftah_reset_profile", "Reset the active profile to the configured default."),
   tool("miftah_profile_info", "Show non-secret metadata for a profile.", ["profile"]),
   tool("miftah_health", "Show redacted wrapper and upstream health."),
@@ -164,6 +164,7 @@ export class MiftahServer {
   private readonly restartingProfiles = new Map<string, Promise<void>>();
   private readonly pendingResourceListChanges = new Set<string>();
   private readonly pendingPromptListChanges = new Set<string>();
+  private profileTransitions: Promise<void> = Promise.resolve();
   private mcpRoots: readonly RoutingContextMcpRoot[] = EMPTY_MCP_ROOTS;
   private mcpRootsReady: Promise<void> = Promise.resolve();
   private resolveMcpRootsReady: () => void = () => undefined;
@@ -266,6 +267,12 @@ export class MiftahServer {
   }
 
   async connect(transport: Transport): Promise<void> {
+    await this.profileTransitions;
+    const previousProfile = this.profiles.current().activeProfile;
+    await this.profiles.beginSession();
+    const activeProfile = this.profiles.current().activeProfile;
+    this.routing.setActiveProfile(activeProfile);
+    if (previousProfile !== activeProfile) this.invalidateResourcePromptProfiles(previousProfile, activeProfile);
     this.resetMcpRoots();
     await this.server.connect(transport);
     await this.auditTrail.writeLifecycle({
@@ -568,31 +575,39 @@ export class MiftahServer {
         JSON.stringify({
           activeProfile: current.activeProfile,
           defaultProfile: current.defaultProfile,
+          selectionSource: current.selectionSource,
+          selectedAt: current.selectedAt,
+          scope: current.scope,
+          ...(current.stateDiagnostic === undefined ? {} : { stateDiagnostic: current.stateDiagnostic }),
           routingMode: this.config.routing?.mode ?? "hybrid",
           identity: this.identityStatuses(current.activeProfile)
         })
       );
     }
     if (name === "miftah_use_profile") {
-      const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
       const profile = requiredString(args, "profile");
-      const switched = this.profiles.switch(profile);
-      audit.update({ name: switched.activeProfile, profile: switched.activeProfile });
-      this.routing.setActiveProfile(switched.activeProfile);
-      this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
-      await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
-      await this.notifyResourcePromptListChanged();
-      return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
+      return this.enqueueProfileTransition(async () => {
+        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
+        const switched = await this.profiles.switchPersisted(profile);
+        audit.update({ name: switched.activeProfile, profile: switched.activeProfile });
+        this.routing.setActiveProfile(switched.activeProfile);
+        this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
+        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
+        await this.notifyResourcePromptListChanged();
+        return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
+      });
     }
     if (name === "miftah_reset_profile") {
-      const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
-      const reset = this.profiles.reset();
-      audit.update({ name: reset.activeProfile, profile: reset.activeProfile });
-      this.routing.setActiveProfile(reset.activeProfile);
-      this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
-      await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
-      await this.notifyResourcePromptListChanged();
-      return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
+      return this.enqueueProfileTransition(async () => {
+        const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
+        const reset = await this.profiles.resetPersisted();
+        audit.update({ name: reset.activeProfile, profile: reset.activeProfile });
+        this.routing.setActiveProfile(reset.activeProfile);
+        this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
+        await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
+        await this.notifyResourcePromptListChanged();
+        return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
+      });
     }
     if (name === "miftah_profile_info") {
       const profile = requiredString(args, "profile");
@@ -1097,6 +1112,15 @@ export class MiftahServer {
         return { profile: state.activeProfile, snapshot };
       }
     }
+  }
+
+  private enqueueProfileTransition<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const result = this.profileTransitions.then(operation, operation);
+    this.profileTransitions = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   private restartUpstreamProfile(profile: string): Promise<void> {
