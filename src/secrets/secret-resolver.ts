@@ -8,6 +8,7 @@ import type {
   SecretProviderReference,
   SecretRedactionRegistrar
 } from "./secret-provider.js";
+import type { BuiltinSecretProviders } from "./builtin-secret-providers.js";
 
 const embeddedEnvironmentReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
@@ -16,6 +17,8 @@ export interface SecretResolverOptions {
   envFiles?: string[];
   allowPlaintextSecrets?: boolean;
   redactor?: SecretRedactor;
+  /** Internal injection point for provider integration tests and runtime composition. */
+  providers?: Partial<BuiltinSecretProviders>;
 }
 
 /** Contains resolved configuration values and every value sourced from a secret reference. */
@@ -30,7 +33,8 @@ export class SecretResolver {
   private readonly values: Record<string, string>;
   private readonly options: SecretResolverOptions;
   private readonly redactor: SecretRedactor;
-  private readonly providers = createBuiltinSecretProviders();
+  private readonly providers: BuiltinSecretProviders;
+  private readonly resolutionCache = new Map<string, Promise<string>>();
 
   constructor(options: SecretResolverOptions = {}) {
     this.options = options;
@@ -39,6 +43,7 @@ export class SecretResolver {
       Object.entries(this.environment).filter((entry): entry is [string, string] => entry[1] !== undefined)
     );
     this.redactor = options.redactor ?? new SecretRedactor();
+    this.providers = { ...createBuiltinSecretProviders(), ...options.providers };
   }
 
   async load(): Promise<void> {
@@ -96,6 +101,16 @@ export class SecretResolver {
       const resolved = await this.resolveReference(this.providers.plaintext, plaintextReference, secretValues);
       return { value: resolved, secretValues: [...secretValues] };
     }
+    const keychainReference = this.providers.keychain.parse(value);
+    if (keychainReference) {
+      const resolved = await this.resolveReference(this.providers.keychain, keychainReference, secretValues);
+      return { value: resolved, secretValues: [...secretValues] };
+    }
+    const onePasswordReference = this.providers.op.parse(value);
+    if (onePasswordReference) {
+      const resolved = await this.resolveReference(this.providers.op, onePasswordReference, secretValues);
+      return { value: resolved, secretValues: [...secretValues] };
+    }
     if (value.startsWith("secretref:")) {
       throw new MiftahError(
         "SECRET_PROVIDER_FAILED",
@@ -128,16 +143,34 @@ export class SecretResolver {
     reference: Reference,
     secretValues: Set<string>
   ): Promise<string> {
-    const resolved = await provider.resolve(reference, {
-      values: this.values,
-      allowPlaintextSecrets: this.options.allowPlaintextSecrets === true
-    });
+    // Plaintext references deliberately share a redacted canonical diagnostic value, so caching them would alias secrets.
+    const cacheKey = reference.provider === "plain" ? undefined : `${reference.provider}:${reference.canonicalReference}`;
+    let resolution = cacheKey === undefined ? undefined : this.resolutionCache.get(cacheKey);
+    if (resolution === undefined) {
+      resolution = provider
+        .resolve(reference, {
+          values: this.values,
+          allowPlaintextSecrets: this.options.allowPlaintextSecrets === true,
+          registerSecret: (value) => this.redactor.add(value)
+        })
+        .then((result) => {
+          this.redactor.add(result.value);
+          return result.value;
+        });
+      if (cacheKey !== undefined) {
+        this.resolutionCache.set(cacheKey, resolution);
+        void resolution.catch(() => {
+          if (this.resolutionCache.get(cacheKey) === resolution) this.resolutionCache.delete(cacheKey);
+        });
+      }
+    }
+    const resolved = await resolution;
     const registerResolvedSecret: SecretRedactionRegistrar = (result) => {
       this.redactor.add(result.value);
       secretValues.add(result.value);
     };
-    registerResolvedSecret(resolved);
-    return resolved.value;
+    registerResolvedSecret({ value: resolved });
+    return resolved;
   }
 }
 

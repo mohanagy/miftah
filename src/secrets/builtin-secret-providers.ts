@@ -1,4 +1,9 @@
 import { MiftahError } from "../utils/errors.js";
+import {
+  createKeychainSecretProvider,
+  createOnePasswordSecretProvider
+} from "./external-secret-providers.js";
+import type { KeychainSecretReference, OnePasswordSecretReference } from "./external-secret-reference.js";
 import type {
   DotenvSecretReference,
   EnvironmentSecretReference,
@@ -116,12 +121,16 @@ export interface BuiltinSecretProviders {
   readonly environment: SecretProvider<EnvironmentSecretReference>;
   readonly dotenv: SecretProvider<DotenvSecretReference>;
   readonly plaintext: SecretProvider<PlaintextSecretReference>;
+  readonly keychain: SecretProvider<KeychainSecretReference>;
+  readonly op: SecretProvider<OnePasswordSecretReference>;
 }
 
 export function createBuiltinSecretProviders(): BuiltinSecretProviders {
   return {
     environment: new EnvironmentSecretProvider(),
     dotenv: new DotenvSecretProvider(),
-    plaintext: new PlaintextSecretProvider()
+    plaintext: new PlaintextSecretProvider(),
+    keychain: createKeychainSecretProvider(),
+    op: createOnePasswordSecretProvider()
   };
 }

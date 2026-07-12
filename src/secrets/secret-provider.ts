@@ -1,4 +1,6 @@
-export type SecretProviderName = "env" | "dotenv" | "plain";
+import type { KeychainSecretReference, OnePasswordSecretReference } from "./external-secret-reference.js";
+
+export type SecretProviderName = "env" | "dotenv" | "plain" | "keychain" | "op";
 
 /** Safe provider metadata that may be included in diagnostics. */
 export interface SecretReferenceDescriptor {
@@ -25,12 +27,16 @@ export interface PlaintextSecretReference extends SecretReferenceDescriptor {
 export type SecretProviderReference =
   | EnvironmentSecretReference
   | DotenvSecretReference
-  | PlaintextSecretReference;
+  | PlaintextSecretReference
+  | KeychainSecretReference
+  | OnePasswordSecretReference;
 
 /** Resolve-only context. Providers receive resolved values only while resolving a reference. */
 export interface SecretProviderResolveContext {
   readonly values: Readonly<Record<string, string>>;
   readonly allowPlaintextSecrets: boolean;
+  /** Registers a provider credential before it can be sent to a child process. */
+  readonly registerSecret: (value: string) => void;
 }
 
 /** Availability-only context that intentionally excludes resolved secret values. */
