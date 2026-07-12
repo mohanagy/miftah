@@ -72,6 +72,9 @@ function decodeComponent(component: string, provider: "keychain" | "op"): string
     containsControlCharacter(decoded) ||
     decoded === "." ||
     decoded === ".." ||
+    decoded.includes("@") ||
+    decoded.includes("?") ||
+    decoded.includes("#") ||
     decoded.includes("/") ||
     decoded.includes("\\")
   ) {

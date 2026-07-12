@@ -143,6 +143,26 @@ describe("external secret-reference grammar", () => {
       canonicalReference: "secretref:op://vault%20name/item/field"
     });
   });
+
+  it.each([
+    "secretref:keychain://service%40name/account",
+    "secretref:keychain://service%3Fname/account",
+    "secretref:keychain://service%23name/account",
+    "secretref:keychain://service/account%40name",
+    "secretref:keychain://service/account%3Fname",
+    "secretref:keychain://service/account%23name",
+    "secretref:op://vault%40name/item/field",
+    "secretref:op://vault%3Fname/item/field",
+    "secretref:op://vault%23name/item/field",
+    "secretref:op://vault/item%40name/field",
+    "secretref:op://vault/item%3Fname/field",
+    "secretref:op://vault/item%23name/field",
+    "secretref:op://vault/item/field%40name",
+    "secretref:op://vault/item/field%3Fname",
+    "secretref:op://vault/item/field%23name"
+  ])("rejects percent-encoded reserved delimiters after decoding %s", (reference) => {
+    expect(() => parseExternalSecretReference(reference)).toThrow("SECRET_REFERENCE_MALFORMED");
+  });
 });
 
 describe("secret command runner", () => {
