@@ -114,6 +114,208 @@ describe("doctor readiness runner", () => {
     expect(serialized).not.toContain("ready-account");
   });
 
+  it("skips identity verification for an unconfigured real stdio upstream", async () => {
+    const { configPath } = await writeConfig("identity-unconfigured", baseConfig(stdioUpstream()));
+
+    const report = await runDoctor(configPath);
+
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "skipped"
+    });
+    expect(report).toMatchObject({ overallStatus: "healthy", ok: true });
+  });
+
+  it("reports a verified configured upstream identity", async () => {
+    const { configPath } = await writeConfig(
+      "identity-verified",
+      baseConfig(
+        stdioUpstream({ TEST_ACCOUNT_NAME: "ready-account" }),
+        {
+          default: {
+            identity: {
+              expected: { provider: "github", login: "ready-account" },
+              probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write"]
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "DOCTOR_IDENTITY",
+          status: "pass",
+          explanation: "Configured upstream identity verification completed."
+        })
+      ])
+    );
+    expect(JSON.stringify(report)).not.toContain("ready-account");
+  });
+
+  it("fails required identity verification on a real mismatching probe without exposing identity details", async () => {
+    const expectedAccount = "configured-doctor-account";
+    const actualAccount = "actual-doctor-account";
+    const { configPath } = await writeConfig(
+      "identity-required-mismatch",
+      baseConfig(
+        stdioUpstream({ TEST_ACCOUNT_NAME: actualAccount }),
+        {
+          default: {
+            identity: {
+              expected: { provider: "github", login: expectedAccount },
+              probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write"]
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+    const serialized = JSON.stringify(report);
+    const codes = report.checks.map((item) => item.code);
+
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "error",
+      explanation: "Configured upstream identity verification did not complete."
+    });
+    expect(report).toMatchObject({ overallStatus: "failed", ok: false });
+    expect(codes.indexOf(DOCTOR_CODES.TOOLS_DISCOVERY)).toBeLessThan(codes.indexOf(DOCTOR_CODES.IDENTITY));
+    expect(codes.indexOf(DOCTOR_CODES.IDENTITY)).toBeLessThan(codes.indexOf(DOCTOR_CODES.RESOURCES_DISCOVERY));
+    for (const sensitiveValue of [configPath, expectedAccount, actualAccount, "whoami", "miftah_verify_identity"]) {
+      expect(serialized).not.toContain(sensitiveValue);
+    }
+  });
+
+  it("warns when an optional configured identity probe returns an upstream error", async () => {
+    const rawIdentityResponse = "raw-identity-response-secret";
+    const expectedAccount = "optional-configured-account";
+    const { configPath } = await writeConfig(
+      "identity-optional-failure",
+      baseConfig(
+        stdioUpstream({
+          API_TOKEN: rawIdentityResponse,
+          TEST_ACCOUNT_NAME: "actual-optional-account",
+          TEST_FAIL_CALL_TOOL: "true",
+          TEST_IDENTITY_RESPONSE: rawIdentityResponse
+        }),
+        {
+          default: {
+            identity: {
+              expected: { login: expectedAccount },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+    const serialized = JSON.stringify(report);
+
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "warning",
+      explanation: "Configured upstream identity verification did not complete."
+    });
+    expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
+    for (const sensitiveValue of [configPath, rawIdentityResponse, expectedAccount, "whoami", "miftah_verify_identity"]) {
+      expect(serialized).not.toContain(sensitiveValue);
+    }
+  });
+
+  it("warns when an optional configured identity probe is absent after normal discovery", async () => {
+    const { configPath } = await writeConfig(
+      "identity-optional-unsupported",
+      baseConfig(
+        stdioUpstream(),
+        {
+          default: {
+            identity: {
+              expected: { login: "optional-unsupported-account" },
+              probe: { tool: "identity", resultFormat: "json" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "warning",
+      explanation: "Configured upstream identity verification did not complete."
+    });
+    expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
+  });
+
+  it("warns when an optional configured identity probe requires input after healthy real stdio discovery", async () => {
+    const { configPath } = await writeConfig(
+      "identity-optional-required-input",
+      baseConfig(
+        stdioUpstream({ TEST_WHOAMI_SCHEMA: "account" }),
+        {
+          default: {
+            identity: {
+              expected: { login: "optional-required-input-account" },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+
+    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.RESOURCES_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.PROMPTS_DISCOVERY).status).toBe("pass");
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "warning",
+      explanation: "Configured upstream identity verification did not complete."
+    });
+    expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
+  });
+
+  it("fails readiness when required identity verification cannot discover its probe", async () => {
+    const { configPath } = await writeConfig(
+      "identity-required-failure",
+      baseConfig(
+        stdioUpstream({ TEST_FAIL_LIST_TOOLS: "true" }),
+        {
+          default: {
+            identity: {
+              expected: { login: "work" },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write"]
+            }
+          }
+        }
+      )
+    );
+
+    const report = await runDoctor(configPath);
+
+    expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
+      status: "error",
+      explanation: "Required upstream identity verification could not complete."
+    });
+    expect(report.ok).toBe(false);
+  });
+
   it("degrades instead of failing when real optional discovery capabilities fail in permissive mode", async () => {
     const shutdownPath = join(fixtureDirectory, "degraded", "upstream-ended");
     const { configPath } = await writeConfig(

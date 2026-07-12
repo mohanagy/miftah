@@ -84,6 +84,58 @@ MCP roots are optional client metadata. After initialization, Miftah calls `root
 
 `miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision, and sanitized `evidence`. Proxied operation audit records carry the same snapshot as additive `routingEvidence`, including an ambiguity that prevents forwarding. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
 
+## Identity verification
+
+Identity verification is opt-in. Add `identity` at `profiles.<profile>.identity` to configure a profile fingerprint. For an `upstreams` bundle, `profiles.<profile>.upstreams.<upstream>.identity` replaces the profile identity for that exact named target; it does not merge fields from the profile identity.
+
+An identity configuration is strict and contains:
+
+- `expected`: a nonempty fingerprint with only optional `provider`, `login`, `organization`, and `host` string fields. Each identity fingerprint string, `probe.tool`, and any `probe.provider` is trimmed and must be nonempty, with a maximum 256 JavaScript characters;
+- `probe`: `{ "tool": "<discovered-tool>", "resultFormat": "text" | "json" }`, with optional `provider` only for `"text"`;
+- positive integer `maxAgeMs`, with a maximum 86,400,000 ms (24 hours); and
+- optional nonempty, unique `requiredForRisk`, containing only `"write"` and/or `"destructive"`. `"read"` is not accepted.
+
+The expected fingerprint has exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `provider` | Provider identifier. |
+| `login` | Account login. |
+| `organization` | Organization identifier. |
+| `host` | Provider host identifier. |
+
+For example, this profile identity requires a GitHub login fingerprint before configured write or destructive risks:
+
+```json
+{
+  "profiles": {
+    "work": {
+      "identity": {
+        "expected": {
+          "provider": "github",
+          "login": "octo-work"
+        },
+        "probe": {
+          "tool": "whoami",
+          "resultFormat": "text",
+          "provider": "github"
+        },
+        "maxAgeMs": 300000,
+        "requiredForRisk": ["write", "destructive"]
+      }
+    }
+  }
+}
+```
+
+The probe must be a discovered read-risk tool with no required input fields; Miftah calls it with `{}`. A missing probe, a non-read probe, or a probe with required input is unsupported. A probe is an account-fingerprint observation only: it does not validate credentials, authentication, provider authorization, or token scopes.
+
+Before parsing or normalization, a probe response must contain exactly one MCP text content item. Its text has a maximum 4,096 JavaScript characters; a response with another content shape or a longer text fails verification. For `"json"` probes, the text must parse to a JSON object, and Miftah retains only allowed string fields (`provider`, `login`, `organization`, and `host`) after their normal validation.
+
+For a `"text"` response, Miftah uses the response as `login` and adds the configured static `provider` when supplied. Text probes require `expected.login`, cannot verify `organization` or `host`, and their static provider must equal `expected.provider` when an expected provider is configured. For a `"json"` response, Miftah retains only allowed string `provider`, `login`, `organization`, and `host` fields; provider must come from that response, so a static probe provider is prohibited. Matching uses exact equality for every configured expected field. Miftah retains only actual fields that were configured in `expected`.
+
+Identity gating is applied only after routing, policy, and target resolution and before the protected operation executes. It applies only when `requiredForRisk` explicitly names the selected write or destructive risk. Read discovery, resource reads, and prompt retrieval are not gated. Mismatch, unsupported, or failed required checks block the protected operation; an identity configuration without `requiredForRisk` never gates an operation.
+
 ## Operation routing and policy
 
 Miftah applies one safety pipeline to every proxied upstream tool call, resource read, and prompt retrieval. It captures the active profile once at request start, resolves the routing rule using that immutable fallback, evaluates the selected profile's policy before resolving an aggregate route or forwarding, redacts the result or error, and records the terminal operation metadata in audit output.

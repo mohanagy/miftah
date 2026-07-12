@@ -5,6 +5,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, ProfileConfig, ToolingConfig, UpstreamConfig } from "../config/types.js";
+import { IdentityManager } from "../identity/identity-manager.js";
 import { canonicalJson } from "../mcp/server/tool-registry.js";
 import { resolveClientVisibleToolName } from "../mcp/server/miftah-server.js";
 import type { UpstreamSession } from "../upstream/upstream-session.js";
@@ -56,6 +57,15 @@ function skippedDiscoveryCheck(code: DoctorCheck["code"], target: string, capabi
     `${capability} discovery was skipped because startup did not complete.`,
     "Resolve the startup check before retrying discovery."
   );
+}
+
+function identityCheck(
+  status: DoctorCheck["status"],
+  target: string,
+  explanation: string,
+  remediation: string
+): DoctorCheck {
+  return check(DOCTOR_CODES.IDENTITY, status, target, explanation, remediation);
 }
 
 function configuredUpstreams(config: MiftahConfig): Array<{ name?: string; upstream: UpstreamConfig }> {
@@ -406,7 +416,31 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
     const targets = configuredTargets(runtime.config);
+    const identities = new IdentityManager(runtime.config);
     const discoveryFailureStatus = runtime.config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
+    const identityRequired = (target: DoctorTarget): boolean =>
+      identities.requiresVerification(target.profile, target.upstreamName, "write") ||
+      identities.requiresVerification(target.profile, target.upstreamName, "destructive");
+    const unavailableIdentityCheck = (target: DoctorTarget, targetText: string, reason: "startup" | "discovery"): DoctorCheck => {
+      const configured = identities.status(target.profile, target.upstreamName);
+      if (configured.status === "unconfigured") {
+        return identityCheck(
+          "skipped",
+          targetText,
+          `Identity verification was skipped because ${reason === "startup" ? "upstream startup" : "tool discovery"} did not complete.`,
+          `Resolve the ${reason === "startup" ? "startup" : "tool discovery"} check before retrying doctor.`
+        );
+      }
+      const required = identityRequired(target);
+      return identityCheck(
+        required ? "error" : "warning",
+        targetText,
+        required
+          ? "Required upstream identity verification could not complete."
+          : "Optional upstream identity verification could not complete.",
+        "Review the configured expected fingerprint and identity probe before relying on risky operations."
+      );
+    };
     const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
       if (target.upstream.transport === "stdio") {
@@ -461,12 +495,14 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             "Correct upstream availability or configuration before retrying doctor."
           ),
           skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
+          unavailableIdentityCheck(target, targetText, "startup"),
           skippedDiscoveryCheck(DOCTOR_CODES.RESOURCES_DISCOVERY, targetText, "Resource"),
           skippedDiscoveryCheck(DOCTOR_CODES.PROMPTS_DISCOVERY, targetText, "Prompt")
         );
         return;
       }
 
+      let discoveryCompleted = false;
       try {
         const result = await listTools(session);
         runtime.manager.recordCapabilitySuccess(target.profile, "tools", target.upstreamName);
@@ -488,6 +524,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         if (recordCollision(checks, target, fingerprints, result.tools, runtime.config.tooling?.collisionStrategy)) {
           incompleteProfiles.add(target.profile);
         }
+        discoveryCompleted = true;
       } catch (error) {
         incompleteProfiles.add(target.profile);
         runtime.manager.recordCapabilityFailure(target.profile, "tools", error, target.upstreamName);
@@ -498,8 +535,45 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             targetText,
             "Tool discovery did not complete.",
             "Review upstream tool discovery before relying on this profile."
-          )
+          ),
+          unavailableIdentityCheck(target, targetText, "discovery")
         );
+      }
+
+      if (discoveryCompleted) {
+        try {
+          const configuredIdentity = identities.status(target.profile, target.upstreamName);
+          if (configuredIdentity.status === "unconfigured") {
+            checks.push(
+              identityCheck(
+                "skipped",
+                targetText,
+                "No upstream identity verification is configured.",
+                "Configure profile identity verification to validate risky operations."
+              )
+            );
+          } else {
+            const identity = await identities.verify(target.profile, target.upstreamName, session);
+            const required = identityRequired(target);
+            checks.push(
+              identity.status === "verified"
+                ? identityCheck(
+                    "pass",
+                    targetText,
+                    "Configured upstream identity verification completed.",
+                    noAction()
+                  )
+                : identityCheck(
+                    required ? "error" : "warning",
+                    targetText,
+                    "Configured upstream identity verification did not complete.",
+                    "Review the configured expected fingerprint and identity probe before relying on risky operations."
+                  )
+            );
+          }
+        } catch {
+          checks.push(unavailableIdentityCheck(target, targetText, "discovery"));
+        }
       }
 
       try {

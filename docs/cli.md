@@ -52,6 +52,14 @@ miftah doctor --json --config github.json
 
 The JSON report intentionally omits resolved secret values, raw configuration paths, configured upstream command arguments, and its synthetic redaction canary.
 
+When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as `skipped`. A configured verified identity is `pass`; mismatch, unsupported, or failed required identity verification is `error`; and nonverified optional identity verification is `warning`. Identity doctor output never includes raw probe output or fingerprint values.
+
+### MCP identity management
+
+`miftah_verify_identity` is an MCP management tool, not a shell subcommand. It accepts optional `profile` and `upstream` strings. `profile` defaults to the active profile. Supplying a named `upstream` verifies only that target; `upstream: "default"` is an alias only for a single unnamed upstream. With `upstream` omitted, Miftah verifies every configured target in deterministic upstream order. The response always contains safe structured identity results, including nonverified states, and its audit event contains only safe evidence and a failure outcome when verification did not succeed.
+
+`miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose configured or cached identity status but do not start an upstream or run a probe.
+
 ## Global version options
 
 These forms all print the package SemVer to stdout and nothing to stderr:

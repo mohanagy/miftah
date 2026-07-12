@@ -1,4 +1,5 @@
 import type { AuditScope } from "../../audit/audit-trail.js";
+import { IdentityManager } from "../../identity/identity-manager.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
@@ -19,6 +20,7 @@ export interface CapturedProfileState {
 
 export interface ResolvedOperation<Result> {
   readonly upstreamName?: string;
+  readonly identityUpstreamName?: string;
   readonly name: string;
   execute(session: UpstreamSession): Promise<Result>;
   redact(result: Result): Result;
@@ -44,6 +46,7 @@ interface PipelineOptions {
   readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager;
   readonly redactor: SecretRedactor;
   readonly routingContext: RoutingContextProvider;
+  readonly identities: IdentityManager;
 }
 
 /**
@@ -84,6 +87,11 @@ export class OperationPipeline {
         ...(target.upstreamName === undefined ? {} : { upstream: target.upstreamName })
       });
       const session = await this.options.upstreams.get(profile, target.upstreamName);
+      if (this.options.identities.requiresVerification(profile, target.identityUpstreamName, decision.risk)) {
+        const identity = await this.options.identities.verify(profile, target.identityUpstreamName, session);
+        audit.update({ identity: this.options.redactor.redactForAudit(identity) });
+        await this.options.identities.requireVerified(profile, target.identityUpstreamName, session);
+      }
       return this.options.redactor.redact(target.redact(await target.execute(session)));
     } catch (error) {
       throw this.toSafeError(error);

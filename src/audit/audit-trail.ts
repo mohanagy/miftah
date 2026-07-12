@@ -20,6 +20,7 @@ export interface AuditScopeUpdate {
   policyName?: string;
   policyDecision?: AuditEvent["policyDecision"];
   risk?: AuditEvent["risk"];
+  identity?: AuditEvent["identity"];
   routingEvidence?: RoutingContextEvidence;
 }
 
@@ -98,6 +99,7 @@ export class AuditScope {
   private readonly startedAt = Date.now();
   private readonly event: AuditOperationInput & AuditScopeUpdate;
   private finalized = false;
+  private resultOverride?: AuditScopeResult;
 
   constructor(
     private readonly trail: AuditTrail,
@@ -114,9 +116,17 @@ export class AuditScope {
     Object.assign(this.event, update);
   }
 
+  /** Overrides the default terminal outcome when a request returns structured failure details. */
+  setResult(result: AuditScopeResult): void {
+    if (this.finalized) throw new Error("Audit scope already has a terminal event");
+    if (this.resultOverride) throw new Error("Audit scope terminal outcome is already set");
+    this.resultOverride = result;
+  }
+
   async finish(result: AuditScopeResult): Promise<void> {
     if (this.finalized) throw new Error("Audit scope already has a terminal event");
     this.finalized = true;
+    const terminalResult = this.resultOverride ?? result;
     await this.trail.write({
       wrapper: this.trail.wrapper(),
       kind: "operation",
@@ -127,7 +137,7 @@ export class AuditScope {
       profile: this.event.profile ?? this.event.sourceProfile,
       operation: this.event.operation,
       name: this.event.name,
-      status: result.status,
+      status: terminalResult.status,
       durationMs: Date.now() - this.startedAt,
       ...(this.event.upstream === undefined ? {} : { upstream: this.event.upstream }),
       ...(this.event.routingReason === undefined ? {} : { routingReason: this.event.routingReason }),
@@ -135,9 +145,10 @@ export class AuditScope {
       ...(this.event.policyName === undefined ? {} : { policyName: this.event.policyName }),
       ...(this.event.policyDecision === undefined ? {} : { policyDecision: this.event.policyDecision }),
       ...(this.event.risk === undefined ? {} : { risk: this.event.risk }),
+      ...(this.event.identity === undefined ? {} : { identity: this.event.identity }),
       ...(this.event.routingEvidence === undefined ? {} : { routingEvidence: this.event.routingEvidence }),
       ...(this.event.arguments === undefined ? {} : { arguments: this.event.arguments }),
-      ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode })
+      ...(terminalResult.errorCode === undefined ? {} : { errorCode: terminalResult.errorCode })
     });
   }
 

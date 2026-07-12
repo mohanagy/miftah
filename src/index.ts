@@ -9,6 +9,9 @@ export { generateConfigSchema } from "./config/generate-json-schema.js";
 export { presetConfig } from "./config/presets.js";
 export type {
   AuditConfig,
+  IdentityConfig,
+  IdentityFingerprint,
+  IdentityProbeConfig,
   MiftahConfig,
   PolicyConfig,
   ProcessConfig,

@@ -24,6 +24,8 @@ export type UpstreamRequestErrorMapper = (error: unknown) => MiftahError | undef
 export class UpstreamSession {
   constructor(
     readonly profile: string,
+    /** Monotonically increasing manager generation for this live upstream session. */
+    readonly generation: number,
     private readonly client: Client,
     private readonly closeTransport: () => Promise<void>,
     private readonly activity?: UpstreamSessionActivity,

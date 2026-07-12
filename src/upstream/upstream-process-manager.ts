@@ -386,6 +386,7 @@ export class UpstreamProcessManager {
         upstreamTransport === "stdio" ? undefined : (error: unknown) => asRemoteError(profile, upstreamTransport, error);
       const session = new UpstreamSession(
         profile,
+        generation,
         client,
         () => client.close(),
         {

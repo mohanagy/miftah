@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
 import { expandEnvironmentReferences, expandEnvironmentReferencesWithSecretValues } from "../src/config/env-expand.js";
+import type { IdentityConfig } from "../src/config/types.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const policyNotFoundPattern = /POLICY_NOT_FOUND/u;
+const duplicateIdentityRiskPattern = /profiles\.work\.identity\.requiredForRisk/u;
+const identityProbeProviderPattern = /profiles\.work\.identity\.probe\.provider/u;
+const identityExpectedLoginPattern = /profiles\.work\.identity\.expected\.login/u;
+const insecureRemoteUrlPattern = /CONFIG_SCHEMA_INVALID.*upstream\.url/u;
 
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
@@ -23,6 +28,139 @@ describe("config foundation", () => {
     expect(
       expandEnvironmentReferences(config.profiles.work!.env!, { WORK_TOKEN: "secret-value" })
     ).toEqual({ API_TOKEN: "secret-value", ACCOUNT: "work" });
+  });
+
+  it("accepts an opt-in profile identity verifier for risky operations", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          identity: {
+            expected: { provider: "github", login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write", "destructive"]
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.identity).toEqual({
+      expected: { provider: "github", login: "mona" },
+      probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+      maxAgeMs: 60_000,
+      requiredForRisk: ["write", "destructive"]
+    });
+  });
+
+  it("rejects duplicate identity risk requirements", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected: { login: "mona" },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write", "write"]
+            }
+          }
+        }
+      })
+    ).toThrow(duplicateIdentityRiskPattern);
+  });
+
+  it.each([
+    ["organization", { organization: "github" }],
+    ["host", { host: "github.com" }]
+  ])("rejects a text identity probe that cannot verify %s", (field, expected) => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected,
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      })
+    ).toThrow(new RegExp(`profiles\\.work\\.identity\\.expected\\.${field}`, "u"));
+  });
+
+  it("rejects a text identity probe whose static provider differs from the expected provider", () => {
+    // This structurally type-checks; validateConfig must enforce provider equality at runtime.
+    const mismatchedTextProviderIdentity: IdentityConfig = {
+      expected: { provider: "github", login: "mona" },
+      probe: { tool: "whoami", resultFormat: "text", provider: "gitlab" },
+      maxAgeMs: 60_000
+    };
+
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: mismatchedTextProviderIdentity
+          }
+        }
+      })
+    ).toThrow(identityProbeProviderPattern);
+  });
+
+  it("rejects a static provider on a JSON identity probe", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected: { provider: "github", login: "mona" },
+              probe: { tool: "identity", resultFormat: "json", provider: "github" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      })
+    ).toThrow(identityProbeProviderPattern);
+  });
+
+  it("rejects a text identity probe that has no response-derived expected field", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected: { provider: "github" },
+              probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      })
+    ).toThrow(identityExpectedLoginPattern);
   });
 
   it("tracks values resolved from environment references regardless of their configuration key", () => {
@@ -124,7 +262,7 @@ describe("config foundation", () => {
         ...baseConfig,
         upstream: { transport: "streamable-http", url: insecureUrl }
       })
-    ).toThrow(/CONFIG_SCHEMA_INVALID.*upstream\.url/u);
+    ).toThrow(insecureRemoteUrlPattern);
     expect(() =>
       validateConfig({
         ...baseConfig,

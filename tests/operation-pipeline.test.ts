@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { access, mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,222 @@ import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
 describe("operation pipeline", () => {
+  it("blocks a configured risky operation before forwarding it when identity mismatches", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-identity-mismatch-"));
+    const createCountPath = join(directory, "create-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "personal",
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: "personal",
+            TEST_CREATE_ITEM_COUNT_PATH: createCountPath
+          },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "identity", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "create_item", arguments: { name: "x" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("IDENTITY_MISMATCH") }]
+      });
+      await expect(access(createCountPath)).rejects.toThrow();
+    } finally {
+      try {
+        await client.close();
+      } finally {
+        try {
+          await wrapper.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  it("records a safe verified identity status for a protected operation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-identity-audit-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "work", untrusted: "must-not-be-audited" })
+          },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "create_item", arguments: { name: "x" } })).toMatchObject({
+        content: [{ type: "text", text: "created:x" }]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const operation = events.find((event) => event.kind === "operation" && event.name === "create_item");
+      expect(operation).toMatchObject({
+        identity: {
+          status: "verified",
+          profile: "work",
+          upstream: "default",
+          expected: { login: "work" },
+          actual: { login: "work" }
+        }
+      });
+      expect(JSON.stringify(operation)).not.toContain("must-not-be-audited");
+    } finally {
+      try {
+        await client.close();
+      } finally {
+        try {
+          await wrapper.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  it("verifies named upstream writes against their exact override or inherited identity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-multi-upstream-identity-"));
+    const githubCreateCountPath = join(directory, "github-create-count");
+    const sentryCreateCountPath = join(directory, "sentry-create-count");
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          },
+          upstreams: {
+            github: {
+              env: {
+                TEST_INCLUDE_IDENTITY_TOOL: "true",
+                TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "github-work" }),
+                TEST_CREATE_ITEM_COUNT_PATH: githubCreateCountPath
+              },
+              identity: {
+                expected: { login: "github-work" },
+                probe: { tool: "identity", resultFormat: "json" },
+                maxAgeMs: 60_000,
+                requiredForRisk: ["write"]
+              }
+            },
+            sentry: {
+              env: {
+                TEST_INCLUDE_IDENTITY_TOOL: "true",
+                TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "work" }),
+                TEST_CREATE_ITEM_COUNT_PATH: sentryCreateCountPath
+              }
+            }
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } },
+      audit: { path: auditPath }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "github__create_item", arguments: { name: "github-item" } })).toMatchObject({
+        content: [{ type: "text", text: "created:github-item" }]
+      });
+      expect(await client.callTool({ name: "sentry__create_item", arguments: { name: "sentry-item" } })).toMatchObject({
+        content: [{ type: "text", text: "created:sentry-item" }]
+      });
+      expect(await readFile(githubCreateCountPath, "utf8")).toBe("1\n");
+      expect(await readFile(sentryCreateCountPath, "utf8")).toBe("1\n");
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation" && event.operation === "tools/call");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "create_item",
+            upstream: "github",
+            identity: expect.objectContaining({
+              status: "verified",
+              expected: { login: "github-work" },
+              actual: { login: "github-work" }
+            })
+          }),
+          expect.objectContaining({
+            name: "create_item",
+            upstream: "sentry",
+            identity: expect.objectContaining({
+              status: "verified",
+              expected: { login: "work" },
+              actual: { login: "work" }
+            })
+          })
+        ])
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("blocks confirmation-required proxied operations before forwarding them upstream", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-operation-confirm-"));
     const toolCountPath = join(directory, "tool-count");

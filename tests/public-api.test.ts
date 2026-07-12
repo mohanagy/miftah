@@ -10,6 +10,9 @@ import * as api from "../src/index.js";
 import type {
   AuditConfig,
   ConfigDiagnostic,
+  IdentityConfig,
+  IdentityFingerprint,
+  IdentityProbeConfig,
   MiftahConfig,
   MiftahErrorCode,
   MiftahErrorDetails,
@@ -57,6 +60,9 @@ const internalRuntimeExports = [
 const supportedTypeExports = [
   "AuditConfig",
   "ConfigDiagnostic",
+  "IdentityConfig",
+  "IdentityFingerprint",
+  "IdentityProbeConfig",
   "MiftahConfig",
   "MiftahErrorCode",
   "MiftahErrorDetails",
@@ -79,6 +85,9 @@ const supportedTypeExports = [
 type PublicTypeImportCoverage = [
   AuditConfig,
   ConfigDiagnostic,
+  IdentityConfig,
+  IdentityFingerprint,
+  IdentityProbeConfig,
   MiftahConfig,
   MiftahErrorCode,
   MiftahErrorDetails,
@@ -100,6 +109,118 @@ type PublicTypeImportCoverage = [
 
 void (undefined as unknown as PublicTypeImportCoverage);
 
+const validTextIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["write"]
+};
+
+const validDestructiveIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["destructive"]
+};
+
+const validWriteThenDestructiveIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["write", "destructive"]
+};
+
+const validDestructiveThenWriteIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["destructive", "write"]
+};
+
+const invalidDuplicateRiskIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  // @ts-expect-error Identity risk requirements must be unique.
+  requiredForRisk: ["write", "write"]
+};
+
+const validJsonIdentityConfig: IdentityConfig = {
+  expected: { organization: "lubab" },
+  probe: { tool: "identity", resultFormat: "json" },
+  maxAgeMs: 60_000
+};
+
+const validTextIdentityProbe: IdentityProbeConfig = {
+  tool: "whoami",
+  resultFormat: "text",
+  provider: "github"
+};
+
+const validJsonIdentityProbe: IdentityProbeConfig = {
+  tool: "identity",
+  resultFormat: "json"
+};
+
+// @ts-expect-error Text probes require an expected login.
+const invalidTextIdentityWithoutLogin: IdentityConfig = {
+  expected: { provider: "github" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error Text probes cannot verify an organization.
+const invalidTextIdentityOrganization: IdentityConfig = {
+  expected: { login: "mona", organization: "lubab" },
+  probe: { tool: "whoami", resultFormat: "text" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error Expected text providers require a static probe provider.
+const invalidTextIdentityProviderWithoutProbeProvider: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text" },
+  maxAgeMs: 60_000
+};
+
+const invalidJsonIdentityStaticProvider: IdentityConfig = {
+  expected: { login: "mona" },
+  // @ts-expect-error JSON probes derive their provider from the response.
+  probe: { tool: "identity", resultFormat: "json", provider: "github" },
+  maxAgeMs: 60_000
+};
+
+const invalidJsonIdentityEmptyExpected: IdentityConfig = {
+  // @ts-expect-error JSON probes require at least one expected fingerprint field.
+  expected: {},
+  probe: { tool: "identity", resultFormat: "json" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error JSON probes do not support a static provider.
+const invalidJsonIdentityProbe: IdentityProbeConfig = {
+  tool: "identity",
+  resultFormat: "json",
+  provider: "github"
+};
+
+void [
+  validTextIdentityConfig,
+  validDestructiveIdentityConfig,
+  validWriteThenDestructiveIdentityConfig,
+  validDestructiveThenWriteIdentityConfig,
+  invalidDuplicateRiskIdentityConfig,
+  validJsonIdentityConfig,
+  validTextIdentityProbe,
+  validJsonIdentityProbe,
+  invalidTextIdentityWithoutLogin,
+  invalidTextIdentityOrganization,
+  invalidTextIdentityProviderWithoutProbeProvider,
+  invalidJsonIdentityStaticProvider,
+  invalidJsonIdentityEmptyExpected,
+  invalidJsonIdentityProbe
+];
+
 describe("public library API", () => {
   it("exposes only the intentionally supported runtime API", () => {
     expect(Object.keys(api).sort()).toEqual([...supportedRuntimeExports].sort());
@@ -120,6 +241,9 @@ describe("public library API", () => {
     for (const name of [...supportedRuntimeExports, ...supportedTypeExports]) {
       expect(documentation).toContain(`\`${name}\``);
     }
+    expect(documentation).toContain(
+      "For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider."
+    );
   });
 
   it("uses the package version for wrapper and upstream MCP metadata", async () => {
