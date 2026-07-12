@@ -30,7 +30,7 @@ describe("routing context documentation contract", () => {
 
     expect(readme).toContain("[routing context](docs/config.md#routing-context)");
     expect(config).toContain("## Routing context");
-    expect(config).toContain("only runtime configuration authority");
+    expect(routingContext).toContain("only runtime configuration authority");
     expect(routingContext).toContain('"profiles": {');
     expect(routingContext).toContain("only top-level key");
     expect(routingContext).toContain("all values are strings");
