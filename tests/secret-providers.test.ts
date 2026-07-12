@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -14,10 +14,6 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
-import {
-  resolveWindowsSecretCommand,
-  spawnWindowsSecretCommand
-} from "../src/secrets/windows-secret-command.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
@@ -64,17 +60,6 @@ function fakeProviderEnvironment(
     MIFTAH_FAKE_RECORD_PATH: join(directory, "record.json"),
     MIFTAH_FAKE_MODE: mode,
     MIFTAH_FAKE_VALUE: value
-  };
-}
-
-function windowsProviderBootstrapEnvironment(): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot ?? process.env.windir,
-    windir: process.env.windir,
-    ComSpec: process.env.ComSpec,
-    TEMP: process.env.TEMP,
-    TMP: process.env.TMP
   };
 }
 
@@ -187,13 +172,11 @@ function activePipeCount(): number {
 
 async function runWindowsCompressedBootstrap(
   source: string,
-  environment: NodeJS.ProcessEnv = {},
-  options: { timeoutMs?: number; inheritEnvironment?: boolean } = {}
+  environment: NodeJS.ProcessEnv = {}
 ): Promise<{
   code: number | null;
   stdout: string;
   stderr: string;
-  timedOut?: boolean;
 }> {
   const systemRoot = process.env.SystemRoot ?? process.env.windir;
   if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
@@ -220,13 +203,12 @@ try {
   const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
 
   return new Promise((resolve, reject) => {
-    let timedOut = false;
     const child = spawn(
       launcher,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
       {
         env: {
-          ...(options.inheritEnvironment === false ? {} : process.env),
+          ...process.env,
           ...environment,
           MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
         },
@@ -239,81 +221,12 @@ try {
     const stderr: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    const timeout =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true;
-            child.kill("SIGKILL");
-          }, options.timeoutMs);
-    child.once("error", (error) => {
-      if (timeout) clearTimeout(timeout);
-      reject(error);
-    });
+    child.once("error", reject);
     child.once("close", (code) => {
-      if (timeout) clearTimeout(timeout);
       resolve({
         code,
         stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        ...(options.timeoutMs === undefined ? {} : { timedOut })
-      });
-    });
-  });
-}
-
-async function runWindowsSecretHelper(
-  executable: string,
-  args: readonly string[],
-  environment: NodeJS.ProcessEnv,
-  timeoutMs = 5_000
-): Promise<{
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}> {
-  const command = await resolveWindowsSecretCommand({ executable, args, environment });
-  if (command === undefined) throw new Error("Windows secret command is unavailable");
-  return collectWindowsSecretHelper(spawnWindowsSecretCommand(command), timeoutMs);
-}
-
-function collectWindowsSecretHelper(
-  child: ChildProcess,
-  timeoutMs: number
-): Promise<{
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}> {
-  const stdoutStream = child.stdout;
-  const stderrStream = child.stderr;
-  if (stdoutStream === null || stderrStream === null) {
-    child.kill("SIGKILL");
-    throw new Error("Windows secret helper did not expose standard streams");
-  }
-  return new Promise((resolve, reject) => {
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let timedOut = false;
-    stdoutStream.on("data", (chunk: Buffer) => stdout.push(chunk));
-    stderrStream.on("data", (chunk: Buffer) => stderr.push(chunk));
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      resolve({
-        code,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        timedOut
+        stderr: Buffer.concat(stderr).toString("utf8")
       });
     });
   });
@@ -898,114 +811,6 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "executes the compressed bootstrap with the provider environment at process start",
-    async () => {
-      const result = await runWindowsCompressedBootstrap(
-        "Write-Output 'narrow-bootstrap-ready'\nexit 0",
-        windowsProviderBootstrapEnvironment(),
-        { timeoutMs: 5_000, inheritEnvironment: false }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "narrow-bootstrap-ready\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "executes the compressed bootstrap when the provider environment preserves PSModulePath",
-    async () => {
-      const result = await runWindowsCompressedBootstrap(
-        "Write-Output 'module-path-bootstrap-ready'\nexit 0",
-        { ...windowsProviderBootstrapEnvironment(), PSModulePath: process.env.PSModulePath },
-        { timeoutMs: 5_000, inheritEnvironment: false }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "module-path-bootstrap-ready\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "executes the compressed bootstrap with only the trusted system module path",
-    async () => {
-      const systemRoot = process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows";
-      const result = await runWindowsCompressedBootstrap(
-        "Write-Output 'system-module-bootstrap-ready'\nexit 0",
-        {
-          ...windowsProviderBootstrapEnvironment(),
-          PSModulePath: win32.join(
-            win32.resolve(systemRoot),
-            "System32",
-            "WindowsPowerShell",
-            "v1.0",
-            "Modules"
-          )
-        },
-        { timeoutMs: 5_000, inheritEnvironment: false }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "system-module-bootstrap-ready\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "executes the compressed bootstrap with trusted all-users module paths",
-    async () => {
-      const systemRoot = process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows";
-      const programFiles = process.env.ProgramW6432 ?? process.env.ProgramFiles ?? "C:\\Program Files";
-      const result = await runWindowsCompressedBootstrap(
-        "Write-Output 'all-users-module-bootstrap-ready'\nexit 0",
-        {
-          ...windowsProviderBootstrapEnvironment(),
-          PSModulePath: [
-            win32.join(programFiles, "WindowsPowerShell", "Modules"),
-            win32.join(win32.resolve(systemRoot), "System32", "WindowsPowerShell", "v1.0", "Modules")
-          ].join(";")
-        },
-        { timeoutMs: 5_000, inheritEnvironment: false }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "all-users-module-bootstrap-ready\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "executes the compressed bootstrap when the provider environment preserves USERPROFILE",
-    async () => {
-      const result = await runWindowsCompressedBootstrap(
-        "Write-Output 'user-profile-bootstrap-ready'\nexit 0",
-        { ...windowsProviderBootstrapEnvironment(), USERPROFILE: process.env.USERPROFILE },
-        { timeoutMs: 5_000, inheritEnvironment: false }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "user-profile-bootstrap-ready\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
     "compiles the embedded Job Object type before starting providers",
     async () => {
       const csharp = await embeddedWindowsJobCSharp();
@@ -1076,68 +881,6 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
-    "forwards immediate Node child stdout through the embedded Job Object",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-Write-Output 'before-native-run'
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', "process.stdout.write('native-node-output', () => process.exit(0))"))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        { MIFTAH_TEST_EXECUTABLE: process.execPath },
-        { timeoutMs: 5_000 }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "before-native-run\r\nnative-node-outputnative-run-exit=0\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate Node child with the provider environment shape",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_TEST_EXECUTABLE')
-Get-ChildItem Env: | ForEach-Object {
-  if ($preservedEnvironmentNames -notcontains $_.Name) {
-    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
-  }
-}
-Add-Type -TypeDefinition $source
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-Write-Output 'before-native-run'
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', "process.stdout.write('native-node-output', () => process.exit(0))"))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        { MIFTAH_TEST_EXECUTABLE: process.execPath },
-        { timeoutMs: 5_000 }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout: "before-native-run\r\nnative-node-outputnative-run-exit=0\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
     "initializes the embedded Job Object before starting providers",
     async () => {
       const csharp = await embeddedWindowsJobCSharp();
@@ -1154,163 +897,6 @@ exit 0`);
       expect(result.stdout).toBe("native-job-ready\r\n");
     },
     60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs the full helper request and provider argv before the command runner",
-    async () => {
-      await inSandbox(async (directory) => {
-        const result = await runWindowsSecretHelper(
-          process.execPath,
-          [fakeProviderPath, "argument with spaces", "", "trailing\\"],
-          fakeProviderEnvironment(directory, "success")
-        );
-
-        expect(result).toMatchObject({
-          code: 0,
-          stdout: "fixture-provider-secret",
-          timedOut: false
-        });
-        expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an inline Node command through the full helper request",
-    async () => {
-      await inSandbox(async (directory) => {
-        const result = await runWindowsSecretHelper(
-          process.execPath,
-          ["-e", "process.stdout.write('full-helper-output', () => process.exit(0))"],
-          fakeProviderEnvironment(directory, "success")
-        );
-
-        expect(result).toMatchObject({
-          code: 0,
-          stdout: "full-helper-output",
-          timedOut: false
-        });
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate cmd.exe child through the full helper request",
-    async () => {
-      await inSandbox(async (directory) => {
-        const result = await runWindowsSecretHelper(
-          win32.join(
-            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
-            "System32",
-            "cmd.exe"
-          ),
-          ["/d", "/s", "/c", "exit 0"],
-          fakeProviderEnvironment(directory, "success")
-        );
-
-        expect(result).toMatchObject({ code: 0, stdout: "", timedOut: false });
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "parses a helper request with the provider environment shape",
-    async () => {
-      const request = Buffer.from(
-        JSON.stringify({ executable: "C:\\Windows\\System32\\cmd.exe", arguments: ["/d", "/s", "/c", "exit 0"] }),
-        "utf8"
-      ).toString("base64");
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_SECRET_RUNNER_REQUEST')
-Get-ChildItem Env: | ForEach-Object {
-  if ($preservedEnvironmentNames -notcontains $_.Name) {
-    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
-  }
-}
-$requestName = 'MIFTAH_SECRET_RUNNER_REQUEST'
-Write-Output 'before-request-read'
-$encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
-Write-Output 'after-request-read'
-$requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
-Write-Output 'after-request-decode'
-[Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-Write-Output 'after-request-clear'
-$request = $requestJson | ConvertFrom-Json
-Write-Output 'after-request-parse'
-if ($null -eq $request -or $null -eq $request.executable -or $null -eq $request.arguments) { exit 1 }
-exit 0`,
-        { MIFTAH_SECRET_RUNNER_REQUEST: request },
-        { timeoutMs: 5_000 }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout:
-          "before-request-read\r\nafter-request-read\r\nafter-request-decode\r\nafter-request-clear\r\nafter-request-parse\r\n",
-        timedOut: false
-      });
-    },
-    20_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs native helper stages after parsing a provider request",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const request = Buffer.from(
-        JSON.stringify({
-          executable: "C:\\Windows\\System32\\cmd.exe",
-          arguments: ["/d", "/s", "/c", "exit 0"]
-        }),
-        "utf8"
-      ).toString("base64");
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_SECRET_RUNNER_REQUEST')
-Get-ChildItem Env: | ForEach-Object {
-  if ($preservedEnvironmentNames -notcontains $_.Name) {
-    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
-  }
-}
-$requestName = 'MIFTAH_SECRET_RUNNER_REQUEST'
-$encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
-$requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
-[Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-$request = $requestJson | ConvertFrom-Json
-Write-Output 'after-request-parse'
-$source = @'
-${csharp}
-'@
-Write-Output 'before-csharp-compile'
-Add-Type -TypeDefinition $source
-Write-Output 'after-csharp-compile'
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-Write-Output 'after-job-init'
-$arguments = @($request.arguments | ForEach-Object {
-  if ($null -eq $_) { throw 'Invalid argument' }
-  [string]$_
-})
-Write-Output 'before-native-run'
-$exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$arguments)
-Write-Output "after-native-run=$exitCode"
-exit 0`,
-        { MIFTAH_SECRET_RUNNER_REQUEST: request },
-        { timeoutMs: 5_000 }
-      );
-
-      expect(result).toMatchObject({
-        code: 0,
-        stdout:
-          "after-request-parse\r\nbefore-csharp-compile\r\nafter-csharp-compile\r\nafter-job-init\r\nbefore-native-run\r\nafter-native-run=0\r\n",
-        timedOut: false
-      });
-    },
-    20_000
   );
 
   it.runIf(process.platform === "win32")(

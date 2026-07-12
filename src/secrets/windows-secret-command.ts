@@ -106,6 +106,7 @@ function containsNul(value: string): boolean {
 
 function helperEnvironment(environment: NodeJS.ProcessEnv, request: string): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...environment };
+  // Windows PowerShell can hang before its encoded bootstrap runs without this module-path setting.
   for (const name of ["SystemRoot", "windir", "ComSpec", "TEMP", "TMP", "PSModulePath"]) {
     if (environmentValue(result, name) === undefined) {
       const inherited = environmentValue(process.env, name);
