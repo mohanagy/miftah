@@ -113,7 +113,7 @@ Identity verification is an optional account-fingerprint check, not provider aut
 
 ## Secret handling
 
-Supported local references include environment variables (`${NAME}` and `secretref:env://NAME`), configured dotenv files (`secretref:dotenv://NAME`), and explicitly opt-in plaintext (`secretref:plain://...`). OS keychains and external secret CLIs are reserved extension points. Secrets are redacted from diagnostics, errors, stderr forwarding, audit entries, and tool responses.
+Supported local references include environment variables (`${NAME}` and `secretref:env://NAME`), configured dotenv files (`secretref:dotenv://NAME`), explicitly opt-in plaintext (`secretref:plain://...`), OS keychain entries (`secretref:keychain://<service>/<account>`), and 1Password fields (`secretref:op://<vault>/<item>/<field>`). External reference components are strictly percent-decoded once; keep credentials out of references and config files. Secrets are redacted from diagnostics, errors, stderr forwarding, audit entries, and tool responses. See [secret provider configuration](docs/config.md#secret-providers) for platform requirements, bounded execution, and noninteractive 1Password behavior.
 
 Use `miftah doctor` to inspect config and upstream readiness without printing process environment values.
 

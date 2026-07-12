@@ -33,6 +33,35 @@ Before loading secret sources or starting an upstream, Miftah validates that `de
 
 Profile `env` values can reference `${ENV_NAME}` or `secretref:env://ENV_NAME`. Put dotenv paths in `secrets.envFiles`; paths are resolved relative to the config file. Profile descriptions, tags, policy names, and upstream-specific `args` and `cwd` overrides are non-secret. Per-upstream `env` and `headers` values may contain credentials and use the same secret-resolution and redaction safeguards as profile-level values.
 
+## Secret providers
+
+`secrets` is a strict configuration object:
+
+```json
+{
+  "secrets": {
+    "envFiles": [".env"],
+    "providerTimeoutMs": 10000,
+    "allowPlaintextSecrets": false
+  }
+}
+```
+
+`providerTimeoutMs` is an optional deadline for one external provider command. It is an integer from **100 ms** through **120,000 ms** and defaults to **10 seconds**. The deadline includes provider launcher startup, lookup, and cleanup. Cancellation returns a stable secret-provider cancellation error; a deadline returns a timeout error. Miftah never retries an external lookup automatically.
+
+The supported external reference forms are exactly:
+
+| Provider | Reference | Lookup |
+| --- | --- | --- |
+| OS keychain | `secretref:keychain://<service>/<account>` | macOS Keychain, Linux Secret Service, or Windows Credential Manager |
+| 1Password CLI | `secretref:op://<vault>/<item>/<field>` | `op read --no-newline op://<vault>/<item>/<field>` |
+
+Each component is percent-decoded exactly once and must be nonempty, at most 255 characters, well-formed Unicode, and free of controls, dot segments, `@`, `?`, `#`, `/`, and `\\`. Use percent encoding for spaces or literal percent signs. Plaintext references remain opt-in only and never place their payload in a diagnostic.
+
+On macOS Miftah runs the fixed `/usr/bin/security find-generic-password -s <service> -a <account> -w` form. On Linux it resolves `secret-tool` from an absolute `PATH` entry and runs `secret-tool lookup service <service> account <account>`. On Windows it reads the generic credential named `miftah:keychain:<percent-encoded-service>:<percent-encoded-account>` through a fixed Credential Manager helper. Miftah never executes these commands through a shell.
+
+For `secretref:op`, noninteractive launches require an inherited `OP_SERVICE_ACCOUNT_TOKEN`; Miftah fails closed before invoking `op` when it is absent. Interactive 1Password desktop/CLI authentication is allowed only when both standard input and output are TTYs, and remains subject to `providerTimeoutMs`. Miftah registers a successful provider value and the inherited service-account token with the shared redactor before either can cross an error, audit, health, or response boundary.
+
 ## Remote upstream transports
 
 Use `transport: "streamable-http"` for new remote MCP servers. The historical `transport: "http"` value remains a Streamable HTTP compatibility alias. `transport: "sse"` supports legacy SSE servers but is deprecated and should be used only while an upstream has not migrated. `transport: "stdio"` remains the local-process default.

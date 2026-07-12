@@ -33,7 +33,7 @@ The server advertises `resources.listChanged` and `prompts.listChanged` with `to
 Configuration and runtime concerns are intentionally separate:
 
 - `config/` parses and validates JSON, expands paths, and provides schema output.
-- `secrets/` resolves local references and owns redaction.
+- `secrets/` owns a typed provider contract for environment, dotenv, opt-in plaintext, OS keychain, and 1Password resolution; it canonicalizes external references, bounds child processes, and registers each resolved value with shared redaction before returning it.
 - `profiles/` owns active profile state and switching restrictions.
 - `routing/` resolves explicit rules and safe fallbacks.
 - `policy/` classifies proxied-operation risk and returns allow/deny/confirm decisions.
