@@ -1097,6 +1097,47 @@ exit 0`);
   );
 
   it.runIf(process.platform === "win32")(
+    "parses a helper request with the provider environment shape",
+    async () => {
+      const request = Buffer.from(
+        JSON.stringify({ executable: "C:\\Windows\\System32\\cmd.exe", arguments: ["/d", "/s", "/c", "exit 0"] }),
+        "utf8"
+      ).toString("base64");
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_SECRET_RUNNER_REQUEST')
+Get-ChildItem Env: | ForEach-Object {
+  if ($preservedEnvironmentNames -notcontains $_.Name) {
+    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
+  }
+}
+$requestName = 'MIFTAH_SECRET_RUNNER_REQUEST'
+Write-Output 'before-request-read'
+$encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
+Write-Output 'after-request-read'
+$requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
+Write-Output 'after-request-decode'
+[Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+Write-Output 'after-request-clear'
+$request = $requestJson | ConvertFrom-Json
+Write-Output 'after-request-parse'
+if ($null -eq $request -or $null -eq $request.executable -or $null -eq $request.arguments) { exit 1 }
+exit 0`,
+        { MIFTAH_SECRET_RUNNER_REQUEST: request },
+        { timeoutMs: 5_000 }
+      );
+
+      expect(result).toMatchObject({
+        code: 0,
+        stdout:
+          "before-request-read\r\nafter-request-read\r\nafter-request-decode\r\nafter-request-clear\r\nafter-request-parse\r\n",
+        timedOut: false
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "preserves provider arguments and output through the Job Object helper",
     async () => {
       await inSandbox(async (directory) => {
