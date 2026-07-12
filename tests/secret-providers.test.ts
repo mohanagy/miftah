@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -14,6 +14,10 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
+import {
+  resolveWindowsSecretCommand,
+  spawnWindowsSecretCommand
+} from "../src/secrets/windows-secret-command.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
@@ -240,6 +244,63 @@ try {
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
         ...(options.timeoutMs === undefined ? {} : { timedOut })
+      });
+    });
+  });
+}
+
+async function runWindowsSecretHelper(
+  executable: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  timeoutMs = 5_000
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const command = await resolveWindowsSecretCommand({ executable, args, environment });
+  if (command === undefined) throw new Error("Windows secret command is unavailable");
+  return collectWindowsSecretHelper(spawnWindowsSecretCommand(command), timeoutMs);
+}
+
+function collectWindowsSecretHelper(
+  child: ChildProcess,
+  timeoutMs: number
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const stdoutStream = child.stdout;
+  const stderrStream = child.stderr;
+  if (stdoutStream === null || stderrStream === null) {
+    child.kill("SIGKILL");
+    throw new Error("Windows secret helper did not expose standard streams");
+  }
+  return new Promise((resolve, reject) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let timedOut = false;
+    stdoutStream.on("data", (chunk: Buffer) => stdout.push(chunk));
+    stderrStream.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        timedOut
       });
     });
   });
@@ -972,6 +1033,27 @@ exit 0`);
       expect(result.stdout).toBe("native-job-ready\r\n");
     },
     60_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "runs the full helper request and provider argv before the command runner",
+    async () => {
+      await inSandbox(async (directory) => {
+        const result = await runWindowsSecretHelper(
+          process.execPath,
+          [fakeProviderPath, "argument with spaces", "", "trailing\\"],
+          fakeProviderEnvironment(directory, "success")
+        );
+
+        expect(result).toMatchObject({
+          code: 0,
+          stdout: "fixture-provider-secret",
+          timedOut: false
+        });
+        expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
+      });
+    },
+    20_000
   );
 
   it.runIf(process.platform === "win32")(
