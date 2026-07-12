@@ -179,6 +179,27 @@ describe("config runtime parity", () => {
     });
   });
 
+  it("accepts a bounded secret-provider timeout", () => {
+    const config = validateConfig(
+      baseConfig({
+        secrets: { providerTimeoutMs: 15_000 }
+      })
+    );
+
+    expect(config.secrets?.providerTimeoutMs).toBe(15_000);
+  });
+
+  it.each([0, 99, 120_001, 1.5])("rejects an out-of-range secret-provider timeout of %s", (providerTimeoutMs) => {
+    const error = validationError(
+      baseConfig({
+        secrets: { providerTimeoutMs }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("secrets.providerTimeoutMs");
+  });
+
   it("requires automatic recovery when a restart limit is configured", () => {
     const error = validationError(
       baseConfig({

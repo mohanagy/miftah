@@ -21,6 +21,7 @@ export type {
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
+  SecretsConfig,
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,

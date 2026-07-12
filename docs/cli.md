@@ -43,7 +43,7 @@ miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 
 ### `doctor`
 
-`doctor` checks configuration, secret references, redaction, permissions, configured audit storage, executable availability, upstream startup, discovery, and clean shutdown where applicable. Its checks have stable `code`, `status`, `target`, `explanation`, and `remediation` fields.
+`doctor` checks configuration, secret references, external provider availability, redaction, permissions, configured audit storage, executable availability, upstream startup, discovery, and clean shutdown where applicable. Its checks have stable `code`, `status`, `target`, `explanation`, and `remediation` fields.
 
 ```sh
 miftah doctor --config github.json
@@ -51,6 +51,8 @@ miftah doctor --json --config github.json
 ```
 
 The JSON report intentionally omits resolved secret values, raw configuration paths, configured upstream command arguments, and its synthetic redaction canary.
+
+`DOCTOR_SECRET_PROVIDERS` is an availability-only check: it verifies configured keychain/1Password platform or executable prerequisites without looking up a secret. Doctor then uses target-scoped secret resolution for each profile/upstream readiness probe. A locked, unavailable, or malformed secret reference therefore produces a redacted target-local `DOCTOR_SECRET_REFERENCES` error without preventing unrelated healthy targets from starting and being checked.
 
 When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as `skipped`. A configured verified identity is `pass`; mismatch, unsupported, or failed required identity verification is `error`; and nonverified optional identity verification is `warning`. Identity doctor output never includes raw probe output or fingerprint values.
 

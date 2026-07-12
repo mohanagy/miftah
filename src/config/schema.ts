@@ -300,7 +300,8 @@ const toolingSchema = z
 const secretsSchema = z
   .object({
     envFiles: z.array(z.string()).optional(),
-    allowPlaintextSecrets: z.boolean().optional()
+    allowPlaintextSecrets: z.boolean().optional(),
+    providerTimeoutMs: z.number().int().min(100).max(120_000).optional()
   })
   .strict();
 
