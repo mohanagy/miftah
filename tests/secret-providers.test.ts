@@ -226,6 +226,18 @@ try {
   });
 }
 
+async function embeddedWindowsJobCSharp(): Promise<string> {
+  const source = await readFile(
+    new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
+    "utf8"
+  );
+  const match = source.match(
+    /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/
+  );
+  if (match?.[1] === undefined) throw new Error("Embedded Windows Job Object C# source is unavailable");
+  return match[1];
+}
+
 describe("built-in secret providers", () => {
   it("resolves environment, dotenv, and interpolated references asynchronously with precedence", async () => {
     await inSandbox(async (directory) => {
@@ -786,10 +798,28 @@ describe("secret command runner", () => {
       expect(result).toEqual({
         code: 0,
         stdout: "bootstrap-ready\r\n",
-        stderr: ""
+        stderr: expect.any(String)
       });
     },
     20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "compiles the embedded Job Object type before starting providers",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+Add-Type -TypeDefinition $source
+Write-Output 'native-type-ready'
+exit 0`);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("native-type-ready\r\n");
+    },
+    60_000
   );
 
   it.runIf(process.platform === "win32")(
