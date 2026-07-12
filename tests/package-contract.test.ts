@@ -394,18 +394,23 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type AuditConfig, type ConfigDiagnostic, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
             "",
             "type SupportedTypes = [",
-            "  AuditConfig, ConfigDiagnostic, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, MiftahConfig,",
+            "  ActiveProfileStateScope, AuditConfig, ConfigDiagnostic, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, MiftahConfig,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
             "  PolicyConfig, ProcessConfig, ProfileConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
-            "  RoutingRule, SecurityConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UpstreamConfig,",
+            "  RoutingRule, SecurityConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UpstreamConfig,",
             "  ValidatedRoutingConfig",
             "];",
             "declare const types: SupportedTypes;",
             "const version: string = MIFTAH_VERSION;",
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
+            'const globalScope: ActiveProfileStateScope = "global";',
+            'const validState: StateConfig = { persistActiveProfile: true, scope: "workspace" };',
+            'const validSessionState: StateConfig = { scope: "session" };',
+            "// @ts-expect-error Durable profile state requires explicit opt-in.",
+            'const invalidState: StateConfig = { scope: "global" };',
             'const validTextIdentity: IdentityConfig = { expected: { provider: "github", login: "mona" }, probe: { tool: "whoami", resultFormat: "text", provider: "github" }, maxAgeMs: 60_000, requiredForRisk: ["write"] };',
             "// This structurally type-checks; validateConfig must enforce provider equality at runtime.",
             'const mismatchedTextProviderIdentity: IdentityConfig = { expected: { provider: "github", login: "mona" }, probe: { tool: "whoami", resultFormat: "text", provider: "gitlab" }, maxAgeMs: 60_000 };',
@@ -455,7 +460,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, runtime, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, validJsonIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, runtime, globalScope, validState, validSessionState, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, validJsonIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(

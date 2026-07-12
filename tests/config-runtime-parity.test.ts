@@ -56,7 +56,6 @@ describe("config runtime parity", () => {
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: 1 } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: "profile" } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: true } }],
-    ["state.persistActiveProfile", { state: { persistActiveProfile: true } }],
     ["state.persistActiveProfile", { state: { persistActiveProfile: "true" } }],
     ["state.path", { state: { path: ".miftah-state.json" } }],
     ["state.path", { state: { path: 1 } }],
@@ -69,11 +68,21 @@ describe("config runtime parity", () => {
     expect(error.message).toContain(path);
   });
 
-  it("rejects an empty state declaration as an unsupported option", () => {
-    const error = validationError(baseConfig({ state: {} }));
+  it("accepts explicit active-profile state scopes and requires durable scopes to opt in", () => {
+    expect(
+      validateConfig(baseConfig({ state: { persistActiveProfile: true, scope: "workspace" } })).state
+    ).toEqual({ persistActiveProfile: true, scope: "workspace" });
+    expect(validateConfig(baseConfig({ state: { scope: "session" } })).state).toEqual({ scope: "session" });
 
-    expect(error.code).toBe(unsupportedConfigOption);
-    expect(error.message).toContain("state");
+    const processPersistence = validationError(
+      baseConfig({ state: { persistActiveProfile: true, scope: "process" } })
+    );
+    const missingDurableOptIn = validationError(baseConfig({ state: { scope: "global" } }));
+
+    expect(processPersistence.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(processPersistence.message).toContain("state.scope");
+    expect(missingDurableOptIn.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(missingDurableOptIn.message).toContain("state.persistActiveProfile");
   });
 
   it.each([
@@ -145,7 +154,8 @@ describe("config runtime parity", () => {
         failureMode: "fail-open"
       },
       tooling: { collisionStrategy: "prefix-upstream", toolRiskOverrides: { write_tool: "write" } },
-      secrets: { envFiles: [".env"], allowPlaintextSecrets: false }
+      secrets: { envFiles: [".env"], allowPlaintextSecrets: false },
+      state: { persistActiveProfile: true, scope: "workspace" }
     });
 
     expect(config.routing?.mode).toBe("hybrid");

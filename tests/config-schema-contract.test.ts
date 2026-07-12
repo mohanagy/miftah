@@ -39,6 +39,35 @@ const invalidAuditConfig: MiftahConfig = {
 };
 void invalidAuditConfig;
 
+const validStateConfig: MiftahConfig = {
+  ...publicConfig,
+  state: { persistActiveProfile: true, scope: "workspace" }
+};
+void validStateConfig;
+
+const invalidInMemoryStateConfig: MiftahConfig = {
+  ...publicConfig,
+  // @ts-expect-error In-memory scopes cannot opt in to durable persistence.
+  state: { persistActiveProfile: true, scope: "session" }
+};
+void invalidInMemoryStateConfig;
+
+const invalidDurableStateConfig: MiftahConfig = {
+  ...publicConfig,
+  // @ts-expect-error Durable scopes require explicit persistence opt-in.
+  state: { scope: "global" }
+};
+void invalidDurableStateConfig;
+
+const invalidStateConfig: MiftahConfig = {
+  ...publicConfig,
+  state: {
+    // @ts-expect-error Arbitrary profile-state paths are intentionally unsupported.
+    path: "state.json"
+  }
+};
+void invalidStateConfig;
+
 interface SchemaNode {
   const?: boolean | string;
   minimum?: number;
@@ -83,13 +112,13 @@ describe("published config schema", () => {
     const audit = root?.audit?.properties;
     const tooling = root?.tooling?.properties;
     const secrets = root?.secrets?.properties;
+    const state = root?.state?.properties;
 
     expect(schema).toMatchObject({
       $schema: "https://json-schema.org/draft/2019-09/schema#",
       title: "Miftah configuration",
       additionalProperties: false
     });
-    expect(root).not.toHaveProperty("state");
     expect(root).not.toHaveProperty("ui");
     expect(routing).toMatchObject({ mode: { const: "hybrid" } });
     expect(routing).not.toHaveProperty("plugins");
@@ -125,6 +154,12 @@ describe("published config schema", () => {
     expect(secrets).toMatchObject({
       providerTimeoutMs: { minimum: 100, maximum: 120_000 }
     });
+    expect(state).toMatchObject({
+      persistActiveProfile: { type: "boolean" },
+      scope: { enum: ["process", "session", "workspace", "global"] }
+    });
+    expect(state).not.toHaveProperty("path");
+    expect(root?.state?.additionalProperties).toBe(false);
     expect(root?.routing?.additionalProperties).toBe(false);
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);
@@ -137,5 +172,52 @@ describe("published config schema", () => {
     expect(schema.allOf).toContainEqual({
       oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]
     });
+  });
+
+  it("requires an explicit opt-in for durable active-profile state in generated JSON Schema", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+
+    expect(schema.allOf).toEqual(
+      expect.arrayContaining([
+        {
+          if: {
+            required: ["state"],
+            properties: {
+              state: {
+                required: ["persistActiveProfile"],
+                properties: { persistActiveProfile: { const: true } }
+              }
+            }
+          },
+          then: {
+            properties: {
+              state: {
+                required: ["scope"],
+                properties: { scope: { enum: ["workspace", "global"] } }
+              }
+            }
+          }
+        },
+        {
+          if: {
+            required: ["state"],
+            properties: {
+              state: {
+                required: ["scope"],
+                properties: { scope: { enum: ["workspace", "global"] } }
+              }
+            }
+          },
+          then: {
+            properties: {
+              state: {
+                required: ["persistActiveProfile"],
+                properties: { persistActiveProfile: { const: true } }
+              }
+            }
+          }
+        }
+      ])
+    );
   });
 });

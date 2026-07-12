@@ -8,6 +8,44 @@ export function generateConfigSchema(): Record<string, unknown> {
     allOf: [
       {
         oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]
+      },
+      {
+        if: {
+          required: ["state"],
+          properties: {
+            state: {
+              required: ["persistActiveProfile"],
+              properties: { persistActiveProfile: { const: true } }
+            }
+          }
+        },
+        then: {
+          properties: {
+            state: {
+              required: ["scope"],
+              properties: { scope: { enum: ["workspace", "global"] } }
+            }
+          }
+        }
+      },
+      {
+        if: {
+          required: ["state"],
+          properties: {
+            state: {
+              required: ["scope"],
+              properties: { scope: { enum: ["workspace", "global"] } }
+            }
+          }
+        },
+        then: {
+          properties: {
+            state: {
+              required: ["persistActiveProfile"],
+              properties: { persistActiveProfile: { const: true } }
+            }
+          }
+        }
       }
     ],
     title: "Miftah configuration"

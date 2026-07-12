@@ -305,9 +305,20 @@ const secretsSchema = z
   })
   .strict();
 
+const activeProfileStateScopeSchema = z.enum(["process", "session", "workspace", "global"]);
+
+const publicStateSchema = z
+  .object({
+    persistActiveProfile: z.boolean().optional(),
+    scope: activeProfileStateScopeSchema.optional()
+  })
+  .strict()
+  .superRefine(validateProfileState);
+
 const stateSchema = z
   .object({
-    persistActiveProfile: unsupportedOptionSchema,
+    persistActiveProfile: z.boolean().optional(),
+    scope: activeProfileStateScopeSchema.optional(),
     path: unsupportedOptionSchema
   })
   .strict();
@@ -427,6 +438,33 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
   }
 }
 
+function validateProfileState(
+  value: { persistActiveProfile?: boolean; scope?: "process" | "session" | "workspace" | "global" },
+  context: z.RefinementCtx,
+  pathPrefix: readonly string[] = []
+): void {
+  const stateScope = value.scope ?? "process";
+  const durableStateScope = stateScope === "workspace" || stateScope === "global";
+  if (value.persistActiveProfile === true && !durableStateScope) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      [...pathPrefix, "scope"],
+      "persistActiveProfile requires workspace or global scope",
+      "Set state.scope to workspace or global, or disable persistence."
+    );
+  }
+  if (durableStateScope && value.persistActiveProfile !== true) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      [...pathPrefix, "persistActiveProfile"],
+      "workspace and global profile state require explicit persistence opt-in",
+      "Set state.persistActiveProfile to true or use process or session scope."
+    );
+  }
+}
+
 /** The strict, supported configuration surface used for runtime output and JSON Schema generation. */
 export const miftahPublicConfigSchema = z
   .object({
@@ -443,7 +481,8 @@ export const miftahPublicConfigSchema = z
     process: publicProcessSchema.optional(),
     audit: publicAuditSchema.optional(),
     tooling: publicToolingSchema.optional(),
-    secrets: secretsSchema.optional()
+    secrets: secretsSchema.optional(),
+    state: publicStateSchema.optional()
   })
   .strict()
   .superRefine(validateConfigReferences);
@@ -555,15 +594,14 @@ export const miftahConfigSchema = z
       }
     }
 
-    const stateOptions = ["persistActiveProfile", "path"] as const;
-    if (value.state !== undefined && stateOptions.every((option) => value.state?.[option] === undefined)) {
-      rejectUnsupportedOption(["state"], "persistent profile state is not implemented");
-    } else {
-      for (const option of stateOptions) {
-        if (value.state?.[option] !== undefined) {
-          rejectUnsupportedOption(["state", option], "persistent profile state is not implemented");
-        }
-      }
+    if (value.state?.path !== undefined) {
+      rejectUnsupportedOption(
+        ["state", "path"],
+        "custom profile-state paths are not supported; choose workspace or global scope"
+      );
+    }
+    if (value.state !== undefined) {
+      validateProfileState(value.state, context, ["state"]);
     }
     if (value.ui !== undefined) {
       rejectUnsupportedOption(["ui"], "a Miftah UI is not implemented");

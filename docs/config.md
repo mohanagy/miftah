@@ -12,7 +12,7 @@ Miftah accepts config version `"1"` only and does not silently migrate config fi
 
 For strict starter configurations, use the versioned `init` catalog rather than treating generic command examples as trusted upstream recommendations. The [preset and client compatibility matrix](presets-and-clients.md) records exact pins, required inputs, upstream provenance, and the validation boundary for every catalog entry.
 
-The generated JSON Schema enforces static structure, including exactly one of `upstream` or `upstreams`. References to names declared in dynamic maps cannot be represented by JSON Schema alone; run `miftah validate` in addition to editor validation to verify profile, policy, routing, lock, and per-profile upstream references.
+The generated JSON Schema enforces static structure, including exactly one of `upstream` or `upstreams` and the active-profile state opt-in rules. References to names declared in dynamic maps cannot be represented by JSON Schema alone; run `miftah validate` in addition to editor validation to verify profile, policy, routing, lock, and per-profile upstream references.
 
 With `upstreams`, each profile may override `env`, `headers`, `args`, or `cwd` under a named upstream. Miftah namespaces discovered tools as `<upstream>__<tool>` so one wrapper can safely expose several providers. Tool discovery uses the active profile. Clients receive `notifications/tools/list_changed` after a profile change, restart, or upstream recovery that changes the public tool surface and must re-run `tools/list` before relying on cached tools or schemas. If a routing rule selects another profile, Miftah forwards only tools with an identical client-visible schema in both profiles; otherwise it returns `TOOL_SCHEMA_MISMATCH` instead of forwarding a call whose schema the client did not see.
 
@@ -179,7 +179,35 @@ Audit logging writes local JSONL when a path is configured. Every supported MCP 
 
 ## Runtime-supported controls
 
-Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules` and `routing.fallback` to control its behavior. Routing plugins, profile metadata and matchers, persistent state, UI settings, and configurable management-tool namespaces are not available yet.
+Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules` and `routing.fallback` to control its behavior. Routing plugins, profile metadata and matchers, UI settings, and configurable management-tool namespaces are not available yet.
+
+### Active profile state
+
+Active-profile persistence is disabled by default. With no `state` section, Miftah uses in-memory `process` scope. To opt in to a durable selection, configure one of the durable scopes explicitly:
+
+```json
+{
+  "state": {
+    "persistActiveProfile": true,
+    "scope": "workspace"
+  }
+}
+```
+
+`state.scope` is configuration-owned: MCP callers can switch a profile but cannot select a scope or a file path.
+
+| Scope | Lifetime and boundary |
+| --- | --- |
+| `process` | In memory for the lifetime of this Miftah runtime. |
+| `session` | In memory and reset to the configured default (or lock) when a new MCP transport connects. The current STDIO runtime accepts one client transport at a time. |
+| `workspace` | Durable beside the resolved configuration file at `.miftah/state/<config-identity>.json`. |
+| `global` | Durable in the platform user-state directory under `miftah/state/<config-identity>.json`: `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS, or absolute `$XDG_STATE_HOME` / `~/.local/state` elsewhere. |
+
+`workspace` and `global` require `persistActiveProfile: true`; setting persistence for `process` or `session`, or choosing a durable scope without that opt-in, is invalid. Custom `state.path` values are rejected. The config-identity component is a hash of the resolved configuration path: global state is deliberately shared only by the same configuration, so one workspace or client cannot silently alter another configuration's active profile.
+
+Only safe selection metadata is stored: a format version, scope, config identity, profile name, and ISO timestamp. No secret, raw configuration path, provider output, or other MCP request input is persisted. Writes use a unique same-directory temporary file, sync it, then atomically rename it; state directories and files use owner-only permissions where the platform supports them. Concurrent writers can replace a completed selection, but never leave a partial state record.
+
+At startup, Miftah validates a stored profile against the current configuration. A `security.lockToProfile` always wins. Corrupt state, an unknown profile, or an unreadable state file falls back safely to the configured default; `miftah_current_profile` reports its `selectionSource`, `selectedAt`, `scope`, and, when applicable, `stateDiagnostic` (`PROFILE_STATE_INVALID`, `PROFILE_STATE_STALE`, or `PROFILE_STATE_UNAVAILABLE`). `miftah_reset_profile` persists the configured default for a durable scope.
 
 ### Process lifecycle
 

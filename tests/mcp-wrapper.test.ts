@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { expectExactlyOneNotification } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
+import type { AuditScope } from "../src/audit/audit-trail.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
@@ -129,6 +130,46 @@ class DropInitializedNotificationTransport implements Transport {
   async close(): Promise<void> {
     await this.delegate.close();
   }
+}
+
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => resolvePromise?.()
+  };
+}
+
+class DelayedProfileManager extends ProfileManager {
+  readonly firstSwitchEntered = deferred();
+  readonly releaseFirstSwitch = deferred();
+  private firstSwitch = true;
+
+  override async switchPersisted(profile: string) {
+    if (this.firstSwitch) {
+      this.firstSwitch = false;
+      this.firstSwitchEntered.resolve();
+      await this.releaseFirstSwitch.promise;
+    }
+    return super.switchPersisted(profile);
+  }
+}
+
+interface ProfileManagementHost {
+  handleManagement: (
+    name: string,
+    args: Record<string, unknown>,
+    audit: AuditScope,
+    source: { activeProfile: string; revision: number }
+  ) => Promise<unknown>;
+  routing: {
+    resolve(input: { toolName: string; args: Record<string, unknown>; context: Record<string, unknown> }): {
+      profile: string;
+    };
+  };
 }
 
 describe("Miftah MCP wrapper", () => {
@@ -1944,6 +1985,151 @@ describe("Miftah MCP wrapper", () => {
       await rm(callCountPath, { force: true });
       if (originalProfile === undefined) delete process.env.MIFTAH_PROFILE;
       else process.env.MIFTAH_PROFILE = originalProfile;
+    }
+  });
+
+  it("restores a workspace-scoped active profile and exposes safe selection metadata", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-state-wrapper-"));
+    const configPath = join(directory, "miftah.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "1",
+        name: "accounts",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+        profiles: { work: {}, personal: {} },
+        state: { persistActiveProfile: true, scope: "workspace" }
+      })
+    );
+
+    let firstRuntime: Awaited<ReturnType<typeof createMiftahRuntime>> | undefined;
+    let firstClient: Client | undefined;
+    let secondRuntime: Awaited<ReturnType<typeof createMiftahRuntime>> | undefined;
+    let secondClient: Client | undefined;
+    try {
+      firstRuntime = await createMiftahRuntime(configPath);
+      const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
+      firstClient = new Client({ name: "profile-state-first", version: "1.0.0" });
+      await Promise.all([firstRuntime.connect(firstServerTransport), firstClient.connect(firstClientTransport)]);
+
+      await firstClient.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(parseJsonToolResult(await firstClient.callTool({ name: "miftah_current_profile", arguments: {} }))).toMatchObject({
+        activeProfile: "personal",
+        selectionSource: "mcp-switch",
+        scope: "workspace",
+        selectedAt: expect.any(String)
+      });
+      await firstClient.close();
+      firstClient = undefined;
+      await firstRuntime.close();
+      firstRuntime = undefined;
+
+      secondRuntime = await createMiftahRuntime(configPath);
+      const [secondClientTransport, secondServerTransport] = InMemoryTransport.createLinkedPair();
+      secondClient = new Client({ name: "profile-state-second", version: "1.0.0" });
+      await Promise.all([secondRuntime.connect(secondServerTransport), secondClient.connect(secondClientTransport)]);
+
+      expect(parseJsonToolResult(await secondClient.callTool({ name: "miftah_current_profile", arguments: {} }))).toMatchObject({
+        activeProfile: "personal",
+        selectionSource: "persisted-workspace",
+        scope: "workspace",
+        selectedAt: expect.any(String)
+      });
+    } finally {
+      await firstClient?.close();
+      await firstRuntime?.close();
+      await secondClient?.close();
+      await secondRuntime?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("resets a session-scoped selection when a new MCP connection opens", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true },
+      state: { scope: "session" }
+    });
+    const profiles = new ProfileManager(config, config.security, {
+      ...config.state,
+      configPath: join(tmpdir(), "miftah-session-state.json")
+    });
+    await profiles.initialize();
+    await profiles.switchPersisted("personal");
+
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, profiles, upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "session-profile-state", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_current_profile", arguments: {} }))).toMatchObject({
+        activeProfile: "work",
+        selectionSource: "configured-default",
+        scope: "session"
+      });
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "whoami" } }))).toMatchObject({
+        profile: "work",
+        reason: "active-profile"
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("serializes concurrent profile transitions with their routing side effects", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true }
+    });
+    const profiles = new DelayedProfileManager(config, config.security);
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, profiles, upstreams);
+    const host = wrapper as unknown as ProfileManagementHost;
+    const audit = { update: () => undefined } as unknown as AuditScope;
+
+    try {
+      const switchToWork = host.handleManagement(
+        "miftah_use_profile",
+        { profile: "work" },
+        audit,
+        { activeProfile: "work", revision: 0 }
+      );
+      await profiles.firstSwitchEntered.promise;
+
+      const secondHandlerEntered = deferred();
+      const originalHandleManagement = host.handleManagement.bind(wrapper);
+      let managementCalls = 1;
+      host.handleManagement = async (...args) => {
+        managementCalls += 1;
+        if (managementCalls === 2) secondHandlerEntered.resolve();
+        return originalHandleManagement(...args);
+      };
+      const switchToPersonal = host.handleManagement(
+        "miftah_use_profile",
+        { profile: "personal" },
+        audit,
+        { activeProfile: "work", revision: 0 }
+      );
+      await secondHandlerEntered.promise;
+      profiles.releaseFirstSwitch.resolve();
+      await Promise.all([switchToWork, switchToPersonal]);
+
+      expect(profiles.current().activeProfile).toBe("personal");
+      expect(host.routing.resolve({ toolName: "whoami", args: {}, context: {} })).toMatchObject({ profile: "personal" });
+    } finally {
+      await wrapper.close();
     }
   });
 });
