@@ -56,7 +56,6 @@ describe("config runtime parity", () => {
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: 1 } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: "profile" } }],
     ["tooling.upstreamToolNamespace", { tooling: { upstreamToolNamespace: true } }],
-    ["state.persistActiveProfile", { state: { persistActiveProfile: "true" } }],
     ["state.path", { state: { path: ".miftah-state.json" } }],
     ["state.path", { state: { path: 1 } }],
     ["ui", { ui: { enabled: true } }],
@@ -78,11 +77,14 @@ describe("config runtime parity", () => {
       baseConfig({ state: { persistActiveProfile: true, scope: "process" } })
     );
     const missingDurableOptIn = validationError(baseConfig({ state: { scope: "global" } }));
+    const malformedPersistence = validationError(baseConfig({ state: { persistActiveProfile: "true" } }));
 
     expect(processPersistence.code).toBe("CONFIG_SCHEMA_INVALID");
     expect(processPersistence.message).toContain("state.scope");
     expect(missingDurableOptIn.code).toBe("CONFIG_SCHEMA_INVALID");
     expect(missingDurableOptIn.message).toContain("state.persistActiveProfile");
+    expect(malformedPersistence.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(malformedPersistence.message).toContain("state.persistActiveProfile");
   });
 
   it.each([
