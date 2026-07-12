@@ -718,6 +718,22 @@ it.each([
 });
 
 describe("secret command runner", () => {
+  it.runIf(process.platform === "win32")(
+    "preserves provider arguments and output through the Job Object helper",
+    async () => {
+      await inSandbox(async (directory) => {
+        const result = await runSecretCommand({
+          executable: process.execPath,
+          args: [fakeProviderPath, "argument with spaces", "", "trailing\\"],
+          environment: fakeProviderEnvironment(directory, "success")
+        });
+
+        expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+        expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
+      });
+    }
+  );
+
   it.each([
         ["sleep", { timeoutMs: providerCommandTimeout(20) }, "timeout"],
         ["sleep", { signal: AbortSignal.abort() }, "cancelled"],
