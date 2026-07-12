@@ -54,6 +54,36 @@ The supported routing fallback values are:
 - `ask`: return `ROUTING_AMBIGUOUS` when no unique rule applies.
 - `block`: reject requests that do not match a rule.
 
+## Routing context
+
+The explicit `--config` file is the only runtime configuration authority. Miftah never auto-loads a second configuration file. It treats a discovered `.miftahrc.json` or non-runtime `miftah.json` as a metadata-only project marker only when it has this exact shape:
+
+```json
+{
+  "profiles": {
+    "<wrapper-name>": "<profile-name>"
+  }
+}
+```
+
+`<wrapper-name>` is the trusted runtime configuration's `name`, and `<profile-name>` must name one of its configured profiles. A marker cannot configure an upstream, policy, header, environment value, audit setting, secret source, or any other Miftah option; it does not merge with runtime configuration. Miftah reads only bounded known metadata files while walking from the process working directory to an applicable local boundary and ignores malformed, irrelevant, oversized, or out-of-boundary files.
+
+The metadata-only collector can provide rules with `context.*` values from:
+
+- validated MCP client `file:` roots and the process working directory;
+- `MIFTAH_PROFILE` and `MIFTAH_PROJECT`;
+- the strict project marker above;
+- bounded `package.json` name/repository and workspace metadata;
+- the local Git `remote.origin.url`.
+
+`MIFTAH_PROFILE` must name a configured profile or routing fails closed. `MIFTAH_PROJECT` is contextual metadata only: Miftah does not interpret it as a path or probe the filesystem from it. URI-like project and repository values, Git origins, and roots are structurally sanitized before evidence crosses an MCP or audit boundary.
+
+Selection order is environment hint, project-marker hint, configured rule, then fallback. A distinct set of marker profiles or matching rule profiles returns `ROUTING_AMBIGUOUS`; Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
+
+MCP roots are optional client metadata. After initialization, Miftah calls `roots/list` only when the client advertises `roots` capability, stores a URI-only snapshot for that connection, and refreshes it only on an advertised `notifications/roots/list_changed`. An unsupported or failed roots request yields an empty-root snapshot; Miftah does not poll roots or request them for every operation.
+
+`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision, and sanitized `evidence`. Proxied operation audit records carry the same snapshot as additive `routingEvidence`, including an ambiguity that prevents forwarding. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
+
 ## Operation routing and policy
 
 Miftah applies one safety pipeline to every proxied upstream tool call, resource read, and prompt retrieval. It captures the active profile once at request start, resolves the routing rule using that immutable fallback, evaluates the selected profile's policy before resolving an aggregate route or forwarding, redacts the result or error, and records the terminal operation metadata in audit output.
@@ -62,7 +92,7 @@ Routing rules receive a tool's original arguments unchanged. Resource reads expo
 
 Policies classify these operation names as `read`, `write`, or `destructive` using configurable overrides and conservative name heuristics. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the operation.
 
-Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
+Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 
 `audit.failureMode` accepts `"fail-closed"` (the default) or `"fail-open"`. Fail-closed verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared; a terminal write error also surfaces as `AUDIT_WRITE_FAILED`. Because terminal writes occur after an upstream operation, that error can leave a non-idempotent operation's outcome indeterminate; do not blindly retry it. Fail-open preserves the request result and exposes a redacted `AUDIT_WRITE_FAILED` entry through `miftah_health`; it should be used only when availability is more important than complete auditability.
 
