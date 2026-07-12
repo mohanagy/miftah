@@ -971,12 +971,17 @@ describe("Miftah MCP wrapper", () => {
       const content = result.content[0];
       expect(content).toMatchObject({ type: "text" });
       if (content?.type !== "text") throw new Error("Expected a text result.");
-      expect(JSON.parse(content.text)).toEqual({
+      const current = JSON.parse(content.text) as Record<string, unknown>;
+      expect(current).toMatchObject({
         activeProfile: "work",
         defaultProfile: "work",
+        selectionSource: "configured-default",
+        selectedAt: expect.any(String),
+        scope: "process",
         routingMode: "hybrid",
         identity: [{ status: "unconfigured", profile: "work", upstream: "default" }]
       });
+      expect(current).not.toHaveProperty("revision");
     } finally {
       await client.close();
       await wrapper.close();
