@@ -1,4 +1,5 @@
 import type { PolicyAction, RiskLevel } from "../policy/policy-types.js";
+import type { RoutingContextEvidence } from "../routing/routing-types.js";
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
@@ -36,6 +37,7 @@ export interface AuditEvent {
   policyName?: string;
   policyDecision?: PolicyAction;
   risk?: RiskLevel;
+  routingEvidence?: RoutingContextEvidence;
   arguments?: unknown;
   errorCode?: string;
 }
