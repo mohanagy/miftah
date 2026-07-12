@@ -1,11 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
+import { gzipSync } from "node:zlib";
 import { resolveExecutablePath } from "./executable-resolver.js";
 
 const maximumRequestBytes = 16 * 1024;
 const maximumArgumentCount = 128;
 const requestEnvironmentName = "MIFTAH_SECRET_RUNNER_REQUEST";
+const helperSourceEnvironmentName = "MIFTAH_SECRET_RUNNER_HELPER";
 
 export interface WindowsSecretCommand {
   readonly executable: string;
@@ -16,12 +18,6 @@ export interface WindowsSecretCommand {
 export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
   readonly launcher: string;
 }
-
-const windowsJobBootstrap = String.raw`$ErrorActionPreference = 'Stop'
-$source = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrEmpty($source)) { exit 1 }
-& ([ScriptBlock]::Create($source))`;
-const encodedWindowsJobBootstrap = Buffer.from(windowsJobBootstrap, "utf16le").toString("base64");
 
 /**
  * Resolves Windows provider executables before spawn so Node never performs a
@@ -53,11 +49,9 @@ export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand)
       env: helperEnvironment(command.environment, request),
       shell: false,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"] as const
+      stdio: ["ignore", "pipe", "pipe"] as const
     }
   );
-  child.stdin.on("error", () => undefined);
-  child.stdin.end(windowsJobHelper, "utf8");
   return child;
 }
 
@@ -119,6 +113,7 @@ function helperEnvironment(environment: NodeJS.ProcessEnv, request: string): Nod
     }
   }
   setEnvironmentValue(result, requestEnvironmentName, request);
+  setEnvironmentValue(result, helperSourceEnvironmentName, encodedWindowsJobHelper);
   return result;
 }
 
@@ -482,3 +477,25 @@ public static class MiftahSecretJob
 } catch {
   exit 1
 }`;
+
+const encodedWindowsJobHelper = gzipSync(windowsJobHelper).toString("base64");
+const windowsJobBootstrap = String.raw`$ErrorActionPreference = 'Stop'
+$helperName = '${helperSourceEnvironmentName}'
+try {
+  $encodedHelper = [Environment]::GetEnvironmentVariable($helperName, [EnvironmentVariableTarget]::Process)
+  [Environment]::SetEnvironmentVariable($helperName, $null, [EnvironmentVariableTarget]::Process)
+  if ([string]::IsNullOrEmpty($encodedHelper) -or $encodedHelper.Length -gt 8192) { exit 1 }
+  $input = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedHelper), $false)
+  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress, $false)
+  $reader = [IO.StreamReader]::new($gzip, [Text.Encoding]::UTF8)
+  try {
+    $source = $reader.ReadToEnd()
+  } finally {
+    $reader.Dispose()
+  }
+  if ([string]::IsNullOrEmpty($source)) { exit 1 }
+  & ([ScriptBlock]::Create($source))
+} catch {
+  exit 1
+}`;
+const encodedWindowsJobBootstrap = Buffer.from(windowsJobBootstrap, "utf16le").toString("base64");

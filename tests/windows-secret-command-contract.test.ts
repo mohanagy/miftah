@@ -12,6 +12,9 @@ describe("Windows secret command contract", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
     expect(source).toContain("const windowsJobBootstrap = String.raw`");
+    expect(source).toContain('import { gzipSync } from "node:zlib";');
+    expect(source).toContain('const encodedWindowsJobHelper = gzipSync(windowsJobHelper).toString("base64");');
+    expect(source).toContain("setEnvironmentValue(result, helperSourceEnvironmentName, encodedWindowsJobHelper);");
     expect(source).toContain(
       'const encodedWindowsJobBootstrap = Buffer.from(windowsJobBootstrap, "utf16le").toString("base64");'
     );
