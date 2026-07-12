@@ -375,7 +375,9 @@ export class MiftahServer {
           arguments: args
         },
         (audit) =>
-          isManagementTool ? this.handleManagement(name, args, audit) : this.handleUpstreamTool(name, args, audit, source),
+          isManagementTool
+            ? this.handleManagement(name, args, audit, source)
+            : this.handleUpstreamTool(name, args, audit, source),
         (error) => textResult(error.message, true),
         (result) =>
           result.isError
@@ -539,7 +541,8 @@ export class MiftahServer {
   private async handleManagement(
     name: string,
     args: Record<string, unknown>,
-    audit: AuditScope
+    audit: AuditScope,
+    source: CapturedProfileState
   ): Promise<CallToolResult> {
     if (name === "miftah_list_profiles") {
       const activeProfile = this.profiles.current().activeProfile;
@@ -614,14 +617,15 @@ export class MiftahServer {
     if (name === "miftah_route_preview") {
       const toolName = requiredString(args, "toolName");
       const snapshot = await this.provideRoutingContext();
+      const evidence = this.redactor.redactForAudit(snapshot.evidence);
+      audit.update({ routingEvidence: evidence });
       const route = this.routing.resolve({
         toolName,
         args: isRecord(args.args) ? args.args : {},
         context: snapshot.context,
         profileHints: snapshot.profileHints
-      });
+      }, source.activeProfile);
       const profile = this.profiles.get(route.profile);
-      const evidence = this.redactor.redactForAudit(snapshot.evidence);
       const policy = this.policy.evaluate(profile.policy, toolName);
       audit.update({
         profile: route.profile,

@@ -251,6 +251,120 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("records collector evidence when route preview context is ambiguous", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-preview-ambiguous-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const snapshot: RoutingContextSnapshot = {
+      context: {},
+      evidence: {
+        cwd: join(directory, "project"),
+        fileRoots: [],
+        marker: { path: join(directory, "project", ".miftahrc.json") }
+      },
+      profileHints: [
+        {
+          profile: "work",
+          source: "project-marker",
+          evidence: { kind: "marker", path: join(directory, "work", ".miftahrc.json") }
+        },
+        {
+          profile: "personal",
+          source: "project-marker",
+          evidence: { kind: "marker", path: join(directory, "personal", ".miftahrc.json") }
+        }
+      ]
+    };
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager, async () => snapshot);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "whoami" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("ROUTING_AMBIGUOUS") }]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.find((event) => event.kind === "operation" && event.operation === "management/route-preview")).toMatchObject({
+        status: "ambiguous",
+        errorCode: "ROUTING_AMBIGUOUS",
+        routingEvidence: snapshot.evidence
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("keeps a route preview bound to its captured fallback profile", async () => {
+    let resolveSnapshotStarted: () => void = () => undefined;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      resolveSnapshotStarted = resolve;
+    });
+    let releaseSnapshot: () => void = () => undefined;
+    const snapshotGate = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
+    const snapshot: RoutingContextSnapshot = {
+      context: {},
+      evidence: { cwd: process.cwd(), fileRoots: [] },
+      profileHints: []
+    };
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager, async () => {
+      resolveSnapshotStarted();
+      await snapshotGate;
+      return snapshot;
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const preview = client.callTool({ name: "miftah_route_preview", arguments: { toolName: "whoami" } });
+      await snapshotStarted;
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      releaseSnapshot();
+
+      const previewResult = CallToolResultSchema.parse(await preview);
+      const previewContent = previewResult.content[0];
+      if (previewContent?.type !== "text") throw new Error("Expected route preview text.");
+      expect(JSON.parse(previewContent.text)).toMatchObject({ profile: "work", reason: "active-profile" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("blocks destructive calls when runtime policy lookup misses an explicitly named policy", async () => {
     const config: MiftahConfig = {
       version: "1",
