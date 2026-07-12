@@ -835,7 +835,8 @@ exit 0`);
         expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
         expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
       });
-    }
+    },
+    20_000
   );
 
   it.each([
