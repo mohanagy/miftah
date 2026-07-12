@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -13,6 +14,7 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
+import { resolveWindowsSecretCommand, spawnWindowsSecretCommand } from "../src/secrets/windows-secret-command.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
@@ -782,6 +784,34 @@ describe("secret command runner", () => {
 
     await expect(result).resolves.toBe(0);
     expect(Buffer.concat(stdout).toString("utf8")).toContain("powershell-stdin-probe");
+  });
+
+  it.runIf(process.platform === "win32")("rejects a missing executable inside the Job Object helper", async () => {
+    await inSandbox(async (directory) => {
+      const command = await resolveWindowsSecretCommand({
+        executable: join(directory, "missing-provider.exe"),
+        args: [],
+        environment: fakeProviderEnvironment(directory, "success")
+      });
+      expect(command).toBeDefined();
+
+      const child = spawnWindowsSecretCommand(command!);
+      if (child.stdout === null || child.stderr === null) {
+        child.kill();
+        throw new Error("Job Object helper did not expose standard streams");
+      }
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      const [code] = await once(child, "close");
+
+      expect({
+        code,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: Buffer.concat(stdout).toString("utf8")
+      }).toMatchObject({ code: 1 });
+    });
   });
 
   it.each([
