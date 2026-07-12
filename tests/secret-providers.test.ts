@@ -1057,6 +1057,26 @@ exit 0`);
   );
 
   it.runIf(process.platform === "win32")(
+    "runs an inline Node command through the full helper request",
+    async () => {
+      await inSandbox(async (directory) => {
+        const result = await runWindowsSecretHelper(
+          process.execPath,
+          ["-e", "process.stdout.write('full-helper-output', () => process.exit(0))"],
+          fakeProviderEnvironment(directory, "success")
+        );
+
+        expect(result).toMatchObject({
+          code: 0,
+          stdout: "full-helper-output",
+          timedOut: false
+        });
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "preserves provider arguments and output through the Job Object helper",
     async () => {
       await inSandbox(async (directory) => {
