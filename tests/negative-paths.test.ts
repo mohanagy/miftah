@@ -36,28 +36,20 @@ describe("negative integration paths", () => {
     }
   });
 
-  it("reports missing environment secret references with SECRET_ENV_MISSING", () => {
+  it("reports missing environment secret references with SECRET_ENV_MISSING", async () => {
     const resolver = new SecretResolver({ environment: {} });
-    let failure: unknown;
-    try {
-      resolver.resolveValue("secretref:env://MIFTAH_MISSING_NEGATIVE_PATH_SECRET");
-    } catch (error) {
-      failure = error;
-    }
 
-    expectMiftahError(failure, "SECRET_ENV_MISSING");
+    await expect(resolver.resolveValue("secretref:env://MIFTAH_MISSING_NEGATIVE_PATH_SECRET")).rejects.toMatchObject({
+      code: "SECRET_ENV_MISSING"
+    });
   });
 
-  it("rejects unsupported secret reference providers with SECRET_PROVIDER_FAILED", () => {
+  it("rejects unsupported secret reference providers with SECRET_PROVIDER_FAILED", async () => {
     const resolver = new SecretResolver({ environment: {} });
-    let failure: unknown;
-    try {
-      resolver.resolveValue("secretref:unsupported://credential");
-    } catch (error) {
-      failure = error;
-    }
 
-    expectMiftahError(failure, "SECRET_PROVIDER_FAILED");
+    await expect(resolver.resolveValue("secretref:unsupported://credential")).rejects.toMatchObject({
+      code: "SECRET_PROVIDER_FAILED"
+    });
   });
 
   it("rejects a malformed MCP initialize response without exposing configured secrets", async () => {

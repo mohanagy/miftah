@@ -13,57 +13,61 @@ export interface ResolvedRuntimeConfig {
 /** Loads a configuration and resolves every supported secret-bearing configuration map. */
 export async function resolveRuntimeConfig(configPath: string): Promise<ResolvedRuntimeConfig> {
   const config = await loadConfig(configPath);
+  const redactor = new SecretRedactor();
   const resolver = new SecretResolver({
     envFiles: config.secrets?.envFiles,
-    allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets
+    allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets,
+    redactor
   });
   await resolver.load();
   const secretValues = new Set<string>();
-  const resolveMap = (values: Record<string, string> | undefined): Record<string, string> | undefined => {
+  const resolveMap = async (
+    values: Record<string, string> | undefined
+  ): Promise<Record<string, string> | undefined> => {
     if (!values) return values;
-    const resolved = resolver.resolveMapWithSecretValues(values);
+    const resolved = await resolver.resolveMapWithSecretValues(values);
     for (const value of resolved.secretValues) secretValues.add(value);
     return resolved.values;
   };
   const profiles = Object.fromEntries(
-    Object.entries(config.profiles).map(([name, profile]) => [
+    await Promise.all(Object.entries(config.profiles).map(async ([name, profile]) => [
       name,
       {
         ...profile,
-        env: resolveMap(profile.env),
-        headers: resolveMap(profile.headers),
+        env: await resolveMap(profile.env),
+        headers: await resolveMap(profile.headers),
         upstreams: profile.upstreams
           ? Object.fromEntries(
-              Object.entries(profile.upstreams).map(([upstreamName, override]) => [
+              await Promise.all(Object.entries(profile.upstreams).map(async ([upstreamName, override]) => [
                 upstreamName,
                 {
                   ...override,
-                  env: resolveMap(override.env),
-                  headers: resolveMap(override.headers)
+                  env: await resolveMap(override.env),
+                  headers: await resolveMap(override.headers)
                 }
-              ])
+              ]))
             )
           : profile.upstreams
       }
-    ])
+    ]))
   );
   const upstreams = config.upstreams
     ? Object.fromEntries(
-        Object.entries(config.upstreams).map(([name, upstream]) => [
+        await Promise.all(Object.entries(config.upstreams).map(async ([name, upstream]) => [
           name,
           {
             ...upstream,
-            env: resolveMap(upstream.env),
-            headers: resolveMap(upstream.headers)
+            env: await resolveMap(upstream.env),
+            headers: await resolveMap(upstream.headers)
           }
-        ])
+        ]))
       )
     : config.upstreams;
   const upstream = config.upstream
     ? {
         ...config.upstream,
-        env: resolveMap(config.upstream.env),
-        headers: resolveMap(config.upstream.headers)
+        env: await resolveMap(config.upstream.env),
+        headers: await resolveMap(config.upstream.headers)
       }
     : undefined;
   const resolvedConfig = { ...config, profiles, upstreams, upstream };
@@ -72,6 +76,6 @@ export async function resolveRuntimeConfig(configPath: string): Promise<Resolved
     config: resolvedConfig,
     upstream,
     secretValues: values,
-    redactor: new SecretRedactor(values)
+    redactor
   };
 }

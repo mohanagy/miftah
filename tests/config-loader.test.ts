@@ -25,11 +25,11 @@ describe("config loading and secret resolution", () => {
     const config = await loadConfig(configFile);
     const resolver = new SecretResolver({ envFiles: [envFile], environment: {} });
     await resolver.load();
-    expect(resolver.resolveMap(config.profiles.work!.env!)).toEqual({ TOKEN: "from-dotenv" });
+    await expect(resolver.resolveMap(config.profiles.work!.env!)).resolves.toEqual({ TOKEN: "from-dotenv" });
   });
 
-  it("rejects plaintext secret references unless explicitly enabled", () => {
+  it("rejects plaintext secret references unless explicitly enabled", async () => {
     const resolver = new SecretResolver({ environment: {}, allowPlaintextSecrets: false });
-    expect(() => resolver.resolveValue("secretref:plain://visible")).toThrow(/PLAINTEXT/);
+    await expect(resolver.resolveValue("secretref:plain://visible")).rejects.toThrow(/PLAINTEXT/);
   });
 });
