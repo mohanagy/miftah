@@ -30,6 +30,8 @@ import type {
   RoutingContextSnapshot
 } from "../../routing/routing-types.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
+import { IdentityManager } from "../../identity/identity-manager.js";
+import type { IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
 import type { AuditStatus } from "../../audit/audit-types.js";
@@ -66,6 +68,7 @@ const managementTools: Tool[] = [
   tool("miftah_validate_config", "Validate the loaded wrapper configuration."),
   tool("miftah_list_upstream_tools", "List tools discovered from an upstream profile.", ["profile"]),
   tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
+  tool("miftah_verify_identity", "Explicitly verify configured upstream identity.", [], ["profile", "upstream"]),
   tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"])
 ];
 
@@ -95,13 +98,14 @@ export function resolveClientVisibleToolName(
   return name;
 }
 
-function tool(name: string, description: string, required: string[] = []): Tool {
+function tool(name: string, description: string, required: string[] = [], optional: string[] = []): Tool {
+  const fields = [...new Set([...required, ...optional])];
   return {
     name,
     description,
     inputSchema: {
       type: "object",
-      properties: required.reduce<Record<string, { type: string }>>((result, key) => {
+      properties: fields.reduce<Record<string, { type: string }>>((result, key) => {
         result[key] = { type: key === "toolName" ? "string" : "string" };
         return result;
       }, {}),
@@ -154,6 +158,7 @@ export class MiftahServer {
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private readonly toolRegistry: ToolRegistry;
   private readonly operationPipeline: OperationPipeline;
+  private readonly identities: IdentityManager;
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
   private readonly restartingProfiles = new Map<string, Promise<void>>();
@@ -205,6 +210,7 @@ export class MiftahServer {
     );
     this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile);
     this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {});
+    this.identities = new IdentityManager(config);
     this.toolRegistry = new ToolRegistry(
       (profile) => this.discoverTools(profile),
       (name, upstreamName) => this.exposedToolName(name, upstreamName)
@@ -229,14 +235,18 @@ export class MiftahServer {
       });
     }
     this.auditTrail = new AuditTrail(config.name, this.audit);
-    this.upstreams.addLifecycleListener((event) => this.recordUpstreamLifecycle(event));
+    this.upstreams.addLifecycleListener((event) => {
+      this.identities.invalidate(event.profile, event.upstreamName);
+      this.recordUpstreamLifecycle(event);
+    });
     this.operationPipeline = new OperationPipeline({
       profiles,
       routing: this.routing,
       policy: this.policy,
       upstreams,
       redactor: this.redactor,
-      routingContext: this.provideRoutingContext
+      routingContext: this.provideRoutingContext,
+      identities: this.identities
     });
     this.server.oninitialized = () => this.handleClientInitialized();
     this.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
@@ -528,6 +538,7 @@ export class MiftahServer {
           }
           return {
             upstreamName: this.auditUpstreamName(target.upstreamName),
+            identityUpstreamName: target.upstreamName,
             name: target.originalName,
             execute: (session) => session.callTool({ name: target.originalName, arguments: args }),
             redact: (result) => result
@@ -557,7 +568,8 @@ export class MiftahServer {
         JSON.stringify({
           activeProfile: current.activeProfile,
           defaultProfile: current.defaultProfile,
-          routingMode: this.config.routing?.mode ?? "hybrid"
+          routingMode: this.config.routing?.mode ?? "hybrid",
+          identity: this.identityStatuses(current.activeProfile)
         })
       );
     }
@@ -597,7 +609,10 @@ export class MiftahServer {
             ? { available: true }
             : { available: false, reason: this.resourcePromptProxy.reason },
           audit: this.auditTrail.health(),
-          upstreams: this.upstreams.listHealth()
+          upstreams: this.upstreams.listHealth(),
+          identity: Object.keys(this.config.profiles)
+            .sort()
+            .flatMap((profile) => this.identityStatuses(profile))
         })
       );
     }
@@ -613,6 +628,39 @@ export class MiftahServer {
       audit.update({ name: profile, profile });
       await this.restartUpstreamProfile(profile);
       return textResult("Profile restarted.");
+    }
+    if (name === "miftah_verify_identity") {
+      const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
+      this.profiles.get(profile);
+      const requestedUpstream = optionalString(args, "upstream");
+      const targetUpstreams = this.identityTargetUpstreams(requestedUpstream);
+      audit.update({
+        name: requestedUpstream ?? profile,
+        profile,
+        ...(requestedUpstream === undefined ? {} : { upstream: requestedUpstream })
+      });
+      const statuses = await Promise.all(
+        targetUpstreams.map(async (upstreamName) => {
+          const current = this.identities.status(profile, upstreamName);
+          if (current.status === "unconfigured") return current;
+          let session: UpstreamSession;
+          try {
+            session = await this.upstreams.get(profile, upstreamName);
+          } catch {
+            return this.identities.recordAcquisitionFailure(profile, upstreamName);
+          }
+          return this.identities.verify(profile, upstreamName, session, { force: true });
+        })
+      );
+      const identity = statuses
+        .map((status) => this.redactor.redactForAudit(status))
+        .sort((left, right) => left.upstream.localeCompare(right.upstream));
+      audit.update({ identity });
+      const failure = identity.find((status) => status.status !== "verified");
+      if (failure) {
+        audit.setResult({ status: "failure", errorCode: identityAuditErrorCode(failure) });
+      }
+      return textResult(JSON.stringify({ profile, identity }));
     }
     if (name === "miftah_route_preview") {
       const toolName = requiredString(args, "toolName");
@@ -635,7 +683,7 @@ export class MiftahServer {
         risk: policy.risk,
         routingEvidence: evidence
       });
-      return textResult(JSON.stringify({ ...route, policy, evidence }));
+      return textResult(JSON.stringify({ ...route, policy, evidence, identity: this.identityStatuses(route.profile) }));
     }
     throw new MiftahError("TOOL_NOT_FOUND", `TOOL_NOT_FOUND: management tool '${name}' is not registered`);
   }
@@ -647,6 +695,20 @@ export class MiftahServer {
   private upstreamNames(): (string | undefined)[] {
     if (this.upstreams instanceof MultiUpstreamProcessManager) return this.upstreams.listUpstreams();
     return [undefined];
+  }
+
+  private identityStatuses(profile: string) {
+    return this.upstreamNames()
+      .map((upstreamName) => this.redactor.redactForAudit(this.identities.status(profile, upstreamName)))
+      .sort((left, right) => left.upstream.localeCompare(right.upstream));
+  }
+
+  private identityTargetUpstreams(requestedUpstream?: string): (string | undefined)[] {
+    const configured = this.upstreamNames();
+    if (requestedUpstream === undefined) return configured;
+    if (requestedUpstream === "default" && configured.length === 1 && configured[0] === undefined) return [undefined];
+    if (configured.includes(requestedUpstream)) return [requestedUpstream];
+    throw new MiftahError("UPSTREAM_NOT_FOUND", `UPSTREAM_NOT_FOUND: upstream '${requestedUpstream}' is not configured`);
   }
 
   private auditUpstreamName(upstreamName?: string): string | undefined {
@@ -805,6 +867,7 @@ export class MiftahServer {
           const auditUpstream = this.auditUpstreamName(upstreamName);
           return {
             ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
+            ...(upstreamName === undefined ? {} : { identityUpstreamName: upstreamName }),
             name: params.uri,
             execute: (session) => session.readResource(params),
             redact: redactDirectReadResult
@@ -834,6 +897,7 @@ export class MiftahServer {
           const auditUpstream = this.auditUpstreamName(upstreamName);
           return {
             ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
+            ...(upstreamName === undefined ? {} : { identityUpstreamName: upstreamName }),
             name: params.name,
             execute: (session) => session.getPrompt(params),
             redact: redactDirectPromptResult
@@ -910,6 +974,7 @@ export class MiftahServer {
     registry.assertResourceEpoch(profile, epoch);
     return {
       upstreamName: route.upstreamName,
+      identityUpstreamName: route.upstreamName,
       name: route.originalUri,
       execute: (session) => session.readResource({ ...params, uri: route.originalUri }),
       redact: (result) => registry.redactReadResult(route, result, epoch)
@@ -939,6 +1004,7 @@ export class MiftahServer {
     registry.assertPromptEpoch(profile, epoch);
     return {
       upstreamName: route.upstreamName,
+      identityUpstreamName: route.upstreamName,
       name: route.originalName,
       execute: (session) => session.getPrompt({ ...params, name: route.originalName }),
       redact: (result) => registry.redactPromptResult(route, result, epoch)
@@ -1163,6 +1229,16 @@ function requiredString(args: Record<string, unknown>, key: string): string {
     throw new MiftahError("CONFIG_SCHEMA_INVALID", `CONFIG_SCHEMA_INVALID: '${key}' must be a non-empty string`);
   }
   return value;
+}
+
+function optionalString(args: Record<string, unknown>, key: string): string | undefined {
+  if (args[key] === undefined) return undefined;
+  return requiredString(args, key);
+}
+
+function identityAuditErrorCode(status: IdentityStatus): string {
+  if (status.status === "unconfigured") return "IDENTITY_NOT_CONFIGURED";
+  return status.errorCode ?? "IDENTITY_VERIFICATION_FAILED";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

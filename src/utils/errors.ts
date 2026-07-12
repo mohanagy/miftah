@@ -43,7 +43,11 @@ export type MiftahErrorCode =
   | "PROMPT_COLLISION"
   | "PROMPT_NOT_FOUND"
   | "PROMPT_CURSOR_INVALID"
-  | "PROMPT_DISCOVERY_INVALIDATED";
+  | "PROMPT_DISCOVERY_INVALIDATED"
+  | "IDENTITY_NOT_CONFIGURED"
+  | "IDENTITY_MISMATCH"
+  | "IDENTITY_PROBE_UNSUPPORTED"
+  | "IDENTITY_VERIFICATION_FAILED";
 
 export interface MiftahErrorDetails {
   readonly diagnostics?: readonly ConfigDiagnostic[];

@@ -1,6 +1,7 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { randomUUID } from "node:crypto";
 import {
   CallToolResultSchema,
   ListRootsRequestSchema,
@@ -20,6 +21,7 @@ import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
+import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
@@ -69,6 +71,15 @@ function withoutMiftahProfile(): () => void {
     if (profile === undefined) delete process.env.MIFTAH_PROFILE;
     else process.env.MIFTAH_PROFILE = profile;
   };
+}
+
+function parseJsonToolResult(result: unknown): Record<string, unknown> {
+  const parsed = CallToolResultSchema.parse(result);
+  const content = parsed.content[0];
+  if (content?.type !== "text") throw new Error("Expected a text tool result.");
+  const value: unknown = JSON.parse(content.text);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object tool result.");
+  return value as Record<string, unknown>;
 }
 
 class DropInitializedNotificationTransport implements Transport {
@@ -121,6 +132,477 @@ class DropInitializedNotificationTransport implements Transport {
 }
 
 describe("Miftah MCP wrapper", () => {
+  it("reports configured identity status without probing upstreams from management surfaces", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-identity-management-"));
+    const callCountPath = join(directory, "tool-call-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_CALL_TOOL_COUNT_PATH: callCountPath },
+          identity: {
+            expected: { provider: "github", login: "work" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const current = parseJsonToolResult(await client.callTool({ name: "miftah_current_profile", arguments: {} }));
+      const health = parseJsonToolResult(await client.callTool({ name: "miftah_health", arguments: {} }));
+      const preview = parseJsonToolResult(
+        await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "create_item" } })
+      );
+
+      const expectedStatus = {
+        status: "not-verified",
+        profile: "work",
+        upstream: "default",
+        expected: { provider: "github", login: "work" }
+      };
+      expect(current.identity).toEqual([expectedStatus]);
+      expect(health.identity).toEqual([expectedStatus]);
+      expect(preview.identity).toEqual([expectedStatus]);
+      await expect(access(callCountPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("explicitly verifies the active profile identity through a management tool", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work" },
+          identity: {
+            expected: { provider: "github", login: "work" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const verification = parseJsonToolResult(await client.callTool({ name: "miftah_verify_identity", arguments: {} }));
+
+      expect(verification).toEqual({
+        profile: "work",
+        identity: [
+          {
+            status: "verified",
+            profile: "work",
+            upstream: "default",
+            expected: { provider: "github", login: "work" },
+            actual: { provider: "github", login: "work" },
+            verifiedAt: expect.any(String)
+          }
+        ]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("verifies requested named upstreams alone and all configured upstreams in sorted order", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-multi-upstream-identity-management-"));
+    const githubCallCountPath = join(directory, "github-tool-call-count");
+    const sentryCallCountPath = join(directory, "sentry-tool-call-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          },
+          upstreams: {
+            github: {
+              env: {
+                TEST_INCLUDE_IDENTITY_TOOL: "true",
+                TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "github-work" }),
+                TEST_CALL_TOOL_COUNT_PATH: githubCallCountPath
+              },
+              identity: {
+                expected: { login: "github-work" },
+                probe: { tool: "identity", resultFormat: "json" },
+                maxAgeMs: 60_000,
+                requiredForRisk: ["write"]
+              }
+            },
+            sentry: {
+              env: {
+                TEST_INCLUDE_IDENTITY_TOOL: "true",
+                TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "work" }),
+                TEST_CALL_TOOL_COUNT_PATH: sentryCallCountPath
+              }
+            }
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(await client.callTool({ name: "miftah_verify_identity", arguments: { upstream: "sentry" } }))
+      ).toMatchObject({
+        profile: "work",
+        identity: [
+          {
+            status: "verified",
+            profile: "work",
+            upstream: "sentry",
+            expected: { login: "work" },
+            actual: { login: "work" }
+          }
+        ]
+      });
+      await expect(access(githubCallCountPath)).rejects.toThrow();
+      expect(await readFile(sentryCallCountPath, "utf8")).toBe("1\n");
+
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_verify_identity", arguments: {} }))).toMatchObject({
+        profile: "work",
+        identity: [
+          {
+            status: "verified",
+            profile: "work",
+            upstream: "github",
+            expected: { login: "github-work" },
+            actual: { login: "github-work" }
+          },
+          {
+            status: "verified",
+            profile: "work",
+            upstream: "sentry",
+            expected: { login: "work" },
+            actual: { login: "work" }
+          }
+        ]
+      });
+      expect(await readFile(githubCallCountPath, "utf8")).toBe("1\n");
+      expect(await readFile(sentryCallCountPath, "utf8")).toBe("1\n1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records a failed manual identity verification with only safe status evidence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-identity-management-audit-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const secret = "manual-identity-response-secret";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({ login: "personal", ignored: { secret } })
+          },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const verification = await client.callTool({ name: "miftah_verify_identity", arguments: {} });
+      expect(verification.isError).toBeUndefined();
+      expect(parseJsonToolResult(verification)).toMatchObject({
+        profile: "work",
+        identity: [
+          {
+            status: "mismatch",
+            expected: { login: "work" },
+            actual: { login: "personal" },
+            errorCode: "IDENTITY_MISMATCH"
+          }
+        ]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const event = events.find((entry) => entry.operation === "management/verify-identity");
+      expect(event).toMatchObject({
+        status: "failure",
+        errorCode: "IDENTITY_MISMATCH",
+        identity: [
+          {
+            status: "mismatch",
+            expected: { login: "work" },
+            actual: { login: "personal" }
+          }
+        ]
+      });
+      expect(JSON.stringify({ verification, event })).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a safe unsupported status and failure audit when the probe requires input", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-identity-unsupported-audit-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const rawResponse = "manual-unsupported-identity-secret";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: rawResponse, TEST_WHOAMI_SCHEMA: "account" },
+          identity: {
+            expected: { provider: "github", login: "work" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const verification = await client.callTool({ name: "miftah_verify_identity", arguments: {} });
+      expect(verification.isError).toBeUndefined();
+      expect(parseJsonToolResult(verification)).toMatchObject({
+        profile: "work",
+        identity: [
+          {
+            status: "unsupported",
+            profile: "work",
+            upstream: "default",
+            expected: { provider: "github", login: "work" },
+            errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+          }
+        ]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        operation: "management/verify-identity",
+        status: "failure",
+        errorCode: "IDENTITY_PROBE_UNSUPPORTED",
+        identity: [
+          {
+            status: "unsupported",
+            expected: { provider: "github", login: "work" },
+            errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+          }
+        ]
+      });
+      expect(JSON.stringify({ verification, events })).not.toContain(rawResponse);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns and audits a safe status when a selected identity upstream cannot start", async () => {
+    const secret = "identity-acquisition-error-secret";
+    const missingExecutable = join(process.cwd(), `.missing-${secret}`);
+    const auditPath = join(process.cwd(), `.miftah-identity-acquisition-${randomUUID()}.jsonl`);
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        broken: {
+          transport: "stdio",
+          command: missingExecutable,
+          env: { API_TOKEN: secret }
+        }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            broken: {
+              identity: {
+                expected: { login: "work" },
+                probe: { tool: "whoami", resultFormat: "text" },
+                maxAgeMs: 60_000,
+                requiredForRisk: ["write"]
+              }
+            }
+          }
+        }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const verification = await client.callTool({
+        name: "miftah_verify_identity",
+        arguments: { profile: "work", upstream: "broken" }
+      });
+
+      expect(verification.isError).toBeUndefined();
+      expect(parseJsonToolResult(verification)).toEqual({
+        profile: "work",
+        identity: [
+          {
+            status: "failed",
+            profile: "work",
+            upstream: "broken",
+            expected: { login: "work" },
+            errorCode: "IDENTITY_VERIFICATION_FAILED"
+          }
+        ]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "operation");
+      expect(events).toEqual([
+        expect.objectContaining({
+          operation: "management/verify-identity",
+          name: "broken",
+          profile: "work",
+          upstream: "broken",
+          status: "failure",
+          errorCode: "IDENTITY_VERIFICATION_FAILED",
+          identity: [
+            {
+              status: "failed",
+              profile: "work",
+              upstream: "broken",
+              expected: { login: "work" },
+              errorCode: "IDENTITY_VERIFICATION_FAILED"
+            }
+          ]
+        })
+      ]);
+      expect(JSON.stringify({ verification, events })).not.toContain(missingExecutable);
+      expect(JSON.stringify({ verification, events })).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(auditPath, { force: true });
+    }
+  });
+
+  it("invalidates passive identity status when a verified upstream profile restarts", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work" },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(await client.callTool({ name: "miftah_verify_identity", arguments: {} })).identity
+      ).toMatchObject([{ status: "verified" }]);
+      await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } });
+
+      expect(
+        parseJsonToolResult(await client.callTool({ name: "miftah_current_profile", arguments: {} })).identity
+      ).toMatchObject([{ status: "not-verified" }]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("exposes management and upstream capabilities while routing calls by active profile", async () => {
     const config = validateConfig({
       version: "1",
@@ -451,7 +933,8 @@ describe("Miftah MCP wrapper", () => {
       expect(JSON.parse(content.text)).toEqual({
         activeProfile: "work",
         defaultProfile: "work",
-        routingMode: "hybrid"
+        routingMode: "hybrid",
+        identity: [{ status: "unconfigured", profile: "work", upstream: "default" }]
       });
     } finally {
       await client.close();

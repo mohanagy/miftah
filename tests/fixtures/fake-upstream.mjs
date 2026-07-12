@@ -38,6 +38,7 @@ const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
 const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
 const crashAfterInitializedPath = process.env.TEST_CRASH_AFTER_INITIALIZED_PATH;
 const startCountPath = process.env.TEST_START_COUNT_PATH;
+const createItemCountPath = process.env.TEST_CREATE_ITEM_COUNT_PATH;
 const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
 const clientInfoPath = process.env.TEST_CLIENT_INFO_PATH;
 const stderrMessage = process.env.TEST_STDERR_MESSAGE;
@@ -46,6 +47,16 @@ const hangOnStartPath = process.env.TEST_HANG_ON_START_PATH;
 const hangOnStartReadyPath = process.env.TEST_HANG_ON_START_READY_PATH;
 const shutdownDelayMs = Number(process.env.TEST_SHUTDOWN_DELAY_MS ?? "0");
 const shutdownEndPath = process.env.TEST_SHUTDOWN_END_PATH;
+const includeIdentityTool = process.env.TEST_INCLUDE_IDENTITY_TOOL === "true";
+const identityResponse = process.env.TEST_IDENTITY_RESPONSE ?? JSON.stringify({ login: account });
+const identityInputSchema =
+  process.env.TEST_IDENTITY_SCHEMA === "min-properties"
+    ? { type: "object", properties: { account: { type: "string" } }, minProperties: 1 }
+    : process.env.TEST_IDENTITY_SCHEMA === "all-of-required"
+      ? { type: "object", properties: { account: { type: "string" } }, allOf: [{ required: ["account"] }] }
+      : process.env.TEST_IDENTITY_SCHEMA === "additional-properties-false"
+        ? { type: "object", properties: {}, additionalProperties: false }
+      : { type: "object", properties: {} };
 
 if (startCountPath) {
   appendFileSync(startCountPath, "1\n");
@@ -118,6 +129,8 @@ const whoamiInputSchema =
         properties: { account: { type: "string" } },
         required: ["account"]
       }
+    : process.env.TEST_WHOAMI_SCHEMA === "malformed-required"
+      ? { type: "object", properties: {}, required: "account" }
     : { type: "object", properties: {} };
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
@@ -215,6 +228,15 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
               }
             }
           ]),
+      ...(includeIdentityTool && !secondPage
+        ? [
+            {
+              name: "identity",
+              description: "Return the configured account identity.",
+              inputSchema: identityInputSchema
+            }
+          ]
+        : []),
       ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
         ? [
             {
@@ -246,6 +268,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (process.env.TEST_CALL_TOOL_COUNT_PATH) {
     appendFileSync(process.env.TEST_CALL_TOOL_COUNT_PATH, "1\n");
   }
+  if (request.params.name === "create_item" && createItemCountPath) {
+    appendFileSync(createItemCountPath, "1\n");
+  }
   if (process.env.TEST_FAIL_CALL_TOOL === "true") {
     throw new Error(`test tool call failure: ${process.env.API_TOKEN}`);
   }
@@ -254,6 +279,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: account }] };
+  }
+  if (request.params.name === "identity") {
+    return { content: [{ type: "text", text: identityResponse }] };
   }
   if (request.params.name === "echo") {
     return { content: [{ type: "text", text: String(request.params.arguments?.message ?? "") }] };

@@ -60,11 +60,90 @@ function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
+const identityFieldSchema = z.string().trim().min(1).max(256);
+const identityFingerprintSchema = z
+  .object({
+    provider: identityFieldSchema.optional(),
+    login: identityFieldSchema.optional(),
+    organization: identityFieldSchema.optional(),
+    host: identityFieldSchema.optional()
+  })
+  .strict();
+const identityProbeSchema = z
+  .object({
+    tool: z.string().trim().min(1).max(256),
+    resultFormat: z.enum(["text", "json"]),
+    provider: identityFieldSchema.optional()
+  })
+  .strict();
+const identitySchema = z
+  .object({
+    expected: identityFingerprintSchema,
+    probe: identityProbeSchema,
+    maxAgeMs: z.number().int().positive().max(86_400_000),
+    requiredForRisk: z.array(z.enum(["write", "destructive"])).nonempty().optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (Object.keys(value.expected).length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["expected"],
+        message: "identity expected fingerprint must include at least one field"
+      });
+    }
+    if (
+      value.requiredForRisk !== undefined &&
+      new Set(value.requiredForRisk).size !== value.requiredForRisk.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requiredForRisk"],
+        message: "identity requiredForRisk entries must be unique"
+      });
+    }
+    if (value.probe.resultFormat === "json") {
+      if (value.probe.provider !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["probe", "provider"],
+          message: "JSON identity probes must derive provider from the response"
+        });
+      }
+      return;
+    }
+
+    if (value.expected.login === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["expected", "login"],
+        message: "text identity probes require expected.login"
+      });
+    }
+    for (const field of ["organization", "host"] as const) {
+      if (value.expected[field] !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expected", field],
+          message: `text identity probes cannot verify '${field}'`
+        });
+      }
+    }
+    if (value.expected.provider !== undefined && value.probe.provider !== value.expected.provider) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["probe", "provider"],
+        message: "text identity probes require probe.provider to match expected.provider"
+      });
+    }
+  });
+
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional()
+  headers: z.record(z.string(), z.string()).optional(),
+  identity: identitySchema.optional()
 };
 
 const publicProfileUpstreamOverrideSchema = z.object(publicProfileUpstreamOverrideShape).strict();
@@ -85,6 +164,7 @@ const publicProfileShape = {
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   policy: z.string().optional(),
+  identity: identitySchema.optional(),
   upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
 };
 

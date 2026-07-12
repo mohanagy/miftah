@@ -25,3 +25,15 @@ Miftah cannot reduce privileges granted by a provider token. A read-only Miftah 
 The STDIO transport is the default because it avoids a network listener. Remote upstream connections carry profile-bound credentials, so Miftah requires HTTPS outside loopback development URLs (`localhost`, `127.0.0.0/8`, or `::1`). It uses Node's normal certificate validation and does not disable TLS verification; self-signed endpoints fail closed unless an operator explicitly provides a trusted local CA through Node's normal trust configuration. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0`, and do not send credentials to a cleartext non-loopback endpoint.
 
 For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. Any future HTTP server exposed by Miftah itself must bind localhost by default and require explicit authentication before non-local binding.
+
+## Identity verification boundary
+
+Identity verification is an optional, local account-fingerprint comparison. It is not credential validity, provider authentication, account authorization, or scope validation. Miftah does not ship provider SDKs or plugins for it.
+
+The only safe statuses are `unconfigured`, `not-verified`, `verified`, `expired`, `mismatch`, `unsupported`, and `failed`. Status and audit output retain only safe profile/upstream names, configured expected and allowed actual fingerprint fields (`provider`, `login`, `organization`, `host`), a verification timestamp, and a stable error code. These values traverse normal redaction before they reach an MCP response or audit entry.
+
+Identity state is process-only and bounded by `maxAgeMs`, the upstream session generation, and the exact profile/upstream target. A restart, crash, or idle session replacement therefore invalidates it. Miftah does not persist identity state or retain a raw response, raw account payload, tool arguments, error body, arbitrary JSON, or credentials. Doctor never reports raw identity output or fingerprint values.
+
+Before parsing or normalization, identity verification accepts exactly one MCP text content item with at most 4,096 JavaScript characters. Any other response shape or longer text fails safely; JSON probes accept only an object and retain only validated allowlisted fingerprint strings.
+
+Required checks fail closed for their configured write or destructive risks: a mismatch, unsupported probe, or failed verification blocks that protected operation. Optional identity configuration is observational and does not gate operations. See [identity verification configuration](config.md#identity-verification) for the probe and response contract.

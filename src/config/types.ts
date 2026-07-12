@@ -10,11 +10,77 @@ export interface UpstreamConfig {
   headers?: Record<string, string>;
 }
 
+/** Non-secret account attributes used to validate an upstream identity. */
+export interface IdentityFingerprint {
+  provider?: string;
+  login?: string;
+  organization?: string;
+  host?: string;
+}
+
+interface TextIdentityProbeConfig {
+  tool: string;
+  resultFormat: "text";
+  provider?: string;
+}
+
+interface JsonIdentityProbeConfig {
+  tool: string;
+  resultFormat: "json";
+  provider?: never;
+}
+
+/** Describes an upstream tool that returns a bounded identity fingerprint. */
+export type IdentityProbeConfig = TextIdentityProbeConfig | JsonIdentityProbeConfig;
+
+type TextIdentityExpectedFingerprint = {
+  login: string;
+  provider?: never;
+  organization?: never;
+  host?: never;
+};
+
+type TextIdentityExpectedFingerprintWithProvider = {
+  login: string;
+  provider: string;
+  organization?: never;
+  host?: never;
+};
+
+type NonEmptyIdentityFingerprint =
+  | (IdentityFingerprint & { provider: string })
+  | (IdentityFingerprint & { login: string })
+  | (IdentityFingerprint & { organization: string })
+  | (IdentityFingerprint & { host: string });
+
+type IdentityRequiredRisk = ["write"] | ["destructive"] | ["write", "destructive"] | ["destructive", "write"];
+
+type IdentityVerificationConfig = {
+  maxAgeMs: number;
+  requiredForRisk?: IdentityRequiredRisk;
+};
+
+/** Opt-in identity verification for a profile or one named upstream. */
+export type IdentityConfig =
+  | (IdentityVerificationConfig & {
+      expected: TextIdentityExpectedFingerprint;
+      probe: TextIdentityProbeConfig;
+    })
+  | (IdentityVerificationConfig & {
+      expected: TextIdentityExpectedFingerprintWithProvider;
+      probe: TextIdentityProbeConfig & { provider: string };
+    })
+  | (IdentityVerificationConfig & {
+      expected: NonEmptyIdentityFingerprint;
+      probe: JsonIdentityProbeConfig;
+    });
+
 export interface ProfileUpstreamOverride {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   headers?: Record<string, string>;
+  identity?: IdentityConfig;
 }
 
 export interface ProfileConfig {
@@ -25,6 +91,7 @@ export interface ProfileConfig {
   cwd?: string;
   headers?: Record<string, string>;
   policy?: string;
+  identity?: IdentityConfig;
   upstreams?: Record<string, ProfileUpstreamOverride>;
 }
 
