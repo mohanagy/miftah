@@ -17,6 +17,8 @@ const execFile = promisify(execFileCallback);
 
 /** Maximum bytes read from a known JSON metadata file before it is ignored. */
 export const MAX_ROUTING_CONTEXT_JSON_BYTES = 64 * 1024;
+const uriSchemePattern = /^[a-z][a-z0-9+.-]*:/i;
+const windowsDrivePattern = /^[a-z]:[\\/]/i;
 
 interface ProjectMarker {
   readonly profile: string;
@@ -129,7 +131,7 @@ function collectEnvironment(environment: Readonly<Record<string, string | undefi
 }
 
 function redactProjectValue(value: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[a-z]:[\\/]/i.test(value)) {
+  if (uriSchemePattern.test(value) && !windowsDrivePattern.test(value)) {
     return redactUri(value);
   }
   return value;
