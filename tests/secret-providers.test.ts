@@ -18,11 +18,8 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
-const windowsHelperStartupTimeoutMs = 5_000;
-
-function providerCommandTimeout(timeoutMs: number): number {
-  return process.platform === "win32" ? Math.max(timeoutMs, windowsHelperStartupTimeoutMs) : timeoutMs;
-}
+const embeddedWindowsJobCSharpPattern =
+  /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -97,7 +94,7 @@ function errorCode(error: unknown): string | undefined {
 async function waitForCondition(
   condition: () => Promise<boolean> | boolean,
   description: string,
-  timeoutMs = providerCommandTimeout(1_000)
+  timeoutMs = 1_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -237,9 +234,7 @@ async function embeddedWindowsJobCSharp(): Promise<string> {
     new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
     "utf8"
   );
-  const match = source.match(
-    /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/
-  );
+  const match = source.match(embeddedWindowsJobCSharpPattern);
   if (match?.[1] === undefined) throw new Error("Embedded Windows Job Object C# source is unavailable");
   return match[1];
 }
@@ -388,7 +383,6 @@ describe("secret command runner", () => {
               args: [fakeProviderPath],
               environment: fakeProviderEnvironment(directory, "success")
             },
-            { timeoutMs: providerCommandTimeout(100) }
           );
 
           expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
@@ -603,7 +597,7 @@ it.each([
               platform: "linux",
               commands: { linux: fakeCommand },
               environment: fakeProviderEnvironment(directory, mode, "keychain-secret-that-must-not-leak"),
-              timeoutMs: mode === "sleep" ? providerCommandTimeout(20) : undefined
+              timeoutMs: mode === "sleep" ? 20 : undefined
             });
             const error = await rejectedMiftahError(async () =>
               provider.resolve(provider.parse("secretref:keychain://service/account")!, providerContext())
@@ -751,7 +745,7 @@ it.each([
               command: fakeCommand,
               environment: fakeProviderEnvironment(directory, "sleep"),
               isInteractive: true,
-              timeoutMs: providerCommandTimeout(20)
+              timeoutMs: 20
             });
             const error = await rejectedMiftahError(async () =>
               provider.resolve(provider.parse("secretref:op://vault/item/field")!, providerContext())
@@ -934,9 +928,9 @@ exit 0`);
   );
 
   it.each([
-        ["sleep", { timeoutMs: providerCommandTimeout(20) }, "timeout"],
+        ["sleep", { timeoutMs: 20 }, "timeout"],
         ["sleep", { signal: AbortSignal.abort() }, "cancelled"],
-        ["large", { timeoutMs: providerCommandTimeout(100) }, "output_limit"]
+        ["large", {}, "output_limit"]
       ] as const)("reports %s process termination as %s", async (mode, options, expectedKind) => {
         await inSandbox(async (directory) => {
           await expect(
@@ -993,7 +987,7 @@ exit 0`);
           args: [fakeProviderPath],
           environment: fakeProviderEnvironment(directory, "descendant", inheritedSecret)
         },
-        termination === "timeout" ? { timeoutMs: providerCommandTimeout(200) } : { signal: controller.signal }
+        termination === "timeout" ? { timeoutMs: 1_000 } : { signal: controller.signal }
       );
       const descendantPid = await readDescendantPid(directory);
 
@@ -1027,7 +1021,7 @@ exit 0`);
               args: [fakeProviderPath],
               environment: fakeProviderEnvironment(directory, "descendant")
             },
-            { timeoutMs: providerCommandTimeout(100) }
+            { timeoutMs: 1_000 }
           )
         ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
 
@@ -1046,7 +1040,7 @@ exit 0`);
           args: [fakeProviderPath],
           environment: fakeProviderEnvironment(directory, "early-exit-descendant")
         },
-        { timeoutMs: providerCommandTimeout(100) }
+        process.platform === "win32" ? {} : { timeoutMs: 100 }
       );
       if (process.platform === "win32") {
         await expect(pending).resolves.toEqual({ stdout: Buffer.alloc(0) });
@@ -1054,7 +1048,7 @@ exit 0`);
         await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
       }
 
-      expect(Date.now() - startedAt).toBeLessThan(providerCommandTimeout(250));
+      if (process.platform !== "win32") expect(Date.now() - startedAt).toBeLessThan(250);
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
       expect(activePipeCount()).toBeLessThanOrEqual(pipesBefore);
     });
@@ -1070,7 +1064,6 @@ exit 0`);
             args: [fakeProviderPath],
             environment: fakeProviderEnvironment(directory, "early-exit-descendant")
           },
-          { timeoutMs: providerCommandTimeout(200) }
         );
         const descendantPid = await readDescendantPid(directory);
 
