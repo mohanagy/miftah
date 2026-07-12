@@ -78,7 +78,7 @@ export class ProfileManager {
     if (this.options.lockToProfile || this.stateStore === undefined || !this.stateStore.persistent) return;
     const stored = await this.stateStore.load();
     if (stored.kind === "valid") {
-      if (this.collection.profiles[stored.profile]) {
+      if (Object.hasOwn(this.collection.profiles, stored.profile)) {
         this.activeProfile = stored.profile;
         this.selection = {
           selectionSource: this.scope === "workspace" ? "persisted-workspace" : "persisted-global",
@@ -124,11 +124,15 @@ export class ProfileManager {
   }
 
   reset(): { previousProfile: string; activeProfile: string; revision: number } {
+    this.ensureSwitchingEnabled();
     return this.commit(this.collection.defaultProfile, "reset");
   }
 
   async resetPersisted(): Promise<{ previousProfile: string; activeProfile: string; revision: number }> {
-    return this.enqueue(() => this.persistAndCommit(this.collection.defaultProfile, "reset"));
+    return this.enqueue(async () => {
+      this.ensureSwitchingEnabled();
+      return this.persistAndCommit(this.collection.defaultProfile, "reset");
+    });
   }
 
   get(profile = this.activeProfile): ProfileConfig {
@@ -155,7 +159,7 @@ export class ProfileManager {
   }
 
   private ensureExists(profile: string): void {
-    if (!this.collection.profiles[profile]) {
+    if (!Object.hasOwn(this.collection.profiles, profile)) {
       throw new MiftahError("PROFILE_NOT_FOUND", `PROFILE_NOT_FOUND: profile '${profile}' does not exist`);
     }
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -96,6 +96,48 @@ describe("profile state", () => {
     );
     await locked.initialize();
     expect(locked.current()).toMatchObject({ activeProfile: "personal", selectionSource: "configured-lock" });
+  });
+
+  it("does not let a reset bypass a configured lock or write durable state", async () => {
+    const directory = await createDirectory();
+    const configPath = join(directory, "miftah.json");
+    const state = { persistActiveProfile: true as const, scope: "workspace" as const, configPath };
+    const manager = new ProfileManager(
+      profiles,
+      { allowProfileSwitchingFromMcp: true, lockToProfile: "personal" },
+      state
+    );
+
+    await manager.initialize();
+    expect(() => manager.reset()).toThrow(/PROFILE_SWITCH_DISABLED/);
+    await expect(manager.resetPersisted()).rejects.toMatchObject({ code: "PROFILE_SWITCH_DISABLED" });
+    expect(manager.current()).toMatchObject({ activeProfile: "personal", selectionSource: "configured-lock" });
+    await expect(access(resolveProfileStatePath(state))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects inherited object properties as direct or persisted profile selections", async () => {
+    const directory = await createDirectory();
+    const configPath = join(directory, "miftah.json");
+    const state = { persistActiveProfile: true as const, scope: "workspace" as const, configPath };
+    const manager = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+
+    for (const inheritedProfile of ["toString", "__proto__"]) {
+      expect(() => manager.switch(inheritedProfile)).toThrow(/PROFILE_NOT_FOUND/);
+    }
+
+    await manager.initialize();
+    await manager.switchPersisted("personal");
+    const statePath = resolveProfileStatePath(state);
+    const record = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify({ ...record, profile: "toString" }));
+
+    const restarted = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+    await restarted.initialize();
+    expect(restarted.current()).toMatchObject({
+      activeProfile: "work",
+      selectionSource: "configured-default",
+      stateDiagnostic: "PROFILE_STATE_STALE"
+    });
   });
 
   it("keeps session selections isolated and writes only complete records under concurrent workspace changes", async () => {
