@@ -16,6 +16,7 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
+const windowsOutputProbePath = join(process.cwd(), "tests", "fixtures", "windows-secret-output-probe.cjs");
 const windowsHelperStartupTimeoutMs = 5_000;
 
 function providerCommandTimeout(timeoutMs: number): number {
@@ -733,6 +734,21 @@ describe("secret command runner", () => {
       });
     }
   );
+
+  it.runIf(process.platform === "win32")("forwards stdout without a provider script argument", async () => {
+    await inSandbox(async (directory) => {
+      const result = await runSecretCommand({
+        executable: process.execPath,
+        args: [],
+        environment: {
+          ...fakeProviderEnvironment(directory, "success"),
+          NODE_OPTIONS: `--require=${windowsOutputProbePath}`
+        }
+      });
+
+      expect(result.stdout.toString("utf8")).toBe("windows-secret-output-probe");
+    });
+  });
 
   it.each([
         ["sleep", { timeoutMs: providerCommandTimeout(20) }, "timeout"],
