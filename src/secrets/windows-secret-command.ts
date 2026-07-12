@@ -106,7 +106,7 @@ function containsNul(value: string): boolean {
 
 function helperEnvironment(environment: NodeJS.ProcessEnv, request: string): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...environment };
-  for (const name of ["SystemRoot", "windir", "ComSpec", "TEMP", "TMP"]) {
+  for (const name of ["SystemRoot", "windir", "ComSpec", "TEMP", "TMP", "PSModulePath"]) {
     if (environmentValue(result, name) === undefined) {
       const inherited = environmentValue(process.env, name);
       if (inherited !== undefined) setEnvironmentValue(result, name, inherited);
