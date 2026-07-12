@@ -1138,6 +1138,61 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
+    "runs native helper stages after parsing a provider request",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const request = Buffer.from(
+        JSON.stringify({
+          executable: "C:\\Windows\\System32\\cmd.exe",
+          arguments: ["/d", "/s", "/c", "exit 0"]
+        }),
+        "utf8"
+      ).toString("base64");
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$preservedEnvironmentNames = @('SystemRoot', 'windir', 'ComSpec', 'TEMP', 'TMP', 'PATH', 'MIFTAH_SECRET_RUNNER_REQUEST')
+Get-ChildItem Env: | ForEach-Object {
+  if ($preservedEnvironmentNames -notcontains $_.Name) {
+    [Environment]::SetEnvironmentVariable($_.Name, $null, [EnvironmentVariableTarget]::Process)
+  }
+}
+$requestName = 'MIFTAH_SECRET_RUNNER_REQUEST'
+$encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
+$requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
+[Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+$request = $requestJson | ConvertFrom-Json
+Write-Output 'after-request-parse'
+$source = @'
+${csharp}
+'@
+Write-Output 'before-csharp-compile'
+Add-Type -TypeDefinition $source
+Write-Output 'after-csharp-compile'
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+Write-Output 'after-job-init'
+$arguments = @($request.arguments | ForEach-Object {
+  if ($null -eq $_) { throw 'Invalid argument' }
+  [string]$_
+})
+Write-Output 'before-native-run'
+$exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$arguments)
+Write-Output "after-native-run=$exitCode"
+exit 0`,
+        { MIFTAH_SECRET_RUNNER_REQUEST: request },
+        { timeoutMs: 5_000 }
+      );
+
+      expect(result).toMatchObject({
+        code: 0,
+        stdout:
+          "after-request-parse\r\nbefore-csharp-compile\r\nafter-csharp-compile\r\nafter-job-init\r\nbefore-native-run\r\nafter-native-run=0\r\n",
+        timedOut: false
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "preserves provider arguments and output through the Job Object helper",
     async () => {
       await inSandbox(async (directory) => {
