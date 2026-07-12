@@ -94,7 +94,7 @@ function errorCode(error: unknown): string | undefined {
 async function waitForCondition(
   condition: () => Promise<boolean> | boolean,
   description: string,
-  timeoutMs = 1_000
+  timeoutMs = process.platform === "win32" ? 1_500 : 1_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -981,13 +981,16 @@ exit 0`);
     await inSandbox(async (directory) => {
       const controller = new AbortController();
       const inheritedSecret = "descendant-secret-that-must-not-leak";
+      const mode = termination === "timeout" && process.platform === "win32" ? "slow-descendant" : "descendant";
       const pending = runSecretCommand(
         {
           executable: process.execPath,
           args: [fakeProviderPath],
-          environment: fakeProviderEnvironment(directory, "descendant", inheritedSecret)
+          environment: fakeProviderEnvironment(directory, mode, inheritedSecret)
         },
-        termination === "timeout" ? { timeoutMs: 1_000 } : { signal: controller.signal }
+        termination === "timeout"
+          ? { timeoutMs: process.platform === "win32" ? 2_000 : 200 }
+          : { signal: controller.signal }
       );
       const descendantPid = await readDescendantPid(directory);
 
@@ -1010,24 +1013,25 @@ exit 0`);
     });
   });
 
-      it("settles a timeout after the direct child exits even when a descendant retains its streams", async () => {
-      await inSandbox(async (directory) => {
-        const startedAt = Date.now();
+  it("settles a timeout after the direct child exits even when a descendant retains its streams", async () => {
+    await inSandbox(async (directory) => {
+      const startedAt = Date.now();
+      const timeoutMs = process.platform === "win32" ? 2_000 : 100;
 
-        await expect(
-          runSecretCommand(
-            {
-              executable: process.execPath,
-              args: [fakeProviderPath],
-              environment: fakeProviderEnvironment(directory, "descendant")
-            },
-            { timeoutMs: 1_000 }
-          )
-        ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+      await expect(
+        runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath],
+            environment: fakeProviderEnvironment(directory, "descendant")
+          },
+          { timeoutMs }
+        )
+      ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
 
-        if (process.platform !== "win32") expect(Date.now() - startedAt).toBeLessThan(250);
-      });
-      });
+      if (process.platform !== "win32") expect(Date.now() - startedAt).toBeLessThan(250);
+    });
+  });
 
   it("settles after a direct child exits with retained descendant streams", async () => {
     await inSandbox(async (directory) => {
@@ -1063,7 +1067,7 @@ exit 0`);
             executable: process.execPath,
             args: [fakeProviderPath],
             environment: fakeProviderEnvironment(directory, "early-exit-descendant")
-          },
+          }
         );
         const descendantPid = await readDescendantPid(directory);
 

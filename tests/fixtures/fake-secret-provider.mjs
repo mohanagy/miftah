@@ -41,9 +41,9 @@ if (countPath) await appendFile(countPath, "1\n");
 if (mode === "sleep") {
   await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
   process.stdout.write(process.env.MIFTAH_FAKE_VALUE ?? "fixture-secret");
-} else if (mode === "descendant") {
+} else if (mode === "descendant" || mode === "slow-descendant") {
   await spawnDescendant();
-  await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
+  await new Promise((resolve) => globalThis.setTimeout(resolve, mode === "slow-descendant" ? 10_000 : 500));
 } else if (mode === "early-exit-descendant") {
   await spawnDescendant();
   process.exit(0);
