@@ -1,4 +1,9 @@
-import type { PolicyAction, RiskLevel } from "../policy/policy-types.js";
+import type {
+  PolicyAction,
+  RiskClassificationConfidence,
+  RiskClassificationSource,
+  RiskLevel
+} from "../policy/policy-types.js";
 import type { RoutingContextEvidence } from "../routing/routing-types.js";
 import type { IdentityStatus } from "../identity/identity-types.js";
 
@@ -38,6 +43,8 @@ export interface AuditEvent {
   policyName?: string;
   policyDecision?: PolicyAction;
   risk?: RiskLevel;
+  riskSource?: RiskClassificationSource;
+  riskConfidence?: RiskClassificationConfidence;
   identity?: IdentityStatus | readonly IdentityStatus[];
   routingEvidence?: RoutingContextEvidence;
   arguments?: unknown;

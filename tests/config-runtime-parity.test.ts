@@ -87,6 +87,29 @@ describe("config runtime parity", () => {
     expect(malformedPersistence.message).toContain("state.persistActiveProfile");
   });
 
+  it("requires explicit annotation trust and validates the unknown-tool risk default", () => {
+    const config = validateConfig(
+      baseConfig({
+        upstream: { transport: "stdio", command: "node", trustToolAnnotations: true },
+        tooling: { unknownToolRisk: "destructive" }
+      })
+    );
+
+    expect(config.upstream?.trustToolAnnotations).toBe(true);
+    expect(config.tooling?.unknownToolRisk).toBe("destructive");
+    expect(() => validateConfig(baseConfig({ upstream: { transport: "stdio", command: "node", trustToolAnnotations: "true" } }))).toThrow(
+      /upstream\.trustToolAnnotations/u
+    );
+    expect(() => validateConfig(baseConfig({ tooling: { unknownToolRisk: "read" } }))).toThrow(
+      /tooling\.unknownToolRisk/u
+    );
+    expect(() => validateConfig(baseConfig({
+      upstreams: { primary: { transport: "stdio", command: "node" } },
+      upstream: undefined,
+      profiles: { default: { upstreams: { primary: { trustToolAnnotations: true } } } }
+    }))).toThrow(/profiles\.default\.upstreams\.primary\.trustToolAnnotations/u);
+  });
+
   it.each([
     ["transport", "stdio"],
     ["transport", true],

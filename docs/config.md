@@ -111,7 +111,7 @@ Selection order is environment hint, project-marker hint, configured rule, then 
 
 MCP roots are optional client metadata. After initialization, Miftah calls `roots/list` only when the client advertises `roots` capability, stores a URI-only snapshot for that connection, and refreshes it only on an advertised `notifications/roots/list_changed`. An unsupported or failed roots request yields an empty-root snapshot; Miftah does not poll roots or request them for every operation.
 
-`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision, and sanitized `evidence`. Proxied operation audit records carry the same snapshot as additive `routingEvidence`, including an ambiguity that prevents forwarding. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
+`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision (including `riskSource` and `riskConfidence`), and sanitized `evidence`. It never starts an upstream to inspect a tool: it uses only an already-cached compatible tool snapshot and otherwise reports the conservative heuristic or unknown classification. Proxied operation audit records carry the same snapshot as additive `routingEvidence`, including an ambiguity that prevents forwarding. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
 
 ## Identity verification
 
@@ -171,7 +171,16 @@ Miftah applies one safety pipeline to every proxied upstream tool call, resource
 
 Routing rules receive a tool's original arguments unchanged. Resource reads expose the requested URI as `args.uri`; prompt retrieval exposes the prompt arguments and always sets `args.name` to the requested prompt name. Policies evaluate upstream tools by their original tool name, resource reads as `resources/read`, and prompt retrieval as `prompts/get`. For example, `deny: ["resources/read"]` blocks all resource reads for the selected profile, while `requireConfirmation: ["prompts/get"]` returns `POLICY_CONFIRMATION_REQUIRED` without forwarding the request.
 
-Policies classify these operation names as `read`, `write`, or `destructive` using configurable overrides and conservative name heuristics. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the operation.
+Policies classify operations as `read`, `write`, or `destructive` in this order:
+
+1. an exact local `tooling.toolRiskOverrides` entry;
+2. MCP tool annotations only when that exact base `upstream` or named `upstreams.<name>` declaration sets `trustToolAnnotations: true`;
+3. conservative name heuristics; then
+4. `tooling.unknownToolRisk`, which defaults to `"destructive"` and may be set only to `"write"` or `"destructive"`.
+
+MCP annotations are hints, not authority. They cannot lower risk unless the operator explicitly trusts that configured upstream; profile-level upstream overrides cannot alter this trust boundary. A trusted `readOnlyHint: true` classifies as read, a trusted non-read-only `destructiveHint: false` classifies as write, and any contradictory `readOnlyHint`/`destructiveHint` combination classifies as destructive. `idempotentHint` and `openWorldHint` are retained as metadata but never lower mutation risk. Exact local overrides always win, including when an upstream annotation is incorrect.
+
+Every policy decision carries stable `riskSource` and `riskConfidence` values. Route previews and audit events expose only those enum values, never raw upstream annotations or tool output. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the operation.
 
 Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 

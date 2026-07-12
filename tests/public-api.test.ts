@@ -30,6 +30,7 @@ import type {
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,
+  UnknownToolRisk,
   UpstreamConfig,
   ValidatedRoutingConfig
 } from "../src/index.js";
@@ -82,6 +83,7 @@ const supportedTypeExports = [
   "ToolDiscoveryMode",
   "ToolingConfig",
   "TransportType",
+  "UnknownToolRisk",
   "UpstreamConfig",
   "ValidatedRoutingConfig"
 ] as const;
@@ -109,6 +111,7 @@ type PublicTypeImportCoverage = [
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,
+  UnknownToolRisk,
   UpstreamConfig,
   ValidatedRoutingConfig
 ];

@@ -27,6 +27,7 @@ export type {
   ToolDiscoveryMode,
   ToolingConfig,
   TransportType,
+  UnknownToolRisk,
   UpstreamConfig,
   ValidatedRoutingConfig
 } from "./config/types.js";

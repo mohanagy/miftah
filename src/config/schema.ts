@@ -23,7 +23,8 @@ const upstreamBaseShape = {
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().optional(),
   url: z.string().url().optional(),
-  headers: z.record(z.string(), z.string()).optional()
+  headers: z.record(z.string(), z.string()).optional(),
+  trustToolAnnotations: z.boolean().optional()
 };
 
 const upstreamSchema = z.object(upstreamBaseShape).strict().superRefine((value, context) => {
@@ -283,7 +284,8 @@ const publicToolingSchema = z
   .object({
     collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
     toolDiscoveryMode: z.enum(["permissive", "strict"]).optional(),
-    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
+    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional(),
+    unknownToolRisk: z.enum(["write", "destructive"]).optional()
   })
   .strict();
 
@@ -293,7 +295,8 @@ const toolingSchema = z
     upstreamToolNamespace: unsupportedOptionSchema,
     collisionStrategy: z.enum(["prefix-upstream", "fail"]).optional(),
     toolDiscoveryMode: z.enum(["permissive", "strict"]).optional(),
-    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional()
+    toolRiskOverrides: z.record(z.string(), z.enum(["read", "write", "destructive"])).optional(),
+    unknownToolRisk: z.enum(["write", "destructive"]).optional()
   })
   .strict();
 

@@ -1,13 +1,72 @@
-import type { RiskLevel } from "../config/types.js";
+import type { RiskLevel, UnknownToolRisk } from "../config/types.js";
+import type { RiskClassification, ToolRiskAnnotations } from "./policy-types.js";
 
 const destructivePattern = /(delete|remove|destroy|revoke|archive|close|merge)/i;
 const writePattern = /(create|update|edit|post|comment|send|resolve|assign|move|set)/i;
 const readPattern = /(get|list|search|read|fetch|query|find|whoami|status|health)/i;
 
+export interface ToolRiskMetadata {
+  readonly trusted?: boolean;
+  readonly annotations?: ToolRiskAnnotations;
+}
+
+export interface RiskClassifierOptions {
+  readonly overrides?: Record<string, RiskLevel>;
+  readonly unknownRisk?: UnknownToolRisk;
+}
+
+/** Classifies one operation and preserves the evidence used for the safety decision. */
+export function classifyToolRisk(
+  toolName: string,
+  options: RiskClassifierOptions = {},
+  metadata: ToolRiskMetadata = {}
+): RiskClassification {
+  const override = options.overrides;
+  if (override !== undefined && Object.hasOwn(override, toolName)) {
+    return { risk: override[toolName]!, riskSource: "local-override", riskConfidence: "high" };
+  }
+
+  if (metadata.trusted && metadata.annotations !== undefined) {
+    const annotationRisk = classifyTrustedAnnotations(metadata.annotations);
+    if (annotationRisk !== undefined) return annotationRisk;
+  }
+
+  if (destructivePattern.test(toolName)) return heuristic("destructive");
+  if (writePattern.test(toolName)) return heuristic("write");
+  if (readPattern.test(toolName)) return heuristic("read");
+  return {
+    risk: options.unknownRisk ?? "destructive",
+    riskSource: "unknown-default",
+    riskConfidence: "low"
+  };
+}
+
+/** Backwards-compatible risk-only classifier for callers that do not need provenance. */
 export function classifyRisk(toolName: string, overrides: Record<string, RiskLevel> = {}): RiskLevel {
-  if (overrides[toolName]) return overrides[toolName];
-  if (destructivePattern.test(toolName)) return "destructive";
-  if (writePattern.test(toolName)) return "write";
-  if (readPattern.test(toolName)) return "read";
-  return "write";
+  return classifyToolRisk(toolName, { overrides }).risk;
+}
+
+function classifyTrustedAnnotations(annotations: ToolRiskAnnotations): RiskClassification | undefined {
+  const readOnly = booleanHint(annotations.readOnlyHint);
+  const destructive = booleanHint(annotations.destructiveHint);
+  if (readOnly === true && destructive === true) {
+    return { risk: "destructive", riskSource: "annotation-conflict", riskConfidence: "low" };
+  }
+  if (readOnly === true) return trusted("read");
+  if (destructive === true) return trusted("destructive");
+  if (readOnly === false && destructive === false) return trusted("write");
+  if (readOnly === false) return trusted("destructive");
+  return undefined;
+}
+
+function booleanHint(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function trusted(risk: RiskLevel): RiskClassification {
+  return { risk, riskSource: "trusted-upstream-annotation", riskConfidence: "medium" };
+}
+
+function heuristic(risk: RiskLevel): RiskClassification {
+  return { risk, riskSource: "name-heuristic", riskConfidence: "low" };
 }

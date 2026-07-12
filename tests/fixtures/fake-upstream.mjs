@@ -139,7 +139,11 @@ const whoamiInputSchema =
       }
     : process.env.TEST_WHOAMI_SCHEMA === "malformed-required"
       ? { type: "object", properties: {}, required: "account" }
-    : { type: "object", properties: {} };
+      : { type: "object", properties: {} };
+const createItemAnnotations =
+  process.env.TEST_CREATE_ITEM_ANNOTATIONS === undefined
+    ? undefined
+    : JSON.parse(process.env.TEST_CREATE_ITEM_ANNOTATIONS);
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
@@ -233,7 +237,8 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
                 type: "object",
                 properties: { name: { type: "string" } },
                 required: ["name"]
-              }
+              },
+              ...(createItemAnnotations === undefined ? {} : { annotations: createItemAnnotations })
             }
           ]),
       ...(includeIdentityTool && !secondPage

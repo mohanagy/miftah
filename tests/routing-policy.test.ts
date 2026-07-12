@@ -196,12 +196,97 @@ describe("routing and policy", () => {
       { create_item: "write" }
     );
 
-    expect(engine.evaluate("readonly", "create_item")).toEqual({ action: "deny", risk: "write" });
+    expect(engine.evaluate("readonly", "create_item")).toEqual({
+      action: "deny",
+      risk: "write",
+      riskSource: "local-override",
+      riskConfidence: "high"
+    });
     expect(engine.evaluate("safe", "create_item")).toEqual({
       action: "confirm",
-      risk: "write"
+      risk: "write",
+      riskSource: "local-override",
+      riskConfidence: "high"
     });
-    expect(engine.evaluate("safe", "get_item")).toEqual({ action: "allow", risk: "read" });
+    expect(engine.evaluate("safe", "get_item")).toEqual({
+      action: "allow",
+      risk: "read",
+      riskSource: "name-heuristic",
+      riskConfidence: "low"
+    });
+  });
+
+  it("records ordered risk classification from local overrides, trusted annotations, heuristics, and defaults", () => {
+    const readonly = new PolicyEngine(
+      { readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] } },
+      { delete_workspace: "read" }
+    );
+
+    expect(
+      readonly.evaluate("readonly", "delete_workspace", {
+        trusted: true,
+        annotations: { readOnlyHint: false, destructiveHint: true }
+      })
+    ).toEqual({ action: "allow", risk: "read", riskSource: "local-override", riskConfidence: "high" });
+
+    expect(
+      new PolicyEngine({ readonly: { allowRisk: ["read"] } }).evaluate("readonly", "delete_workspace", {
+        trusted: true,
+        annotations: { readOnlyHint: true, destructiveHint: false }
+      })
+    ).toEqual({ action: "allow", risk: "read", riskSource: "trusted-upstream-annotation", riskConfidence: "medium" });
+
+    expect(
+      new PolicyEngine({ readonly: { allowRisk: ["read"] } }).evaluate("readonly", "get_workspace", {
+        trusted: true,
+        annotations: { readOnlyHint: true, destructiveHint: true }
+      })
+    ).toEqual({ action: "deny", risk: "destructive", riskSource: "annotation-conflict", riskConfidence: "low" });
+
+    expect(
+      new PolicyEngine({ readonly: { allowRisk: ["read"] } }).evaluate("readonly", "delete_workspace", {
+        trusted: false,
+        annotations: { readOnlyHint: true }
+      })
+    ).toEqual({ action: "deny", risk: "destructive", riskSource: "name-heuristic", riskConfidence: "low" });
+
+    expect(
+      new PolicyEngine({ readonly: { allowRisk: ["read"] } }).evaluate("readonly", "delete_workspace", {
+        trusted: true,
+        annotations: { destructiveHint: false }
+      })
+    ).toEqual({ action: "deny", risk: "destructive", riskSource: "name-heuristic", riskConfidence: "low" });
+
+    expect(
+      new PolicyEngine().evaluate(undefined, "upsert_workspace", {
+        trusted: true,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true
+        }
+      })
+    ).toEqual({ action: "allow", risk: "write", riskSource: "trusted-upstream-annotation", riskConfidence: "medium" });
+
+    expect(new PolicyEngine().evaluate(undefined, "frobnicate")).toEqual({
+      action: "allow",
+      risk: "destructive",
+      riskSource: "unknown-default",
+      riskConfidence: "low"
+    });
+    expect(new PolicyEngine({}, {}, { unknownRisk: "write" }).evaluate(undefined, "frobnicate")).toEqual({
+      action: "allow",
+      risk: "write",
+      riskSource: "unknown-default",
+      riskConfidence: "low"
+    });
+    expect(new PolicyEngine().evaluate(undefined, "toString")).toEqual({
+      action: "allow",
+      risk: "destructive",
+      riskSource: "unknown-default",
+      riskConfidence: "low"
+    });
   });
 
   it("fails closed when a profile references a missing named policy", () => {
@@ -212,18 +297,33 @@ describe("routing and policy", () => {
       { create_item: "write" }
     );
 
-    expect(engine.evaluate("missing-policy", "create_item")).toEqual({ action: "deny", risk: "write" });
+    expect(engine.evaluate("missing-policy", "create_item")).toEqual({
+      action: "deny",
+      risk: "write",
+      riskSource: "local-override",
+      riskConfidence: "high"
+    });
   });
 
   it("fails closed when a policy name resolves to an inherited object property", () => {
     const engine = new PolicyEngine();
 
-    expect(engine.evaluate("toString", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
+    expect(engine.evaluate("toString", "delete_repository")).toEqual({
+      action: "deny",
+      risk: "destructive",
+      riskSource: "name-heuristic",
+      riskConfidence: "low"
+    });
   });
 
   it("fails closed when a policy name is explicitly empty", () => {
     const engine = new PolicyEngine();
 
-    expect(engine.evaluate("", "delete_repository")).toEqual({ action: "deny", risk: "destructive" });
+    expect(engine.evaluate("", "delete_repository")).toEqual({
+      action: "deny",
+      risk: "destructive",
+      riskSource: "name-heuristic",
+      riskConfidence: "low"
+    });
   });
 });

@@ -1,4 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolRiskAnnotations } from "../../policy/policy-types.js";
 import { MiftahError } from "../../utils/errors.js";
 
 export interface DiscoveredTools {
@@ -12,11 +13,12 @@ export interface ToolDiscoveryResult {
 }
 
 export interface RegisteredTool {
-  exposedName: string;
-  originalName: string;
-  upstreamName?: string;
-  profile: string;
-  fingerprint: string;
+  readonly exposedName: string;
+  readonly originalName: string;
+  readonly upstreamName?: string;
+  readonly profile: string;
+  readonly fingerprint: string;
+  readonly annotations?: ToolRiskAnnotations;
 }
 
 export interface ToolSnapshot {
@@ -120,7 +122,8 @@ export class ToolRegistry {
           originalName: tool.name,
           upstreamName,
           profile,
-          fingerprint: canonicalJson(exposedTool)
+          fingerprint: canonicalJson(exposedTool),
+          annotations: normalizeRiskAnnotations(tool)
         });
         tools.push(exposedTool);
       }
@@ -132,7 +135,7 @@ export class ToolRegistry {
       profile,
       fingerprint: canonicalJson(snapshotTools),
       getTools: () => snapshotTools.map(cloneTool),
-      resolve: (exposedName) => routes.get(exposedName),
+      resolve: (exposedName) => cloneRegisteredTool(routes.get(exposedName)),
       isComplete: () => !discovery.incomplete
     };
   }
@@ -148,6 +151,42 @@ function compareTools(left: Tool, right: Tool): number {
 
 function cloneTool(tool: Tool): Tool {
   return structuredClone(tool);
+}
+
+function cloneRegisteredTool(tool: RegisteredTool | undefined): RegisteredTool | undefined {
+  return tool === undefined
+    ? undefined
+    : {
+        ...tool,
+        ...(tool.annotations === undefined ? {} : { annotations: { ...tool.annotations } })
+      };
+}
+
+function normalizeRiskAnnotations(tool: Tool): ToolRiskAnnotations | undefined {
+  const annotations = tool.annotations;
+  if (annotations === undefined) return undefined;
+  const readOnlyHint = booleanHint(annotations.readOnlyHint);
+  const destructiveHint = booleanHint(annotations.destructiveHint);
+  const idempotentHint = booleanHint(annotations.idempotentHint);
+  const openWorldHint = booleanHint(annotations.openWorldHint);
+  if (
+    readOnlyHint === undefined &&
+    destructiveHint === undefined &&
+    idempotentHint === undefined &&
+    openWorldHint === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(readOnlyHint === undefined ? {} : { readOnlyHint }),
+    ...(destructiveHint === undefined ? {} : { destructiveHint }),
+    ...(idempotentHint === undefined ? {} : { idempotentHint }),
+    ...(openWorldHint === undefined ? {} : { openWorldHint })
+  };
+}
+
+function booleanHint(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function canonicalJson(value: unknown): string {

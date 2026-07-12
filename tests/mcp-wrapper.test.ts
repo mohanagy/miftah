@@ -173,9 +173,114 @@ interface ProfileManagementHost {
 }
 
 describe("Miftah MCP wrapper", () => {
+  it("uses explicitly trusted tool annotations and records risk provenance", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-risk-annotations-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture], trustToolAnnotations: true },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: {
+            TEST_CREATE_ITEM_ANNOTATIONS: JSON.stringify({
+              readOnlyHint: true,
+              destructiveHint: false,
+              idempotentHint: true,
+              openWorldHint: true
+            })
+          }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"] } },
+      audit: { path: auditPath }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "risk-annotation-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "create_item" } }))).toMatchObject({
+        policy: { action: "allow", risk: "read", riskSource: "trusted-upstream-annotation", riskConfidence: "medium" }
+      });
+      expect(await client.callTool({ name: "create_item", arguments: { name: "x" } })).not.toMatchObject({ isError: true });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.find((event) => event.operation === "tools/call" && event.name === "create_item")).toMatchObject({
+        risk: "read",
+        riskSource: "trusted-upstream-annotation",
+        riskConfidence: "medium"
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes annotation trust to each named base upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        trusted: { transport: "stdio", command: process.execPath, args: [fixture], trustToolAnnotations: true },
+        untrusted: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          upstreams: {
+            trusted: {
+              env: { TEST_CREATE_ITEM_ANNOTATIONS: JSON.stringify({ readOnlyHint: true, destructiveHint: false }) }
+            },
+            untrusted: {
+              env: { TEST_CREATE_ITEM_ANNOTATIONS: JSON.stringify({ readOnlyHint: true, destructiveHint: false }) }
+            }
+          }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"] } }
+    });
+    const upstreams = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-risk-annotation-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "trusted__create_item" } }))).toMatchObject({
+        policy: { action: "allow", risk: "read", riskSource: "trusted-upstream-annotation", riskConfidence: "medium" }
+      });
+      expect(await client.callTool({ name: "trusted__create_item", arguments: { name: "x" } })).not.toMatchObject({ isError: true });
+      expect(parseJsonToolResult(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "untrusted__create_item" } }))).toMatchObject({
+        policy: { action: "deny", risk: "write", riskSource: "name-heuristic", riskConfidence: "low" }
+      });
+      expect(await client.callTool({ name: "untrusted__create_item", arguments: { name: "x" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("reports configured identity status without probing upstreams from management surfaces", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-identity-management-"));
     const callCountPath = join(directory, "tool-call-count");
+    const listCountPath = join(directory, "tool-list-count");
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -183,7 +288,7 @@ describe("Miftah MCP wrapper", () => {
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: {
         work: {
-          env: { TEST_CALL_TOOL_COUNT_PATH: callCountPath },
+          env: { TEST_CALL_TOOL_COUNT_PATH: callCountPath, TEST_LIST_TOOLS_COUNT_PATH: listCountPath },
           identity: {
             expected: { provider: "github", login: "work" },
             probe: { tool: "whoami", resultFormat: "text", provider: "github" },
@@ -217,6 +322,7 @@ describe("Miftah MCP wrapper", () => {
       expect(health.identity).toEqual([expectedStatus]);
       expect(preview.identity).toEqual([expectedStatus]);
       await expect(access(callCountPath)).rejects.toThrow();
+      await expect(access(listCountPath)).rejects.toThrow();
     } finally {
       await client.close();
       await wrapper.close();

@@ -2,6 +2,7 @@ import type { AuditScope } from "../../audit/audit-trail.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
+import type { ToolRiskMetadata } from "../../policy/risk-classifier.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import type { RoutingContextSnapshot, RoutingDecision } from "../../routing/routing-types.js";
@@ -33,6 +34,7 @@ export interface ProxiedOperation<Result> {
   readonly policyName: string;
   readonly name: string;
   readonly args: Record<string, unknown>;
+  readonly riskMetadata?: ToolRiskMetadata;
   readonly requireExplicitRuleForDestructive?: boolean;
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
 }
@@ -70,14 +72,16 @@ export class OperationPipeline {
       );
       const profile = route.profile;
       const profileConfig = this.options.profiles.get(profile);
-      const decision = this.options.policy.evaluate(profileConfig.policy, operation.policyName);
+      const decision = this.options.policy.evaluate(profileConfig.policy, operation.policyName, operation.riskMetadata);
       audit.update({
         profile,
         routingReason: route.reason,
         routingSource: routingSource(route),
         policyName: profileConfig.policy ?? "default",
         policyDecision: decision.action,
-        risk: decision.risk
+        risk: decision.risk,
+        riskSource: decision.riskSource,
+        riskConfidence: decision.riskConfidence
       });
       this.assertPolicyAllows(operation, route, decision, profile);
 
