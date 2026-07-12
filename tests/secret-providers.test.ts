@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseExternalSecretReference } from "../src/secrets/external-secret-reference.js";
 import {
@@ -164,6 +166,64 @@ function providerContext(redactor?: SecretRedactor): {
 
 function activePipeCount(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === "PipeWrap").length;
+}
+
+async function runWindowsCompressedBootstrap(source: string): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
+  const launcher = win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const bootstrap = String.raw`$ErrorActionPreference = 'Stop'
+$helperName = 'MIFTAH_SECRET_RUNNER_HELPER'
+try {
+  $encodedHelper = [Environment]::GetEnvironmentVariable($helperName, [EnvironmentVariableTarget]::Process)
+  [Environment]::SetEnvironmentVariable($helperName, $null, [EnvironmentVariableTarget]::Process)
+  if ([string]::IsNullOrEmpty($encodedHelper) -or $encodedHelper.Length -gt 8192) { exit 1 }
+  $input = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedHelper), $false)
+  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress, $false)
+  $reader = [IO.StreamReader]::new($gzip, [Text.Encoding]::UTF8)
+  try {
+    $decoded = $reader.ReadToEnd()
+  } finally {
+    $reader.Dispose()
+  }
+  if ([string]::IsNullOrEmpty($decoded)) { exit 1 }
+  & ([ScriptBlock]::Create($decoded))
+} catch {
+  exit 1
+}`;
+  const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      launcher,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
+      {
+        env: {
+          ...process.env,
+          MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
+        },
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", (code) => {
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8")
+      });
+    });
+  });
 }
 
 describe("built-in secret providers", () => {
@@ -718,6 +778,20 @@ it.each([
 });
 
 describe("secret command runner", () => {
+  it.runIf(process.platform === "win32")(
+    "executes a compressed bootstrap payload before starting providers",
+    async () => {
+      const result = await runWindowsCompressedBootstrap("Write-Output 'bootstrap-ready'\nexit 0");
+
+      expect(result).toEqual({
+        code: 0,
+        stdout: "bootstrap-ready\r\n",
+        stderr: ""
+      });
+    },
+    20_000
+  );
+
   it.runIf(process.platform === "win32")(
     "preserves provider arguments and output through the Job Object helper",
     async () => {
