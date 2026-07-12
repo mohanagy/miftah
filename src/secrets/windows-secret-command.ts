@@ -62,7 +62,11 @@ async function resolveTargetExecutable(
 ): Promise<string | undefined> {
   const pathQualified =
     executable.includes("/") || executable.includes("\\") || win32.isAbsolute(executable);
-  if (pathQualified) return win32.isAbsolute(executable) ? executable : undefined;
+  if (pathQualified) {
+    return win32.isAbsolute(executable)
+      ? resolveExecutablePath(executable, { environment, platform: "win32" })
+      : undefined;
+  }
   if (executable.toLocaleLowerCase("en-US") === "powershell.exe") return launcher;
   return resolveExecutablePath(executable, { environment, platform: "win32" });
 }
