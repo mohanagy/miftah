@@ -168,7 +168,10 @@ function activePipeCount(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === "PipeWrap").length;
 }
 
-async function runWindowsCompressedBootstrap(source: string): Promise<{
+async function runWindowsCompressedBootstrap(
+  source: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<{
   code: number | null;
   stdout: string;
   stderr: string;
@@ -204,6 +207,7 @@ try {
       {
         env: {
           ...process.env,
+          ...environment,
           MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
         },
         shell: false,
@@ -818,6 +822,35 @@ exit 0`);
 
       expect(result.code).toBe(0);
       expect(result.stdout).toBe("native-type-ready\r\n");
+    },
+    60_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "runs an immediate cmd.exe child through the embedded Job Object",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+Add-Type -TypeDefinition $source
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
+Write-Output "native-run-exit=$exitCode"
+exit 0`,
+        {
+          MIFTAH_TEST_EXECUTABLE: win32.join(
+            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
+            "System32",
+            "cmd.exe"
+          )
+        }
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("native-run-exit=0\r\n");
     },
     60_000
   );
