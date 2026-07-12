@@ -60,13 +60,72 @@ async function readFakeRecord(directory: string): Promise<{
   mode: string;
   hasOpServiceAccountToken: boolean;
   keychainEnvironment: Record<string, string>;
+  descendantPid?: number;
 }> {
   return JSON.parse(await readFile(join(directory, "record.json"), "utf8")) as {
     argv: string[];
     mode: string;
     hasOpServiceAccountToken: boolean;
     keychainEnvironment: Record<string, string>;
+    descendantPid?: number;
   };
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const { code } = error as { code?: unknown };
+  return typeof code === "string" ? code : undefined;
+}
+
+async function waitForCondition(condition: () => Promise<boolean> | boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function readDescendantPid(directory: string): Promise<number> {
+  let descendantPid: number | undefined;
+  await waitForCondition(async () => {
+    try {
+      const candidate = (await readFakeRecord(directory)).descendantPid;
+      if (!Number.isSafeInteger(candidate) || candidate === undefined || candidate <= 0) return false;
+      descendantPid = candidate;
+      return true;
+    } catch (error) {
+      if (errorCode(error) === "ENOENT" || error instanceof SyntaxError) return false;
+      throw error;
+    }
+  }, "the fake provider to record its descendant PID");
+  return descendantPid!;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "ESRCH") return false;
+    if (errorCode(error) === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  await waitForCondition(() => !isProcessRunning(pid), `descendant process ${pid} to exit`);
+}
+
+async function terminateTestProcess(pid: number): Promise<void> {
+  if (!isProcessRunning(pid)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if (errorCode(error) === "ESRCH") return;
+    throw error;
+  }
+  await waitForProcessExit(pid);
 }
 
 const fakeCommand: SecretCommandDescriptor = {
@@ -162,6 +221,26 @@ describe("external secret-reference grammar", () => {
     "secretref:op://vault/item/field%23name"
   ])("rejects percent-encoded reserved delimiters after decoding %s", (reference) => {
     expect(() => parseExternalSecretReference(reference)).toThrow("SECRET_REFERENCE_MALFORMED");
+  });
+
+  it("classifies a genuine lone surrogate as a malformed reference without exposing it", () => {
+    const loneSurrogate = JSON.parse('"\\ud800"') as string;
+    const reference = `secretref:keychain://${loneSurrogate}/account`;
+    let thrown: unknown;
+
+    try {
+      parseExternalSecretReference(reference);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    expect(thrown).not.toBeInstanceOf(URIError);
+    expect(thrown).toMatchObject({
+      code: "SECRET_REFERENCE_MALFORMED",
+      message: "SECRET_REFERENCE_MALFORMED: malformed keychain secret reference",
+      details: { provider: "keychain" }
+    });
   });
 });
 
@@ -473,6 +552,42 @@ describe("secret command runner", () => {
           ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: expectedKind }));
         });
       });
+
+  it.each([
+    ["timeout", "timeout"],
+    ["cancellation", "cancelled"]
+  ] as const)("terminates a spawned descendant when handling %s", async (termination, expectedKind) => {
+    await inSandbox(async (directory) => {
+      const controller = new AbortController();
+      const inheritedSecret = "descendant-secret-that-must-not-leak";
+      const pending = runSecretCommand(
+        {
+          executable: process.execPath,
+          args: [fakeProviderPath],
+          environment: fakeProviderEnvironment(directory, "descendant", inheritedSecret)
+        },
+        termination === "timeout" ? { timeoutMs: 200 } : { signal: controller.signal }
+      );
+      const descendantPid = await readDescendantPid(directory);
+
+      try {
+        if (termination === "cancellation") controller.abort();
+        const error = await pending.then(
+          () => {
+            throw new Error("Expected secret command to reject");
+          },
+          (reason: unknown) => reason
+        );
+
+        expect(error).toBeInstanceOf(SecretProcessError);
+        expect(error).toMatchObject({ kind: expectedKind });
+        expect(`${error}`).not.toContain(inheritedSecret);
+        await waitForProcessExit(descendantPid);
+      } finally {
+        await terminateTestProcess(descendantPid);
+      }
+    });
+  });
 
       it("settles a timeout after the direct child exits even when a descendant retains its streams", async () => {
       await inSandbox(async (directory) => {

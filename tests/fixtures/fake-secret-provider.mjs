@@ -6,13 +6,8 @@ const mode = process.env.MIFTAH_FAKE_MODE ?? "success";
 const recordPath = process.env.MIFTAH_FAKE_RECORD_PATH;
 const countPath = process.env.MIFTAH_FAKE_COUNT_PATH;
 
-if (
-  process.env.MIFTAH_FAKE_REQUIRE_REGISTRATION === "true" &&
-  process.env.MIFTAH_FAKE_REGISTRATION_MARKER !== "registered"
-) {
-  process.exit(1);
-}
-if (recordPath) {
+async function writeRecord(descendantPid) {
+  if (!recordPath) return;
   await writeFile(
     recordPath,
     JSON.stringify({
@@ -21,20 +16,35 @@ if (recordPath) {
       hasOpServiceAccountToken: process.env.OP_SERVICE_ACCOUNT_TOKEN !== undefined,
       keychainEnvironment: Object.fromEntries(
         Object.entries(process.env).filter(([key]) => key.startsWith("MIFTAH_KEYCHAIN_"))
-      )
+      ),
+      ...(descendantPid === undefined ? {} : { descendantPid })
     })
   );
 }
+
+async function spawnDescendant() {
+  const descendant = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5_000)"], { stdio: "inherit" });
+  if (descendant.pid === undefined) throw new Error("Fake descendant did not start");
+  await writeRecord(descendant.pid);
+}
+
+if (
+  process.env.MIFTAH_FAKE_REQUIRE_REGISTRATION === "true" &&
+  process.env.MIFTAH_FAKE_REGISTRATION_MARKER !== "registered"
+) {
+  process.exit(1);
+}
+if (mode !== "descendant" && mode !== "early-exit-descendant") await writeRecord();
 if (countPath) await appendFile(countPath, "1\n");
 
 if (mode === "sleep") {
   await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
   process.stdout.write(process.env.MIFTAH_FAKE_VALUE ?? "fixture-secret");
 } else if (mode === "descendant") {
-  spawn(process.execPath, ["-e", "setTimeout(() => {}, 500)"], { stdio: "inherit" });
+  await spawnDescendant();
   await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
 } else if (mode === "early-exit-descendant") {
-  spawn(process.execPath, ["-e", "setTimeout(() => {}, 500)"], { stdio: "inherit" });
+  await spawnDescendant();
   process.exit(0);
 } else if (mode === "locked") {
   process.stderr.write("fixture locked raw provider detail\n");

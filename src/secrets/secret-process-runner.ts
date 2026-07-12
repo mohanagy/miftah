@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 const defaultTimeoutMs = 10_000;
 const maximumStdoutBytes = 64 * 1024;
@@ -49,6 +49,7 @@ export function runSecretCommand(
       env: command.environment,
       shell: false,
       windowsHide: true,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"]
     });
     const stdoutChunks: Buffer[] = [];
@@ -56,8 +57,10 @@ export function runSecretCommand(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let terminalKind: SecretProcessFailureKind | undefined;
-    let directChildExited = false;
     let forceKill: NodeJS.Timeout | undefined;
+    let terminationPoll: NodeJS.Timeout | undefined;
+    let childClosed = false;
+    let terminationComplete = true;
     let finished = false;
 
     const finish = (result: SecretCommandResult | SecretProcessError) => {
@@ -65,23 +68,84 @@ export function runSecretCommand(
       finished = true;
       if (timeout) clearTimeout(timeout);
       if (forceKill) clearTimeout(forceKill);
+      if (terminationPoll) clearInterval(terminationPoll);
       options.signal?.removeEventListener("abort", onAbort);
       if (result instanceof SecretProcessError) {
-        child.stdout.destroy();
-        child.stderr.destroy();
         reject(result);
       } else resolve(result);
+    };
+
+    const finishTerminalFailure = () => {
+      if (terminalKind === undefined || !childClosed || !terminationComplete) return;
+      finish(new SecretProcessError(terminalKind));
+    };
+
+    const terminatePosixProcessGroup = (): Promise<void> => {
+      const pid = child.pid;
+      if (pid === undefined) return Promise.resolve();
+      signalPosixProcessGroup(pid, "SIGTERM");
+      return new Promise((resolve) => {
+        const complete = () => {
+          if (forceKill) clearTimeout(forceKill);
+          if (terminationPoll) clearInterval(terminationPoll);
+          forceKill = undefined;
+          terminationPoll = undefined;
+          resolve();
+        };
+        forceKill = setTimeout(() => {
+          signalPosixProcessGroup(pid, "SIGKILL");
+          complete();
+        }, forceKillDelayMs);
+        terminationPoll = setInterval(() => {
+          if (!isPosixProcessGroupRunning(pid)) complete();
+        }, 10);
+        if (!isPosixProcessGroupRunning(pid)) complete();
+      });
+    };
+
+    const terminateWindowsProcessTree = (): Promise<void> => {
+      const pid = child.pid;
+      if (pid === undefined) return Promise.resolve();
+      return new Promise((resolve) => {
+        let settled = false;
+        let taskkill: ChildProcess | undefined;
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          taskkill?.removeListener("error", settle);
+          taskkill?.removeListener("close", settle);
+          resolve();
+        };
+        try {
+          taskkill = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+            shell: false,
+            windowsHide: true,
+            stdio: "ignore"
+          });
+        } catch {
+          resolve();
+          return;
+        }
+        taskkill.once("error", settle);
+        taskkill.once("close", settle);
+      });
     };
 
     const terminate = (kind: SecretProcessFailureKind) => {
       if (terminalKind !== undefined) return;
       terminalKind = kind;
-      if (directChildExited) {
-        finish(new SecretProcessError(kind));
-        return;
-      }
-      child.kill("SIGTERM");
-      forceKill = setTimeout(() => child.kill("SIGKILL"), forceKillDelayMs);
+      terminationComplete = false;
+      const cleanup = process.platform === "win32" ? terminateWindowsProcessTree() : terminatePosixProcessGroup();
+      void cleanup.then(
+        () => {
+          terminationComplete = true;
+          finishTerminalFailure();
+        },
+        () => {
+          terminationComplete = true;
+          finishTerminalFailure();
+        }
+      );
     };
 
     const onAbort = () => terminate("cancelled");
@@ -106,13 +170,10 @@ export function runSecretCommand(
     child.on("error", () => {
       terminalKind ??= "unavailable";
     });
-    child.on("exit", () => {
-      directChildExited = true;
-      if (terminalKind !== undefined) finish(new SecretProcessError(terminalKind));
-    });
     child.on("close", (code) => {
+      childClosed = true;
       if (terminalKind !== undefined) {
-        finish(new SecretProcessError(terminalKind));
+        finishTerminalFailure();
         return;
       }
       if (code !== 0) {
@@ -122,6 +183,27 @@ export function runSecretCommand(
       finish({ stdout: Buffer.concat(stdoutChunks) });
     });
   });
+}
+
+function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // A failed group signal has no provider output to expose.
+  }
+}
+
+function isPosixProcessGroupRunning(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return isErrorCode(error, "EPERM");
+  }
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function classifyStderr(stderr: Buffer): SecretProcessExitClassification {

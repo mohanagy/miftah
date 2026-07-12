@@ -69,6 +69,7 @@ function decodeComponent(component: string, provider: "keychain" | "op"): string
   if (
     decoded.length === 0 ||
     decoded.length > maximumComponentLength ||
+    !isWellFormedUnicode(decoded) ||
     containsControlCharacter(decoded) ||
     decoded === "." ||
     decoded === ".." ||
@@ -85,6 +86,20 @@ function decodeComponent(component: string, provider: "keychain" | "op"): string
 
 function encodeComponent(value: string): string {
   return encodeURIComponent(value);
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const followingCodeUnit = value.charCodeAt(index + 1);
+      if (!(followingCodeUnit >= 0xdc00 && followingCodeUnit <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function containsControlCharacter(value: string): boolean {
