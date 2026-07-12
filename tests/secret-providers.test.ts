@@ -90,6 +90,7 @@ async function readFakeRecord(directory: string): Promise<{
   mode: string;
   hasOpServiceAccountToken: boolean;
   keychainEnvironment: Record<string, string>;
+  hasPowerShellModulePath: boolean;
   descendantPid?: number;
 }> {
   return JSON.parse(await readFile(join(directory, "record.json"), "utf8")) as {
@@ -97,6 +98,7 @@ async function readFakeRecord(directory: string): Promise<{
     mode: string;
     hasOpServiceAccountToken: boolean;
     keychainEnvironment: Record<string, string>;
+    hasPowerShellModulePath: boolean;
     descendantPid?: number;
   };
 }
@@ -1323,6 +1325,23 @@ exit 0`,
 
         expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
         expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "makes the PowerShell module path available to the Windows provider helper",
+    async () => {
+      await inSandbox(async (directory) => {
+        const result = await runSecretCommand({
+          executable: process.execPath,
+          args: [fakeProviderPath],
+          environment: fakeProviderEnvironment(directory, "success")
+        });
+
+        expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+        expect((await readFakeRecord(directory)).hasPowerShellModulePath).toBe(true);
       });
     },
     20_000

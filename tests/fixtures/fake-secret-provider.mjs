@@ -17,6 +17,7 @@ async function writeRecord(descendantPid) {
       keychainEnvironment: Object.fromEntries(
         Object.entries(process.env).filter(([key]) => key.startsWith("MIFTAH_KEYCHAIN_"))
       ),
+      hasPowerShellModulePath: process.env.PSModulePath !== undefined,
       ...(descendantPid === undefined ? {} : { descendantPid })
     })
   );
