@@ -170,11 +170,13 @@ function activePipeCount(): number {
 
 async function runWindowsCompressedBootstrap(
   source: string,
-  environment: NodeJS.ProcessEnv = {}
+  environment: NodeJS.ProcessEnv = {},
+  options: { timeoutMs?: number } = {}
 ): Promise<{
   code: number | null;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
 }> {
   const systemRoot = process.env.SystemRoot ?? process.env.windir;
   if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
@@ -201,6 +203,7 @@ try {
   const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
 
   return new Promise((resolve, reject) => {
+    let timedOut = false;
     const child = spawn(
       launcher,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
@@ -219,12 +222,24 @@ try {
     const stderr: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", reject);
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, options.timeoutMs);
+    child.once("error", (error) => {
+      if (timeout) clearTimeout(timeout);
+      reject(error);
+    });
     child.once("close", (code) => {
+      if (timeout) clearTimeout(timeout);
       resolve({
         code,
         stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8")
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        ...(options.timeoutMs === undefined ? {} : { timedOut })
       });
     });
   });
@@ -876,6 +891,35 @@ exit 0`,
       expect(result.stdout).toBe("native-run-exit=0\r\n");
     },
     60_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "forwards immediate Node child stdout through the embedded Job Object",
+    async () => {
+      const csharp = await embeddedWindowsJobCSharp();
+      const result = await runWindowsCompressedBootstrap(
+        `$ErrorActionPreference = 'Stop'
+$source = @'
+${csharp}
+'@
+Add-Type -TypeDefinition $source
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+Write-Output 'before-native-run'
+$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', "process.stdout.write('native-node-output', () => process.exit(0))"))
+Write-Output "native-run-exit=$exitCode"
+exit 0`,
+        { MIFTAH_TEST_EXECUTABLE: process.execPath },
+        { timeoutMs: 5_000 }
+      );
+
+      expect(result).toEqual({
+        code: 0,
+        stdout: "before-native-run\r\nnative-node-outputnative-run-exit=0\r\n",
+        stderr: "",
+        timedOut: false
+      });
+    },
+    20_000
   );
 
   it.runIf(process.platform === "win32")(
