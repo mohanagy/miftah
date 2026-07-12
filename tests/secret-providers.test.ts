@@ -336,6 +336,36 @@ it.each([
           });
         });
 
+        it("registers an inherited service-account token before interactive 1Password execution", async () => {
+          await inSandbox(async (directory) => {
+            const redactor = new SecretRedactor();
+            const token = "interactive-op-service-account-token";
+            const registeredTokens: string[] = [];
+            const environment: NodeJS.ProcessEnv = {
+              ...fakeProviderEnvironment(directory, "success", "interactive op secret"),
+              MIFTAH_FAKE_REQUIRE_REGISTRATION: "true",
+              OP_SERVICE_ACCOUNT_TOKEN: token
+            };
+            const provider = createOnePasswordSecretProvider({
+              command: fakeCommand,
+              environment,
+              isInteractive: true
+            });
+            const reference = provider.parse("secretref:op://vault/item/field");
+            const context = providerContext(redactor);
+            context.registerSecret = (value) => {
+              registeredTokens.push(value);
+              redactor.add(value);
+              environment.MIFTAH_FAKE_REGISTRATION_MARKER = "registered";
+            };
+
+            await expect(provider.resolve(reference!, context)).resolves.toEqual({ value: "interactive op secret" });
+            expect(registeredTokens).toEqual([token]);
+            expect((await readFakeRecord(directory)).hasOpServiceAccountToken).toBe(true);
+            expect(redactor.redactText(`token=${token}`)).toBe("token=[REDACTED]");
+          });
+        });
+
         it("refuses noninteractive 1Password execution without spawning", async () => {
           await inSandbox(async (directory) => {
             const provider = createOnePasswordSecretProvider({

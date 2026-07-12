@@ -130,6 +130,7 @@ export function createOnePasswordSecretProvider(
     async resolve(reference, context) {
       const interactive = options.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
       const token = environment.OP_SERVICE_ACCOUNT_TOKEN;
+      if (token !== undefined && token.length > 0) context.registerSecret(token);
       if (!interactive) {
         if (token === undefined || token.length === 0) {
           throw providerError(
@@ -139,7 +140,6 @@ export function createOnePasswordSecretProvider(
             "requires OP_SERVICE_ACCOUNT_TOKEN in a noninteractive process"
           );
         }
-        context.registerSecret(token);
       }
       const descriptor = options.command ?? { executable: "op" };
       try {

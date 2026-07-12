@@ -6,6 +6,12 @@ const mode = process.env.MIFTAH_FAKE_MODE ?? "success";
 const recordPath = process.env.MIFTAH_FAKE_RECORD_PATH;
 const countPath = process.env.MIFTAH_FAKE_COUNT_PATH;
 
+if (
+  process.env.MIFTAH_FAKE_REQUIRE_REGISTRATION === "true" &&
+  process.env.MIFTAH_FAKE_REGISTRATION_MARKER !== "registered"
+) {
+  process.exit(1);
+}
 if (recordPath) {
   await writeFile(
     recordPath,
