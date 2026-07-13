@@ -22,6 +22,7 @@ import {
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
+import { ApprovalStore, type ApprovalBinding, type ApprovalSummary } from "../../approvals/approval-store.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
@@ -35,7 +36,7 @@ import { IdentityManager } from "../../identity/identity-manager.js";
 import type { IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
-import type { AuditStatus } from "../../audit/audit-types.js";
+import type { ApprovalAuditAction, AuditStatus } from "../../audit/audit-types.js";
 import {
   UpstreamProcessManager,
   type UpstreamHealth,
@@ -47,6 +48,7 @@ import { MiftahError } from "../../utils/errors.js";
 import { MIFTAH_VERSION } from "../../version.js";
 import {
   OperationPipeline,
+  type ApprovalRequestContext,
   type CapturedProfileState,
   type ResolvedOperation
 } from "./operation-pipeline.js";
@@ -71,7 +73,10 @@ const managementTools: Tool[] = [
   tool("miftah_list_upstream_tools", "List tools discovered from an upstream profile.", ["profile"]),
   tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
   tool("miftah_verify_identity", "Explicitly verify configured upstream identity.", [], ["profile", "upstream"]),
-  tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"])
+  tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"]),
+  tool("miftah_list_approvals", "List safe metadata for approvals pending in this connection."),
+  tool("miftah_approve", "Approve a pending operation using its one-time approval token.", ["approval"]),
+  tool("miftah_deny", "Deny a pending operation using its one-time approval token.", ["approval"])
 ];
 
 const EMPTY_MCP_ROOTS: readonly RoutingContextMcpRoot[] = Object.freeze([]);
@@ -163,6 +168,11 @@ interface ResourcePromptProxyUnavailable {
 
 type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePromptProxyUnavailable;
 
+type ApprovalResolution =
+  | { readonly kind: "consumed" }
+  | { readonly kind: "fallback"; readonly token: string }
+  | { readonly kind: "form"; readonly token: string };
+
 /** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
   readonly server: Server;
@@ -174,12 +184,15 @@ export class MiftahServer {
   private readonly resourcePromptProxy: ResourcePromptProxyAvailability;
   private readonly toolRegistry: ToolRegistry;
   private readonly operationPipeline: OperationPipeline;
+  private readonly approvals = new ApprovalStore();
   private readonly identities: IdentityManager;
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
   private readonly restartingProfiles = new Map<string, Promise<void>>();
   private readonly pendingResourceListChanges = new Set<string>();
   private readonly pendingPromptListChanges = new Set<string>();
+  /** Serializes approval state changes through their audit records; native elicitation runs outside this queue. */
+  private approvalTransitions: Promise<void> = Promise.resolve();
   private profileTransitions: Promise<void> = Promise.resolve();
   private mcpRoots: readonly RoutingContextMcpRoot[] = EMPTY_MCP_ROOTS;
   private mcpRootsReady: Promise<void> = Promise.resolve();
@@ -265,7 +278,8 @@ export class MiftahServer {
       upstreams,
       redactor: this.redactor,
       routingContext: this.provideRoutingContext,
-      identities: this.identities
+      identities: this.identities,
+      approvals: { requireApproval: (binding, context) => this.requireApproval(binding, context) }
     });
     this.server.oninitialized = () => this.handleClientInitialized();
     this.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
@@ -286,6 +300,9 @@ export class MiftahServer {
 
   async connect(transport: Transport): Promise<void> {
     await this.profileTransitions;
+    await this.enqueueApprovalTransition(async () => {
+      this.approvals.beginSession();
+    });
     const previousProfile = this.profiles.current().activeProfile;
     await this.profiles.beginSession();
     const activeProfile = this.profiles.current().activeProfile;
@@ -397,22 +414,26 @@ export class MiftahServer {
       );
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name;
       const args = request.params.arguments ?? {};
       const source = this.profiles.current();
       const isManagementTool = managementTools.some((tool) => tool.name === name);
+      const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
       return this.runAudited(
         {
           operation: isManagementTool ? managementOperation(name) : "tools/call",
           name: isManagementTool ? managementName(name, args) : name,
           sourceProfile: source.activeProfile,
-          arguments: args
+          ...(isApprovalManagementTool ? {} : { arguments: args })
         },
         (audit) =>
           isManagementTool
             ? this.handleManagement(name, args, audit, source)
-            : this.handleUpstreamTool(name, args, audit, source),
+            : this.handleUpstreamTool(name, args, audit, source, {
+                requestId: extra.requestId,
+                signal: extra.signal
+              }),
         (error) => textResult(error.message, true),
         (result) =>
           result.isError
@@ -447,8 +468,9 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
         const source = this.profiles.current();
+        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         return this.runAudited(
           {
             operation: "resources/read",
@@ -459,12 +481,12 @@ export class MiftahServer {
           async (audit) => {
             if (this.resourcePromptRegistry) {
               try {
-                return await this.executeResourceRead(source, upstreamName, request.params, audit);
+                return await this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext);
               } finally {
                 await this.notifyResourceAvailabilityChange(source.activeProfile);
               }
             }
-            return this.executeResourceRead(source, upstreamName, request.params, audit);
+            return this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext);
           }
         );
       });
@@ -493,8 +515,9 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
         const source = this.profiles.current();
+        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         return this.runAudited(
           {
             operation: "prompts/get",
@@ -505,12 +528,12 @@ export class MiftahServer {
           async (audit) => {
             if (this.resourcePromptRegistry) {
               try {
-                return await this.executePromptGet(source, upstreamName, request.params, audit);
+                return await this.executePromptGet(source, upstreamName, request.params, audit, approvalContext);
               } finally {
                 await this.notifyPromptAvailabilityChange(source.activeProfile);
               }
             }
-            return this.executePromptGet(source, upstreamName, request.params, audit);
+            return this.executePromptGet(source, upstreamName, request.params, audit, approvalContext);
           }
         );
       });
@@ -521,7 +544,8 @@ export class MiftahServer {
     name: string,
     args: Record<string, unknown>,
     audit: AuditScope,
-    sourceState: CapturedProfileState
+    sourceState: CapturedProfileState,
+    approvalContext?: ApprovalRequestContext
   ): Promise<CallToolResult> {
     const sourceProfile = sourceState.activeProfile;
     const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
@@ -546,6 +570,7 @@ export class MiftahServer {
         policyName: mapped.originalName,
         name: mapped.originalName,
         args,
+        ...(approvalContext === undefined ? {} : { approvalContext }),
         riskMetadataForProfile: (profile) => {
           const target = this.toolRegistry.peek(profile)?.resolve(name);
           return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
@@ -660,6 +685,44 @@ export class MiftahServer {
       );
     }
     if (name === "miftah_validate_config") return textResult(JSON.stringify({ ok: true, errors: [] }));
+    if (name === "miftah_list_approvals") {
+      return this.enqueueApprovalTransition(async () => {
+        await this.expireApprovals();
+        return textResult(JSON.stringify(this.approvals.list()));
+      });
+    }
+    if (name === "miftah_approve") {
+      return this.enqueueApprovalTransition(async () => {
+        await this.expireApprovals();
+        const approval = await this.withApprovalExpiryAudit(
+          () => this.approvals.approve(requiredString(args, "approval")),
+          (value) => this.approvals.revoke(value.id)
+        );
+        try {
+          await this.writeApproval("approved", approval);
+        } catch (error) {
+          this.approvals.revoke(approval.id);
+          throw error;
+        }
+        return textResult("Approval granted. Retry the exact operation.");
+      });
+    }
+    if (name === "miftah_deny") {
+      return this.enqueueApprovalTransition(async () => {
+        await this.expireApprovals();
+        const approval = await this.withApprovalExpiryAudit(
+          () => this.approvals.deny(requiredString(args, "approval")),
+          (value) => this.approvals.revoke(value.id)
+        );
+        try {
+          await this.writeApproval("denied", approval);
+        } catch (error) {
+          this.approvals.revoke(approval.id);
+          throw error;
+        }
+        return textResult("Approval denied.");
+      });
+    }
     if (name === "miftah_list_upstream_tools") {
       const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
       audit.update({ name: profile, profile });
@@ -753,6 +816,183 @@ export class MiftahServer {
       trusted: this.trustsToolAnnotations(tool.upstreamName),
       ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
     };
+  }
+
+  private async requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void> {
+    const supportsFormElicitation =
+      context !== undefined && this.server.getClientCapabilities()?.elicitation?.form !== undefined;
+    const resolution = await this.enqueueApprovalTransition(async (): Promise<ApprovalResolution> => {
+      await this.expireApprovals();
+      const consumed = await this.withApprovalExpiryAudit(
+        () => this.approvals.consume(binding),
+        (value) => {
+          if (value !== undefined) this.approvals.revoke(value.id);
+        }
+      );
+      if (consumed !== undefined) {
+        try {
+          await this.writeApproval("consumed", consumed);
+        } catch (error) {
+          this.approvals.revoke(consumed.id);
+          throw error;
+        }
+        return { kind: "consumed" };
+      }
+      const requested = await this.withApprovalExpiryAudit(
+        () =>
+          this.approvals.request(
+            binding,
+            supportsFormElicitation ? undefined : (bearer) => this.redactor.redactText(bearer) === bearer
+          ),
+        (value) => this.approvals.revoke(value.approval.id)
+      );
+      if (requested.created) {
+        try {
+          await this.writeApproval("requested", requested.approval);
+        } catch (error) {
+          this.approvals.revoke(requested.approval.id);
+          throw error;
+        }
+      }
+      return supportsFormElicitation ? { kind: "form", token: requested.token } : { kind: "fallback", token: requested.token };
+    });
+    if (resolution.kind === "consumed") return;
+    if (resolution.kind === "fallback") {
+      throw new MiftahError(
+        "POLICY_CONFIRMATION_REQUIRED",
+        `POLICY_CONFIRMATION_REQUIRED: approval required for '${binding.displayName}'. Use miftah_approve with approval '${resolution.token}' then retry the exact operation.`
+      );
+    }
+    if (context === undefined) throw new Error("Form approval requires an MCP request context.");
+    let result;
+    try {
+      result = await this.server.elicitInput(
+        {
+          mode: "form",
+          message: "Approve this exact operation?",
+          requestedSchema: {
+            type: "object",
+            properties: { approved: { type: "boolean" } },
+            required: ["approved"]
+          }
+        },
+        { relatedRequestId: context.requestId, signal: context.signal, timeout: 60_000 }
+      );
+    } catch {
+      await this.finalizeNativeApproval(resolution.token, binding, false);
+      throw this.approvalNotAccepted(binding);
+    }
+    if (result.action === "accept" && result.content?.approved === true) {
+      await this.finalizeNativeApproval(resolution.token, binding, true);
+      return;
+    }
+    await this.finalizeNativeApproval(resolution.token, binding, false);
+    throw this.approvalNotAccepted(binding);
+  }
+
+  private async finalizeNativeApproval(token: string, binding: ApprovalBinding, accepted: boolean): Promise<void> {
+    await this.enqueueApprovalTransition(async () => {
+      await this.expireApprovals();
+      if (accepted) {
+        const approval = await this.withApprovalExpiryAudit(
+          () => this.approvals.approveAndConsume(token, binding),
+          (value) => this.approvals.revoke(value.id)
+        );
+        try {
+          await this.writeApproval("approved", approval);
+          await this.writeApproval("consumed", approval);
+        } catch (error) {
+          this.approvals.revoke(approval.id);
+          throw error;
+        }
+        return;
+      }
+      const approval = await this.withApprovalExpiryAudit(
+        () => this.approvals.deny(token),
+        (value) => this.approvals.revoke(value.id)
+      );
+      try {
+        await this.writeApproval("denied", approval);
+      } catch (error) {
+        this.approvals.revoke(approval.id);
+        throw error;
+      }
+    });
+  }
+
+  private approvalNotAccepted(binding: ApprovalBinding): MiftahError {
+    return new MiftahError(
+      "POLICY_CONFIRMATION_REQUIRED",
+      `POLICY_CONFIRMATION_REQUIRED: approval was not accepted for '${binding.displayName}'`
+    );
+  }
+
+  private async expireApprovals(): Promise<void> {
+    this.approvals.expire();
+    await this.writeExpiredApprovalTransitions();
+  }
+
+  private async withApprovalExpiryAudit<Result>(
+    operation: () => Result,
+    rollbackOnAuditFailure?: (result: Result) => void
+  ): Promise<Result> {
+    let result: Result;
+    try {
+      result = operation();
+    } catch (error) {
+      try {
+        await this.writeExpiredApprovalTransitions();
+      } catch {
+        // The transition is restored before this throws and the fail-closed audit logger retains its health failure.
+        // Preserve the original approval error because it is the actionable result of this operation.
+      }
+      throw error;
+    }
+    try {
+      await this.writeExpiredApprovalTransitions();
+    } catch (error) {
+      rollbackOnAuditFailure?.(result);
+      throw error;
+    }
+    return result;
+  }
+
+  private enqueueApprovalTransition<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const result = this.approvalTransitions.then(operation, operation);
+    this.approvalTransitions = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async writeExpiredApprovalTransitions(): Promise<void> {
+    const expired = this.approvals.takeExpiredTransitions();
+    for (let index = 0; index < expired.length; index += 1) {
+      try {
+        await this.writeApproval("expired", expired[index]!);
+      } catch (error) {
+        this.approvals.restoreExpiredTransitions(expired.slice(index));
+        throw error;
+      }
+    }
+  }
+
+  private async writeApproval(
+    action: ApprovalAuditAction,
+    approval: ApprovalSummary
+  ): Promise<void> {
+    await this.auditTrail.writeApproval({
+      approvalId: approval.id,
+      approvalSessionId: this.approvals.activeSessionId,
+      approvalAction: action,
+      sourceProfile: approval.sourceProfile,
+      profile: approval.profile,
+      upstream: approval.upstream,
+      operation: approval.operation,
+      name: approval.name,
+      expiresAt: approval.expiresAt
+    });
   }
 
   private trustsToolAnnotations(upstreamName: string | undefined): boolean {
@@ -925,7 +1165,8 @@ export class MiftahServer {
     source: CapturedProfileState,
     upstreamName: string | undefined,
     params: ReadResourceRequest["params"],
-    audit: AuditScope
+    audit: AuditScope,
+    approvalContext?: ApprovalRequestContext
   ): Promise<ReadResourceResult> {
     return this.operationPipeline.execute(
       {
@@ -935,6 +1176,7 @@ export class MiftahServer {
         policyName: "resources/read",
         name: params.uri,
         args: { uri: params.uri },
+        ...(approvalContext === undefined ? {} : { approvalContext }),
         resolveTarget: async (profile) => {
           if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
           const auditUpstream = this.auditUpstreamName(upstreamName);
@@ -955,7 +1197,8 @@ export class MiftahServer {
     source: CapturedProfileState,
     upstreamName: string | undefined,
     params: GetPromptRequest["params"],
-    audit: AuditScope
+    audit: AuditScope,
+    approvalContext?: ApprovalRequestContext
   ): Promise<GetPromptResult> {
     return this.operationPipeline.execute(
       {
@@ -965,6 +1208,7 @@ export class MiftahServer {
         policyName: "prompts/get",
         name: params.name,
         args: { ...(params.arguments ?? {}), name: params.name },
+        ...(approvalContext === undefined ? {} : { approvalContext }),
         resolveTarget: async (profile) => {
           if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
           const auditUpstream = this.auditUpstreamName(upstreamName);

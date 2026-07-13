@@ -20,9 +20,10 @@ export interface AuditHealth {
   lastFailure?: AuditWriteFailure;
 }
 
-export type AuditEventKind = "operation" | "lifecycle";
+export type AuditEventKind = "operation" | "lifecycle" | "approval";
 export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
 export type AuditRoutingSource = "rule" | "active-profile" | "default-profile";
+export type ApprovalAuditAction = "requested" | "approved" | "denied" | "expired" | "consumed";
 
 export interface AuditEvent {
   wrapper: string;
@@ -33,6 +34,10 @@ export interface AuditEvent {
   sessionId?: string;
   sourceProfile?: string;
   upstream?: string;
+  approvalId?: string;
+  approvalSessionId?: string;
+  approvalAction?: ApprovalAuditAction;
+  expiresAt?: string;
   lockToProfile?: string;
   operation: "tools/call" | "resources/read" | "prompts/get" | string;
   name: string;
