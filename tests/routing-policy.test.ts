@@ -187,6 +187,26 @@ describe("routing and policy", () => {
     });
   });
 
+  it("routes a resource read from a canonical provider URI", () => {
+    const engine = new RoutingEngine(
+      { fallback: "activeProfile" },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(
+      engine.resolve({
+        toolName: "resources/read",
+        args: { uri: "https://github.com/acme/miftah/issues/30" }
+      })
+    ).toEqual({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [{ profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }]
+    });
+  });
+
   it.each([
     {
       provider: "github",
@@ -308,6 +328,57 @@ describe("routing and policy", () => {
         })
       )
     ).toBeUndefined();
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "raw-unclassified-secret"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
+  });
+
+  it("treats conflicting canonical provider aliases as ambiguity instead of silently preferring one", () => {
+    const engine = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        alpha: { routing: { match: { github: { repositories: ["acme/alpha"] } } } },
+        beta: { routing: { match: { github: { repositories: ["acme/beta"] } } } }
+      }
+    );
+
+    let failure: unknown;
+    try {
+      engine.resolve({
+        toolName: "github__get_issue",
+        args: {
+          repository: "acme/alpha",
+          repo: "acme/beta",
+          accessToken: "must-not-reach-ambiguity-evidence"
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "ROUTING_AMBIGUOUS",
+      details: {
+        matcherEvidence: [
+          { profile: "alpha", provider: "github", kind: "repository", value: "acme/alpha" },
+          { profile: "beta", provider: "github", kind: "repository", value: "acme/beta" }
+        ]
+      }
+    });
+    expect(JSON.stringify((failure as MiftahError).details)).not.toContain("must-not-reach-ambiguity-evidence");
   });
 
   it("returns an ambiguity error when ask fallback has multiple matches", () => {

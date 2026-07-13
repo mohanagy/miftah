@@ -823,6 +823,39 @@ describe("Miftah MCP wrapper", () => {
     await wrapper.close();
   });
 
+  it("routes a standard resource read through a canonical provider URI matcher", async () => {
+    const resourceUri = "https://github.com/acme/miftah/issues/30";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work", TEST_RESOURCE_URI: resourceUri },
+          routing: { match: { github: { repositories: ["acme/miftah"] } } }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_URI: resourceUri } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "matcher-resource-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect((await client.listResources()).resources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ uri: resourceUri })])
+      );
+      expect(await client.readResource({ uri: resourceUri })).toMatchObject({ contents: [{ text: "work" }] });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("uses the collector snapshot for matching redacted preview and audit evidence", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-route-evidence-"));
     const auditPath = join(directory, "audit.jsonl");

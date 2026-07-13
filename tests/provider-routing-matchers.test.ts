@@ -61,6 +61,22 @@ describe("provider routing matchers", () => {
     ]);
   });
 
+  it("preserves every safe URL alias so conflicting provider matches remain explicit", () => {
+    const input = projectProviderMatcherInput("fetch_context", {
+      url: "https://github.com/acme/alpha/issues/1",
+      issue_url: "https://github.com/acme/beta/issues/2",
+      accessToken: "must-not-reach-a-matcher"
+    });
+
+    expect(input).toEqual({
+      signals: [
+        { provider: "github", kind: "repository", value: "acme/alpha", source: "url" },
+        { provider: "github", kind: "repository", value: "acme/beta", source: "url" }
+      ]
+    });
+    expect(JSON.stringify(input)).not.toContain("must-not-reach-a-matcher");
+  });
+
   it("matches Sentry organization, project, and environment declarations from allowlisted arguments", () => {
     const input = projectProviderMatcherInput("sentry__get_issue", {
       organization: "acme",

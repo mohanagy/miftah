@@ -1,6 +1,10 @@
 import type { ProfileConfig, RoutingConfig, RoutingRule } from "../config/types.js";
 import { MiftahError } from "../utils/errors.js";
-import { matchProviderBindings, projectProviderMatcherInput } from "./provider-matchers.js";
+import {
+  isCanonicalProviderMatcherEvidence,
+  matchProviderBindings,
+  projectProviderMatcherInput
+} from "./provider-matchers.js";
 import type { ProviderMatcherCandidate } from "./provider-matcher-types.js";
 import type { RoutingDecision, RoutingInput, RoutingMatcherEvidence } from "./routing-types.js";
 
@@ -154,14 +158,7 @@ export function matcherEvidenceFromError(error: unknown): readonly RoutingMatche
 
 function isRoutingMatcherEvidence(value: unknown): value is RoutingMatcherEvidence {
   if (!isRecord(value) || !isBoundedPlainText(value.profile, 256) || !isBoundedPlainText(value.value, 256)) return false;
-  if (value.value.includes("?") || value.value.includes("#") || value.value.includes("@")) return false;
-  return (
-    (value.provider === "github" && (value.kind === "repository" || value.kind === "organization")) ||
-    (value.provider === "sentry" && (value.kind === "organization" || value.kind === "project" || value.kind === "environment")) ||
-    (value.provider === "jira" && (value.kind === "site" || value.kind === "project")) ||
-    (value.provider === "linear" && (value.kind === "workspace" || value.kind === "team")) ||
-    (value.provider === "posthog" && (value.kind === "host" || value.kind === "project"))
-  );
+  return isCanonicalProviderMatcherEvidence(value.provider, value.kind, value.value);
 }
 
 function isBoundedPlainText(value: unknown, maximumLength: number): value is string {

@@ -17,6 +17,7 @@ describe("provider routing matcher documentation", () => {
     expect(config).toContain('"github"');
     expect(config).toContain('"repositories"');
     expect(config).toContain("environment hint, project-marker hint, configured rule, static matcher, then fallback");
+    expect(config).toContain("allowlisted `url` and `uri` fields");
     expect(config).toContain("`routing.plugins` remains unsupported");
     expect(config).toContain("Issue #34");
     expect(architecture).toContain("`matcher:<provider>`");
