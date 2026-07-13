@@ -32,6 +32,7 @@ export function checkPack() {
     cwd: repositoryRoot,
     encoding: "utf8",
     env: { ...process.env, npm_config_loglevel: "silent" },
+    shell: false,
     maxBuffer: 10 * 1024 * 1024
   });
 
