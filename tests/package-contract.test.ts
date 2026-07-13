@@ -1,13 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PackageManifest {
+  name?: string;
   version?: string;
+  dependencies?: Record<string, string>;
   repository?: unknown;
   homepage?: unknown;
   bugs?: unknown;
@@ -30,12 +34,19 @@ interface NpmCommand {
   timeoutMs: number;
 }
 
+interface PackageLock {
+  lockfileVersion?: number;
+  requires?: boolean;
+  packages?: Record<string, Record<string, unknown>>;
+}
+
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommandTimeoutMs = 25_000;
 // A fresh consumer resolves package dependencies and is slower on Windows than local pack/build/check commands.
 const consumerInstallTimeoutMs = 120_000;
 const packedArtifactContractTimeoutMs = consumerInstallTimeoutMs + npmCommandTimeoutMs;
 const npmDiagnosticOutputLimit = 8_000;
+const npmTerminationGraceMs = 250;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
@@ -64,6 +75,41 @@ function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
 }
 
+async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
+  const manifest = readPackageManifest();
+  if (!manifest.name) throw new Error("Package manifest is missing a name.");
+
+  const source = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+  const rootPackage = source.packages?.[""];
+  if (!rootPackage || source.lockfileVersion === undefined) {
+    throw new Error("Package lock is missing the root package entry.");
+  }
+
+  const tarball = `file:${basename(tarballPath)}`;
+  const consumerManifest = {
+    name: "miftah-packed-artifact-contract",
+    private: true,
+    dependencies: { [manifest.name]: tarball }
+  };
+  const packedPackage = { ...rootPackage };
+  delete packedPackage.devDependencies;
+  const consumerLock = {
+    name: consumerManifest.name,
+    lockfileVersion: source.lockfileVersion,
+    requires: source.requires,
+    packages: {
+      ...source.packages,
+      "": consumerManifest,
+      [`node_modules/${manifest.name}`]: { ...packedPackage, resolved: tarball }
+    }
+  };
+
+  await Promise.all([
+    writeFile(join(directory, "package.json"), JSON.stringify(consumerManifest)),
+    writeFile(join(directory, "package-lock.json"), JSON.stringify(consumerLock))
+  ]);
+}
+
 function npmInvocation(args: readonly string[]): { command: string; args: readonly string[] } {
   if (npmCliPath) {
     return { command: process.execPath, args: [npmCliPath, ...args] };
@@ -74,16 +120,15 @@ function npmInvocation(args: readonly string[]): { command: string; args: readon
   return { command: "npm", args };
 }
 
-function consumerInstallCommand(tarballPath: string): NpmCommand {
+function consumerInstallCommand(): NpmCommand {
   return {
     args: [
-      "install",
+      "ci",
+      "--omit=dev",
       "--ignore-scripts",
-      "--no-package-lock",
       "--no-audit",
       "--no-fund",
-      "--offline",
-      tarballPath
+      "--offline"
     ],
     timeoutMs: consumerInstallTimeoutMs
   };
@@ -111,14 +156,46 @@ interface NpmCommandResult {
   readonly stderr: string;
 }
 
+interface NpmProcess {
+  readonly stdout: Readable;
+  readonly stderr: Readable;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "close", listener: (status: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+interface NpmSpawnOptions {
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly stdio: ["ignore", "pipe", "pipe"];
+}
+
+type NpmSpawner = (
+  command: string,
+  args: readonly string[],
+  options: NpmSpawnOptions
+) => NpmProcess;
+
+const spawnNpm: NpmSpawner = (command, args, options) =>
+  spawn(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    shell: options.shell,
+    windowsHide: options.windowsHide,
+    stdio: options.stdio
+  });
+
 async function runNpm(
   args: readonly string[],
   cwd = repositoryRoot,
-  timeoutMs = npmCommandTimeoutMs
+  timeoutMs = npmCommandTimeoutMs,
+  spawnProcess: NpmSpawner = spawnNpm
 ): Promise<NpmCommandResult> {
   const invocation = npmInvocation(args);
   return new Promise<NpmCommandResult>((resolve, reject) => {
-    const child = spawn(invocation.command, invocation.args, {
+    const child = spawnProcess(invocation.command, invocation.args, {
       cwd,
       env: { ...process.env, npm_config_loglevel: "silent" },
       shell: false,
@@ -129,16 +206,26 @@ async function runNpm(
     let stderr = "";
     let timedOut = false;
     let settled = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = () => new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
     const settle = (result: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (forceKill !== undefined) clearTimeout(forceKill);
       result();
     };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      forceKill = setTimeout(() => {
+        if (settled) return;
+        child.kill("SIGKILL");
+        settle(() => {
+          reject(timeoutError());
+        });
+      }, npmTerminationGraceMs);
+    }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -156,7 +243,7 @@ async function runNpm(
     child.once("close", (status, signal) => {
       settle(() => {
         if (timedOut) {
-          reject(new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`));
+          reject(timeoutError());
           return;
         }
         if (status !== 0) {
@@ -168,6 +255,17 @@ async function runNpm(
       });
     });
   });
+}
+
+class TermIgnoringNpmProcess extends EventEmitter implements NpmProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly signals: NodeJS.Signals[] = [];
+
+  kill(signal?: NodeJS.Signals): boolean {
+    if (signal !== undefined) this.signals.push(signal);
+    return true;
+  }
 }
 
 function quoteForWindowsCommand(value: string): string {
@@ -271,16 +369,15 @@ describe("package metadata contract", () => {
 });
 
 describe("packed artifact contract", () => {
-  it("requires a cache-only fresh consumer install and its own timeout", () => {
-    expect(consumerInstallCommand("miftah-0.1.1.tgz")).toEqual({
+  it("requires a locked cache-only consumer install and its own timeout", () => {
+    expect(consumerInstallCommand()).toEqual({
       args: [
-        "install",
+        "ci",
+        "--omit=dev",
         "--ignore-scripts",
-        "--no-package-lock",
         "--no-audit",
         "--no-fund",
-        "--offline",
-        "miftah-0.1.1.tgz"
+        "--offline"
       ],
       timeoutMs: 120_000
     });
@@ -311,6 +408,21 @@ describe("packed artifact contract", () => {
     ).rejects.toThrow(
       /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
     );
+  });
+
+  it("escalates an npm timeout when its child ignores SIGTERM", async () => {
+    const child = new TermIgnoringNpmProcess();
+    const spawnTermIgnoringChild: NpmSpawner = () => child;
+    const outcome = await Promise.race([
+      runNpm(["ignored"], repositoryRoot, 5, spawnTermIgnoringChild).then(
+        () => "resolved",
+        (error: unknown) => error
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 500))
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
   it("loads its verifier from a shebang-free ESM module", async () => {
@@ -387,9 +499,14 @@ describe("packed artifact contract", () => {
         const [result] = JSON.parse(packed.stdout) as PackResult[];
         if (!result) throw new Error("npm pack did not report an artifact.");
 
-        const consumerInstall = consumerInstallCommand(join(directory, result.filename));
+        await prepareLockedConsumer(directory, join(directory, result.filename));
+        const consumerInstall = consumerInstallCommand();
         const install = await runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
         expect(install.status, install.stderr || install.stdout).toBe(0);
+        const installedManifest = JSON.parse(
+          await readFile(join(directory, "node_modules", "@lubab", "miftah", "package.json"), "utf8")
+        ) as PackageManifest;
+        expect(installedManifest.dependencies).toEqual(readPackageManifest().dependencies);
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");
