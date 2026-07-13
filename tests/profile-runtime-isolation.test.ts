@@ -2,13 +2,28 @@ import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile, mkdtemp, rm
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProfileConfig } from "../src/config/types.js";
 import { buildContainerIsolationArguments, ProfileRuntimeIsolation } from "../src/isolation/profile-runtime-isolation.js";
 import { createRuntime } from "../src/runtime/create-runtime.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { mergeProfileIsolation } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+
+const unsupportedChmod = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    chmod: (path: Parameters<typeof actual.chmod>[0], mode: Parameters<typeof actual.chmod>[1]) => {
+      if (unsupportedChmod.enabled) {
+        throw Object.assign(new Error("simulated unsupported chmod"), { code: "EOPNOTSUPP" });
+      }
+      return actual.chmod(path, mode);
+    }
+  };
+});
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const supportsNativeProfileRuntimeIsolation = process.platform !== "win32";
@@ -524,6 +539,31 @@ describe("profile runtime isolation", () => {
         code: "UPSTREAM_START_FAILED"
       });
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("fails closed when the filesystem cannot enforce restrictive runtime modes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-unsupported-chmod-"));
+    const credentialsDirectory = join(directory, "credentials");
+    const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, "{}", "utf8");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(join(credentialsDirectory, "oauth.json"), "unsupported-chmod-oauth-secret", "utf8");
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor: new SecretRedactor() });
+
+    try {
+      unsupportedChmod.enabled = true;
+      await expect(
+        isolation.prepare(
+          "work",
+          "default",
+          { files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }] },
+          "stdio"
+        )
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+    } finally {
+      unsupportedChmod.enabled = false;
       await rm(directory, { recursive: true, force: true });
     }
   });

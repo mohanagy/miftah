@@ -798,25 +798,11 @@ async function removeVerifiedTemporary(
 }
 
 async function setRestrictiveMode(path: string, mode: number): Promise<void> {
-  try {
-    await chmod(path, mode);
-  } catch (error) {
-    if (!isUnsupportedPermissionOperation(error)) {
-      throw error;
-    }
-  }
+  await chmod(path, mode);
 }
 
 async function setHandleRestrictiveMode(handle: Awaited<ReturnType<typeof open>>, mode: number): Promise<void> {
-  try {
-    await handle.chmod(mode);
-  } catch (error) {
-    if (!isUnsupportedPermissionOperation(error)) throw error;
-  }
-}
-
-function isUnsupportedPermissionOperation(error: unknown): boolean {
-  return isErrorCode(error, "ENOSYS") || isErrorCode(error, "ENOTSUP") || isErrorCode(error, "EOPNOTSUPP");
+  await handle.chmod(mode);
 }
 
 function isWithin(parent: string, child: string): boolean {
