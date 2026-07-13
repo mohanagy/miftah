@@ -49,8 +49,6 @@ describe("config runtime parity", () => {
     ["routing.plugins", { routing: { plugins: {} } }],
     ["profiles.default.metadata", { profiles: { default: { metadata: { owner: "team" } } } }],
     ["profiles.default.metadata", { profiles: { default: { metadata: "team" } } }],
-    ["profiles.default.routing.match", { profiles: { default: { routing: { match: { repo: "acme/miftah" } } } } }],
-    ["profiles.default.routing.match", { profiles: { default: { routing: { match: "acme/miftah" } } } }],
     ["security.redactSecrets", { security: { redactSecrets: false } }],
     ["audit.redact", { audit: { redact: false } }],
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: "safe_" } }],

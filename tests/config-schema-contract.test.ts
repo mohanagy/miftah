@@ -180,7 +180,35 @@ describe("published config schema", () => {
       }
     });
     expect(profile.properties).not.toHaveProperty("metadata");
-    expect(profile.properties).not.toHaveProperty("routing");
+    expect(profile.properties?.routing).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["match"],
+      properties: {
+        match: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            github: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                repositories: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 32,
+                  uniqueItems: true
+                }
+              }
+            },
+            sentry: { type: "object", additionalProperties: false },
+            jira: { type: "object", additionalProperties: false },
+            linear: { type: "object", additionalProperties: false },
+            posthog: { type: "object", additionalProperties: false }
+          }
+        }
+      }
+    });
     expect(profileUpstreamOverride.properties).toHaveProperty("args");
     expect(profileUpstreamOverride.properties).toHaveProperty("env");
     expect(profileUpstreamOverride.properties).toHaveProperty("cwd");

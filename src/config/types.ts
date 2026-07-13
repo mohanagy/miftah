@@ -107,6 +107,51 @@ export interface ProfileUpstreamOverride {
   isolation?: ProfileIsolationConfig;
 }
 
+/** GitHub identifiers that can select a profile through Miftah's built-in matcher. */
+export interface GitHubProfileRoutingMatch {
+  repositories?: string[];
+  organizations?: string[];
+}
+
+/** Sentry identifiers that can select a profile through Miftah's built-in matcher. */
+export interface SentryProfileRoutingMatch {
+  organizations?: string[];
+  projects?: string[];
+  environments?: string[];
+}
+
+/** Jira identifiers that can select a profile through Miftah's built-in matcher. */
+export interface JiraProfileRoutingMatch {
+  sites?: string[];
+  projects?: string[];
+}
+
+/** Linear identifiers that can select a profile through Miftah's built-in matcher. */
+export interface LinearProfileRoutingMatch {
+  workspaces?: string[];
+  teams?: string[];
+}
+
+/** PostHog identifiers that can select a profile through Miftah's built-in matcher. */
+export interface PostHogProfileRoutingMatch {
+  hosts?: string[];
+  projects?: string[];
+}
+
+/** Static, provider-specific identifiers that may route to one profile. */
+export interface ProfileRoutingMatchConfig {
+  github?: GitHubProfileRoutingMatch;
+  sentry?: SentryProfileRoutingMatch;
+  jira?: JiraProfileRoutingMatch;
+  linear?: LinearProfileRoutingMatch;
+  posthog?: PostHogProfileRoutingMatch;
+}
+
+/** Opt-in static provider matcher declarations for a profile. */
+export interface ProfileRoutingConfig {
+  match: ProfileRoutingMatchConfig;
+}
+
 /** Requires a fresh explicit profile selection before the named risky operations can run. */
 export interface ProfileLeaseConfig {
   ttlMs: number;
@@ -128,6 +173,7 @@ export interface ProfileConfig {
   identity?: IdentityConfig;
   lease?: ProfileLeaseConfig;
   isolation?: ProfileIsolationConfig;
+  routing?: ProfileRoutingConfig;
   upstreams?: Record<string, ProfileUpstreamOverride>;
 }
 

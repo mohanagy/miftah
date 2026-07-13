@@ -26,11 +26,13 @@ await runtime.connect(new StdioServerTransport());
 
 ## Type exports
 
-The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `MiftahConfig`, `PolicyConfig`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SecretsConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `GitHubProfileRoutingMatch`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
 
 `StateConfig` makes active-profile persistence explicit. Its durable `workspace` and `global` scopes require `persistActiveProfile: true`; custom state-file paths are intentionally not part of the public API.
 
 `UpstreamConfig.trustToolAnnotations` is opt-in and defaults to false. `ToolingConfig.unknownToolRisk` uses the exported `UnknownToolRisk` union (`"write" | "destructive"`) and defaults to `"destructive"`; callers can use exact `toolRiskOverrides` for known read tools.
+
+`ProfileRoutingConfig` describes opt-in identifiers for Miftah's fixed in-tree provider matchers. It is declarative configuration only: it does not load third-party code, resolve secrets, or grant a matcher access to process or network APIs.
 
 For identity configurations, format-dependent structural constraints and unique `requiredForRisk` tuples are static. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 
