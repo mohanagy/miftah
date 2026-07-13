@@ -139,7 +139,8 @@ const whoamiInputSchema =
       }
     : process.env.TEST_WHOAMI_SCHEMA === "malformed-required"
       ? { type: "object", properties: {}, required: "account" }
-    : { type: "object", properties: {} };
+      : { type: "object", properties: {} };
+const createItemAnnotations = parseOptionalJson(process.env.TEST_CREATE_ITEM_ANNOTATIONS, "TEST_CREATE_ITEM_ANNOTATIONS");
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
   { capabilities: { tools: {}, resources: {}, prompts: {} } }
@@ -149,6 +150,15 @@ server.oninitialized = () => {
     void delay(0).then(() => process.exit(1));
   }
 };
+
+function parseOptionalJson(value, variableName) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${variableName} must contain valid JSON`);
+  }
+}
 
 if (failInitialize || clientInfoPath) {
   server.setRequestHandler(InitializeRequestSchema, async (request) => {
@@ -233,7 +243,8 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
                 type: "object",
                 properties: { name: { type: "string" } },
                 required: ["name"]
-              }
+              },
+              ...(createItemAnnotations === undefined ? {} : { annotations: createItemAnnotations })
             }
           ]),
       ...(includeIdentityTool && !secondPage

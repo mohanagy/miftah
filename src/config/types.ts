@@ -8,6 +8,8 @@ export interface UpstreamConfig {
   cwd?: string;
   url?: string;
   headers?: Record<string, string>;
+  /** Explicitly permits this configured upstream's MCP tool annotations to influence risk classification. */
+  trustToolAnnotations?: boolean;
 }
 
 /** Non-secret account attributes used to validate an upstream identity. */
@@ -112,6 +114,8 @@ export interface ValidatedRoutingConfig extends Omit<RoutingConfig, "mode"> {
 }
 
 export type RiskLevel = "read" | "write" | "destructive";
+/** Conservative defaults allowed for tools whose risk cannot be classified. */
+export type UnknownToolRisk = "write" | "destructive";
 export type ToolDiscoveryMode = "permissive" | "strict";
 
 export interface PolicyConfig {
@@ -153,6 +157,7 @@ export interface ToolingConfig {
   collisionStrategy?: "prefix-upstream" | "fail";
   toolDiscoveryMode?: ToolDiscoveryMode;
   toolRiskOverrides?: Record<string, RiskLevel>;
+  unknownToolRisk?: UnknownToolRisk;
 }
 
 /** Configures provider-backed secret resolution. */

@@ -20,6 +20,8 @@ export interface AuditScopeUpdate {
   policyName?: string;
   policyDecision?: AuditEvent["policyDecision"];
   risk?: AuditEvent["risk"];
+  riskSource?: AuditEvent["riskSource"];
+  riskConfidence?: AuditEvent["riskConfidence"];
   identity?: AuditEvent["identity"];
   routingEvidence?: RoutingContextEvidence;
 }
@@ -145,6 +147,8 @@ export class AuditScope {
       ...(this.event.policyName === undefined ? {} : { policyName: this.event.policyName }),
       ...(this.event.policyDecision === undefined ? {} : { policyDecision: this.event.policyDecision }),
       ...(this.event.risk === undefined ? {} : { risk: this.event.risk }),
+      ...(this.event.riskSource === undefined ? {} : { riskSource: this.event.riskSource }),
+      ...(this.event.riskConfidence === undefined ? {} : { riskConfidence: this.event.riskConfidence }),
       ...(this.event.identity === undefined ? {} : { identity: this.event.identity }),
       ...(this.event.routingEvidence === undefined ? {} : { routingEvidence: this.event.routingEvidence }),
       ...(this.event.arguments === undefined ? {} : { arguments: this.event.arguments }),

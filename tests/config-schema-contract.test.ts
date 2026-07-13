@@ -45,6 +45,22 @@ const validStateConfig: MiftahConfig = {
 };
 void validStateConfig;
 
+const validRiskClassificationConfig: MiftahConfig = {
+  ...publicConfig,
+  upstream: { transport: "stdio", command: "node", trustToolAnnotations: true },
+  tooling: { unknownToolRisk: "destructive" }
+};
+void validRiskClassificationConfig;
+
+const invalidRiskClassificationConfig: MiftahConfig = {
+  ...publicConfig,
+  tooling: {
+    // @ts-expect-error Unknown tool risk must be a supported risk level.
+    unknownToolRisk: "unsafe"
+  }
+};
+void invalidRiskClassificationConfig;
+
 const invalidInMemoryStateConfig: MiftahConfig = {
   ...publicConfig,
   // @ts-expect-error In-memory scopes cannot opt in to durable persistence.
@@ -104,6 +120,7 @@ describe("published config schema", () => {
   it("advertises only the runtime-supported configuration surface", () => {
     const schema = generateConfigSchema() as unknown as ConfigSchema;
     const root = schema.properties;
+    const upstream = root?.upstream?.properties;
     const routing = root?.routing?.properties;
     const profile = mapValue(root?.profiles, "profiles");
     const profileUpstreamOverride = mapValue(profile.properties?.upstreams, "profile upstreams");
@@ -120,6 +137,7 @@ describe("published config schema", () => {
       additionalProperties: false
     });
     expect(root).not.toHaveProperty("ui");
+    expect(upstream).toMatchObject({ trustToolAnnotations: { type: "boolean" } });
     expect(routing).toMatchObject({ mode: { const: "hybrid" } });
     expect(routing).not.toHaveProperty("plugins");
     expect(profile.properties).toHaveProperty("headers");
@@ -150,7 +168,10 @@ describe("published config schema", () => {
     });
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
-    expect(tooling).toMatchObject({ toolDiscoveryMode: { enum: ["permissive", "strict"] } });
+    expect(tooling).toMatchObject({
+      toolDiscoveryMode: { enum: ["permissive", "strict"] },
+      unknownToolRisk: { enum: ["write", "destructive"] }
+    });
     expect(secrets).toMatchObject({
       providerTimeoutMs: { minimum: 100, maximum: 120_000 }
     });

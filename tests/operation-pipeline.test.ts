@@ -5,10 +5,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { AuditTrail } from "../src/audit/audit-trail.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { IdentityManager } from "../src/identity/identity-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
+import { OperationPipeline } from "../src/mcp/server/operation-pipeline.js";
+import { PolicyEngine } from "../src/policy/policy-engine.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
+import { RoutingEngine } from "../src/routing/routing-engine.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
+import { SecretRedactor } from "../src/secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
@@ -1220,5 +1226,58 @@ describe("operation pipeline", () => {
       await client.close();
       await wrapper.close();
     }
+  });
+});
+
+describe("operation pipeline routed risk", () => {
+  it("uses cached target metadata before policy without resolving the target", async () => {
+    const profiles = new ProfileManager({
+      defaultProfile: "source",
+      profiles: { source: { policy: "readonly" }, target: { policy: "readonly" } }
+    });
+    let targetResolved = false;
+    let upstreamRequested = false;
+    const pipeline = new OperationPipeline({
+      profiles,
+      routing: new RoutingEngine({ rules: [{ when: { "args.account": "target" }, profile: "target" }] }, "source"),
+      policy: new PolicyEngine({ readonly: { allowRisk: ["read"] } }),
+      upstreams: {
+        get: async () => {
+          upstreamRequested = true;
+          throw new Error("The untrusted routed target must be blocked before it is contacted.");
+        }
+      } as unknown as UpstreamProcessManager,
+      redactor: new SecretRedactor(),
+      routingContext: async () => ({ context: {}, evidence: { cwd: "", fileRoots: [] }, profileHints: [] }),
+      identities: { requiresVerification: () => false } as unknown as IdentityManager
+    });
+    const audit = new AuditTrail("test").beginOperation({
+      operation: "tools/call",
+      name: "create_item",
+      sourceProfile: "source"
+    });
+
+    await expect(
+      pipeline.execute(
+        {
+          source: profiles.current(),
+          operation: "tools/call",
+          routingName: "create_item",
+          policyName: "create_item",
+          name: "create_item",
+          args: { account: "target" },
+          riskMetadata: { trusted: true, annotations: { readOnlyHint: true } },
+          riskMetadataForProfile: () => ({ trusted: false, annotations: { readOnlyHint: true } }),
+          resolveTarget: async () => {
+            targetResolved = true;
+            throw new Error("The target must not be resolved before policy blocks it.");
+          }
+        },
+        audit
+      )
+    ).rejects.toMatchObject({ code: "POLICY_BLOCKED" });
+
+    expect(targetResolved).toBe(false);
+    expect(upstreamRequested).toBe(false);
   });
 });

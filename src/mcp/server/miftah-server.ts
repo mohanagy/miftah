@@ -30,6 +30,7 @@ import type {
   RoutingContextSnapshot
 } from "../../routing/routing-types.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
+import type { ToolRiskMetadata } from "../../policy/risk-classifier.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
 import type { IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
@@ -54,6 +55,7 @@ import {
   canonicalJson,
   ToolRegistry,
   type DiscoveredTools,
+  type RegisteredTool,
   type ToolDiscoveryResult,
   type ToolSnapshot
 } from "./tool-registry.js";
@@ -96,6 +98,20 @@ export function resolveClientVisibleToolName(
     return `upstream_${name}`;
   }
   return name;
+}
+
+/** Checks that a cached routed tool still denotes the same upstream operation before using its risk hints. */
+export function hasCompatibleCachedToolTarget(
+  source: RegisteredTool | undefined,
+  target: RegisteredTool | undefined
+): target is RegisteredTool {
+  return (
+    source !== undefined &&
+    target !== undefined &&
+    source.fingerprint === target.fingerprint &&
+    source.originalName === target.originalName &&
+    source.upstreamName === target.upstreamName
+  );
 }
 
 function tool(name: string, description: string, required: string[] = [], optional: string[] = []): Tool {
@@ -210,7 +226,9 @@ export class MiftahServer {
       }
     );
     this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile);
-    this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {});
+    this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {}, {
+      unknownRisk: config.tooling?.unknownToolRisk
+    });
     this.identities = new IdentityManager(config);
     this.toolRegistry = new ToolRegistry(
       (profile) => this.discoverTools(profile),
@@ -528,6 +546,10 @@ export class MiftahServer {
         policyName: mapped.originalName,
         name: mapped.originalName,
         args,
+        riskMetadataForProfile: (profile) => {
+          const target = this.toolRegistry.peek(profile)?.resolve(name);
+          return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
+        },
         requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
         resolveTarget: async (profile) => {
           const target = (await this.toolRegistry.get(profile)).resolve(name);
@@ -537,10 +559,16 @@ export class MiftahServer {
               `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${profile}'`
             );
           }
-          if (target.fingerprint !== mapped.fingerprint) {
+          if (target.fingerprint !== mapped.fingerprint || target.originalName !== mapped.originalName) {
             throw new MiftahError(
               "TOOL_SCHEMA_MISMATCH",
               `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
+            );
+          }
+          if (target.upstreamName !== mapped.upstreamName) {
+            throw new MiftahError(
+              "TOOL_SCHEMA_MISMATCH",
+              `TOOL_SCHEMA_MISMATCH: tool '${name}' resolves to a different upstream for routed profile '${profile}'`
             );
           }
           return {
@@ -689,13 +717,26 @@ export class MiftahServer {
         profileHints: snapshot.profileHints
       }, source.activeProfile);
       const profile = this.profiles.get(route.profile);
-      const policy = this.policy.evaluate(profile.policy, toolName);
+      const sourceTool = this.toolRegistry.peek(source.activeProfile)?.resolve(toolName);
+      const targetTool =
+        sourceTool === undefined
+          ? undefined
+          : this.toolRegistry.peek(route.profile)?.resolve(toolName);
+      const hasCompatibleCachedTarget = hasCompatibleCachedToolTarget(sourceTool, targetTool);
+      const policyName = sourceTool?.originalName ?? toolName;
+      const policy = this.policy.evaluate(
+        profile.policy,
+        policyName,
+        hasCompatibleCachedTarget && targetTool !== undefined ? this.riskMetadata(targetTool) : undefined
+      );
       audit.update({
         profile: route.profile,
         routingReason: route.reason,
         policyName: profile.policy ?? "default",
         policyDecision: policy.action,
         risk: policy.risk,
+        riskSource: policy.riskSource,
+        riskConfidence: policy.riskConfidence,
         routingEvidence: evidence
       });
       return textResult(JSON.stringify({ ...route, policy, evidence, identity: this.identityStatuses(route.profile) }));
@@ -705,6 +746,23 @@ export class MiftahServer {
 
   private exposedToolName(name: string, upstreamName?: string): string {
     return resolveClientVisibleToolName(name, upstreamName, this.config.tooling?.collisionStrategy);
+  }
+
+  private riskMetadata(tool: RegisteredTool): ToolRiskMetadata {
+    return {
+      trusted: this.trustsToolAnnotations(tool.upstreamName),
+      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
+    };
+  }
+
+  private trustsToolAnnotations(upstreamName: string | undefined): boolean {
+    if (this.config.upstream !== undefined) return this.config.upstream.trustToolAnnotations === true;
+    return (
+      upstreamName !== undefined &&
+      this.config.upstreams !== undefined &&
+      Object.hasOwn(this.config.upstreams, upstreamName) &&
+      this.config.upstreams[upstreamName]!.trustToolAnnotations === true
+    );
   }
 
   private upstreamNames(): (string | undefined)[] {

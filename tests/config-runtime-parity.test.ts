@@ -11,6 +11,9 @@ const checkedInExamples = [
   "sentry.miftah.json"
 ];
 const unsupportedConfigOption = "UNSUPPORTED_CONFIG_OPTION";
+const upstreamTrustPathPattern = /upstream\.trustToolAnnotations/u;
+const unknownToolRiskPathPattern = /tooling\.unknownToolRisk/u;
+const profileUpstreamTrustPathPattern = /profiles\.default\.upstreams\.primary\.trustToolAnnotations/u;
 
 function baseConfig(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -85,6 +88,27 @@ describe("config runtime parity", () => {
     expect(missingDurableOptIn.message).toContain("state.persistActiveProfile");
     expect(malformedPersistence.code).toBe("CONFIG_SCHEMA_INVALID");
     expect(malformedPersistence.message).toContain("state.persistActiveProfile");
+  });
+
+  it("requires explicit annotation trust and validates the unknown-tool risk default", () => {
+    const config = validateConfig(
+      baseConfig({
+        upstream: { transport: "stdio", command: "node", trustToolAnnotations: true },
+        tooling: { unknownToolRisk: "destructive" }
+      })
+    );
+
+    expect(config.upstream?.trustToolAnnotations).toBe(true);
+    expect(config.tooling?.unknownToolRisk).toBe("destructive");
+    expect(() => validateConfig(baseConfig({ upstream: { transport: "stdio", command: "node", trustToolAnnotations: "true" } }))).toThrow(
+      upstreamTrustPathPattern
+    );
+    expect(() => validateConfig(baseConfig({ tooling: { unknownToolRisk: "read" } }))).toThrow(unknownToolRiskPathPattern);
+    expect(() => validateConfig(baseConfig({
+      upstreams: { primary: { transport: "stdio", command: "node" } },
+      upstream: undefined,
+      profiles: { default: { upstreams: { primary: { trustToolAnnotations: true } } } }
+    }))).toThrow(profileUpstreamTrustPathPattern);
   });
 
   it.each([
