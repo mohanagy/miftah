@@ -62,6 +62,52 @@ On macOS Miftah runs the fixed `/usr/bin/security find-generic-password -s <serv
 
 For `secretref:op`, noninteractive launches require an inherited `OP_SERVICE_ACCOUNT_TOKEN`; Miftah fails closed before invoking `op` when it is absent. Interactive 1Password desktop/CLI authentication is allowed only when both standard input and output are TTYs, and remains subject to `providerTimeoutMs`. Miftah registers a successful provider value and the inherited service-account token with the shared redactor before either can cross an error, audit, health, or response boundary.
 
+## Profile credential isolation
+
+`profiles.<profile>.isolation` is an opt-in, POSIX-only filesystem boundary for a local STDIO target. Miftah derives a deterministic runtime tree from the canonical configuration file, profile, and upstream name; it never accepts an operator-selected runtime root. The tree contains `home`, `appdata`, `localappdata`, and `xdg/config`, `xdg/cache`, `xdg/data`, `xdg/state`, and `xdg/runtime`. On macOS and Linux, Miftah verifies owner control, uses restrictive `0700` directories and `0600` copied files where the platform supports those modes, and refuses a reused target without its matching Miftah marker.
+
+Use `files` to copy an existing regular file below the canonical configuration directory into that runtime tree. Both `source` and `destination` are bounded relative paths; symlinks, traversal, non-regular files, files larger than 1 MiB, and paths outside the canonical configuration directory fail closed. An optional `environment` binding receives the generated host path. Miftah injects the generated HOME/XDG and Windows-compatible environment names after configured upstream/profile environment values, and mappings cannot replace those generated names.
+
+```json
+{
+  "upstream": {
+    "transport": "stdio",
+    "command": "docker",
+    "args": ["run", "-i", "--rm", "example/mcp@sha256:<digest>", "stdio"]
+  },
+  "profiles": {
+    "work": {
+      "isolation": {
+        "files": [
+          {
+            "source": "credentials/work-oauth.json",
+            "destination": "credentials/oauth.json",
+            "environment": "OAUTH_CREDENTIAL_PATH"
+          }
+        ],
+        "containerVolumes": [
+          {
+            "source": "credentials/oauth.json",
+            "destination": "/run/miftah/oauth.json",
+            "environment": "OAUTH_CREDENTIAL_PATH"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+`containerVolumes` is available only for an exact local Docker/Podman `run` STDIO command. Its `source` is relative to the generated runtime tree, while its `destination` is a normalized absolute POSIX path in the container. `readOnly` defaults to `true`; set `readOnly: false` only when the container must write that path. Miftah emits fixed `--mount` and `--env` argument arrays before the image, never a shell string. It maps known runtime directories to HOME/XDG/platform environment names in the container and maps an explicit `environment` to its container destination. Existing mount, tmpfs, device, `--env-file`, or conflicting generated environment flags fail closed instead of relying on Docker/Podman flag precedence. A host runtime path containing Docker mount grammar delimiters also fails closed.
+
+Miftah rejects an explicit `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `PODMAN_CONNECTIONS_CONF`, or `CONTAINERS_CONF` because a remote engine would interpret a local runtime path on another machine. It also rejects Podman isolation on macOS, where the normal Podman machine is remote from the client. The Docker/Podman daemon and its default local connection remain an operator trust boundary; Miftah does not inspect daemon configuration. It rechecks the runtime root and each volume source before returning argv, but a hostile same-user process can still race a filesystem path after that check and before the engine resolves it.
+
+A named-upstream isolation object augments its profile isolation object for that target. Duplicate destinations and generated environment bindings fail closed; the one intentional exception is a container volume that mounts the exact copied-file destination and carries that file's same `environment` name, as in the example above. The native child receives the generated host path, while Docker/Podman receives the explicit container path.
+
+Miftah copies files atomically before startup, registers copied content and generated paths with its redactor, and replaces all stderr from a child that receives copied files or container volumes with a fixed `[REDACTED]` marker. It does not create backups, perform automatic migration, or clean up profile runtime trees: **Miftah never removes** an existing runtime tree or an upstream-created OAuth session. Stop the wrapper before manually removing only a directory whose marker you have verified; Miftah has no cleanup command.
+
+Windows profile credential isolation is currently rejected before any runtime file is materialized, because Node mode bits cannot install and verify the restrictive Windows DACL this boundary requires. Remote HTTP/SSE transports are also rejected. Use normal secret references on Windows until a verified ACL implementation is available.
+
 ## Remote upstream transports
 
 Use `transport: "streamable-http"` for new remote MCP servers. The historical `transport: "http"` value remains a Streamable HTTP compatibility alias. `transport: "sse"` supports legacy SSE servers but is deprecated and should be used only while an upstream has not migrated. `transport: "stdio"` remains the local-process default.

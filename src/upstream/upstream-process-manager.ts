@@ -475,6 +475,11 @@ export class UpstreamProcessManager {
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.headers)
       : undefined;
     const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
+    const baseEnvironment = mergeEnvironment(
+      getDefaultEnvironment(),
+      upstreamEnvironment?.values,
+      profileEnvironment?.values
+    );
     let isolationEnvironment: Record<string, string> | undefined;
     let suppressStderr = false;
     if (profile.isolation !== undefined) {
@@ -488,17 +493,16 @@ export class UpstreamProcessManager {
         profileName,
         this.upstreamName,
         profile.isolation,
-        this.upstream.transport
+        this.upstream.transport,
+        this.upstream.command,
+        args,
+        baseEnvironment
       );
       isolationEnvironment = preparedIsolation.environment;
       suppressStderr = preparedIsolation.suppressStderr;
+      args = preparedIsolation.args;
     }
-    const environment = mergeEnvironment(
-      getDefaultEnvironment(),
-      upstreamEnvironment?.values,
-      profileEnvironment?.values,
-      isolationEnvironment
-    );
+    const environment = mergeEnvironment(baseEnvironment, isolationEnvironment);
     const headers = mergeHeaders(upstreamHeaders?.values, profileHeaders?.values);
     for (const value of [
       ...(upstreamEnvironment?.secretValues ?? []),

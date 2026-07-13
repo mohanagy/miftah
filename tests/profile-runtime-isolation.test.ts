@@ -1,15 +1,17 @@
-import { mkdir, readFile, stat, symlink, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, symlink, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ProfileConfig } from "../src/config/types.js";
-import { ProfileRuntimeIsolation } from "../src/isolation/profile-runtime-isolation.js";
+import { buildContainerIsolationArguments, ProfileRuntimeIsolation } from "../src/isolation/profile-runtime-isolation.js";
 import { createRuntime } from "../src/runtime/create-runtime.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
+import { mergeProfileIsolation } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const supportsNativeProfileRuntimeIsolation = process.platform !== "win32";
 
 interface IsolationReport {
   home: string;
@@ -27,7 +29,7 @@ async function readReport(path: string): Promise<IsolationReport> {
 }
 
 describe("profile runtime isolation", () => {
-  it("namespaces runtime state by canonical config file rather than only its directory", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("namespaces runtime state by canonical config file rather than only its directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-config-identity-"));
     const workConfigPath = join(directory, "work.miftah.json");
     const personalConfigPath = join(directory, "personal.miftah.json");
@@ -56,7 +58,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("wires configuration-relative file isolation through the production runtime factory", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("wires configuration-relative file isolation through the production runtime factory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-runtime-"));
     const credentialsDirectory = join(directory, "credentials");
     const configPath = join(directory, "miftah.json");
@@ -99,7 +101,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("adds named-upstream file mappings to the profile isolation tree", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("adds named-upstream file mappings to the profile isolation tree", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-bundle-"));
     const credentialsDirectory = join(directory, "credentials");
     const configPath = join(directory, "miftah.json");
@@ -151,7 +153,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("materializes independent owner-restricted credential homes before each STDIO profile starts", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("materializes independent owner-restricted credential homes before each STDIO profile starts", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-"));
     const credentialsDirectory = join(directory, "credentials");
     const configPath = join(directory, "miftah.json");
@@ -248,7 +250,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("atomically rematerializes mapped files on restart and never deletes source files or runtime state", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("atomically rematerializes mapped files on restart and never deletes source files or runtime state", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-restart-"));
     const credentialsDirectory = join(directory, "credentials");
     const configPath = join(directory, "miftah.json");
@@ -360,7 +362,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("does not claim a pre-existing target runtime directory without its ownership marker", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("does not claim a pre-existing target runtime directory without its ownership marker", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-marker-"));
     const configPath = join(directory, "miftah.json");
     await writeFile(configPath, "{}", "utf8");
@@ -436,7 +438,22 @@ describe("profile runtime isolation", () => {
     }
   );
 
-  it.each(["win32", "darwin"] as const)(
+  it("fails closed for Windows profile isolation until a restrictive DACL can be installed and verified", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-windows-dacl-"));
+    const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, "{}", "utf8");
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor: new SecretRedactor(), platform: "win32" });
+
+    try {
+      await expect(isolation.prepare("work", "default", {}, "stdio")).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["darwin"] as const)(
     "rejects %s-equivalent runtime destinations before materializing either file",
     async (platform) => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-windows-"));
@@ -468,4 +485,279 @@ describe("profile runtime isolation", () => {
     }
     }
   );
+
+  it("generates ordered read-only Docker bind mounts and container environment bindings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-docker-"));
+    await mkdir(join(root, "home"), { recursive: true });
+    await mkdir(join(root, "xdg", "config"), { recursive: true });
+    await mkdir(join(root, "credentials"), { recursive: true });
+    await writeFile(join(root, "credentials", "oauth.json"), "container-oauth-secret", "utf8");
+
+    try {
+      const canonicalRoot = await realpath(root);
+      await expect(
+        buildContainerIsolationArguments(
+          "/usr/local/bin/docker",
+          ["run", "-it", "--rm", "registry.example/mcp@sha256:abc", "stdio"],
+          root,
+          [
+            { source: "home", destination: "/home/miftah" },
+            { source: "xdg/config", destination: "/var/lib/miftah/config" },
+            {
+              source: "credentials/oauth.json",
+              destination: "/run/miftah/oauth.json",
+              environment: "OAUTH_CREDENTIAL_PATH"
+            }
+          ],
+          {}
+        )
+      ).resolves.toEqual([
+        "run",
+        "--mount",
+        `type=bind,src=${join(canonicalRoot, "home")},dst=/home/miftah,readonly`,
+        "--env",
+        "HOME=/home/miftah",
+        "--env",
+        "USERPROFILE=/home/miftah",
+        "--mount",
+        `type=bind,src=${join(canonicalRoot, "xdg", "config")},dst=/var/lib/miftah/config,readonly`,
+        "--env",
+        "XDG_CONFIG_HOME=/var/lib/miftah/config",
+        "--mount",
+        `type=bind,src=${join(canonicalRoot, "credentials", "oauth.json")},dst=/run/miftah/oauth.json,readonly`,
+        "--env",
+        "OAUTH_CREDENTIAL_PATH=/run/miftah/oauth.json",
+        "-it",
+        "--rm",
+        "registry.example/mcp@sha256:abc",
+        "stdio"
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps explicitly writable Podman mounts and unrelated container environment bindings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-podman-"));
+    await mkdir(join(root, "appdata"), { recursive: true });
+
+    try {
+      const canonicalRoot = await realpath(root);
+      await expect(
+        buildContainerIsolationArguments(
+          "podman.exe",
+          ["run", "-e", "UNRELATED=value", "image", "stdio"],
+          root,
+          [{ source: "appdata", destination: "/var/lib/app", readOnly: false }],
+          {},
+          "linux"
+        )
+      ).resolves.toEqual([
+        "run",
+        "--mount",
+        `type=bind,src=${join(canonicalRoot, "appdata")},dst=/var/lib/app`,
+        "--env",
+        "APPDATA=/var/lib/app",
+        "-e",
+        "UNRELATED=value",
+        "image",
+        "stdio"
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not give a case-distinct runtime path generated HOME/XDG semantics", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-container-case-"));
+    await mkdir(join(root, "Home"), { recursive: true });
+
+    try {
+      const args = await buildContainerIsolationArguments(
+        "docker",
+        ["run", "image"],
+        root,
+        [{ source: "Home", destination: "/case-distinct" }],
+        {}
+      );
+      expect(args).toEqual([
+        "run",
+        "--mount",
+        `type=bind,src=${join(await realpath(root), "Home")},dst=/case-distinct,readonly`,
+        "image"
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("returns generated Docker argv from the prepared profile target", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-prepared-container-"));
+    const configPath = join(directory, "miftah.json");
+    const credentialsDirectory = join(directory, "credentials");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(configPath, "{}", "utf8");
+    await writeFile(join(credentialsDirectory, "oauth.json"), "prepared-container-oauth-secret", "utf8");
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor: new SecretRedactor() });
+
+    try {
+      const prepared = await isolation.prepare(
+        "work",
+        "default",
+        {
+          files: [
+            {
+              source: "credentials/oauth.json",
+              destination: "credentials/oauth.json",
+              environment: "OAUTH_CREDENTIAL_PATH"
+            }
+          ],
+          containerVolumes: [
+            {
+              source: "credentials/oauth.json",
+              destination: "/run/miftah/oauth.json",
+              environment: "OAUTH_CREDENTIAL_PATH"
+            }
+          ]
+        },
+        "stdio",
+        "docker",
+        ["run", "image", "stdio"],
+        {}
+      );
+
+      expect(prepared.args).toEqual([
+        "run",
+        "--mount",
+        `type=bind,src=${prepared.environment.OAUTH_CREDENTIAL_PATH},dst=/run/miftah/oauth.json,readonly`,
+        "--env",
+        "OAUTH_CREDENTIAL_PATH=/run/miftah/oauth.json",
+        "image",
+        "stdio"
+      ]);
+      expect(prepared.suppressStderr).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe container commands, mounts, and generated environment conflicts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-container-reject-"));
+    await mkdir(join(root, "home"), { recursive: true });
+    const volume = [{ source: "home", destination: "/home/miftah" }];
+
+    try {
+      await expect(buildContainerIsolationArguments(process.execPath, ["run", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "--mount", "type=tmpfs,dst=/x", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "--env=HOME=/unsafe", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "-itv", "/host:/mnt", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "-iteHOME=/unsafe", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "--tmpfs", "/home/miftah", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["run", "--device", "/dev/fuse", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+      await expect(buildContainerIsolationArguments("docker", ["create", "image"], root, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Docker mount grammar collisions from generated host paths and duplicate destinations", async () => {
+    const commaRoot = await mkdtemp(join(tmpdir(), "miftah,profile-isolation-container-"));
+    const regularRoot = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-container-duplicate-"));
+    await mkdir(join(commaRoot, "home"), { recursive: true });
+    await mkdir(join(regularRoot, "home"), { recursive: true });
+    await mkdir(join(regularRoot, "appdata"), { recursive: true });
+
+    try {
+      await expect(
+        buildContainerIsolationArguments("docker", ["run", "image"], commaRoot, [
+          { source: "home", destination: "/home/miftah" }
+        ])
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(
+        buildContainerIsolationArguments("docker", ["run", "image"], regularRoot, [
+          { source: "home", destination: "/shared" },
+          { source: "appdata", destination: "/shared" }
+        ])
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+    } finally {
+      await rm(commaRoot, { recursive: true, force: true });
+      await rm(regularRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects remote container engines and a symlinked runtime root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-container-engine-"));
+    const linkedRoot = join(dirname(root), `${basename(root)}-link`);
+    await mkdir(join(root, "home"), { recursive: true });
+    await symlink(root, linkedRoot);
+    const volume = [{ source: "home", destination: "/home/miftah" }];
+
+    try {
+      await expect(
+        buildContainerIsolationArguments("docker", ["run", "image"], root, volume, { DOCKER_HOST: "ssh://remote.example" })
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(
+        buildContainerIsolationArguments("docker", ["run", "image"], root, volume, { DOCKER_CONFIG: "/tmp/remote-context" })
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(
+        buildContainerIsolationArguments("podman", ["run", "image"], root, volume, { CONTAINER_HOST: "tcp://remote.example" })
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(
+        buildContainerIsolationArguments("podman", ["run", "image"], root, volume, { PODMAN_CONNECTIONS_CONF: "/tmp/remote-context" })
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(
+        buildContainerIsolationArguments("podman", ["run", "image"], root, volume, {}, "darwin")
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(buildContainerIsolationArguments("docker", ["run", "image"], linkedRoot, volume)).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED"
+      });
+    } finally {
+      await rm(linkedRoot, { force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a named-upstream volume that reuses a profile file binding for another path", () => {
+    expect(() =>
+      mergeProfileIsolation(
+        {
+          files: [{ source: "credentials/profile.json", destination: "credentials/profile.json", environment: "OAUTH_CREDENTIAL_PATH" }]
+        },
+        {
+          containerVolumes: [
+            { source: "credentials/other.json", destination: "/run/miftah/oauth.json", environment: "OAUTH_CREDENTIAL_PATH" }
+          ]
+        }
+      )
+    ).toThrow(/UPSTREAM_START_FAILED/u);
+
+    expect(() =>
+      mergeProfileIsolation(
+        {
+          files: [{ source: "credentials/profile.json", destination: "credentials/profile.json", environment: "OAUTH_CREDENTIAL_PATH" }]
+        },
+        {
+          containerVolumes: [
+            { source: "credentials/profile.json", destination: "/run/miftah/oauth.json", environment: "OAUTH_CREDENTIAL_PATH" }
+          ]
+        }
+      )
+    ).not.toThrow();
+  });
 });

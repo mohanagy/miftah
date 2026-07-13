@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ProfileConfig, ProfileIsolationConfig } from "../config/types.js";
+import { assertProfileIsolationBindings } from "../isolation/profile-runtime-isolation.js";
 import {
   UpstreamProcessManager,
   type UpstreamCapability,
@@ -164,21 +165,26 @@ function scopedProfiles(
           args: override?.args ?? profile.args,
           cwd: override?.cwd ?? profile.cwd,
           headers: { ...(profile.headers ?? {}), ...(override?.headers ?? {}) },
-          isolation: mergeIsolation(profile.isolation, override?.isolation)
+          isolation: mergeProfileIsolation(profile.isolation, override?.isolation)
         }
       ];
     })
   );
 }
 
-function mergeIsolation(
+export function mergeProfileIsolation(
   profileIsolation: ProfileIsolationConfig | undefined,
   upstreamIsolation: ProfileIsolationConfig | undefined
 ): ProfileIsolationConfig | undefined {
-  if (profileIsolation === undefined) return upstreamIsolation;
-  if (upstreamIsolation === undefined) return profileIsolation;
-  return {
-    files: [...(profileIsolation.files ?? []), ...(upstreamIsolation.files ?? [])],
-    containerVolumes: [...(profileIsolation.containerVolumes ?? []), ...(upstreamIsolation.containerVolumes ?? [])]
-  };
+  const merged =
+    profileIsolation === undefined
+      ? upstreamIsolation
+      : upstreamIsolation === undefined
+        ? profileIsolation
+        : {
+            files: [...(profileIsolation.files ?? []), ...(upstreamIsolation.files ?? [])],
+            containerVolumes: [...(profileIsolation.containerVolumes ?? []), ...(upstreamIsolation.containerVolumes ?? [])]
+          };
+  if (merged !== undefined) assertProfileIsolationBindings(merged);
+  return merged;
 }

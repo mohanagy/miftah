@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import type { ProfileIsolationConfig, TransportType } from "../config/types.js";
+import type { ProfileIsolationConfig, ProfileIsolationContainerVolume, TransportType } from "../config/types.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 
 const maximumMappedFileBytes = 1_048_576;
 const markerName = ".miftah-profile-isolation.json";
 const runtimeVersion = "v1";
+const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
 const generatedEnvironmentNames = new Set([
   "HOME",
   "USERPROFILE",
@@ -31,6 +32,7 @@ export interface ProfileRuntimeIsolationOptions {
 
 export interface PreparedProfileRuntimeIsolation {
   readonly environment: Record<string, string>;
+  readonly args: string[];
   /** Fail closed for child diagnostics when copied credential material can be re-formatted by the child. */
   readonly suppressStderr: boolean;
 }
@@ -62,13 +64,18 @@ export class ProfileRuntimeIsolation {
     profile: string,
     upstreamName: string,
     isolation: ProfileIsolationConfig | undefined,
-    transport: TransportType
+    transport: TransportType,
+    command?: string,
+    args: readonly string[] = [],
+    containerEnvironment: Readonly<Record<string, string | undefined>> = process.env
   ): Promise<PreparedProfileRuntimeIsolation> {
-    if (isolation === undefined) return { environment: {}, suppressStderr: false };
+    if (isolation === undefined) return { environment: {}, args: [...args], suppressStderr: false };
     if (transport !== "stdio") throw isolationFailure();
-    if ((isolation.containerVolumes?.length ?? 0) > 0) throw isolationFailure();
+    // Node mode bits cannot install or verify a restrictive Windows DACL. Refuse before materializing any credential.
+    if (this.platform === "win32") throw isolationFailure();
 
     try {
+      assertProfileIsolationBindings(isolation);
       const [configPath, configDirectory] = await Promise.all([this.canonicalConfigPath, this.configDirectory]);
       const root = await this.ensureRuntimeRoot(configDirectory, configPath, profile, upstreamName);
       const directories = await this.ensureRuntimeDirectories(root);
@@ -87,7 +94,12 @@ export class ProfileRuntimeIsolation {
       for (const file of files) {
         if (file.environment !== undefined) environment[file.environment] = file.destination;
       }
-      return { environment, suppressStderr: files.length > 0 };
+      const containerVolumes = isolation.containerVolumes ?? [];
+      const preparedArgs =
+        containerVolumes.length === 0
+          ? [...args]
+          : await buildContainerIsolationArguments(command, args, root, containerVolumes, containerEnvironment, this.platform);
+      return { environment, args: preparedArgs, suppressStderr: files.length > 0 || containerVolumes.length > 0 };
     } catch {
       throw isolationFailure();
     }
@@ -272,10 +284,325 @@ export class ProfileRuntimeIsolation {
 
   private pathKey(segments: readonly string[]): string {
     const normalized =
-      segments.map((segment) => segment.replace(/[. ]+$/u, "").toLocaleLowerCase("en-US"));
+      this.platform === "win32" || this.platform === "darwin"
+        ? segments.map((segment) => segment.replace(/[. ]+$/u, "").toLocaleLowerCase("en-US"))
+        : [...segments];
     if (normalized.some((segment) => segment.length === 0)) throw isolationFailure();
     return normalized.join("/");
   }
+}
+
+/**
+ * Produces fixed Docker/Podman `run` arguments for paths inside one prepared runtime tree.
+ * It accepts only explicit argument arrays; callers must never interpolate the result into a shell command.
+ */
+export async function buildContainerIsolationArguments(
+  command: string | undefined,
+  args: readonly string[],
+  root: string,
+  volumes: readonly ProfileIsolationContainerVolume[],
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  const engine = containerEngine(command);
+  if (engine === undefined || args[0] !== "run") throw isolationFailure();
+  assertLocalContainerEngine(engine, environment, platform);
+  const runtimeRoot = await verifyContainerRuntimeRoot(root);
+  const canonicalRoot = runtimeRoot.path;
+  const bindings = new Map<string, { name: string; destination: string }>();
+  const destinations = new Set<string>();
+  const generatedVolumes: Array<{
+    mount: string;
+    source: { path: string; entry: Awaited<ReturnType<typeof stat>> };
+    sourceValue: string;
+    bindings: Array<{ name: string; destination: string }>;
+  }> = [];
+
+  for (const volume of volumes) {
+    const source = await resolveContainerVolumeSource(canonicalRoot, volume.source);
+    const destination = safeContainerDestination(volume.destination);
+    if (destinations.has(destination)) throw isolationFailure();
+    destinations.add(destination);
+    const volumeBindings: Array<{ name: string; destination: string }> = [];
+    for (const name of runtimeEnvironmentNamesForSource(volume.source)) {
+      volumeBindings.push(addContainerBinding(bindings, name, destination, true));
+    }
+    if (volume.environment !== undefined) {
+      volumeBindings.push(addContainerBinding(bindings, volume.environment, destination, false));
+    }
+    generatedVolumes.push({
+      mount: `type=bind,src=${source.path},dst=${destination}${volume.readOnly === false ? "" : ",readonly"}`,
+      source,
+      sourceValue: volume.source,
+      bindings: volumeBindings
+    });
+  }
+
+  assertNoConflictingContainerArguments(args, bindings);
+  await verifyContainerRuntimeRoot(root, runtimeRoot.entry);
+  for (const volume of generatedVolumes) {
+    await resolveContainerVolumeSource(canonicalRoot, volume.sourceValue, volume.source.entry);
+  }
+  const generated: string[] = [];
+  for (const volume of generatedVolumes) {
+    generated.push("--mount", volume.mount);
+    for (const { name, destination } of volume.bindings) {
+      generated.push("--env", `${name}=${destination}`);
+    }
+  }
+  return ["run", ...generated, ...args.slice(1)];
+}
+
+/** Validates bindings after profile and named-upstream isolation objects have been combined. */
+export function assertProfileIsolationBindings(isolation: ProfileIsolationConfig): void {
+  const bindings = new Map<string, { kind: "file" | "volume"; destination: string }>();
+  const volumeEnvironmentNames = new Set<string>();
+  for (const file of isolation.files ?? []) {
+    if (file.environment === undefined) continue;
+    addProfileIsolationBinding(bindings, file.environment, "file", file.destination);
+  }
+  for (const volume of isolation.containerVolumes ?? []) {
+    if (volume.environment === undefined) continue;
+    const key = volume.environment.toLocaleUpperCase("en-US");
+    if (
+      !environmentNamePattern.test(volume.environment) ||
+      generatedEnvironmentNames.has(key) ||
+      volumeEnvironmentNames.has(key)
+    ) {
+      throw isolationFailure();
+    }
+    volumeEnvironmentNames.add(key);
+    const existing = bindings.get(key);
+    if (existing === undefined) {
+      bindings.set(key, { kind: "volume", destination: volume.destination });
+      continue;
+    }
+    if (existing.kind !== "file" || existing.destination !== volume.source) throw isolationFailure();
+  }
+}
+
+function addProfileIsolationBinding(
+  bindings: Map<string, { kind: "file" | "volume"; destination: string }>,
+  environment: string,
+  kind: "file" | "volume",
+  destination: string
+): void {
+  const key = environment.toLocaleUpperCase("en-US");
+  if (!environmentNamePattern.test(environment) || generatedEnvironmentNames.has(key) || bindings.has(key)) {
+    throw isolationFailure();
+  }
+  bindings.set(key, { kind, destination });
+}
+
+function containerEngine(command: string | undefined): "docker" | "podman" | undefined {
+  if (command === undefined) return undefined;
+  const executable = command.replaceAll("\\", "/").split("/").at(-1)?.toLocaleLowerCase("en-US");
+  if (executable === "docker" || executable === "docker.exe") return "docker";
+  if (executable === "podman" || executable === "podman.exe") return "podman";
+  return undefined;
+}
+
+function assertLocalContainerEngine(
+  engine: "docker" | "podman",
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform
+): void {
+  if (engine === "podman" && platform === "darwin") throw isolationFailure();
+  const remoteKeys =
+    engine === "docker"
+      ? ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"]
+      : [
+          "CONTAINER_HOST",
+          "CONTAINER_CONNECTION",
+          "PODMAN_CONNECTIONS_CONF",
+          "CONTAINERS_CONF",
+          "DOCKER_HOST",
+          "DOCKER_CONTEXT",
+          "DOCKER_CONFIG"
+        ];
+  if (remoteKeys.some((key) => environmentValue(environment, key) !== undefined)) throw isolationFailure();
+}
+
+function environmentValue(environment: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+  const normalizedName = name.toLocaleUpperCase("en-US");
+  for (const [key, value] of Object.entries(environment)) {
+    if (key.toLocaleUpperCase("en-US") === normalizedName && value !== undefined && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+async function verifyContainerRuntimeRoot(
+  root: string,
+  expected?: Awaited<ReturnType<typeof lstat>>
+): Promise<{ path: string; entry: Awaited<ReturnType<typeof lstat>> }> {
+  const entry = await lstat(root);
+  if (!entry.isDirectory() || entry.isSymbolicLink() || (expected !== undefined && !sameEntry(expected, entry))) {
+    throw isolationFailure();
+  }
+  const canonicalRoot = await realpath(root);
+  const canonicalEntry = await lstat(canonicalRoot);
+  if (!canonicalEntry.isDirectory() || canonicalEntry.isSymbolicLink() || !sameEntry(entry, canonicalEntry)) {
+    throw isolationFailure();
+  }
+  await verifyOwnedDirectory(canonicalRoot, canonicalRoot, undefined);
+  return { path: canonicalRoot, entry: canonicalEntry };
+}
+
+async function resolveContainerVolumeSource(
+  root: string,
+  value: string,
+  expected?: Awaited<ReturnType<typeof stat>>
+): Promise<{ path: string; entry: Awaited<ReturnType<typeof stat>> }> {
+  const segments = safeContainerRelativeSegments(value);
+  let path = root;
+  let sourceEntry: Awaited<ReturnType<typeof lstat>> | undefined;
+  for (const [index, segment] of segments.entries()) {
+    path = join(path, segment);
+    const entry = await lstat(path);
+    if (entry.isSymbolicLink()) throw isolationFailure();
+    if (index < segments.length - 1 && !entry.isDirectory()) throw isolationFailure();
+    if (index === segments.length - 1) {
+      if (!entry.isDirectory() && !entry.isFile()) throw isolationFailure();
+      sourceEntry = entry;
+    }
+  }
+  if (sourceEntry === undefined || !isWithin(root, path)) throw isolationFailure();
+  const canonicalSource = await realpath(path);
+  const canonicalEntry = await stat(canonicalSource);
+  if (
+    (!canonicalEntry.isDirectory() && !canonicalEntry.isFile()) ||
+    !sameEntry(sourceEntry, canonicalEntry) ||
+    !isWithin(root, canonicalSource) ||
+    (expected !== undefined && !sameEntry(expected, canonicalEntry)) ||
+    canonicalSource.includes(",")
+  ) {
+    throw isolationFailure();
+  }
+  return { path: canonicalSource, entry: canonicalEntry };
+}
+
+function safeContainerRelativeSegments(value: string): string[] {
+  const segments = safeRelativeSegments(value);
+  if (segments.some((segment) => segment.includes(","))) throw isolationFailure();
+  return segments;
+}
+
+function safeContainerDestination(value: string): string {
+  if (
+    value.length === 0 ||
+    value.length > 512 ||
+    value.includes("\u0000") ||
+    value.includes(",") ||
+    value.includes("\\") ||
+    !value.startsWith("/")
+  ) {
+    throw isolationFailure();
+  }
+  const segments = value.split("/");
+  if (segments.length < 2 || segments[0] !== "" || segments.slice(1).some((segment) => !segment || segment === "." || segment === "..")) {
+    throw isolationFailure();
+  }
+  return value;
+}
+
+function runtimeEnvironmentNamesForSource(source: string): readonly string[] {
+  switch (source) {
+    case "home":
+      return ["HOME", "USERPROFILE"];
+    case "appdata":
+      return ["APPDATA"];
+    case "localappdata":
+      return ["LOCALAPPDATA"];
+    case "xdg/config":
+      return ["XDG_CONFIG_HOME"];
+    case "xdg/cache":
+      return ["XDG_CACHE_HOME"];
+    case "xdg/data":
+      return ["XDG_DATA_HOME"];
+    case "xdg/state":
+      return ["XDG_STATE_HOME"];
+    case "xdg/runtime":
+      return ["XDG_RUNTIME_DIR"];
+    default:
+      return [];
+  }
+}
+
+function addContainerBinding(
+  bindings: Map<string, { name: string; destination: string }>,
+  name: string,
+  destination: string,
+  managedRuntimeBinding: boolean
+): { name: string; destination: string } {
+  const key = name.toLocaleUpperCase("en-US");
+  if (!environmentNamePattern.test(name) || (!managedRuntimeBinding && generatedEnvironmentNames.has(key)) || bindings.has(key)) {
+    throw isolationFailure();
+  }
+  const binding = { name, destination };
+  bindings.set(key, binding);
+  return binding;
+}
+
+function assertNoConflictingContainerArguments(
+  args: readonly string[],
+  generatedBindings: ReadonlyMap<string, { name: string; destination: string }>
+): void {
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]!;
+    const environment = containerEnvironmentArgument(args, index);
+    if (environment !== undefined) {
+      if (generatedBindings.has(environment.name.toLocaleUpperCase("en-US"))) throw isolationFailure();
+      index += environment.consumed;
+      continue;
+    }
+    if (isContainerMountArgument(argument) || isContainerEnvironmentFileArgument(argument)) throw isolationFailure();
+  }
+}
+
+function isContainerMountArgument(argument: string): boolean {
+  return (
+    argument === "--mount" ||
+    argument.startsWith("--mount=") ||
+    argument === "--volume" ||
+    argument.startsWith("--volume=") ||
+    argument === "--volumes-from" ||
+    argument.startsWith("--volumes-from=") ||
+    argument === "--tmpfs" ||
+    argument.startsWith("--tmpfs=") ||
+    argument === "--device" ||
+    argument.startsWith("--device=") ||
+    argument === "-v" ||
+    (argument.startsWith("-v") && argument.length > 2) ||
+    (argument.startsWith("-") && !argument.startsWith("--") && /[ev]/iu.test(argument.slice(1)))
+  );
+}
+
+function isContainerEnvironmentFileArgument(argument: string): boolean {
+  return argument === "--env-file" || argument.startsWith("--env-file=");
+}
+
+function containerEnvironmentArgument(
+  args: readonly string[],
+  index: number
+): { name: string; consumed: number } | undefined {
+  const argument = args[index]!;
+  let value: string | undefined;
+  let consumed = 0;
+  if (argument === "--env" || argument === "-e") {
+    value = args[index + 1];
+    consumed = 1;
+  } else if (argument.startsWith("--env=")) {
+    value = argument.slice("--env=".length);
+  } else if (argument.startsWith("-e=")) {
+    value = argument.slice("-e=".length);
+  } else if (argument.startsWith("-e") && argument.length > 2) {
+    value = argument.slice(2);
+  } else {
+    return undefined;
+  }
+  const name = value?.split("=", 1)[0];
+  if (name === undefined || name.length === 0) throw isolationFailure();
+  return { name, consumed };
 }
 
 function hash(value: string): string {
