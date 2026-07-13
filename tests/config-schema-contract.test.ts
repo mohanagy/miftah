@@ -146,6 +146,20 @@ describe("published config schema", () => {
     expect(routing).toMatchObject({ mode: { const: "hybrid" } });
     expect(routing).not.toHaveProperty("plugins");
     expect(profile.properties).toHaveProperty("headers");
+    expect(profile.properties?.isolation).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        files: {
+          type: "array",
+          maxItems: 32
+        },
+        containerVolumes: {
+          type: "array",
+          maxItems: 32
+        }
+      }
+    });
     expect(profile.properties).toHaveProperty("upstreams");
     expect(profile.properties?.lease).toMatchObject({
       type: "object",
@@ -168,6 +182,7 @@ describe("published config schema", () => {
     expect(profileUpstreamOverride.properties).toHaveProperty("env");
     expect(profileUpstreamOverride.properties).toHaveProperty("cwd");
     expect(profileUpstreamOverride.properties).toHaveProperty("headers");
+    expect(profileUpstreamOverride.properties).toHaveProperty("isolation");
     expect(profileUpstreamOverride.properties).not.toHaveProperty("transport");
     expect(profileUpstreamOverride.properties).not.toHaveProperty("command");
     expect(profileUpstreamOverride.properties).not.toHaveProperty("url");

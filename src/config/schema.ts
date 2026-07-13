@@ -155,12 +155,134 @@ const profileLeaseSchema = z
     }
   });
 
+const isolationEnvironmentNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u);
+const generatedIsolationEnvironmentNames = new Set([
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR"
+]);
+
+const runtimeRelativePathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .superRefine((value, context) => {
+    if (
+      value.includes("\u0000") ||
+      value.startsWith("/") ||
+      /^[A-Za-z]:/u.test(value) ||
+      value.split(/[\\/]/u).some((segment) => segment.length === 0 || segment === "." || segment === "..")
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "isolation paths must be non-empty relative paths without traversal"
+      });
+    }
+  });
+
+const containerDestinationPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .superRefine((value, context) => {
+    if (
+      value.includes("\u0000") ||
+      value.includes("\\") ||
+      value.includes(",") ||
+      !value.startsWith("/") ||
+      value.split("/").some((segment, index) => index > 0 && (segment.length === 0 || segment === "." || segment === ".."))
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "container isolation destinations must be normalized absolute POSIX paths"
+      });
+    }
+  });
+
+const profileIsolationFileSchema = z
+  .object({
+    source: runtimeRelativePathSchema,
+    destination: runtimeRelativePathSchema,
+    environment: isolationEnvironmentNameSchema.optional()
+  })
+  .strict();
+
+const profileIsolationContainerVolumeSchema = z
+  .object({
+    source: runtimeRelativePathSchema,
+    destination: containerDestinationPathSchema,
+    readOnly: z.boolean().optional(),
+    environment: isolationEnvironmentNameSchema.optional()
+  })
+  .strict();
+
+const profileIsolationSchema = z
+  .object({
+    files: z.array(profileIsolationFileSchema).max(32).optional(),
+    containerVolumes: z.array(profileIsolationContainerVolumeSchema).max(32).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const unique = (
+      values: readonly { readonly [key: string]: unknown }[],
+      property: "destination" | "environment",
+      path: "files" | "containerVolumes"
+    ): void => {
+      const seen = new Set<string>();
+      for (const [index, item] of values.entries()) {
+        const candidate = item[property];
+        if (typeof candidate !== "string") continue;
+        if (seen.has(candidate)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [path, index, property],
+            message: `isolation ${path} ${property} entries must be unique`
+          });
+        }
+        seen.add(candidate);
+      }
+    };
+
+    unique(value.files ?? [], "destination", "files");
+    unique(value.files ?? [], "environment", "files");
+    unique(value.containerVolumes ?? [], "destination", "containerVolumes");
+    unique(value.containerVolumes ?? [], "environment", "containerVolumes");
+
+    const rejectGeneratedEnvironmentName = (
+      values: readonly { readonly environment?: unknown }[],
+      path: "files" | "containerVolumes"
+    ): void => {
+      for (const [index, item] of values.entries()) {
+        if (
+          typeof item.environment === "string" &&
+          generatedIsolationEnvironmentNames.has(item.environment.toUpperCase())
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [path, index, "environment"],
+            message: "isolation mappings cannot replace generated HOME, XDG, or platform runtime bindings"
+          });
+        }
+      }
+    };
+
+    rejectGeneratedEnvironmentName(value.files ?? [], "files");
+    rejectGeneratedEnvironmentName(value.containerVolumes ?? [], "containerVolumes");
+  });
+
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  identity: identitySchema.optional()
+  identity: identitySchema.optional(),
+  isolation: profileIsolationSchema.optional()
 };
 
 const publicProfileUpstreamOverrideSchema = z.object(publicProfileUpstreamOverrideShape).strict();
@@ -183,6 +305,7 @@ const publicProfileShape = {
   policy: z.string().optional(),
   identity: identitySchema.optional(),
   lease: profileLeaseSchema.optional(),
+  isolation: profileIsolationSchema.optional(),
   upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
 };
 

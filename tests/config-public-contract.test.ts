@@ -8,7 +8,7 @@ interface PublicConfigSchema {
 }
 
 interface JsonSchemaNode {
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | JsonSchemaNode;
   properties?: Record<string, JsonSchemaNode>;
 }
 
@@ -23,7 +23,19 @@ describe("public configuration contract", () => {
     name: "test",
     defaultProfile: "default",
     upstream: { transport: "stdio", command: "node" },
-    profiles: { default: {} },
+    profiles: {
+      default: {
+        isolation: {
+          files: [
+            {
+              source: "credentials/default.json",
+              destination: "credentials/default.json",
+              environment: "DEFAULT_CREDENTIAL_PATH"
+            }
+          ]
+        }
+      }
+    },
     routing: {
       mode: "hybrid",
       rules: [{ when: { "args.profile": "default" }, profile: "default" }]
@@ -66,6 +78,13 @@ describe("public configuration contract", () => {
     expect(schema.properties).not.toHaveProperty("ui");
     expect(schema.properties?.state).toMatchObject({ additionalProperties: false });
     expect(schema.properties?.security).toMatchObject({ additionalProperties: false });
+    const profileSchema = schema.properties?.profiles?.additionalProperties;
+    if (profileSchema === undefined || typeof profileSchema === "boolean") {
+      throw new Error("Expected generated profiles to use an object-valued additionalProperties schema.");
+    }
+    expect(profileSchema.properties?.isolation).toMatchObject({
+      additionalProperties: false
+    });
     expect(schema.properties?.routing?.properties?.rules?.additionalProperties).toBeUndefined();
   });
 });

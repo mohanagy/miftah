@@ -85,6 +85,108 @@ describe("config foundation", () => {
     expect(config.profiles.work?.lease).toEqual({ ttlMs: 60_000, requiredForRisk: ["write", "destructive"] });
   });
 
+  it("accepts a profile isolation declaration and additional named-upstream configuration", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+      profiles: {
+        work: {
+          isolation: {
+            files: [
+              {
+                source: "credentials/work-oauth.json",
+                destination: "credentials/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ]
+          },
+          upstreams: {
+            github: {
+              isolation: {
+                containerVolumes: [
+                  {
+                    source: "credentials/oauth.json",
+                    destination: "/run/miftah/oauth.json",
+                    environment: "OAUTH_CREDENTIAL_PATH"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.isolation?.files).toEqual([
+      {
+        source: "credentials/work-oauth.json",
+        destination: "credentials/oauth.json",
+        environment: "OAUTH_CREDENTIAL_PATH"
+      }
+    ]);
+    expect(config.profiles.work?.upstreams?.github?.isolation?.containerVolumes).toEqual([
+      {
+        source: "credentials/oauth.json",
+        destination: "/run/miftah/oauth.json",
+        environment: "OAUTH_CREDENTIAL_PATH"
+      }
+    ]);
+  });
+
+  it("rejects an isolation mapping that tries to replace a generated HOME binding", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                {
+                  source: "credentials/work-oauth.json",
+                  destination: "credentials/oauth.json",
+                  environment: "HOME"
+                }
+              ]
+            }
+          }
+        }
+      })
+    ).toThrow(/profiles\.work\.isolation\.files\.0\.environment/u);
+  });
+
+  it.each([
+    ["a parent-directory source", "../credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
+    ["a Windows drive-relative source", "C:credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
+    ["an absolute destination", "credentials/work-oauth.json", "/tmp/oauth.json", "profiles.work.isolation.files.0.destination"],
+    ["a traversal destination", "credentials/work-oauth.json", "credentials/../oauth.json", "profiles.work.isolation.files.0.destination"],
+    ["an invalid container destination", "credentials/oauth.json", "run/miftah/oauth.json", "profiles.work.isolation.containerVolumes.0.destination"]
+  ])("rejects %s in isolation mappings", (_label, source, destination, expectedPath) => {
+    const isolation = expectedPath.includes("containerVolumes")
+      ? { containerVolumes: [{ source, destination }] }
+      : { files: [{ source, destination }] };
+
+    let thrown: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: { work: { isolation } }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    expect((thrown as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toContain(expectedPath);
+  });
+
   it.each([
     ["an empty risk list", { ttlMs: 60_000, requiredForRisk: [] }, "profiles.work.lease.requiredForRisk"],
     ["a duplicate risk", { ttlMs: 60_000, requiredForRisk: ["write", "write"] }, "profiles.work.lease.requiredForRisk"],

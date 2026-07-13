@@ -20,7 +20,7 @@ Mapped files are copies from existing regular files canonically located under th
 
 ## Public configuration contract
 
-Add `isolation` to `ProfileConfig` and `ProfileUpstreamOverride`. A named-upstream isolation object replaces the profile isolation object for that target, matching the existing exact-target identity override model.
+Add `isolation` to `ProfileConfig` and `ProfileUpstreamOverride`. A named-upstream isolation object augments the profile isolation object for that target: profile file mappings remain available to the target, while target-specific files and container volumes are added after them. Duplicate destinations or generated bindings fail closed rather than selecting a winner.
 
 ```ts
 interface ProfileIsolationConfig {
