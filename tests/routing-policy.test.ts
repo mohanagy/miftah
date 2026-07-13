@@ -342,6 +342,20 @@ describe("routing and policy", () => {
         })
       )
     ).toBeUndefined();
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "AcMe/MifTah"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
   });
 
   it("treats conflicting canonical provider aliases as ambiguity instead of silently preferring one", () => {

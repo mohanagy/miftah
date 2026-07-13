@@ -1,5 +1,9 @@
 import type { RoutingConfig } from "../config/types.js";
-import type { ProviderMatcherContext } from "./provider-matcher-types.js";
+import type {
+  ProviderMatcherContext,
+  ProviderMatcherKind,
+  ProviderMatcherProvider
+} from "./provider-matcher-types.js";
 
 export interface RoutingInput {
   toolName: string;
@@ -14,8 +18,8 @@ export interface RoutingInput {
 /** Bounded, canonical static-matcher evidence safe for routing decisions and audit records. */
 export interface RoutingMatcherEvidence {
   readonly profile: string;
-  readonly provider: "github" | "sentry" | "jira" | "linear" | "posthog";
-  readonly kind: "repository" | "organization" | "project" | "environment" | "site" | "workspace" | "team" | "host";
+  readonly provider: ProviderMatcherProvider;
+  readonly kind: ProviderMatcherKind;
   readonly value: string;
 }
 

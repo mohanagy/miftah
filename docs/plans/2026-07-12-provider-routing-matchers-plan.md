@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Public matcher configuration contract
+## Task 1: Public matcher configuration contract
 
 **Files:**
 - Modify: `src/config/types.ts`, `src/config/schema.ts`, `src/config/generate-json-schema.ts`, `src/index.ts`
@@ -21,7 +21,7 @@
 3. Add public types and strict Zod schemas for profile-local matcher bindings. Keep input bounded, reject URL credentials/query/fragment/control characters, and preserve JSON Schema/runtime parity.
 4. Re-run the focused suite, lint, and type-check. Commit the contract.
 
-### Task 2: Pure provider matcher registry
+## Task 2: Pure provider matcher registry
 
 **Files:**
 - Create: `src/routing/provider-matchers.ts`, `src/routing/provider-matcher-types.ts`
@@ -35,7 +35,7 @@
 5. Add hostile-input regressions: oversized strings, nested objects, non-string values, URI userinfo/query/fragment, malformed URLs, duplicate configured values, and same-profile multi-signal matches. Evidence must contain only canonical allowed identifiers.
 6. Make each test green with the smallest parser/normalizer and commit the registry.
 
-### Task 3: Routing precedence and ambiguity
+## Task 3: Routing precedence and ambiguity
 
 **Files:**
 - Modify: `src/routing/routing-engine.ts`, `src/routing/routing-types.ts`
@@ -46,7 +46,7 @@
 3. Implement candidate aggregation and an additive matcher evidence field on `RoutingDecision`; use reason `matcher:<provider>` and retain safe evidence in ambiguity details.
 4. Add a regression asserting matcher routing never satisfies the destructive explicit-rule guard, then run routing/policy tests and commit.
 
-### Task 4: Preview and audit parity
+## Task 4: Preview and audit parity
 
 **Files:**
 - Modify: `src/audit/audit-types.ts`, `src/audit/audit-trail.ts`, `src/mcp/server/operation-pipeline.ts`, `src/mcp/server/miftah-server.ts`
@@ -57,7 +57,7 @@
 3. Wire the decision's safe matcher evidence through operation and preview paths without changing the existing routing-context collection semantics.
 4. Add a destructive matcher-routed operation regression proving it remains blocked absent a `rule:`. Run focused MCP/audit suites and commit.
 
-### Task 5: Documentation and delivery contract
+## Task 5: Documentation and delivery contract
 
 **Files:**
 - Modify: `README.md`, `docs/config.md`, `docs/architecture.md`, `docs/security.md`, `CHANGELOG.md`
@@ -67,7 +67,7 @@
 2. Update documentation with a safe GitHub/Sentry example that contains no credentials or raw input logging claims.
 3. Run the documentation test, then the focused config/routing/MCP/audit suites, lint, and type-check. Commit the docs.
 
-### Task 6: Release validation and delivery
+## Task 6: Release validation and delivery
 
 1. Run `npm test`, `npm run test:core`, `npm run test:coverage`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm run smoke:cli`, `npm run check:pack`, and `npm run test:package`. Record sandbox-only npm/loopback limitations separately from product failures.
 2. Rebase/cherry-pick the #30 commits onto the current merged `development` only after #29 is merged, open a PR targeting `development`, resolve all review threads, and wait for current-head CI/CodeRabbit/human gates.

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { matchProviderBindings, projectProviderMatcherInput } from "../src/routing/provider-matchers.js";
+import {
+  githubRepositoryFromSource,
+  matchProviderBindings,
+  projectProviderMatcherInput
+} from "../src/routing/provider-matchers.js";
 
 describe("provider routing matchers", () => {
   it("matches a canonical GitHub repository from an allowlisted argument and safe Git context", () => {
@@ -43,6 +47,38 @@ describe("provider routing matchers", () => {
         projectProviderMatcherInput("search_organizations", { organization: "acme" })
       )
     ).toEqual([]);
+  });
+
+  it("normalizes case-insensitive GitHub identifiers before matching lower-case configuration", () => {
+    const input = projectProviderMatcherInput(
+      "github__get_issue",
+      {
+        repo: "AcMe/MifTah",
+        organization: "AcMe",
+        url: "HTTPS://GitHub.Com/AcMe/MifTah/issues/30",
+        accessToken: "must-not-reach-a-matcher"
+      },
+      { githubRepositories: ["AcMe/MifTah"] }
+    );
+
+    expect(input.signals).toEqual(
+      expect.arrayContaining([
+        { provider: "github", kind: "repository", value: "acme/miftah", source: "argument" },
+        { provider: "github", kind: "organization", value: "acme", source: "argument" },
+        { provider: "github", kind: "repository", value: "acme/miftah", source: "url" },
+        { provider: "github", kind: "repository", value: "acme/miftah", source: "context" }
+      ])
+    );
+    expect(matchProviderBindings({ work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }, input)).toEqual([
+      {
+        profile: "work",
+        evidence: { provider: "github", kind: "repository", value: "acme/miftah" }
+      }
+    ]);
+    expect(githubRepositoryFromSource("ssh://git@GitHub.Com/AcMe/MifTah.GIT")).toBe("acme/miftah");
+    expect(githubRepositoryFromSource("git@GitHub.Com:AcMe/MifTah.GIT")).toBe("acme/miftah");
+    expect(JSON.stringify(input)).not.toContain("must-not-reach-a-matcher");
+    expect(JSON.stringify(input)).not.toContain("AcMe/MifTah");
   });
 
   it("uses a canonical GitHub issue URL as a stronger repository signal without a provider tool name", () => {

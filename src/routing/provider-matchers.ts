@@ -11,6 +11,8 @@ const MAX_PROVIDER_MATCHER_VALUE_LENGTH = 256;
 const MAX_PROVIDER_MATCHER_CONTEXT_REPOSITORIES = 32;
 const githubOrganizationPattern = /^[a-z0-9](?:[a-z0-9-]{0,38})$/u;
 const githubRepositoryPattern = /^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/u;
+const githubSshRemotePattern = /^ssh:\/\/git@github\.com\/([^/?#]+)\/([^/?#]+)$/iu;
+const githubScpRemotePattern = /^git@github\.com:([^/?#]+)\/([^/?#]+)$/iu;
 const sentrySlugPattern = /^[a-z0-9][a-z0-9_-]{0,127}$/u;
 const sentryProjectPattern = /^[a-z0-9][a-z0-9_-]{0,127}\/[a-z0-9][a-z0-9_-]{0,127}$/u;
 const sentryEnvironmentPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -159,11 +161,11 @@ export function projectProviderMatcherInput(
 /** Converts supported GitHub URL/remote syntax into a canonical repository identifier. */
 export function githubRepositoryFromSource(value: string): string | undefined {
   if (!isBoundedSafeValue(value)) return undefined;
-  const https = githubRepositoryFromUrl(value.startsWith("git+") ? value.slice(4) : value);
+  const https = githubRepositoryFromUrl(/^git\+/iu.test(value) ? value.slice(4) : value);
   if (https !== undefined) return https;
-  const ssh = value.match(/^ssh:\/\/git@github\.com\/([^/?#]+)\/([^/?#]+)$/u);
+  const ssh = value.match(githubSshRemotePattern);
   if (ssh) return canonicalGithubRepositoryParts(ssh[1], ssh[2]);
-  const scp = value.match(/^git@github\.com:([^/?#]+)\/([^/?#]+)$/u);
+  const scp = value.match(githubScpRemotePattern);
   return scp ? canonicalGithubRepositoryParts(scp[1], scp[2]) : undefined;
 }
 
@@ -203,8 +205,8 @@ export function isCanonicalProviderMatcherEvidence(
   if (typeof value !== "string") return false;
   if (provider === "github") {
     return (
-      (kind === "repository" && canonicalGithubRepository(value) !== undefined) ||
-      (kind === "organization" && canonicalGithubOrganization(value) !== undefined)
+      (kind === "repository" && canonicalGithubRepository(value) === value) ||
+      (kind === "organization" && canonicalGithubOrganization(value) === value)
     );
   }
   if (provider === "sentry") {
@@ -414,11 +416,15 @@ function posthogProjectUrlSignals(
 }
 
 function canonicalGithubRepository(value: string): string | undefined {
-  return isBoundedSafeValue(value) && githubRepositoryPattern.test(value) ? value : undefined;
+  if (!isBoundedSafeValue(value)) return undefined;
+  const canonical = value.toLowerCase();
+  return githubRepositoryPattern.test(canonical) ? canonical : undefined;
 }
 
 function canonicalGithubOrganization(value: string): string | undefined {
-  return isBoundedSafeValue(value) && githubOrganizationPattern.test(value) ? value : undefined;
+  if (!isBoundedSafeValue(value)) return undefined;
+  const canonical = value.toLowerCase();
+  return githubOrganizationPattern.test(canonical) ? canonical : undefined;
 }
 
 function canonicalSentrySlug(value: string): string | undefined {
@@ -485,7 +491,7 @@ function trustedHttpsUrl(value: string): URL | undefined {
 }
 
 function githubRepositoryFromUrl(value: string): string | undefined {
-  if (!isBoundedSafeValue(value) || !value.startsWith("https://github.com/")) return undefined;
+  if (!isBoundedSafeValue(value) || !/^https:\/\//iu.test(value)) return undefined;
   try {
     const parsed = new URL(value);
     if (
@@ -509,7 +515,8 @@ function githubRepositoryFromUrl(value: string): string | undefined {
 
 function canonicalGithubRepositoryParts(owner: string | undefined, repository: string | undefined): string | undefined {
   if (owner === undefined || repository === undefined) return undefined;
-  const bareRepository = repository.endsWith(".git") ? repository.slice(0, -4) : repository;
+  const canonicalRepository = repository.toLowerCase();
+  const bareRepository = canonicalRepository.endsWith(".git") ? canonicalRepository.slice(0, -4) : canonicalRepository;
   return canonicalGithubRepository(`${owner}/${bareRepository}`);
 }
 
