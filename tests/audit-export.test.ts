@@ -142,4 +142,36 @@ describe("audit export", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("preserves a redacted cause when export fails after resolving configured secrets", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-export-redacted-cause-"));
+    const configPath = await writeAuditConfig(directory);
+    const auditPath = join(directory, "audit.jsonl");
+    const blockingPath = join(directory, "export-secret-blocker");
+    const outputPath = join(blockingPath, "support-export.jsonl");
+    await writeFile(auditPath, '{"message":"safe"}\n');
+    await writeFile(blockingPath, "not a directory");
+
+    try {
+      let failure: unknown;
+      try {
+        await runAuditExportCommand({ configPath, outputPath, includeArguments: false });
+      } catch (error) {
+        failure = error;
+      }
+
+      if (!(failure instanceof Error) || !(failure.cause instanceof Error)) {
+        throw new Error("Expected a redacted export failure cause.");
+      }
+      const cause = failure.cause as Error & { code?: unknown; path?: unknown };
+      expect(failure.message).not.toContain("export-secret");
+      expect(cause.message).not.toContain("export-secret");
+      expect(cause.stack ?? "").not.toContain("export-secret");
+      expect(cause.code).toBe("EEXIST");
+      expect(cause.path).toBeDefined();
+      expect(String(cause.path)).not.toContain("export-secret");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

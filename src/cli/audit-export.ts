@@ -87,10 +87,34 @@ async function discardStagingFile(staging: AuditExportStaging | undefined): Prom
   }
 }
 
+function redactErrorCause(error: Error, redactor: SecretRedactor, seen = new Set<Error>()): Error {
+  if (seen.has(error)) return error;
+  seen.add(error);
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(error))) {
+    if (!("value" in descriptor)) continue;
+    const value = descriptor.value;
+    const redacted =
+      value instanceof Error
+        ? redactErrorCause(value, redactor, seen)
+        : typeof value === "string"
+          ? redactor.redactText(value)
+          : redactor.redactForAudit(value);
+    if (redacted === value) continue;
+    try {
+      Object.defineProperty(error, key, { ...descriptor, value: redacted });
+    } catch {
+      // A non-configurable third-party error property cannot be safely retained as a cause.
+      return new Error(redactor.redactText(error.message));
+    }
+  }
+  return error;
+}
+
 function redactFailure(error: unknown, redactor: SecretRedactor | undefined): Error | unknown {
   if (redactor === undefined) return error;
   const message = error instanceof Error ? error.message : String(error);
-  return new Error(redactor.redactText(message));
+  const cause = error instanceof Error ? redactErrorCause(error, redactor) : redactor.redactForAudit(error);
+  return new Error(redactor.redactText(message), { cause });
 }
 
 /** Writes a private, redacted support export without copying raw audit bytes or overwriting a destination. */

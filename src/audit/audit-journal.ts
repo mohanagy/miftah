@@ -2914,7 +2914,7 @@ function replayLedger(location: AuditJournalLocation, entries: readonly Integrit
       if (active === undefined || entry.active.recordCount <= active.recordCount || entry.active.byteLength <= active.byteLength) {
         throw new Error("Audit integrity ledger append is invalid.");
       }
-      const expectedFirst = active.recordCount === 0 ? active.firstPreviousHash : active.firstPreviousHash;
+      const expectedFirst = active.firstPreviousHash;
       if (entry.active.firstPreviousHash !== expectedFirst || entry.active.tailHash === null) {
         throw new Error("Audit integrity ledger append is invalid.");
       }

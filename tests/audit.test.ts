@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AuditLogger } from "../src/audit/audit-logger.js";
 
@@ -369,7 +369,9 @@ describe("audit logger", () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-multi-logger-"));
     const path = join(directory, "audit.jsonl");
     const first = new AuditLogger(path, { rotation: { maxBytes: 1, retainFiles: 128 } });
-    const second = new AuditLogger(join(directory, ".", "audit.jsonl"), {
+    const secondPath = `${directory}${sep}.${sep}audit.jsonl`;
+    expect(secondPath).not.toBe(path);
+    const second = new AuditLogger(secondPath, {
       rotation: { maxBytes: 1, retainFiles: 128 }
     });
 

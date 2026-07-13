@@ -17,6 +17,13 @@ interface GeneratedConfigSchema extends JsonSchemaNode {
   title?: string;
 }
 
+const missingRotationTriggerError = /audit rotation requires maxBytes or maxAgeMs/u;
+const unsupportedIntegrityAlgorithmError = /integrity\.algorithm/u;
+const zeroByteRotationError = /maxBytes/u;
+const oversizedRetentionError = /retainFiles/u;
+const rotationWithoutAuditPathError = /audit\.path/u;
+const disabledIntegrityAuditError = /audit\.enabled/u;
+
 describe("public configuration contract", () => {
   const supportedConfig = {
     version: "1",
@@ -101,17 +108,17 @@ describe("public configuration contract", () => {
     };
 
     expect(publicSchema.safeParse(missingRotationTrigger).success).toBe(false);
-    expect(() => validateConfig(missingRotationTrigger)).toThrow(/audit rotation requires maxBytes or maxAgeMs/u);
+    expect(() => validateConfig(missingRotationTrigger)).toThrow(missingRotationTriggerError);
     expect(publicSchema.safeParse(unsupportedIntegrityAlgorithm).success).toBe(false);
-    expect(() => validateConfig(unsupportedIntegrityAlgorithm)).toThrow(/integrity\.algorithm/u);
+    expect(() => validateConfig(unsupportedIntegrityAlgorithm)).toThrow(unsupportedIntegrityAlgorithmError);
     expect(publicSchema.safeParse(zeroByteRotation).success).toBe(false);
-    expect(() => validateConfig(zeroByteRotation)).toThrow(/maxBytes/u);
+    expect(() => validateConfig(zeroByteRotation)).toThrow(zeroByteRotationError);
     expect(publicSchema.safeParse(oversizedRetention).success).toBe(false);
-    expect(() => validateConfig(oversizedRetention)).toThrow(/retainFiles/u);
+    expect(() => validateConfig(oversizedRetention)).toThrow(oversizedRetentionError);
     expect(publicSchema.safeParse(rotationWithoutAuditPath).success).toBe(false);
-    expect(() => validateConfig(rotationWithoutAuditPath)).toThrow(/audit\.path/u);
+    expect(() => validateConfig(rotationWithoutAuditPath)).toThrow(rotationWithoutAuditPathError);
     expect(publicSchema.safeParse(disabledIntegrityAudit).success).toBe(false);
-    expect(() => validateConfig(disabledIntegrityAudit)).toThrow(/audit\.enabled/u);
+    expect(() => validateConfig(disabledIntegrityAudit)).toThrow(disabledIntegrityAuditError);
   });
 
   it("generates a strict draft 2019-09 schema from the public contract", () => {
