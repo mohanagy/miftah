@@ -679,6 +679,66 @@ describe("approval fallback", () => {
     }
   });
 
+  it("preserves an expiry error when recording its queued audit transition fails", async () => {
+    const times = [
+      new Date("2026-07-12T00:00:00.000Z"),
+      new Date("2026-07-12T00:00:00.000Z"),
+      new Date("2026-07-12T00:00:00.999Z"),
+      new Date("2026-07-12T00:00:01.000Z")
+    ];
+    const approvals = new ApprovalStore({
+      now: () => times.shift() ?? new Date("2026-07-12T00:00:01.000Z"),
+      ttlMs: 1_000
+    });
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { policy: "confirm" } },
+      policies: { confirm: { requireConfirmation: ["create_item"] } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const host = wrapper as unknown as {
+      approvals: ApprovalStore;
+      writeApproval(action: string, approval: unknown): Promise<void>;
+      handleManagement(
+        name: string,
+        args: Record<string, unknown>,
+        audit: unknown,
+        source: unknown
+      ): Promise<unknown>;
+    };
+    host.approvals = approvals;
+    const requested = approvals.request({
+      sourceProfile: "work",
+      profile: "work",
+      upstream: "default",
+      operation: "tools/call",
+      name: "expired_item",
+      displayName: "expired_item",
+      arguments: {}
+    });
+    host.writeApproval = async (action) => {
+      if (action === "expired") {
+        throw new MiftahError("AUDIT_WRITE_FAILED", "AUDIT_WRITE_FAILED: test sink rejected expiry event");
+      }
+    };
+
+    try {
+      await expect(
+        host.handleManagement("miftah_approve", { approval: requested.token }, {}, { activeProfile: "work", revision: 0 })
+      ).rejects.toMatchObject({
+        code: "APPROVAL_EXPIRED",
+        message: "APPROVAL_EXPIRED: approval token has expired"
+      });
+      expect(approvals.takeExpiredTransitions()).toHaveLength(1);
+    } finally {
+      await wrapper.close();
+    }
+  });
+
   it("uses a boolean form elicitation when the client supports it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-approval-elicit-"));
     const createCountPath = join(directory, "create-count");

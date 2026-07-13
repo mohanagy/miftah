@@ -36,7 +36,7 @@ import { IdentityManager } from "../../identity/identity-manager.js";
 import type { IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
-import type { AuditStatus } from "../../audit/audit-types.js";
+import type { ApprovalAuditAction, AuditStatus } from "../../audit/audit-types.js";
 import {
   UpstreamProcessManager,
   type UpstreamHealth,
@@ -940,7 +940,12 @@ export class MiftahServer {
     try {
       result = operation();
     } catch (error) {
-      await this.writeExpiredApprovalTransitions();
+      try {
+        await this.writeExpiredApprovalTransitions();
+      } catch {
+        // The transition is restored before this throws and the fail-closed audit logger retains its health failure.
+        // Preserve the original approval error because it is the actionable result of this operation.
+      }
       throw error;
     }
     try {
@@ -974,7 +979,7 @@ export class MiftahServer {
   }
 
   private async writeApproval(
-    action: "requested" | "approved" | "denied" | "expired" | "consumed",
+    action: ApprovalAuditAction,
     approval: ApprovalSummary
   ): Promise<void> {
     await this.auditTrail.writeApproval({
