@@ -5,7 +5,7 @@ import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
 import type { ToolRiskMetadata } from "../../policy/risk-classifier.js";
 import { ProfileManager } from "../../profiles/profile-manager.js";
-import { RoutingEngine } from "../../routing/routing-engine.js";
+import { matcherEvidenceFromError, RoutingEngine } from "../../routing/routing-engine.js";
 import type { RoutingContextSnapshot, RoutingDecision } from "../../routing/routing-types.js";
 import { SecretRedactor } from "../../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
@@ -110,7 +110,10 @@ export class OperationPipeline {
         policyDecision: decision.action,
         risk: decision.risk,
         riskSource: decision.riskSource,
-        riskConfidence: decision.riskConfidence
+        riskConfidence: decision.riskConfidence,
+        ...(route.matcherEvidence === undefined
+          ? {}
+          : { routingMatcherEvidence: this.options.redactor.redactForAudit(route.matcherEvidence) })
       });
       this.updateSelectionAudit(audit, operation.source);
       this.assertPolicyAllows(operation, route, decision, profile);
@@ -142,7 +145,12 @@ export class OperationPipeline {
       await this.assertProfileSelectionAllows(operation, profile, profileConfig.lease, decision.risk);
       return this.options.redactor.redact(target.redact(await target.execute(session)));
     } catch (error) {
-      throw this.toSafeError(error);
+      const safeError = this.toSafeError(error);
+      const matcherEvidence = matcherEvidenceFromError(safeError);
+      if (matcherEvidence !== undefined) {
+        audit.update({ routingMatcherEvidence: matcherEvidence });
+      }
+      throw safeError;
     }
   }
 
@@ -256,8 +264,9 @@ export class OperationPipeline {
   }
 }
 
-function routingSource(route: RoutingDecision): "rule" | "active-profile" | "default-profile" | undefined {
+function routingSource(route: RoutingDecision): "rule" | "matcher" | "active-profile" | "default-profile" | undefined {
   if (route.reason.startsWith("rule:")) return "rule";
+  if (route.reason.startsWith("matcher:")) return "matcher";
   if (route.reason === "active-profile" || route.reason === "default-profile") return route.reason;
   return undefined;
 }

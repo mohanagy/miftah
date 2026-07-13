@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoutingEngine } from "../src/routing/routing-engine.js";
+import { matcherEvidenceFromError, RoutingEngine } from "../src/routing/routing-engine.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
 import { MiftahError } from "../src/utils/errors.js";
 
@@ -253,6 +253,24 @@ describe("routing and policy", () => {
       }
     });
     expect(JSON.stringify((failure as MiftahError).details)).not.toContain("must-not-reach-ambiguity-evidence");
+    expect(matcherEvidenceFromError(failure)).toEqual([
+      { profile: "alpha", provider: "github", kind: "repository", value: "acme/miftah" },
+      { profile: "zeta", provider: "github", kind: "repository", value: "acme/miftah" }
+    ]);
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "https://admin:secret@github.com/acme/miftah?token=secret"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
   });
 
   it("returns an ambiguity error when ask fallback has multiple matches", () => {

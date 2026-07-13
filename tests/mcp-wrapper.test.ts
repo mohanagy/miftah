@@ -943,6 +943,198 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("records bounded canonical matcher evidence for an ambiguous proxied operation without forwarding it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-matcher-ambiguous-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const workCallPath = join(directory, "work-call-count");
+    const personalCallPath = join(directory, "personal-call-count");
+    const secret = "must-not-reach-operation-matcher-audit";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"] } } },
+          upstreams: {
+            github: { env: { TEST_CALL_TOOL_COUNT_PATH: workCallPath } },
+            sentry: { env: {} }
+          }
+        },
+        personal: {
+          routing: { match: { github: { repositories: ["acme/miftah"] } } },
+          upstreams: {
+            github: { env: { TEST_CALL_TOOL_COUNT_PATH: personalCallPath } },
+            sentry: { env: {} }
+          }
+        }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "matcher-operation-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        await client.callTool({ name: "github__whoami", arguments: { repo: "acme/miftah", accessToken: secret } })
+      ).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("ROUTING_AMBIGUOUS") }]
+      });
+      await expect(access(workCallPath)).rejects.toThrow();
+      await expect(access(personalCallPath)).rejects.toThrow();
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const event = events.find((candidate) => candidate.kind === "operation" && candidate.operation === "tools/call");
+      expect(event).toMatchObject({
+        status: "ambiguous",
+        errorCode: "ROUTING_AMBIGUOUS",
+        routingMatcherEvidence: [
+          { profile: "personal", provider: "github", kind: "repository", value: "acme/miftah" },
+          { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+        ]
+      });
+      expect(JSON.stringify(event)).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same canonical matcher evidence for preview and successful proxied operation audits", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-matcher-evidence-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"] } } },
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-personal" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-personal" } }
+          }
+        }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "matcher-evidence-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const preview = parseJsonToolResult(
+        await client.callTool({
+          name: "miftah_route_preview",
+          arguments: { toolName: "github__whoami", args: { repo: "acme/miftah" } }
+        })
+      );
+      expect(preview).toMatchObject({
+        profile: "work",
+        reason: "matcher:github",
+        matcherEvidence: [{ profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }]
+      });
+      expect(await client.callTool({ name: "github__whoami", arguments: { repo: "acme/miftah" } })).toMatchObject({
+        content: [{ type: "text", text: "github-work" }]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const expectedEvidence = preview.matcherEvidence;
+      expect(events.find((event) => event.operation === "management/route-preview")).toMatchObject({
+        routingMatcherEvidence: expectedEvidence
+      });
+      expect(events.find((event) => event.operation === "tools/call")).toMatchObject({
+        routingSource: "matcher",
+        routingMatcherEvidence: expectedEvidence
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat a static matcher as the explicit rule required for destructive operations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-destructive-matcher-"));
+    const workCallPath = join(directory, "work-call-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"] } } },
+          upstreams: {
+            github: { env: { TEST_CALL_TOOL_COUNT_PATH: workCallPath } },
+            sentry: { env: {} }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: {} },
+            sentry: { env: {} }
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { create_item: "destructive" } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { enabled: false }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "matcher-destructive-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        await client.callTool({ name: "github__create_item", arguments: { repo: "acme/miftah", name: "danger" } })
+      ).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+      await expect(access(workCallPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("records collector evidence when route preview context is ambiguous", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-preview-ambiguous-"));
     const auditPath = join(directory, "audit.jsonl");
@@ -1002,6 +1194,60 @@ describe("Miftah MCP wrapper", () => {
     } finally {
       await client.close();
       await wrapper.close();
+    }
+  });
+
+  it("records bounded canonical matcher evidence when a route preview is ambiguous", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-preview-matcher-ambiguous-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const secret = "must-not-reach-matcher-audit";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } },
+        personal: { routing: { match: { github: { repositories: ["acme/miftah"] } } } }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "matcher-preview-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        await client.callTool({
+          name: "miftah_route_preview",
+          arguments: { toolName: "github__whoami", args: { repo: "acme/miftah", accessToken: secret } }
+        })
+      ).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("ROUTING_AMBIGUOUS") }]
+      });
+
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const event = events.find((candidate) => candidate.kind === "operation" && candidate.operation === "management/route-preview");
+      expect(event).toMatchObject({
+        status: "ambiguous",
+        errorCode: "ROUTING_AMBIGUOUS",
+        routingMatcherEvidence: [
+          { profile: "personal", provider: "github", kind: "repository", value: "acme/miftah" },
+          { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+        ]
+      });
+      expect(JSON.stringify(event)).not.toContain(secret);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

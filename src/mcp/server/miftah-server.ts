@@ -29,7 +29,7 @@ import {
   ProfileManager,
   type ProfileTransitionOptions
 } from "../../profiles/profile-manager.js";
-import { RoutingEngine } from "../../routing/routing-engine.js";
+import { matcherEvidenceFromError, RoutingEngine } from "../../routing/routing-engine.js";
 import type {
   RoutingContextMcpRoot,
   RoutingContextSnapshot
@@ -958,14 +958,23 @@ export class MiftahServer {
       const snapshot = await this.provideRoutingContext();
       const evidence = this.redactor.redactForAudit(snapshot.evidence);
       audit.update({ routingEvidence: evidence });
-      const route = this.routing.resolve({
-        toolName,
-        matcherToolName: toolName,
-        args: isRecord(args.args) ? args.args : {},
-        context: snapshot.context,
-        matcherContext: snapshot.matcherContext,
-        profileHints: snapshot.profileHints
-      }, source.activeProfile);
+      let route;
+      try {
+        route = this.routing.resolve({
+          toolName,
+          matcherToolName: toolName,
+          args: isRecord(args.args) ? args.args : {},
+          context: snapshot.context,
+          matcherContext: snapshot.matcherContext,
+          profileHints: snapshot.profileHints
+        }, source.activeProfile);
+      } catch (error) {
+        const matcherEvidence = matcherEvidenceFromError(error);
+        if (matcherEvidence !== undefined) {
+          audit.update({ routingMatcherEvidence: this.redactor.redactForAudit(matcherEvidence) });
+        }
+        throw error;
+      }
       const profile = this.profiles.get(route.profile);
       const sourceTool = this.toolRegistry.peek(source.activeProfile)?.resolve(toolName);
       const targetTool =
@@ -987,7 +996,10 @@ export class MiftahServer {
         risk: policy.risk,
         riskSource: policy.riskSource,
         riskConfidence: policy.riskConfidence,
-        routingEvidence: evidence
+        routingEvidence: evidence,
+        ...(route.matcherEvidence === undefined
+          ? {}
+          : { routingMatcherEvidence: this.redactor.redactForAudit(route.matcherEvidence) })
       });
       return textResult(JSON.stringify({ ...route, policy, evidence, identity: this.identityStatuses(route.profile) }));
     }

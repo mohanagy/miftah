@@ -4,7 +4,7 @@ import type {
   RiskClassificationSource,
   RiskLevel
 } from "../policy/policy-types.js";
-import type { RoutingContextEvidence } from "../routing/routing-types.js";
+import type { RoutingContextEvidence, RoutingMatcherEvidence } from "../routing/routing-types.js";
 import type { IdentityStatus } from "../identity/identity-types.js";
 import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "../profiles/profile-manager.js";
 
@@ -23,7 +23,7 @@ export interface AuditHealth {
 
 export type AuditEventKind = "operation" | "lifecycle" | "approval" | "profile";
 export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
-export type AuditRoutingSource = "rule" | "active-profile" | "default-profile";
+export type AuditRoutingSource = "rule" | "matcher" | "active-profile" | "default-profile";
 export type ApprovalAuditAction = "requested" | "approved" | "denied" | "expired" | "consumed";
 export type ProfileAuditAction =
   | "confirmation-requested"
@@ -70,6 +70,7 @@ export interface AuditEvent {
   riskConfidence?: RiskClassificationConfidence;
   identity?: IdentityStatus | readonly IdentityStatus[];
   routingEvidence?: RoutingContextEvidence;
+  routingMatcherEvidence?: readonly RoutingMatcherEvidence[];
   arguments?: unknown;
   errorCode?: string;
 }

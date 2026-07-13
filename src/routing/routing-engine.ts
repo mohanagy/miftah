@@ -133,3 +133,74 @@ function routingMatcherEvidence(candidates: readonly ProviderMatcherCandidate[])
     value: candidate.evidence.value
   }));
 }
+
+/** Extracts only structurally safe static-matcher evidence from an ambiguity error. */
+export function matcherEvidenceFromError(error: unknown): readonly RoutingMatcherEvidence[] | undefined {
+  if (!(error instanceof MiftahError) || error.code !== "ROUTING_AMBIGUOUS") return undefined;
+  const source = error.details?.matcherEvidence;
+  if (!Array.isArray(source) || source.length === 0 || source.length > MAX_ROUTING_MATCHER_EVIDENCE) return undefined;
+  const evidence: RoutingMatcherEvidence[] = [];
+  for (const item of source) {
+    if (!isRoutingMatcherEvidence(item)) return undefined;
+    evidence.push({
+      profile: item.profile,
+      provider: item.provider,
+      kind: item.kind,
+      value: item.value
+    });
+  }
+  return isSortedMatcherEvidence(evidence) ? evidence : undefined;
+}
+
+function isRoutingMatcherEvidence(value: unknown): value is RoutingMatcherEvidence {
+  if (!isRecord(value) || !isBoundedPlainText(value.profile, 256) || !isBoundedPlainText(value.value, 256)) return false;
+  if (value.value.includes("?") || value.value.includes("#") || value.value.includes("@")) return false;
+  return (
+    (value.provider === "github" && (value.kind === "repository" || value.kind === "organization")) ||
+    (value.provider === "sentry" && (value.kind === "organization" || value.kind === "project" || value.kind === "environment")) ||
+    (value.provider === "jira" && (value.kind === "site" || value.kind === "project")) ||
+    (value.provider === "linear" && (value.kind === "workspace" || value.kind === "team")) ||
+    (value.provider === "posthog" && (value.kind === "host" || value.kind === "project"))
+  );
+}
+
+function isBoundedPlainText(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSortedMatcherEvidence(evidence: readonly RoutingMatcherEvidence[]): boolean {
+  for (let index = 1; index < evidence.length; index += 1) {
+    if (compareMatcherEvidence(evidence[index - 1]!, evidence[index]!) > 0) return false;
+  }
+  return true;
+}
+
+function compareMatcherEvidence(first: RoutingMatcherEvidence, second: RoutingMatcherEvidence): number {
+  for (const comparison of [
+    compareText(first.provider, second.provider),
+    compareText(first.kind, second.kind),
+    compareText(first.value, second.value),
+    compareText(first.profile, second.profile)
+  ]) {
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
+}
+
+function compareText(first: string, second: string): number {
+  if (first < second) return -1;
+  if (first > second) return 1;
+  return 0;
+}
