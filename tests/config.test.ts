@@ -135,6 +135,44 @@ describe("config foundation", () => {
     ]);
   });
 
+  it("rejects duplicate isolation destinations added by a named-upstream override", () => {
+    let failure: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/base.json", destination: "credentials/oauth.json" }],
+              containerVolumes: [{ source: "home", destination: "/home/miftah" }]
+            },
+            upstreams: {
+              github: {
+                isolation: {
+                  files: [{ source: "credentials/target.json", destination: "credentials/oauth.json" }],
+                  containerVolumes: [{ source: "appdata", destination: "/home/miftah" }]
+                }
+              }
+            }
+          }
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect((failure as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toEqual(
+      expect.arrayContaining([
+        "profiles.work.upstreams.github.isolation.files.0.destination",
+        "profiles.work.upstreams.github.isolation.containerVolumes.0.destination"
+      ])
+    );
+  });
+
   it("rejects an isolation mapping that tries to replace a generated HOME binding", () => {
     expect(() =>
       validateConfig({

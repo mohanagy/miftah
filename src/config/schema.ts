@@ -487,11 +487,27 @@ const stateSchema = z
   })
   .strict();
 
+type IsolationDestinationInput = {
+  destination: string;
+};
+
+type ProfileIsolationReferenceInput = {
+  files?: readonly IsolationDestinationInput[];
+  containerVolumes?: readonly IsolationDestinationInput[];
+};
+
 type ConfigReferenceInput = {
   defaultProfile: string;
   upstream?: unknown;
   upstreams?: Record<string, unknown>;
-  profiles: Record<string, { policy?: string; upstreams?: Record<string, unknown> }>;
+  profiles: Record<
+    string,
+    {
+      policy?: string;
+      isolation?: ProfileIsolationReferenceInput;
+      upstreams?: Record<string, { isolation?: ProfileIsolationReferenceInput }>;
+    }
+  >;
   routing?: { rules?: { profile: string }[] };
   policies?: Record<string, unknown>;
   security?: { lockToProfile?: string | null };
@@ -574,6 +590,10 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
           "Choose an upstream name defined under `upstreams` or remove the override."
         );
       }
+      const override = profile.upstreams?.[upstreamName];
+      if (override !== undefined) {
+        validateMergedIsolationDestinations(profileName, upstreamName, profile.isolation, override.isolation, context);
+      }
     }
   }
 
@@ -597,6 +617,45 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
         ["security", "lockToProfile"],
         `profile '${value.security.lockToProfile}' does not exist`,
         "Choose a profile name defined under `profiles`."
+      );
+    }
+  }
+}
+
+function validateMergedIsolationDestinations(
+  profileName: string,
+  upstreamName: string,
+  profileIsolation: ProfileIsolationReferenceInput | undefined,
+  upstreamIsolation: ProfileIsolationReferenceInput | undefined,
+  context: z.RefinementCtx
+): void {
+  if (profileIsolation === undefined || upstreamIsolation === undefined) return;
+  const mappings: ReadonlyArray<{
+    readonly name: "files" | "containerVolumes";
+    readonly profileEntries: readonly IsolationDestinationInput[];
+    readonly upstreamEntries: readonly IsolationDestinationInput[];
+  }> = [
+    {
+      name: "files",
+      profileEntries: profileIsolation.files ?? [],
+      upstreamEntries: upstreamIsolation.files ?? []
+    },
+    {
+      name: "containerVolumes",
+      profileEntries: profileIsolation.containerVolumes ?? [],
+      upstreamEntries: upstreamIsolation.containerVolumes ?? []
+    }
+  ];
+  for (const mapping of mappings) {
+    const destinations = new Set(mapping.profileEntries.map((entry) => entry.destination));
+    for (const [index, entry] of mapping.upstreamEntries.entries()) {
+      if (!destinations.has(entry.destination)) continue;
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        ["profiles", profileName, "upstreams", upstreamName, "isolation", mapping.name, index, "destination"],
+        `named-upstream isolation ${mapping.name} cannot duplicate a profile isolation destination`,
+        "Use a distinct destination for the named upstream, or keep the mapping only at the profile level."
       );
     }
   }

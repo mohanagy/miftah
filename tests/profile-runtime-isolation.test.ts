@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, symlink, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -358,6 +358,43 @@ describe("profile runtime isolation", () => {
       expect(redactor.redactText("external-oauth-secret")).toBe("external-oauth-secret");
     } finally {
       await rm(externalPath, { force: true });
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("rejects a group- or world-writable mapped credential source", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-writable-source-"));
+    const configPath = join(directory, "miftah.json");
+    const credentialsDirectory = join(directory, "credentials");
+    const sourcePath = join(credentialsDirectory, "oauth.json");
+    const secret = "writable-source-oauth-secret";
+    await writeFile(configPath, "{}", "utf8");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(sourcePath, secret, "utf8");
+    await chmod(sourcePath, 0o666);
+    const redactor = new SecretRedactor();
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor });
+
+    try {
+      const initial = await isolation.prepare("work", "default", {}, "stdio");
+      const destination = join(dirname(initial.environment.HOME!), "credentials", "oauth.json");
+      let failure: unknown;
+      try {
+        await isolation.prepare(
+          "work",
+          "default",
+          { files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }] },
+          "stdio"
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      expect(failure instanceof Error ? failure.message : String(failure)).not.toContain(secret);
+      await expect(stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(redactor.redactText(secret)).toBe(secret);
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });

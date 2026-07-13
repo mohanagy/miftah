@@ -209,7 +209,7 @@ export class ProfileRuntimeIsolation {
       if (entry.isSymbolicLink()) throw isolationFailure();
       if (index < segments.length - 1 && !entry.isDirectory()) throw isolationFailure();
       if (index === segments.length - 1) {
-        if (!entry.isFile()) throw isolationFailure();
+        if (!isTrustedSourceFile(entry, this.ownerUid)) throw isolationFailure();
         sourceEntry = entry;
       }
     }
@@ -224,12 +224,12 @@ export class ProfileRuntimeIsolation {
       const canonicalSource = await realpath(path);
       const canonicalEntry = await stat(canonicalSource);
       if (
-        !opened.isFile() ||
+        !isTrustedSourceFile(opened, this.ownerUid) ||
         opened.size > maximumMappedFileBytes ||
         opened.dev !== sourceEntry.dev ||
         opened.ino !== sourceEntry.ino ||
         !isWithin(configDirectory, canonicalSource) ||
-        !canonicalEntry.isFile() ||
+        !isTrustedSourceFile(canonicalEntry, this.ownerUid) ||
         canonicalEntry.dev !== sourceEntry.dev ||
         canonicalEntry.ino !== sourceEntry.ino
       ) {
@@ -837,6 +837,13 @@ function sameEntry(
 
 function hasExpectedOwner(entry: Pick<Awaited<ReturnType<typeof stat>>, "uid">, ownerUid: number | undefined): boolean {
   return ownerUid === undefined || entry.uid === ownerUid;
+}
+
+function isTrustedSourceFile(
+  entry: Pick<Awaited<ReturnType<typeof stat>>, "isFile" | "mode" | "uid">,
+  ownerUid: number | undefined
+): boolean {
+  return entry.isFile() && hasExpectedOwner(entry, ownerUid) && (Number(entry.mode) & 0o022) === 0;
 }
 
 function isErrorCode(error: unknown, code: string): boolean {
