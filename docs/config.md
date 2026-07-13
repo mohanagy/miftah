@@ -153,11 +153,43 @@ The metadata-only collector can provide rules with `context.*` values from:
 
 `MIFTAH_PROFILE` must name a configured profile or routing fails closed. `MIFTAH_PROJECT` is contextual metadata only: Miftah does not interpret it as a path or probe the filesystem from it. URI-like project and repository values, Git origins, and roots are structurally sanitized before evidence crosses an MCP or audit boundary.
 
-Selection order is environment hint, project-marker hint, configured rule, then fallback. The marker stage is the one nearest valid marker above; matching rules that select different profiles return `ROUTING_AMBIGUOUS`, and Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
+Selection order is environment hint, project-marker hint, configured rule, static matcher, then fallback. The marker stage is the one nearest valid marker above; matching rules that select different profiles return `ROUTING_AMBIGUOUS`, and Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
 
 MCP roots are optional client metadata. After initialization, Miftah calls `roots/list` only when the client advertises `roots` capability, stores a URI-only snapshot for that connection, and refreshes it only on an advertised `notifications/roots/list_changed`. An unsupported or failed roots request yields an empty-root snapshot; Miftah does not poll roots or request them for every operation.
 
-`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision (including `riskSource` and `riskConfidence`), and sanitized `evidence`. It never starts an upstream to inspect a tool: it uses only an already-cached compatible tool snapshot and otherwise reports the conservative heuristic or unknown classification. Proxied operation audit records carry the same snapshot as additive `routingEvidence`, including an ambiguity that prevents forwarding. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
+`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision (including `riskSource` and `riskConfidence`), sanitized `evidence`, and `matcherEvidence` when a static matcher selected a profile. It never starts an upstream to inspect a tool: it uses only an already-cached compatible tool snapshot and otherwise reports the conservative heuristic or unknown classification. Proxied operation audit records carry the same snapshot as additive `routingEvidence` and carry canonical `routingMatcherEvidence` for a successful or ambiguous static match. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
+
+### Provider routing matchers
+
+`profiles.<profile>.routing.match` is an opt-in, declarative binding to Miftah's fixed in-tree provider registry. It never loads configured code, starts a process, resolves a secret, or makes a network request. Every provider declaration and `match` object must be nonempty; each identifier array has at most 32 distinct canonical values.
+
+```json
+{
+  "profiles": {
+    "work": {
+      "routing": {
+        "match": {
+          "github": {
+            "repositories": ["acme/miftah"],
+            "organizations": ["acme"]
+          },
+          "sentry": {
+            "organizations": ["acme"],
+            "projects": ["acme/api"],
+            "environments": ["production"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The supported fixed providers are GitHub (`repositories`, `organizations`), Sentry (`organizations`, `projects`, `environments`), Jira (`sites`, `projects`), Linear (`workspaces`, `teams`), and PostHog (`hosts`, `projects`). GitHub repositories are lowercase `owner/repository`; Sentry projects are lowercase `organization/project`; Jira sites and PostHog hosts are canonical credential-free HTTPS origins; Jira project keys are uppercase; Linear names are lowercase slugs; and PostHog projects are decimal IDs. The validator rejects credentials, query strings, fragments, paths, controls, noncanonical case, duplicates, and unknown provider fields.
+
+Argument-only signals require an exact provider token in the client-visible tool name, such as `github__search_issues`; a generic tool with `{ "repo": "acme/miftah" }` cannot select a GitHub profile. Canonical provider URLs are stronger signals, and GitHub repository context may come from a canonical package/workspace repository or a local `remote.origin.url` in HTTPS, SSH, or scp syntax. The matcher receives only those bounded canonical signals: it never reads arbitrary nested arguments, arbitrary routing context, or `MIFTAH_PROJECT`.
+
+If one profile has several matching signals, it remains one selection. If static bindings select different profiles, Miftah returns `ROUTING_AMBIGUOUS` before resolving an upstream. A matcher reason is `matcher:<provider>` and does not satisfy `security.requireExplicitProfileForDestructive`; destructive operations still require an explicit `routing.rules` match. `routing.plugins` remains unsupported because configured dynamic code is outside this trust boundary; a public extension API is deferred to Issue #34.
 
 ## Identity verification
 
@@ -236,13 +268,13 @@ Clients that advertise MCP **form elicitation** receive a generic boolean form (
 
 Approval lifecycle events record request, approval, denial, expiry, and consumption when audit logging is configured. They contain safe profile/upstream/operation metadata and expiry only; they never contain the fallback bearer or full operation arguments.
 
-Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
+Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available and canonical `routingMatcherEvidence` for a static matcher result or ambiguity. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 
 `audit.failureMode` accepts `"fail-closed"` (the default) or `"fail-open"`. Fail-closed verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared; a terminal write error also surfaces as `AUDIT_WRITE_FAILED`. Because terminal writes occur after an upstream operation, that error can leave a non-idempotent operation's outcome indeterminate; do not blindly retry it. Fail-open preserves the request result and exposes a redacted `AUDIT_WRITE_FAILED` entry through `miftah_health`; it should be used only when availability is more important than complete auditability.
 
 ## Runtime-supported controls
 
-Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules` and `routing.fallback` to control its behavior. Routing plugins, profile metadata and matchers, UI settings, and configurable management-tool namespaces are not available yet.
+Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules`, profile-local static matchers, and `routing.fallback` to control its behavior. Routing plugins, profile metadata, UI settings, and configurable management-tool namespaces are not available yet.
 
 ### Active profile state
 
