@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -105,31 +105,69 @@ function npmDiagnostics(stdout: string | null, stderr: string | null): string {
   return outputs.length === 0 ? "" : `\nCaptured npm output:\n${outputs.join("\n")}`;
 }
 
-function runNpm(args: readonly string[], cwd = repositoryRoot, timeoutMs = npmCommandTimeoutMs) {
+interface NpmCommandResult {
+  readonly status: 0;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+async function runNpm(
+  args: readonly string[],
+  cwd = repositoryRoot,
+  timeoutMs = npmCommandTimeoutMs
+): Promise<NpmCommandResult> {
   const invocation = npmInvocation(args);
-  const result = spawnSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, npm_config_loglevel: "silent" },
-    timeout: timeoutMs,
-    killSignal: "SIGTERM"
+  return new Promise<NpmCommandResult>((resolve, reject) => {
+    const child = spawn(invocation.command, invocation.args, {
+      cwd,
+      env: { ...process.env, npm_config_loglevel: "silent" },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+    const settle = (result: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      result();
+    };
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => {
+        reject(new Error(`npm ${args.join(" ")} could not start: ${error.message}.${npmDiagnostics(stdout, stderr)}`));
+      });
+    });
+    child.once("close", (status, signal) => {
+      settle(() => {
+        if (timedOut) {
+          reject(new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`));
+          return;
+        }
+        if (status !== 0) {
+          const outcome = status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`;
+          reject(new Error(`npm ${args.join(" ")} ${outcome}.${npmDiagnostics(stdout, stderr)}`));
+          return;
+        }
+        resolve({ status: 0, stdout, stderr });
+      });
+    });
   });
-  if (result.error) {
-    const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
-    const reason =
-      timedOut
-        ? `timed out after ${timeoutMs}ms`
-        : `could not start: ${result.error.message}`;
-    throw new Error(`npm ${args.join(" ")} ${reason}.${npmDiagnostics(result.stdout, result.stderr)}`);
-  }
-  if (result.status !== 0) {
-    const outcome =
-      result.status === null
-        ? `terminated by ${result.signal ?? "an unknown signal"}`
-        : `exited with status ${result.status}`;
-    throw new Error(`npm ${args.join(" ")} ${outcome}.${npmDiagnostics(result.stdout, result.stderr)}`);
-  }
-  return result;
 }
 
 function quoteForWindowsCommand(value: string): string {
@@ -185,8 +223,8 @@ async function loadPackVerifier(): Promise<PackVerifier> {
 }
 
 beforeAll(
-  () => {
-    const build = runNpm(["run", "build"]);
+  async () => {
+    const build = await runNpm(["run", "build"]);
     if (build.status !== 0) {
       throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
     }
@@ -248,8 +286,21 @@ describe("packed artifact contract", () => {
     });
   });
 
-  it("includes captured output when an npm command exits unsuccessfully", () => {
-    expect(() =>
+  it("keeps the test worker responsive while an npm subprocess is running", async () => {
+    let completed = false;
+    const running = Promise.resolve(
+      runNpm(["exec", "--", process.execPath, "--eval", "setTimeout(() => process.exit(0), 100)"])
+    ).finally(() => {
+      completed = true;
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(completed).toBe(false);
+    await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("includes captured output when an npm command exits unsuccessfully", async () => {
+    await expect(
       runNpm([
         "exec",
         "--",
@@ -257,7 +308,7 @@ describe("packed artifact contract", () => {
         "--eval",
         'process.stdout.write("miftah-diagnostic-out"); process.stderr.write("miftah-diagnostic-err"); process.exit(1);'
       ])
-    ).toThrow(
+    ).rejects.toThrow(
       /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
     );
   });
@@ -271,8 +322,8 @@ describe("packed artifact contract", () => {
     );
   });
 
-  it("contains required runtime, documentation, and example files from a real dry run", () => {
-    const packed = runNpm(["pack", "--dry-run", "--json"]);
+  it("contains required runtime, documentation, and example files from a real dry run", async () => {
+    const packed = await runNpm(["pack", "--dry-run", "--json"]);
 
     expect(packed.status, packed.stderr).toBe(0);
     const results = JSON.parse(packed.stdout) as PackResult[];
@@ -319,8 +370,8 @@ describe("packed artifact contract", () => {
     );
   });
 
-  it("runs the checked package command against the real npm pack output", () => {
-    const checked = runNpm(["run", "check:pack"]);
+  it("runs the checked package command against the real npm pack output", async () => {
+    const checked = await runNpm(["run", "check:pack"]);
 
     expect(checked.status, checked.stderr || checked.stdout).toBe(0);
     expect(checked.stdout).toMatch(/Package contract verified \(\d+ files\)\./u);
@@ -331,13 +382,13 @@ describe("packed artifact contract", () => {
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "miftah-packed-artifact-"));
       try {
-        const packed = runNpm(["pack", "--json", "--pack-destination", directory]);
+        const packed = await runNpm(["pack", "--json", "--pack-destination", directory]);
         expect(packed.status, packed.stderr).toBe(0);
         const [result] = JSON.parse(packed.stdout) as PackResult[];
         if (!result) throw new Error("npm pack did not report an artifact.");
 
         const consumerInstall = consumerInstallCommand(join(directory, result.filename));
-        const install = runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
+        const install = await runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
         expect(install.status, install.stderr || install.stdout).toBe(0);
 
         const consumerPath = join(directory, "consumer.mjs");
