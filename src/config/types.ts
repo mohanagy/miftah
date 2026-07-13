@@ -77,12 +77,34 @@ export type IdentityConfig =
       probe: JsonIdentityProbeConfig;
     });
 
+/** Copies a regular configuration-owned file into an isolated profile runtime tree. */
+export interface ProfileIsolationFile {
+  source: string;
+  destination: string;
+  environment?: string;
+}
+
+/** Binds a path from an isolated profile runtime tree into a Docker or Podman container. */
+export interface ProfileIsolationContainerVolume {
+  source: string;
+  destination: string;
+  readOnly?: boolean;
+  environment?: string;
+}
+
+/** Opt-in filesystem and container isolation for one profile/upstream target. */
+export interface ProfileIsolationConfig {
+  files?: ProfileIsolationFile[];
+  containerVolumes?: ProfileIsolationContainerVolume[];
+}
+
 export interface ProfileUpstreamOverride {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   headers?: Record<string, string>;
   identity?: IdentityConfig;
+  isolation?: ProfileIsolationConfig;
 }
 
 /** Requires a fresh explicit profile selection before the named risky operations can run. */
@@ -105,6 +127,7 @@ export interface ProfileConfig {
   policy?: string;
   identity?: IdentityConfig;
   lease?: ProfileLeaseConfig;
+  isolation?: ProfileIsolationConfig;
   upstreams?: Record<string, ProfileUpstreamOverride>;
 }
 

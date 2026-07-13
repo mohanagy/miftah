@@ -9,6 +9,10 @@ const duplicateIdentityRiskPattern = /profiles\.work\.identity\.requiredForRisk/
 const identityProbeProviderPattern = /profiles\.work\.identity\.probe\.provider/u;
 const identityExpectedLoginPattern = /profiles\.work\.identity\.expected\.login/u;
 const insecureRemoteUrlPattern = /CONFIG_SCHEMA_INVALID.*upstream\.url/u;
+const profileIsolationTransportPattern = /profiles\.work\.isolation/u;
+const namedUpstreamIsolationTransportPattern = /profiles\.work\.upstreams\.remote\.isolation/u;
+const homeBindingReplacementPathPattern = /profiles\.work\.isolation\.files\.0\.environment/u;
+const containerVolumeEnvironmentMismatchPathPattern = /profiles\.work\.isolation\.containerVolumes\.0\.environment/u;
 
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
@@ -83,6 +87,352 @@ describe("config foundation", () => {
     });
 
     expect(config.profiles.work?.lease).toEqual({ ttlMs: 60_000, requiredForRisk: ["write", "destructive"] });
+  });
+
+  it("accepts a profile isolation declaration and additional named-upstream configuration", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+      profiles: {
+        work: {
+          isolation: {
+            files: [
+              {
+                source: "credentials/work-oauth.json",
+                destination: "credentials/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ]
+          },
+          upstreams: {
+            github: {
+              isolation: {
+                containerVolumes: [
+                  {
+                    source: "credentials/oauth.json",
+                    destination: "/run/miftah/oauth.json",
+                    environment: "OAUTH_CREDENTIAL_PATH"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.isolation?.files).toEqual([
+      {
+        source: "credentials/work-oauth.json",
+        destination: "credentials/oauth.json",
+        environment: "OAUTH_CREDENTIAL_PATH"
+      }
+    ]);
+    expect(config.profiles.work?.upstreams?.github?.isolation?.containerVolumes).toEqual([
+      {
+        source: "credentials/oauth.json",
+        destination: "/run/miftah/oauth.json",
+        environment: "OAUTH_CREDENTIAL_PATH"
+      }
+    ]);
+  });
+
+  it("rejects profile isolation for a non-stdio default upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "remote-isolation",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: "https://example.test/mcp" },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+            }
+          }
+        }
+      })
+    ).toThrow(profileIsolationTransportPattern);
+  });
+
+  it("rejects named-upstream isolation for a non-stdio upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "named-remote-isolation",
+        defaultProfile: "work",
+        upstreams: {
+          remote: { transport: "sse", url: "https://example.test/mcp" }
+        },
+        profiles: {
+          work: {
+            upstreams: {
+              remote: {
+                isolation: {
+                  files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+                }
+              }
+            }
+          }
+        }
+      })
+    ).toThrow(namedUpstreamIsolationTransportPattern);
+  });
+
+  it("rejects profile isolation inherited by a non-stdio named upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "mixed-transport-isolation",
+        defaultProfile: "work",
+        upstreams: {
+          local: { transport: "stdio", command: "node", args: ["server.js"] },
+          remote: { transport: "http", url: "https://example.test/mcp" }
+        },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+            }
+          }
+        }
+      })
+    ).toThrow(profileIsolationTransportPattern);
+  });
+
+  it("allows a named stdio isolation override when a sibling upstream is remote", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "targeted-isolation",
+      defaultProfile: "work",
+      upstreams: {
+        local: { transport: "stdio", command: "node", args: ["server.js"] },
+        remote: { transport: "http", url: "https://example.test/mcp" }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            local: {
+              isolation: {
+                files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+              }
+            }
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.upstreams?.local?.isolation?.files).toHaveLength(1);
+  });
+
+  it("rejects duplicate isolation destinations added by a named-upstream override", () => {
+    let failure: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/base.json", destination: "credentials/oauth.json" }],
+              containerVolumes: [{ source: "home", destination: "/home/miftah" }]
+            },
+            upstreams: {
+              github: {
+                isolation: {
+                  files: [{ source: "credentials/target.json", destination: "credentials/oauth.json" }],
+                  containerVolumes: [{ source: "appdata", destination: "/home/miftah" }]
+                }
+              }
+            }
+          }
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect((failure as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toEqual(
+      expect.arrayContaining([
+        "profiles.work.upstreams.github.isolation.files.0.destination",
+        "profiles.work.upstreams.github.isolation.containerVolumes.0.destination"
+      ])
+    );
+  });
+
+  it("rejects cross-scope isolation environment collisions and incompatible file-volume handoffs", () => {
+    let failure: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                { source: "credentials/base-token.json", destination: "credentials/base-token.json", environment: "TOKEN" },
+                {
+                  source: "credentials/base-oauth.json",
+                  destination: "credentials/base-oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ],
+              containerVolumes: [{ source: "home", destination: "/home/miftah", environment: "HOME_DIR" }]
+            },
+            upstreams: {
+              github: {
+                isolation: {
+                  files: [
+                    { source: "credentials/target-token.json", destination: "credentials/target-token.json", environment: "token" },
+                    { source: "credentials/target-home.json", destination: "credentials/target-home.json", environment: "home_dir" }
+                  ],
+                  containerVolumes: [
+                    {
+                      source: "credentials/other-oauth.json",
+                      destination: "/run/miftah/oauth.json",
+                      environment: "oauth_credential_path"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect((failure as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toEqual(
+      expect.arrayContaining([
+        "profiles.work.upstreams.github.isolation.files.0.environment",
+        "profiles.work.upstreams.github.isolation.files.1.environment",
+        "profiles.work.upstreams.github.isolation.containerVolumes.0.environment"
+      ])
+    );
+  });
+
+  it("rejects an isolation mapping that tries to replace a generated HOME binding", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                {
+                  source: "credentials/work-oauth.json",
+                  destination: "credentials/oauth.json",
+                  environment: "HOME"
+                }
+              ]
+            }
+          }
+        }
+      })
+    ).toThrow(homeBindingReplacementPathPattern);
+  });
+
+  it("rejects a container environment binding that does not map the same isolated file", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                {
+                  source: "credentials/work-oauth.json",
+                  destination: "credentials/oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ],
+              containerVolumes: [
+                {
+                  source: "credentials/other.json",
+                  destination: "/run/miftah/oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ]
+            }
+          }
+        }
+      })
+    ).toThrow(containerVolumeEnvironmentMismatchPathPattern);
+  });
+
+  it("allows a container environment binding for the exact copied file it mounts", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          isolation: {
+            files: [
+              {
+                source: "credentials/work-oauth.json",
+                destination: "credentials/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ],
+            containerVolumes: [
+              {
+                source: "credentials/oauth.json",
+                destination: "/run/miftah/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.isolation?.containerVolumes?.[0]?.environment).toBe("OAUTH_CREDENTIAL_PATH");
+  });
+
+  it.each([
+    ["a parent-directory source", "../credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
+    ["a Windows drive-relative source", "C:credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
+    ["an absolute destination", "credentials/work-oauth.json", "/tmp/oauth.json", "profiles.work.isolation.files.0.destination"],
+    ["a traversal destination", "credentials/work-oauth.json", "credentials/../oauth.json", "profiles.work.isolation.files.0.destination"],
+    ["a comma-delimited container source", "credentials/oauth,dst=/override", "/run/miftah/oauth.json", "profiles.work.isolation.containerVolumes.0.source"],
+    ["an invalid container destination", "credentials/oauth.json", "run/miftah/oauth.json", "profiles.work.isolation.containerVolumes.0.destination"]
+  ])("rejects %s in isolation mappings", (_label, source, destination, expectedPath) => {
+    const isolation = expectedPath.includes("containerVolumes")
+      ? { containerVolumes: [{ source, destination }] }
+      : { files: [{ source, destination }] };
+
+    let thrown: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: { work: { isolation } }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    expect((thrown as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toContain(expectedPath);
   });
 
   it.each([

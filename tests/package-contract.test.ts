@@ -394,12 +394,12 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileLeaseConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
             "",
             "type SupportedTypes = [",
             "  ActiveProfileStateScope, AuditConfig, ConfigDiagnostic, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, MiftahConfig,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
-            "  PolicyConfig, ProcessConfig, ProfileConfig, ProfileLeaseConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
+            "  PolicyConfig, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
             "  RoutingRule, SecurityConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
             "  ValidatedRoutingConfig",
             "];",
@@ -410,6 +410,9 @@ describe("packed artifact contract", () => {
             'const validState: StateConfig = { persistActiveProfile: true, scope: "workspace" };',
             'const validSessionState: StateConfig = { scope: "session" };',
             'const validProfileLease: ProfileLeaseConfig = { ttlMs: 60_000, requiredForRisk: ["write"] };',
+            'const isolatedFile: ProfileIsolationFile = { source: "credentials/oauth.json", destination: "credentials/oauth.json" };',
+            'const isolatedVolume: ProfileIsolationContainerVolume = { source: "credentials/oauth.json", destination: "/run/miftah/oauth.json" };',
+            'const isolation: ProfileIsolationConfig = { files: [isolatedFile], containerVolumes: [isolatedVolume] };',
             "// @ts-expect-error Profile lease risk requirements must be unique.",
             'const invalidDuplicateProfileLease: ProfileLeaseConfig = { ttlMs: 60_000, requiredForRisk: ["write", "write"] };',
             'const unknownRisk: UnknownToolRisk = "destructive";',
@@ -464,7 +467,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, runtime, globalScope, validState, validSessionState, validProfileLease, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, runtime, globalScope, validState, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(

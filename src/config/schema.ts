@@ -155,12 +155,150 @@ const profileLeaseSchema = z
     }
   });
 
+const isolationEnvironmentNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u);
+const generatedIsolationEnvironmentNames = new Set([
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR"
+]);
+
+const runtimeRelativePathPattern = new RegExp(
+  String.raw`^(?![A-Za-z]:)(?![\\/])(?!.*(?:^|[\\/])(?:\.{1,2})(?:[\\/]|$))[^\\/\u0000]+(?:[\\/][^\\/\u0000]+)*$`,
+  "u"
+);
+const containerRuntimeRelativePathPattern = new RegExp(
+  String.raw`^(?![A-Za-z]:)(?![\\/])(?!.*(?:^|[\\/])(?:\.{1,2})(?:[\\/]|$))[^\\/,\u0000]+(?:[\\/][^\\/,\u0000]+)*$`,
+  "u"
+);
+const containerDestinationPathPattern = new RegExp(
+  String.raw`^\/(?!.*(?:^|\/)(?:\.{1,2})(?:\/|$))[^\\/,\u0000]+(?:\/[^\\/,\u0000]+)*$`,
+  "u"
+);
+
+const runtimeRelativePathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(runtimeRelativePathPattern, "isolation paths must be non-empty relative paths without traversal");
+
+const containerRuntimeRelativePathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(
+    containerRuntimeRelativePathPattern,
+    "container isolation source paths must be relative, traversal-free, and safe for Docker mount grammar"
+  );
+
+const containerDestinationPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(containerDestinationPathPattern, "container isolation destinations must be normalized absolute POSIX paths");
+
+const profileIsolationFileSchema = z
+  .object({
+    source: runtimeRelativePathSchema,
+    destination: runtimeRelativePathSchema,
+    environment: isolationEnvironmentNameSchema.optional()
+  })
+  .strict();
+
+const profileIsolationContainerVolumeSchema = z
+  .object({
+    source: containerRuntimeRelativePathSchema,
+    destination: containerDestinationPathSchema,
+    readOnly: z.boolean().optional(),
+    environment: isolationEnvironmentNameSchema.optional()
+  })
+  .strict();
+
+const profileIsolationSchema = z
+  .object({
+    files: z.array(profileIsolationFileSchema).max(32).optional(),
+    containerVolumes: z.array(profileIsolationContainerVolumeSchema).max(32).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const unique = (
+      values: readonly { readonly [key: string]: unknown }[],
+      property: "destination" | "environment",
+      path: "files" | "containerVolumes"
+    ): void => {
+      const seen = new Set<string>();
+      for (const [index, item] of values.entries()) {
+        const candidate = item[property];
+        if (typeof candidate !== "string") continue;
+        const normalizedCandidate = property === "environment" ? candidate.toUpperCase() : candidate;
+        if (seen.has(normalizedCandidate)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [path, index, property],
+            message: `isolation ${path} ${property} entries must be unique`
+          });
+        }
+        seen.add(normalizedCandidate);
+      }
+    };
+
+    unique(value.files ?? [], "destination", "files");
+    unique(value.files ?? [], "environment", "files");
+    unique(value.containerVolumes ?? [], "destination", "containerVolumes");
+    unique(value.containerVolumes ?? [], "environment", "containerVolumes");
+
+    const rejectGeneratedEnvironmentName = (
+      values: readonly { readonly environment?: unknown }[],
+      path: "files" | "containerVolumes"
+    ): void => {
+      for (const [index, item] of values.entries()) {
+        if (
+          typeof item.environment === "string" &&
+          generatedIsolationEnvironmentNames.has(item.environment.toUpperCase())
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [path, index, "environment"],
+            message: "isolation mappings cannot replace generated HOME, XDG, or platform runtime bindings"
+          });
+        }
+      }
+    };
+
+    rejectGeneratedEnvironmentName(value.files ?? [], "files");
+    rejectGeneratedEnvironmentName(value.containerVolumes ?? [], "containerVolumes");
+
+    const fileDestinationsByEnvironment = new Map<string, string>();
+    for (const file of value.files ?? []) {
+      if (file.environment !== undefined) {
+        fileDestinationsByEnvironment.set(file.environment.toUpperCase(), file.destination);
+      }
+    }
+    for (const [index, volume] of (value.containerVolumes ?? []).entries()) {
+      if (volume.environment === undefined) continue;
+      const mappedFileDestination = fileDestinationsByEnvironment.get(volume.environment.toUpperCase());
+      if (mappedFileDestination !== undefined && mappedFileDestination !== volume.source) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["containerVolumes", index, "environment"],
+          message: "a shared isolation environment binding must mount the matching copied file"
+        });
+      }
+    }
+  });
+
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  identity: identitySchema.optional()
+  identity: identitySchema.optional(),
+  isolation: profileIsolationSchema.optional()
 };
 
 const publicProfileUpstreamOverrideSchema = z.object(publicProfileUpstreamOverrideShape).strict();
@@ -183,6 +321,7 @@ const publicProfileShape = {
   policy: z.string().optional(),
   identity: identitySchema.optional(),
   lease: profileLeaseSchema.optional(),
+  isolation: profileIsolationSchema.optional(),
   upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
 };
 
@@ -348,11 +487,36 @@ const stateSchema = z
   })
   .strict();
 
+type IsolationDestinationInput = {
+  destination: string;
+  environment?: string;
+};
+
+type IsolationContainerVolumeInput = IsolationDestinationInput & {
+  source: string;
+};
+
+type ProfileIsolationReferenceInput = {
+  files?: readonly IsolationDestinationInput[];
+  containerVolumes?: readonly IsolationContainerVolumeInput[];
+};
+
+type UpstreamTransportReference = {
+  transport: "stdio" | "http" | "sse" | "streamable-http";
+};
+
 type ConfigReferenceInput = {
   defaultProfile: string;
-  upstream?: unknown;
-  upstreams?: Record<string, unknown>;
-  profiles: Record<string, { policy?: string; upstreams?: Record<string, unknown> }>;
+  upstream?: UpstreamTransportReference;
+  upstreams?: Record<string, UpstreamTransportReference>;
+  profiles: Record<
+    string,
+    {
+      policy?: string;
+      isolation?: ProfileIsolationReferenceInput;
+      upstreams?: Record<string, { isolation?: ProfileIsolationReferenceInput }>;
+    }
+  >;
   routing?: { rules?: { profile: string }[] };
   policies?: Record<string, unknown>;
   security?: { lockToProfile?: string | null };
@@ -404,7 +568,8 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
 
   const profileNames = new Set(Object.keys(value.profiles));
   const policyNames = new Set(Object.keys(value.policies ?? {}));
-  const upstreamNames = new Set(Object.keys(value.upstreams ?? {}));
+  const namedUpstreams = value.upstreams ?? {};
+  const upstreamNames = new Set(Object.keys(namedUpstreams));
   if (!profileNames.has(value.defaultProfile)) {
     addConfigIssue(
       context,
@@ -425,6 +590,25 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
         "Choose a policy name defined under `policies`."
       );
     }
+    if (profile.isolation !== undefined) {
+      if (value.upstream !== undefined) {
+        validateIsolationTransport(
+          ["profiles", profileName, "isolation"],
+          "the configured upstream",
+          value.upstream.transport,
+          context
+        );
+      } else {
+        for (const [upstreamName, upstream] of Object.entries(namedUpstreams)) {
+          validateIsolationTransport(
+            ["profiles", profileName, "isolation"],
+            `upstream '${upstreamName}'`,
+            upstream.transport,
+            context
+          );
+        }
+      }
+    }
     for (const upstreamName of Object.keys(profile.upstreams ?? {})) {
       if (!upstreamNames.has(upstreamName)) {
         addConfigIssue(
@@ -434,6 +618,19 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
           `upstream '${upstreamName}' does not exist`,
           "Choose an upstream name defined under `upstreams` or remove the override."
         );
+      }
+      const override = profile.upstreams?.[upstreamName];
+      if (override !== undefined) {
+        validateMergedIsolationDestinations(profileName, upstreamName, profile.isolation, override.isolation, context);
+        const upstream = namedUpstreams[upstreamName];
+        if (upstream !== undefined && override.isolation !== undefined) {
+          validateIsolationTransport(
+            ["profiles", profileName, "upstreams", upstreamName, "isolation"],
+            `upstream '${upstreamName}'`,
+            upstream.transport,
+            context
+          );
+        }
       }
     }
   }
@@ -461,6 +658,143 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
       );
     }
   }
+}
+
+function validateIsolationTransport(
+  path: (string | number)[],
+  target: string,
+  transport: UpstreamTransportReference["transport"],
+  context: z.RefinementCtx
+): void {
+  if (transport === "stdio") return;
+  addConfigIssue(
+    context,
+    "CONFIG_SCHEMA_INVALID",
+    path,
+    `profile isolation requires a stdio transport; ${target} uses '${transport}'`,
+    "Remove isolation for this target, or configure the target upstream with transport 'stdio'."
+  );
+}
+
+function validateMergedIsolationDestinations(
+  profileName: string,
+  upstreamName: string,
+  profileIsolation: ProfileIsolationReferenceInput | undefined,
+  upstreamIsolation: ProfileIsolationReferenceInput | undefined,
+  context: z.RefinementCtx
+): void {
+  if (profileIsolation === undefined || upstreamIsolation === undefined) return;
+  const mappings: ReadonlyArray<{
+    readonly name: "files" | "containerVolumes";
+    readonly profileEntries: readonly IsolationDestinationInput[];
+    readonly upstreamEntries: readonly IsolationDestinationInput[];
+  }> = [
+    {
+      name: "files",
+      profileEntries: profileIsolation.files ?? [],
+      upstreamEntries: upstreamIsolation.files ?? []
+    },
+    {
+      name: "containerVolumes",
+      profileEntries: profileIsolation.containerVolumes ?? [],
+      upstreamEntries: upstreamIsolation.containerVolumes ?? []
+    }
+  ];
+  for (const mapping of mappings) {
+    const destinations = new Set(mapping.profileEntries.map((entry) => entry.destination));
+    for (const [index, entry] of mapping.upstreamEntries.entries()) {
+      if (!destinations.has(entry.destination)) continue;
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        ["profiles", profileName, "upstreams", upstreamName, "isolation", mapping.name, index, "destination"],
+        `named-upstream isolation ${mapping.name} cannot duplicate a profile isolation destination`,
+        "Use a distinct destination for the named upstream, or keep the mapping only at the profile level."
+      );
+    }
+  }
+  validateMergedIsolationEnvironmentBindings(profileName, upstreamName, profileIsolation, upstreamIsolation, context);
+}
+
+function validateMergedIsolationEnvironmentBindings(
+  profileName: string,
+  upstreamName: string,
+  profileIsolation: ProfileIsolationReferenceInput,
+  upstreamIsolation: ProfileIsolationReferenceInput,
+  context: z.RefinementCtx
+): void {
+  const profileFiles = isolationEnvironmentIndex(profileIsolation.files ?? []);
+  const upstreamFiles = isolationEnvironmentIndex(upstreamIsolation.files ?? []);
+  const profileVolumes = isolationEnvironmentIndex(profileIsolation.containerVolumes ?? []);
+  const upstreamVolumes = isolationEnvironmentIndex(upstreamIsolation.containerVolumes ?? []);
+
+  for (const [environment, upstreamFile] of upstreamFiles) {
+    if (profileFiles.has(environment)) {
+      addMergedIsolationEnvironmentIssue(context, profileName, upstreamName, "files", upstreamFile.index, "cannot duplicate a profile file binding");
+    }
+    const profileVolume = profileVolumes.get(environment);
+    if (profileVolume !== undefined && profileVolume.entry.source !== upstreamFile.entry.destination) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "files",
+        upstreamFile.index,
+        "must match the source of the profile container volume"
+      );
+    }
+  }
+
+  for (const [environment, upstreamVolume] of upstreamVolumes) {
+    if (profileVolumes.has(environment)) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "containerVolumes",
+        upstreamVolume.index,
+        "cannot duplicate a profile container volume binding"
+      );
+    }
+    const profileFile = profileFiles.get(environment);
+    if (profileFile !== undefined && profileFile.entry.destination !== upstreamVolume.entry.source) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "containerVolumes",
+        upstreamVolume.index,
+        "must mount the matching profile copied-file destination"
+      );
+    }
+  }
+}
+
+function isolationEnvironmentIndex<T extends { readonly environment?: string }>(
+  entries: readonly T[]
+): Map<string, { readonly entry: T; readonly index: number }> {
+  const bindings = new Map<string, { readonly entry: T; readonly index: number }>();
+  for (const [index, entry] of entries.entries()) {
+    if (entry.environment !== undefined) bindings.set(entry.environment.toLocaleUpperCase("en-US"), { entry, index });
+  }
+  return bindings;
+}
+
+function addMergedIsolationEnvironmentIssue(
+  context: z.RefinementCtx,
+  profileName: string,
+  upstreamName: string,
+  kind: "files" | "containerVolumes",
+  index: number,
+  explanation: string
+): void {
+  addConfigIssue(
+    context,
+    "CONFIG_SCHEMA_INVALID",
+    ["profiles", profileName, "upstreams", upstreamName, "isolation", kind, index, "environment"],
+    `named-upstream isolation environment ${explanation}`,
+    "Use a distinct environment name, or use the exact copied-file and container-volume pairing."
+  );
 }
 
 function validateProfileState(

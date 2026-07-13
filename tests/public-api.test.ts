@@ -21,6 +21,9 @@ import type {
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileIsolationConfig,
+  ProfileIsolationContainerVolume,
+  ProfileIsolationFile,
   ProfileLeaseConfig,
   ProfileUpstreamOverride,
   RiskLevel,
@@ -75,6 +78,9 @@ const supportedTypeExports = [
   "PolicyConfig",
   "ProcessConfig",
   "ProfileConfig",
+  "ProfileIsolationConfig",
+  "ProfileIsolationContainerVolume",
+  "ProfileIsolationFile",
   "ProfileLeaseConfig",
   "ProfileUpstreamOverride",
   "RiskLevel",
@@ -104,6 +110,9 @@ type PublicTypeImportCoverage = [
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileIsolationConfig,
+  ProfileIsolationContainerVolume,
+  ProfileIsolationFile,
   ProfileLeaseConfig,
   ProfileUpstreamOverride,
   RiskLevel,
@@ -169,6 +178,32 @@ const invalidDuplicateProfileLeaseConfig: ProfileLeaseConfig = {
   requiredForRisk: ["write", "write"]
 };
 void invalidDuplicateProfileLeaseConfig;
+
+const validProfileIsolationFile: ProfileIsolationFile = {
+  source: "credentials/work-oauth.json",
+  destination: "credentials/oauth.json",
+  environment: "OAUTH_CREDENTIAL_PATH"
+};
+
+const validProfileIsolationVolume: ProfileIsolationContainerVolume = {
+  source: "credentials/oauth.json",
+  destination: "/run/miftah/oauth.json",
+  readOnly: true,
+  environment: "OAUTH_CREDENTIAL_PATH"
+};
+
+const validProfileIsolationConfig: ProfileIsolationConfig = {
+  files: [validProfileIsolationFile],
+  containerVolumes: [validProfileIsolationVolume]
+};
+void validProfileIsolationConfig;
+
+const invalidProfileIsolationFile: ProfileIsolationFile = {
+  source: "credentials/work-oauth.json",
+  // @ts-expect-error Every copied isolation file needs a generated runtime destination.
+  destination: undefined
+};
+void invalidProfileIsolationFile;
 
 const validJsonIdentityConfig: IdentityConfig = {
   expected: { organization: "lubab" },
