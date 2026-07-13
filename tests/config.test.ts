@@ -116,6 +116,16 @@ describe("config foundation", () => {
 
   it.each([
     [
+      "an empty profile matcher declaration",
+      {},
+      "profiles.work.routing.match"
+    ],
+    [
+      "an empty GitHub matcher declaration",
+      { github: {} },
+      "profiles.work.routing.match.github"
+    ],
+    [
       "a duplicate GitHub repository",
       { github: { repositories: ["acme/work", "acme/work"] } },
       "profiles.work.routing.match.github.repositories.1"
