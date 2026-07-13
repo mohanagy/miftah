@@ -489,11 +489,16 @@ const stateSchema = z
 
 type IsolationDestinationInput = {
   destination: string;
+  environment?: string;
+};
+
+type IsolationContainerVolumeInput = IsolationDestinationInput & {
+  source: string;
 };
 
 type ProfileIsolationReferenceInput = {
   files?: readonly IsolationDestinationInput[];
-  containerVolumes?: readonly IsolationDestinationInput[];
+  containerVolumes?: readonly IsolationContainerVolumeInput[];
 };
 
 type ConfigReferenceInput = {
@@ -659,6 +664,88 @@ function validateMergedIsolationDestinations(
       );
     }
   }
+  validateMergedIsolationEnvironmentBindings(profileName, upstreamName, profileIsolation, upstreamIsolation, context);
+}
+
+function validateMergedIsolationEnvironmentBindings(
+  profileName: string,
+  upstreamName: string,
+  profileIsolation: ProfileIsolationReferenceInput,
+  upstreamIsolation: ProfileIsolationReferenceInput,
+  context: z.RefinementCtx
+): void {
+  const profileFiles = isolationEnvironmentIndex(profileIsolation.files ?? []);
+  const upstreamFiles = isolationEnvironmentIndex(upstreamIsolation.files ?? []);
+  const profileVolumes = isolationEnvironmentIndex(profileIsolation.containerVolumes ?? []);
+  const upstreamVolumes = isolationEnvironmentIndex(upstreamIsolation.containerVolumes ?? []);
+
+  for (const [environment, upstreamFile] of upstreamFiles) {
+    if (profileFiles.has(environment)) {
+      addMergedIsolationEnvironmentIssue(context, profileName, upstreamName, "files", upstreamFile.index, "cannot duplicate a profile file binding");
+    }
+    const profileVolume = profileVolumes.get(environment);
+    if (profileVolume !== undefined && profileVolume.entry.source !== upstreamFile.entry.destination) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "files",
+        upstreamFile.index,
+        "must match the source of the profile container volume"
+      );
+    }
+  }
+
+  for (const [environment, upstreamVolume] of upstreamVolumes) {
+    if (profileVolumes.has(environment)) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "containerVolumes",
+        upstreamVolume.index,
+        "cannot duplicate a profile container volume binding"
+      );
+    }
+    const profileFile = profileFiles.get(environment);
+    if (profileFile !== undefined && profileFile.entry.destination !== upstreamVolume.entry.source) {
+      addMergedIsolationEnvironmentIssue(
+        context,
+        profileName,
+        upstreamName,
+        "containerVolumes",
+        upstreamVolume.index,
+        "must mount the matching profile copied-file destination"
+      );
+    }
+  }
+}
+
+function isolationEnvironmentIndex<T extends { readonly environment?: string }>(
+  entries: readonly T[]
+): Map<string, { readonly entry: T; readonly index: number }> {
+  const bindings = new Map<string, { readonly entry: T; readonly index: number }>();
+  for (const [index, entry] of entries.entries()) {
+    if (entry.environment !== undefined) bindings.set(entry.environment.toLocaleUpperCase("en-US"), { entry, index });
+  }
+  return bindings;
+}
+
+function addMergedIsolationEnvironmentIssue(
+  context: z.RefinementCtx,
+  profileName: string,
+  upstreamName: string,
+  kind: "files" | "containerVolumes",
+  index: number,
+  explanation: string
+): void {
+  addConfigIssue(
+    context,
+    "CONFIG_SCHEMA_INVALID",
+    ["profiles", profileName, "upstreams", upstreamName, "isolation", kind, index, "environment"],
+    `named-upstream isolation environment ${explanation}`,
+    "Use a distinct environment name, or use the exact copied-file and container-volume pairing."
+  );
 }
 
 function validateProfileState(

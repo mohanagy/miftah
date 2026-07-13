@@ -207,7 +207,7 @@ export class ProfileRuntimeIsolation {
       path = join(path, segment);
       const entry = await lstat(path);
       if (entry.isSymbolicLink()) throw isolationFailure();
-      if (index < segments.length - 1 && !entry.isDirectory()) throw isolationFailure();
+      if (index < segments.length - 1 && !isTrustedSourceDirectory(entry, this.ownerUid)) throw isolationFailure();
       if (index === segments.length - 1) {
         if (!isTrustedSourceFile(entry, this.ownerUid)) throw isolationFailure();
         sourceEntry = entry;
@@ -844,6 +844,13 @@ function isTrustedSourceFile(
   ownerUid: number | undefined
 ): boolean {
   return entry.isFile() && hasExpectedOwner(entry, ownerUid) && (Number(entry.mode) & 0o022) === 0;
+}
+
+function isTrustedSourceDirectory(
+  entry: Pick<Awaited<ReturnType<typeof stat>>, "isDirectory" | "mode" | "uid">,
+  ownerUid: number | undefined
+): boolean {
+  return entry.isDirectory() && hasExpectedOwner(entry, ownerUid) && (Number(entry.mode) & 0o022) === 0;
 }
 
 function isErrorCode(error: unknown, code: string): boolean {

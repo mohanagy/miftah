@@ -399,6 +399,44 @@ describe("profile runtime isolation", () => {
     }
   });
 
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("rejects a mapped credential below a group- or world-writable source directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-writable-source-directory-"));
+    const configPath = join(directory, "miftah.json");
+    const credentialsDirectory = join(directory, "credentials");
+    const sourcePath = join(credentialsDirectory, "oauth.json");
+    const secret = "writable-source-directory-oauth-secret";
+    await writeFile(configPath, "{}", "utf8");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(sourcePath, secret, "utf8");
+    await chmod(directory, 0o755);
+    await chmod(credentialsDirectory, 0o777);
+    const redactor = new SecretRedactor();
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor });
+
+    try {
+      const initial = await isolation.prepare("work", "default", {}, "stdio");
+      const destination = join(dirname(initial.environment.HOME!), "credentials", "oauth.json");
+      let failure: unknown;
+      try {
+        await isolation.prepare(
+          "work",
+          "default",
+          { files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }] },
+          "stdio"
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      expect(failure instanceof Error ? failure.message : String(failure)).not.toContain(secret);
+      await expect(stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(redactor.redactText(secret)).toBe(secret);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!supportsNativeProfileRuntimeIsolation)("does not claim a pre-existing target runtime directory without its ownership marker", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-marker-"));
     const configPath = join(directory, "miftah.json");

@@ -173,6 +173,61 @@ describe("config foundation", () => {
     );
   });
 
+  it("rejects cross-scope isolation environment collisions and incompatible file-volume handoffs", () => {
+    let failure: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstreams: { github: { transport: "stdio", command: "node", args: ["server.js"] } },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                { source: "credentials/base-token.json", destination: "credentials/base-token.json", environment: "TOKEN" },
+                {
+                  source: "credentials/base-oauth.json",
+                  destination: "credentials/base-oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ],
+              containerVolumes: [{ source: "home", destination: "/home/miftah", environment: "HOME_DIR" }]
+            },
+            upstreams: {
+              github: {
+                isolation: {
+                  files: [
+                    { source: "credentials/target-token.json", destination: "credentials/target-token.json", environment: "token" },
+                    { source: "credentials/target-home.json", destination: "credentials/target-home.json", environment: "home_dir" }
+                  ],
+                  containerVolumes: [
+                    {
+                      source: "credentials/other-oauth.json",
+                      destination: "/run/miftah/oauth.json",
+                      environment: "oauth_credential_path"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect((failure as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toEqual(
+      expect.arrayContaining([
+        "profiles.work.upstreams.github.isolation.files.0.environment",
+        "profiles.work.upstreams.github.isolation.files.1.environment",
+        "profiles.work.upstreams.github.isolation.containerVolumes.0.environment"
+      ])
+    );
+  });
+
   it("rejects an isolation mapping that tries to replace a generated HOME binding", () => {
     expect(() =>
       validateConfig({
