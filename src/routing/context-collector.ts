@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { redactUri } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
+import { githubRepositoryFromSource } from "./provider-matchers.js";
 import type {
   RoutingContextCollectorInput,
   RoutingContextEvidence,
@@ -12,6 +13,7 @@ import type {
   RoutingContextProfileHint,
   RoutingContextSnapshot
 } from "./routing-types.js";
+import type { ProviderMatcherContext } from "./provider-matcher-types.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -29,7 +31,13 @@ interface PackageMetadata {
   readonly path: string;
   readonly name?: string;
   readonly repository?: string;
+  readonly githubRepository?: string;
   readonly workspace: boolean;
+}
+
+interface GitOrigin {
+  readonly origin: string;
+  readonly githubRepository?: string;
 }
 
 interface KnownJsonFile {
@@ -96,7 +104,7 @@ export async function collectRoutingContext(
   if (marker) context.marker = { profile: marker.profile };
   if (packages.nearest) context.package = contextPackage(packages.nearest);
   if (packages.workspace) context.workspace = contextPackage(packages.workspace);
-  if (gitOrigin) context.git = { origin: gitOrigin };
+  if (gitOrigin) context.git = { origin: gitOrigin.origin };
 
   const evidence: RoutingContextEvidence = {
     cwd,
@@ -112,10 +120,11 @@ export async function collectRoutingContext(
     ...(marker ? { marker: { path: marker.path } } : {}),
     ...(packages.nearest ? { package: evidencePackage(packages.nearest) } : {}),
     ...(packages.workspace ? { workspace: evidencePackage(packages.workspace) } : {}),
-    ...(gitOrigin ? { git: { origin: gitOrigin } } : {})
+    ...(gitOrigin ? { git: { origin: gitOrigin.origin } } : {})
   };
+  const matcherContext = providerMatcherContext(packages, gitOrigin);
 
-  return deepFreeze({ context, evidence, profileHints: hints });
+  return deepFreeze({ context, evidence, profileHints: hints, ...(matcherContext ? { matcherContext } : {}) });
 }
 
 function collectEnvironment(environment: Readonly<Record<string, string | undefined>>): {
@@ -271,25 +280,28 @@ function strictMarkerProfile(value: unknown, wrapperName: string): string | unde
 function packageMetadata(value: unknown, path: string): PackageMetadata | undefined {
   if (!isRecord(value)) return undefined;
   const name = typeof value.name === "string" ? value.name : undefined;
-  const repository = repositoryUri(value.repository);
+  const repositorySource = repositoryValue(value.repository);
+  const repository = repositorySource === undefined ? undefined : redactUri(repositorySource);
+  const githubRepository = repositorySource === undefined ? undefined : githubRepositoryFromSource(repositorySource);
   const workspace = isWorkspaceDeclaration(value.workspaces);
   if (name === undefined && repository === undefined && !workspace) return undefined;
   return {
     path,
     ...(name === undefined ? {} : { name }),
     ...(repository === undefined ? {} : { repository }),
+    ...(githubRepository === undefined ? {} : { githubRepository }),
     workspace
   };
 }
 
-function repositoryUri(value: unknown): string | undefined {
-  const raw =
+function repositoryValue(value: unknown): string | undefined {
+  return (
     typeof value === "string"
       ? value
       : isRecord(value) && typeof value.url === "string"
         ? value.url
-        : undefined;
-  return raw === undefined ? undefined : redactUri(raw);
+        : undefined
+  );
 }
 
 function isWorkspaceDeclaration(value: unknown): boolean {
@@ -320,7 +332,7 @@ async function findGitOrigin(
   cwd: string,
   boundary: string,
   executable: string
-): Promise<string | undefined> {
+): Promise<GitOrigin | undefined> {
   try {
     const { stdout: gitDirectory } = await execFile(
       executable,
@@ -336,10 +348,28 @@ async function findGitOrigin(
       gitExecutionOptions(cwd, boundary)
     );
     const origin = stdout.trim();
-    return origin.length === 0 ? undefined : redactUri(origin);
+    if (origin.length === 0) return undefined;
+    const githubRepository = githubRepositoryFromSource(origin);
+    return {
+      origin: redactUri(origin),
+      ...(githubRepository === undefined ? {} : { githubRepository })
+    };
   } catch {
     return undefined;
   }
+}
+
+function providerMatcherContext(
+  packages: { nearest?: PackageMetadata; workspace?: PackageMetadata },
+  gitOrigin: GitOrigin | undefined
+): ProviderMatcherContext | undefined {
+  const githubRepositories = [
+    gitOrigin?.githubRepository,
+    packages.nearest?.githubRepository,
+    packages.workspace?.githubRepository
+  ].filter((value): value is string => value !== undefined);
+  const unique = [...new Set(githubRepositories)].sort();
+  return unique.length === 0 ? undefined : { githubRepositories: unique };
 }
 
 function gitExecutionOptions(cwd: string, boundary: string): {

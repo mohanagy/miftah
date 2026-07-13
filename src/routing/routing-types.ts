@@ -1,4 +1,5 @@
 import type { RoutingConfig } from "../config/types.js";
+import type { ProviderMatcherContext } from "./provider-matcher-types.js";
 
 export interface RoutingInput {
   toolName: string;
@@ -59,6 +60,8 @@ export interface RoutingContextSnapshot {
   readonly context: Record<string, unknown>;
   readonly evidence: RoutingContextEvidence;
   readonly profileHints: readonly RoutingContextProfileHint[];
+  /** Safe, canonical provider metadata reserved for the fixed matcher registry. */
+  readonly matcherContext?: ProviderMatcherContext;
 }
 
 export type { RoutingConfig };
