@@ -1,6 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolRequestSchema,
@@ -65,6 +65,31 @@ const identityInputSchema =
       : process.env.TEST_IDENTITY_SCHEMA === "additional-properties-false"
         ? { type: "object", properties: {}, additionalProperties: false }
       : { type: "object", properties: {} };
+
+const isolationReportPath = process.env.TEST_ISOLATION_REPORT_PATH;
+if (isolationReportPath) {
+  const credentialPath = process.env.OAUTH_CREDENTIAL_PATH;
+  if (!credentialPath) {
+    throw new Error("test isolation fixture requires OAUTH_CREDENTIAL_PATH");
+  }
+  const credential = readFileSync(credentialPath, "utf8");
+  writeFileSync(
+    isolationReportPath,
+    JSON.stringify({
+      home: process.env.HOME,
+      xdgConfigHome: process.env.XDG_CONFIG_HOME,
+      xdgCacheHome: process.env.XDG_CACHE_HOME,
+      xdgDataHome: process.env.XDG_DATA_HOME,
+      xdgStateHome: process.env.XDG_STATE_HOME,
+      xdgRuntimeDir: process.env.XDG_RUNTIME_DIR,
+      credentialPath,
+      credential
+    })
+  );
+  if (process.env.TEST_ISOLATION_EMIT_CREDENTIAL === "true") {
+    process.stderr.write(`test isolated credential: ${credential}\n`);
+  }
+}
 
 if (startCountPath) {
   appendFileSync(startCountPath, "1\n");

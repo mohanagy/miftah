@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { MiftahConfig, ProfileConfig } from "../config/types.js";
+import type { MiftahConfig, ProfileConfig, ProfileIsolationConfig } from "../config/types.js";
 import {
   UpstreamProcessManager,
   type UpstreamCapability,
@@ -163,9 +163,22 @@ function scopedProfiles(
           env: { ...(profile.env ?? {}), ...(override?.env ?? {}) },
           args: override?.args ?? profile.args,
           cwd: override?.cwd ?? profile.cwd,
-          headers: { ...(profile.headers ?? {}), ...(override?.headers ?? {}) }
+          headers: { ...(profile.headers ?? {}), ...(override?.headers ?? {}) },
+          isolation: mergeIsolation(profile.isolation, override?.isolation)
         }
       ];
     })
   );
+}
+
+function mergeIsolation(
+  profileIsolation: ProfileIsolationConfig | undefined,
+  upstreamIsolation: ProfileIsolationConfig | undefined
+): ProfileIsolationConfig | undefined {
+  if (profileIsolation === undefined) return upstreamIsolation;
+  if (upstreamIsolation === undefined) return profileIsolation;
+  return {
+    files: [...(profileIsolation.files ?? []), ...(upstreamIsolation.files ?? [])],
+    containerVolumes: [...(profileIsolation.containerVolumes ?? []), ...(upstreamIsolation.containerVolumes ?? [])]
+  };
 }

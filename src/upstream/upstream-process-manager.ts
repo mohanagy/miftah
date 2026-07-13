@@ -8,6 +8,7 @@ import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
 import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expand.js";
 import { SecretRedactor } from "../secrets/redact.js";
+import { ProfileRuntimeIsolation } from "../isolation/profile-runtime-isolation.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
 import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
@@ -35,6 +36,17 @@ function mergeHeaders(
   return Object.fromEntries(merged);
 }
 
+function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
+  if (process.platform !== "win32") return Object.assign({}, ...environmentSets);
+  const merged = new Map<string, [string, string]>();
+  for (const environment of environmentSets) {
+    for (const [name, value] of Object.entries(environment ?? {})) {
+      merged.set(name.toUpperCase(), [name, value]);
+    }
+  }
+  return Object.fromEntries(merged.values());
+}
+
 /** Configures lifecycle behavior, capacity, and redacted diagnostics for an upstream manager. */
 export interface UpstreamManagerOptions {
   startupTimeoutMs?: number;
@@ -45,6 +57,7 @@ export interface UpstreamManagerOptions {
   maxConcurrentProfiles?: number;
   secretValues?: readonly string[];
   redactor?: SecretRedactor;
+  isolation?: ProfileRuntimeIsolation;
   onStderr?: (profile: string, message: string) => void;
 }
 
@@ -333,13 +346,17 @@ export class UpstreamProcessManager {
     try {
       reserved = this.limiter.acquire(profile, this.upstreamName);
       this.setProcessState(profile, "starting", { resetCapabilities: true, pid: null });
-      const { environment, headers } = this.resolveProfileOptions(profileConfig);
+      const { environment, headers, args } = await this.resolveProfileOptions(
+        profile,
+        profileConfig,
+        profileConfig.args ?? this.upstream.args ?? []
+      );
 
       if (this.upstream.transport === "stdio") {
         stdioTransport = new StdioClientTransport({
           command: this.upstream.command!,
-          args: profileConfig.args ?? this.upstream.args ?? [],
-          env: { ...getDefaultEnvironment(), ...environment },
+          args,
+          env: environment,
           ...(profileConfig.cwd ?? this.upstream.cwd ? { cwd: profileConfig.cwd ?? this.upstream.cwd } : {}),
           stderr: "pipe"
         });
@@ -444,10 +461,11 @@ export class UpstreamProcessManager {
   }
 
   /** Resolves per-profile process settings and retains credential values for later diagnostic redaction. */
-  private resolveProfileOptions(profile: ProfileConfig): {
+  private async resolveProfileOptions(profileName: string, profile: ProfileConfig, args: string[]): Promise<{
     environment: Record<string, string>;
     headers: Record<string, string>;
-  } {
+    args: string[];
+  }> {
     const upstreamEnvironment = this.upstream.env
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.env)
       : undefined;
@@ -456,10 +474,24 @@ export class UpstreamProcessManager {
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.headers)
       : undefined;
     const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
-    const environment = {
-      ...(upstreamEnvironment?.values ?? {}),
-      ...(profileEnvironment?.values ?? {})
-    };
+    let isolationEnvironment: Record<string, string> | undefined;
+    if (profile.isolation !== undefined) {
+      if (this.options.isolation === undefined) {
+        throw new MiftahError(
+          "UPSTREAM_START_FAILED",
+          "UPSTREAM_START_FAILED: profile runtime isolation could not be prepared"
+        );
+      }
+      isolationEnvironment = (
+        await this.options.isolation.prepare(profileName, this.upstreamName, profile.isolation, this.upstream.transport)
+      ).environment;
+    }
+    const environment = mergeEnvironment(
+      getDefaultEnvironment(),
+      upstreamEnvironment?.values,
+      profileEnvironment?.values,
+      isolationEnvironment
+    );
     const headers = mergeHeaders(upstreamHeaders?.values, profileHeaders?.values);
     for (const value of [
       ...(upstreamEnvironment?.secretValues ?? []),
@@ -474,7 +506,7 @@ export class UpstreamProcessManager {
         this.redactor.add(value);
       }
     }
-    return { environment, headers };
+    return { environment, headers, args };
   }
 
   /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
