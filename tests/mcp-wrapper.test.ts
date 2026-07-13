@@ -19,7 +19,8 @@ import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
 import type { AuditScope } from "../src/audit/audit-trail.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
-import { MiftahServer } from "../src/mcp/server/miftah-server.js";
+import { hasCompatibleCachedToolTarget, MiftahServer } from "../src/mcp/server/miftah-server.js";
+import type { RegisteredTool } from "../src/mcp/server/tool-registry.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
@@ -27,6 +28,25 @@ import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
+
+function registeredTool(originalName: string): RegisteredTool {
+  return {
+    exposedName: "trusted__shared_tool",
+    originalName,
+    upstreamName: "trusted",
+    profile: "work",
+    fingerprint: "same-client-contract"
+  };
+}
+
+describe("cached routed-tool compatibility", () => {
+  it("requires the original upstream tool name in addition to client shape and upstream identity", () => {
+    const source = registeredTool("source_tool");
+
+    expect(hasCompatibleCachedToolTarget(source, registeredTool("source_tool"))).toBe(true);
+    expect(hasCompatibleCachedToolTarget(source, registeredTool("different_tool"))).toBe(false);
+  });
+});
 
 interface RuntimeRoutingFixture {
   readonly directory: string;

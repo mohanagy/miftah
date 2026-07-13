@@ -100,6 +100,20 @@ export function resolveClientVisibleToolName(
   return name;
 }
 
+/** Checks that a cached routed tool still denotes the same upstream operation before using its risk hints. */
+export function hasCompatibleCachedToolTarget(
+  source: RegisteredTool | undefined,
+  target: RegisteredTool | undefined
+): target is RegisteredTool {
+  return (
+    source !== undefined &&
+    target !== undefined &&
+    source.fingerprint === target.fingerprint &&
+    source.originalName === target.originalName &&
+    source.upstreamName === target.upstreamName
+  );
+}
+
 function tool(name: string, description: string, required: string[] = [], optional: string[] = []): Tool {
   const fields = [...new Set([...required, ...optional])];
   return {
@@ -534,15 +548,7 @@ export class MiftahServer {
         args,
         riskMetadataForProfile: (profile) => {
           const target = this.toolRegistry.peek(profile)?.resolve(name);
-          if (
-            target === undefined ||
-            target.fingerprint !== mapped.fingerprint ||
-            target.originalName !== mapped.originalName ||
-            target.upstreamName !== mapped.upstreamName
-          ) {
-            return undefined;
-          }
-          return this.riskMetadata(target);
+          return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
         },
         requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
         resolveTarget: async (profile) => {
@@ -553,7 +559,7 @@ export class MiftahServer {
               `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${profile}'`
             );
           }
-          if (target.fingerprint !== mapped.fingerprint) {
+          if (target.fingerprint !== mapped.fingerprint || target.originalName !== mapped.originalName) {
             throw new MiftahError(
               "TOOL_SCHEMA_MISMATCH",
               `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
@@ -716,11 +722,7 @@ export class MiftahServer {
         sourceTool === undefined
           ? undefined
           : this.toolRegistry.peek(route.profile)?.resolve(toolName);
-      const hasCompatibleCachedTarget =
-        sourceTool !== undefined &&
-        targetTool !== undefined &&
-        sourceTool.fingerprint === targetTool.fingerprint &&
-        sourceTool.upstreamName === targetTool.upstreamName;
+      const hasCompatibleCachedTarget = hasCompatibleCachedToolTarget(sourceTool, targetTool);
       const policyName = sourceTool?.originalName ?? toolName;
       const policy = this.policy.evaluate(
         profile.policy,
