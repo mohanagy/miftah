@@ -36,6 +36,16 @@ describe("CLI parser", () => {
       command: "logs",
       options: { config: "wrapper.json", follow: true }
     });
+    expect(parseCli(["audit-export", "--config", "wrapper.json", "--output=review.jsonl"])).toEqual({
+      kind: "run",
+      command: "audit-export",
+      options: { config: "wrapper.json", output: "review.jsonl" }
+    });
+    expect(parseCli(["--json", "audit-verify", "--config=wrapper.json"])).toEqual({
+      kind: "run",
+      command: "audit-verify",
+      options: { config: "wrapper.json", json: true }
+    });
   });
 
   it("accepts a leading dash in an explicitly assigned option value", () => {
@@ -123,6 +133,8 @@ describe("CLI parser", () => {
     expect(renderCommandHelp("doctor")).toContain("--config <file>");
     expect(renderCommandHelp("doctor")).toContain("--json");
     expect(renderCommandHelp("logs")).toContain("Continue reading audit logs as they are appended or rotated.");
+    expect(renderCommandHelp("audit-export")).toContain("--include-arguments");
+    expect(renderCommandHelp("audit-verify")).toContain("--json");
     const initHelp = renderCommandHelp("init");
     expect(initHelp).toContain("--interactive");
     expect(initHelp).toContain("--client <claude-desktop|claude-code|cursor|vscode|all>");
@@ -157,6 +169,8 @@ describe("CLI parser", () => {
     expectUsageError(["doctor", "--client", "cursor"]);
     expectUsageError(["serve", "--credential-env", "MCP_TOKEN"]);
     expectUsageError(["logs", "--npm-package", "@scope/server@1.2.3"]);
+    expectUsageError(["audit-export", "--follow"]);
+    expectUsageError(["audit-verify", "--output", "review.jsonl"]);
     expectUsageError(["schema", "--docker-image", "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]);
     expectUsageError(["version", "--url", "https://mcp.example.com"]);
     expectUsageError(["validate", "--header-name", "Authorization"]);

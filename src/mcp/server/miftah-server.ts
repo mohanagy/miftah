@@ -337,7 +337,9 @@ export class MiftahServer {
       this.audit = new AuditLogger(config.audit.path, {
         includeArguments: config.audit.includeArguments,
         redactor: this.redactor,
-        failureMode: config.audit.failureMode
+        failureMode: config.audit.failureMode,
+        rotation: config.audit.rotation,
+        integrity: config.audit.integrity
       });
     }
     this.auditTrail = new AuditTrail(config.name, this.audit);

@@ -562,10 +562,10 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
             "",
             "type SupportedTypes = [",
-            "  ActiveProfileStateScope, AuditConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig,",
+            "  ActiveProfileStateScope, AuditConfig, AuditIntegrityConfig, AuditRotationConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
             "  PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
             "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
@@ -576,6 +576,8 @@ describe("packed artifact contract", () => {
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
             'const globalScope: ActiveProfileStateScope = "global";',
             'const validState: StateConfig = { persistActiveProfile: true, scope: "workspace" };',
+            'const auditRotation: AuditRotationConfig = { maxBytes: 1_024, retainFiles: 7 };',
+            'const auditIntegrity: AuditIntegrityConfig = { algorithm: "sha256-chain" };',
             'const validSessionState: StateConfig = { scope: "session" };',
             'const validProfileLease: ProfileLeaseConfig = { ttlMs: 60_000, requiredForRisk: ["write"] };',
             'const isolatedFile: ProfileIsolationFile = { source: "credentials/oauth.json", destination: "credentials/oauth.json" };',
@@ -642,7 +644,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, runtime, globalScope, validState, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, runtime, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(
@@ -788,6 +790,8 @@ describe("packed artifact contract", () => {
           "list-tools": ["--config <file>", "--profile <name>"],
           "test-profile": ["--config <file>", "--profile <name>"],
           logs: ["--config <file>", "--follow"],
+          "audit-export": ["--config <file>", "--output <file>", "--include-arguments"],
+          "audit-verify": ["--config <file>", "--json"],
           version: ["--json"]
         } as const;
         for (const [command, options] of Object.entries(commandOptions)) {
@@ -1007,6 +1011,59 @@ describe("packed artifact contract", () => {
           }
         ]);
 
+        const exportAuditPath = join(cliContractDirectory, "audit export input with spaces", "events.jsonl");
+        const exportOutputPath = join(cliContractDirectory, "audit export output with spaces", "support export.jsonl");
+        const exportProfileSecret = "export-profile-secret";
+        const exportArgumentSecret = "export-argument-secret";
+        await mkdir(dirname(exportAuditPath), { recursive: true });
+        await writeFile(
+          exportAuditPath,
+          `${JSON.stringify({
+            message: exportProfileSecret,
+            arguments: { token: exportArgumentSecret }
+          })}\n`
+        );
+        const exportConfigPath = await writeCliConfig(
+          "audit export config with spaces.json",
+          cliConfig(
+            "packed-cli-audit-export",
+            { work: { env: { EXPORT_SECRET: `secretref:plain://${exportProfileSecret}` } } },
+            [fakeStdioUpstreamFixture],
+            {
+              audit: { path: exportAuditPath },
+              secrets: { allowPlaintextSecrets: true }
+            }
+          )
+        );
+        const auditExport = runInstalledBinaryThroughShell(
+          binary,
+          ["audit-export", "--config", exportConfigPath, "--output", exportOutputPath],
+          cliContractDirectory
+        );
+        expect(auditExport.status, auditExport.stderr || auditExport.stdout).toBe(0);
+        expect(auditExport.stderr).toBe("");
+        expect(JSON.parse(auditExport.stdout)).toEqual({ ok: true });
+        const exportedAudit = await readFile(exportOutputPath, "utf8");
+        expect(exportedAudit).not.toContain(exportProfileSecret);
+        expect(exportedAudit).not.toContain(exportArgumentSecret);
+        expect(exportedAudit.trim()).toBe(JSON.stringify({ message: "[REDACTED]" }));
+
+        const unconfiguredAuditVerify = runInstalledBinary(
+          binary,
+          ["audit-verify", "--config", exportConfigPath, "--json"],
+          cliContractDirectory
+        );
+        expect(unconfiguredAuditVerify.status, unconfiguredAuditVerify.stderr || unconfiguredAuditVerify.stdout).toBe(1);
+        expect(unconfiguredAuditVerify.stderr).toBe("");
+        expect(JSON.parse(unconfiguredAuditVerify.stdout)).toEqual({
+          ok: false,
+          firstBroken: {
+            segment: basename(exportAuditPath),
+            record: 1,
+            reason: "INTEGRITY_NOT_CONFIGURED"
+          }
+        });
+
         const installedCliReference = await readFile(
           join(directory, "node_modules", "@lubab", "miftah", "docs", "cli.md"),
           "utf8"
@@ -1026,7 +1083,8 @@ describe("packed artifact contract", () => {
           "--preset",
           "--name",
           "--json",
-          "--follow"
+          "--follow",
+          "--include-arguments"
         ]) {
           expect(installedCliReference).toContain(`\`${option}`);
         }

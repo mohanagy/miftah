@@ -12,6 +12,8 @@ import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./pa
 import { exitCodeForError } from "./exit-codes.js";
 import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
+import { runAuditExportCommand } from "./audit-export.js";
+import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 
 async function serve(configPath: string): Promise<void> {
   const runtime = await createMiftahRuntime(configPath);
@@ -86,6 +88,26 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "logs") {
     await runLogsCommand({ configPath: args.config, follow: args.follow === true });
+    return;
+  }
+  if (command === "audit-export") {
+    if (!args.output) {
+      throw new CliUsageError(
+        "Command 'audit-export' requires '--output <file>'. Use 'miftah audit-export --help' for usage."
+      );
+    }
+    await runAuditExportCommand({
+      configPath: args.config,
+      outputPath: args.output,
+      includeArguments: args.includeArguments === true
+    });
+    process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+    return;
+  }
+  if (command === "audit-verify") {
+    const report = await runAuditVerifyCommand({ configPath: args.config });
+    process.stdout.write(`${args.json ? JSON.stringify(report, null, 2) : formatAuditVerifyReport(report)}\n`);
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
   throw new Error(`Unknown command '${command}'`);

@@ -227,7 +227,25 @@ export interface ProcessConfig {
   maxConcurrentProfiles?: number;
 }
 
-export interface AuditConfig {
+/** Bounded local JSONL segment rotation and archive retention. */
+export type AuditRotationConfig =
+  | {
+      maxBytes: number;
+      maxAgeMs?: number;
+      retainFiles: number;
+    }
+  | {
+      maxBytes?: number;
+      maxAgeMs: number;
+      retainFiles: number;
+    };
+
+/** Opt-in local tamper-evidence for already-redacted audit records. */
+export interface AuditIntegrityConfig {
+  algorithm: "sha256-chain";
+}
+
+interface AuditConfigBase {
   enabled?: boolean;
   path?: string;
   format?: "jsonl";
@@ -235,6 +253,23 @@ export interface AuditConfig {
   redact?: true;
   failureMode?: "fail-open" | "fail-closed";
 }
+
+/** An ordinary audit declaration without managed rotation or integrity metadata. */
+type UnmanagedAuditConfig = AuditConfigBase & {
+  rotation?: never;
+  integrity?: never;
+};
+
+/** A managed journal always has an enabled, concrete destination. */
+type ManagedAuditConfig = Omit<AuditConfigBase, "enabled" | "path"> & {
+  enabled?: true;
+  path: string;
+  rotation?: AuditRotationConfig;
+  integrity?: AuditIntegrityConfig;
+};
+
+/** Configures local audit output and optional managed journal controls. */
+export type AuditConfig = UnmanagedAuditConfig | ManagedAuditConfig;
 
 export interface ToolingConfig {
   collisionStrategy?: "prefix-upstream" | "fail";

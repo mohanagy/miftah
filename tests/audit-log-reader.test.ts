@@ -3,6 +3,7 @@ import {
   access,
   appendFile,
   chmod,
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -23,6 +24,7 @@ import {
   followAuditJsonl,
   readAuditJsonl
 } from "../src/cli/audit-jsonl.js";
+import { AuditLogger } from "../src/audit/audit-logger.js";
 import { runLogsCommand } from "../src/cli/logs.js";
 import { createRuntime } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
@@ -945,7 +947,131 @@ describe("audit JSONL reader", () => {
 });
 
 describe("logs command integration", () => {
-  it("redacts configured secrets from finite log read errors", async () => {
+  it("reads retained managed segments before the active rotated audit log", async () => {
+    await inSandbox(async (directory) => {
+      const configPath = join(directory, "miftah.json");
+      const auditPath = join(directory, "audit.jsonl");
+      await writeJson(configPath, {
+        ...namedUpstreamConfig("audit.jsonl"),
+        audit: { path: "audit.jsonl", rotation: { maxBytes: 1, retainFiles: 4 } }
+      });
+      const logger = new AuditLogger(auditPath, { rotation: { maxBytes: 1, retainFiles: 4 } });
+      await logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "archived-audit-event",
+        status: "success",
+        durationMs: 1
+      });
+      await logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "active-audit-event",
+        status: "success",
+        durationMs: 2
+      });
+
+      const output: string[] = [];
+      await runLogsCommand({ configPath, follow: false, write: (chunk) => output.push(chunk) });
+
+      expect(output.flatMap((chunk) => chunk.trim().split("\n")).map((line) => JSON.parse(line).name)).toEqual([
+        "archived-audit-event",
+        "active-audit-event"
+      ]);
+    });
+  });
+
+  it("retains stored audit arguments when rendering logs", async () => {
+    await inSandbox(async (directory) => {
+      const configPath = join(directory, "miftah.json");
+      const auditPath = join(directory, "audit.jsonl");
+      await writeJson(configPath, namedUpstreamConfig("audit.jsonl"));
+      await writeFile(
+        auditPath,
+        `${JSON.stringify({
+          name: "argument-bearing-event",
+          arguments: { requestId: "visible", token: "named-upstream-env" }
+        })}\n`
+      );
+
+      const output: string[] = [];
+      await runLogsCommand({ configPath, follow: false, write: (chunk) => output.push(chunk) });
+
+      expect(JSON.parse(output.join("").trim())).toEqual({
+        name: "argument-bearing-event",
+        arguments: { requestId: "visible", token: "[REDACTED]" }
+      });
+    });
+  });
+
+  it("follows a managed rotation that completes before its next poll", async () => {
+    await inSandbox(async (directory) => {
+      const configPath = join(directory, "miftah.json");
+      const auditPath = join(directory, "audit.jsonl");
+      await writeJson(configPath, {
+        ...namedUpstreamConfig("audit.jsonl"),
+        audit: { path: "audit.jsonl", rotation: { maxBytes: 1, retainFiles: 4 } }
+      });
+      const logger = new AuditLogger(auditPath, { rotation: { maxBytes: 1, retainFiles: 4 } });
+      const output: string[] = [];
+      const managedPollIntervalMs = 100;
+      const follower = runLogsCommand({
+        configPath,
+        follow: true,
+        write: (chunk) => output.push(chunk),
+        pollIntervalMs: managedPollIntervalMs
+      });
+      try {
+        await delay(managedPollIntervalMs * 2);
+        await logger.log({
+          wrapper: "github",
+          profile: "work",
+          operation: "tools/call",
+          name: "follow-before-rotation",
+          status: "success",
+          durationMs: 0
+        });
+        await waitFor(
+          () => output.flatMap((chunk) => chunk.trim().split("\n")).filter(Boolean).length === 1,
+          2_000
+        );
+        await logger.log({
+          wrapper: "github",
+          profile: "work",
+          operation: "tools/call",
+          name: "follow-archived-audit-event",
+          status: "success",
+          durationMs: 1
+        });
+        await logger.log({
+          wrapper: "github",
+          profile: "work",
+          operation: "tools/call",
+          name: "follow-active-audit-event",
+          status: "success",
+          durationMs: 2
+        });
+        await waitFor(
+          () => output.flatMap((chunk) => chunk.trim().split("\n")).filter(Boolean).length === 3,
+          2_000
+        );
+        await delay(managedPollIntervalMs * 2);
+
+        expect(output.flatMap((chunk) => chunk.trim().split("\n")).map((line) => JSON.parse(line).name)).toEqual([
+          "follow-before-rotation",
+          "follow-archived-audit-event",
+          "follow-active-audit-event"
+        ]);
+      } finally {
+        process.emit("SIGTERM");
+        await follower;
+      }
+    });
+  });
+
+  it("reports a fixed safe error for a missing unmanaged audit journal", async () => {
     await inSandbox(async (directory) => {
       const secret = "non-default-log-read-secret";
       const configPath = join(directory, "miftah.json");
@@ -965,13 +1091,79 @@ describe("logs command integration", () => {
       }
 
       expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("Audit journal is unavailable.");
       expect((failure as Error).message).not.toContain(secret);
-      expect((failure as Error).message).toContain("[REDACTED]");
+      expect((failure as Error).message).not.toContain(directory);
       expect((failure as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
       const cause = (failure as Error & { cause: Error & { path?: string } }).cause;
+      expect(cause.message).toBe("Audit journal is unavailable.");
       expect(cause.message).not.toContain(secret);
-      expect(cause.path).not.toContain(secret);
+      expect(cause.message).not.toContain(directory);
+      expect(cause).not.toHaveProperty("path");
       expect(cause.stack).not.toContain(secret);
+      expect(cause.stack).not.toContain(directory);
+    });
+  });
+
+  it.each([
+    ["unmanaged", { path: "not-a-directory/events.jsonl" }],
+    ["managed", { path: "not-a-directory/events.jsonl", rotation: { maxBytes: 1, retainFiles: 1 } }]
+  ])("reports a fixed safe error for an inaccessible %s audit root", async (_kind, audit) => {
+    await inSandbox(async (directory) => {
+      const configPath = join(directory, "miftah.json");
+      const root = join(directory, "not-a-directory");
+      await writeFile(root, "not a directory");
+      await writeJson(configPath, { ...namedUpstreamConfig("unused.jsonl"), audit });
+
+      let failure: unknown;
+      try {
+        await runLogsCommand({ configPath, follow: false, write: () => undefined });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(Error);
+      const error = failure as Error & { cause?: unknown };
+      expect(error.message).toBe("Audit journal is unavailable.");
+      expect(error.message).not.toContain(root);
+      expect(error.cause).toBeInstanceOf(Error);
+      const cause = error.cause as Error & { path?: string };
+      expect(cause.message).toBe("Audit journal is unavailable.");
+      expect(cause.message).not.toContain(root);
+      expect(cause).not.toHaveProperty("path");
+      expect(cause.stack).not.toContain(root);
+    });
+  });
+
+  it("waits for a managed audit parent without creating it", async () => {
+    await inSandbox(async (directory) => {
+      const configPath = join(directory, "miftah.json");
+      const missingParent = join(directory, "missing-managed-parent");
+      await writeJson(configPath, {
+        ...namedUpstreamConfig("unused.jsonl"),
+        audit: { path: "missing-managed-parent/audit.jsonl", rotation: { maxBytes: 1, retainFiles: 1 } }
+      });
+      const initialSigintListeners = process.listenerCount("SIGINT");
+      const initialSigtermListeners = process.listenerCount("SIGTERM");
+      const follower = runLogsCommand({
+        configPath,
+        follow: true,
+        write: () => undefined,
+        pollIntervalMs
+      });
+
+      try {
+        await waitFor(
+          () =>
+            process.listenerCount("SIGINT") === initialSigintListeners + 1 &&
+            process.listenerCount("SIGTERM") === initialSigtermListeners + 1
+        );
+        await delay(pollIntervalMs * 4);
+        await expect(lstat(missingParent)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        process.emit("SIGINT");
+        await follower;
+      }
     });
   });
 

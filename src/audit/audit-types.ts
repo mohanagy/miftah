@@ -10,6 +10,21 @@ import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "..
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
+/** Opt-in local JSONL journal rotation and archive retention settings. */
+export interface AuditRotationOptions {
+  /** Rotate before a complete write would make the active segment larger than this many bytes. */
+  readonly maxBytes?: number;
+  /** Rotate on the next write after the active segment has reached this age. */
+  readonly maxAgeMs?: number;
+  /** Maximum number of regular managed archive segments to retain. */
+  readonly retainFiles: number;
+}
+
+/** Optional local tamper-evidence format for redacted audit records. */
+export interface AuditIntegrityOptions {
+  readonly algorithm: "sha256-chain";
+}
+
 export interface AuditWriteFailure {
   timestamp: string;
   errorCode: "AUDIT_WRITE_FAILED";

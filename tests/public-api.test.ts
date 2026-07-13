@@ -10,6 +10,8 @@ import * as api from "../src/index.js";
 import type {
   ActiveProfileStateScope,
   AuditConfig,
+  AuditIntegrityConfig,
+  AuditRotationConfig,
   ConfigDiagnostic,
   GitHubProfileRoutingMatch,
   IdentityConfig,
@@ -74,6 +76,8 @@ const internalRuntimeExports = [
 const supportedTypeExports = [
   "ActiveProfileStateScope",
   "AuditConfig",
+  "AuditIntegrityConfig",
+  "AuditRotationConfig",
   "ConfigDiagnostic",
   "GitHubProfileRoutingMatch",
   "IdentityConfig",
@@ -113,6 +117,8 @@ const supportedTypeExports = [
 type PublicTypeImportCoverage = [
   ActiveProfileStateScope,
   AuditConfig,
+  AuditIntegrityConfig,
+  AuditRotationConfig,
   ConfigDiagnostic,
   GitHubProfileRoutingMatch,
   IdentityConfig,
@@ -150,6 +156,17 @@ type PublicTypeImportCoverage = [
 ];
 
 void (undefined as unknown as PublicTypeImportCoverage);
+
+const validAuditRotationConfig: AuditRotationConfig = {
+  maxBytes: 1_024,
+  retainFiles: 7
+};
+
+const validAuditIntegrityConfig: AuditIntegrityConfig = {
+  algorithm: "sha256-chain"
+};
+
+void [validAuditRotationConfig, validAuditIntegrityConfig];
 
 const validTextIdentityConfig: IdentityConfig = {
   expected: { provider: "github", login: "mona" },

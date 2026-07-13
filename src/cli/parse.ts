@@ -11,7 +11,7 @@ type ValueOptionName =
   | "url"
   | "headerName"
   | "headerPrefix";
-type BooleanOptionName = "follow" | "json" | "interactive";
+type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -30,6 +30,7 @@ export interface CliOptions {
   readonly follow?: true;
   readonly json?: true;
   readonly interactive?: true;
+  readonly includeArguments?: true;
 }
 
 interface CliCommandMetadata {
@@ -83,6 +84,14 @@ export const CLI_COMMANDS = {
   logs: {
     description: "Print configured audit logs.",
     options: ["config", "follow"]
+  },
+  "audit-export": {
+    description: "Write a redacted audit journal export for support review.",
+    options: ["config", "output", "includeArguments"]
+  },
+  "audit-verify": {
+    description: "Verify retained audit journal integrity chains.",
+    options: ["config", "json"]
   },
   version: {
     description: "Print the Miftah version.",
@@ -192,6 +201,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--follow",
     description: "Continue reading audit logs as they are appended or rotated."
   },
+  includeArguments: {
+    name: "includeArguments",
+    takesValue: false,
+    usage: "--include-arguments",
+    description: "Include stored audit arguments after redaction."
+  },
   json: {
     name: "json",
     takesValue: false,
@@ -220,6 +235,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--follow": OPTION_DEFINITIONS.follow,
+  "--include-arguments": OPTION_DEFINITIONS.includeArguments,
   "--json": OPTION_DEFINITIONS.json,
   "--interactive": OPTION_DEFINITIONS.interactive,
   "--help": "help",

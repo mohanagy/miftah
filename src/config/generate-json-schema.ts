@@ -81,12 +81,22 @@ function addProfileRoutingMatcherArrayConstraints(schema: SchemaObject): void {
   }
 }
 
+/** zod-to-json-schema cannot emit the audit rotation super-refinement that requires a trigger. */
+function addAuditRotationConstraints(schema: SchemaObject): void {
+  const rootProperties = requireSchemaObject(schema.properties, "root properties");
+  const audit = requireSchemaObject(rootProperties.audit, "audit schema");
+  const auditProperties = requireSchemaObject(audit.properties, "audit schema properties");
+  const rotation = requireSchemaObject(auditProperties.rotation, "audit rotation schema");
+  rotation.anyOf = [{ required: ["maxBytes"] }, { required: ["maxAgeMs"] }];
+}
+
 /** Generates the editor-facing JSON Schema from the same strict Zod contract used after validation. */
 export function generateConfigSchema(): Record<string, unknown> {
   const schema = zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }) as SchemaObject;
   addProfileLeaseArrayConstraints(schema);
   addProfileIsolationArrayConstraints(schema);
   addProfileRoutingMatcherArrayConstraints(schema);
+  addAuditRotationConstraints(schema);
   return {
     ...schema,
     allOf: [
@@ -127,6 +137,27 @@ export function generateConfigSchema(): Record<string, unknown> {
             state: {
               required: ["persistActiveProfile"],
               properties: { persistActiveProfile: { const: true } }
+            }
+          }
+        }
+      },
+      {
+        // zod-to-json-schema cannot emit the parent audit super-refinement for managed options.
+        if: {
+          required: ["audit"],
+          properties: {
+            audit: {
+              anyOf: [{ required: ["rotation"] }, { required: ["integrity"] }]
+            }
+          }
+        },
+        then: {
+          properties: {
+            audit: {
+              required: ["path"],
+              properties: {
+                enabled: { not: { const: false } }
+              }
             }
           }
         }

@@ -10,6 +10,8 @@ export { presetConfig } from "./config/presets.js";
 export type {
   ActiveProfileStateScope,
   AuditConfig,
+  AuditIntegrityConfig,
+  AuditRotationConfig,
   GitHubProfileRoutingMatch,
   IdentityConfig,
   IdentityFingerprint,

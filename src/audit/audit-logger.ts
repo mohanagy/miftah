@@ -1,6 +1,7 @@
 import { chmod, mkdir, open, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AuditEvent, AuditFailureMode, AuditHealth } from "./audit-types.js";
+import type { AuditEvent, AuditFailureMode, AuditHealth, AuditIntegrityOptions, AuditRotationOptions } from "./audit-types.js";
+import { appendAuditJournal, prepareAuditJournal } from "./audit-journal.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 
@@ -9,18 +10,27 @@ export interface AuditLoggerOptions {
   redactor?: SecretRedactor;
   includeArguments?: boolean;
   failureMode?: AuditFailureMode;
+  rotation?: AuditRotationOptions;
+  integrity?: AuditIntegrityOptions;
 }
 
 export class AuditLogger {
   private static readonly writesByPath = new Map<string, Promise<void>>();
-  private readonly options: { includeArguments: boolean; failureMode: AuditFailureMode };
+  private readonly options: {
+    includeArguments: boolean;
+    failureMode: AuditFailureMode;
+    rotation?: AuditRotationOptions;
+    integrity?: AuditIntegrityOptions;
+  };
   private readonly redactor: SecretRedactor;
   private lastFailure?: AuditHealth["lastFailure"];
 
   constructor(private readonly path: string, options: AuditLoggerOptions = {}) {
     this.options = {
       includeArguments: options.includeArguments ?? false,
-      failureMode: options.failureMode ?? "fail-closed"
+      failureMode: options.failureMode ?? "fail-closed",
+      rotation: options.rotation,
+      integrity: options.integrity
     };
     this.redactor = options.redactor ?? new SecretRedactor();
     this.redactor.addAll(options.secretValues ?? []);
@@ -91,6 +101,13 @@ export class AuditLogger {
   }
 
   private async writeLine(line: string): Promise<void> {
+    if (this.options.rotation !== undefined || this.options.integrity !== undefined) {
+      await appendAuditJournal(this.path, line, {
+        rotation: this.options.rotation,
+        integrity: this.options.integrity
+      });
+      return;
+    }
     const file = await this.openAuditFile();
     try {
       await file.writeFile(line, "utf8");
@@ -100,6 +117,13 @@ export class AuditLogger {
   }
 
   private async prepareFile(): Promise<void> {
+    if (this.options.rotation !== undefined || this.options.integrity !== undefined) {
+      await prepareAuditJournal(this.path, {
+        rotation: this.options.rotation,
+        integrity: this.options.integrity
+      });
+      return;
+    }
     const file = await this.openAuditFile();
     await file.close();
   }

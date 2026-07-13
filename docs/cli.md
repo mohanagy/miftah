@@ -8,7 +8,7 @@
 Usage: miftah [command] [options]
 ```
 
-The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-tools`, `test-profile`, `logs`, and `version`. With no command, Miftah runs `serve`.
+The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
 
 `--help` and `-h` print help and exit successfully. They can appear before or after a command. Help never reads configuration, resolves secrets, or starts an upstream.
 
@@ -24,6 +24,8 @@ The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-
 | `miftah list-tools --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts the selected profile, discovers its upstream tools, writes a JSON array, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah test-profile --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts and initializes one profile, writes `{"ok":true,"profile":"…"}`, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah logs --config <file>` | `--config` | `--config <file>`, `--follow` | Reads the configured audit JSONL as normalized, redacted JSONL. `--follow` continues watching it. This command does not construct an upstream manager. |
+| `miftah audit-export --config <file> --output <file>` | `--config`, `--output` | `--config <file>`, `--output <file>`, `--include-arguments` | Takes an explicit journal snapshot and writes a new redacted JSONL support export. Success writes `{"ok":true}`. It never starts an upstream or uploads data. |
+| `miftah audit-verify --config <file>` | `--config` | `--config <file>`, `--json` | Verifies configured `sha256-chain` journal integrity without resolving secrets or starting an upstream. It writes a safe human report by default or a JSON report with `--json`; a failed or unconfigured integrity check exits `1`. |
 | `miftah version` | none | `--json` | Writes the package version as a bare SemVer line. `--json` is retained for automation compatibility and intentionally writes the same bare SemVer line. |
 
 Every command also accepts `--help` and `-h`; those generated per-command help screens show only the options valid for that command.
@@ -110,4 +112,19 @@ Without `--follow`, Miftah creates a stable finite snapshot before emitting it. 
 
 With `--follow`, Miftah polls at a bounded interval (250 ms by default), detects appends, truncation, copy-truncate rewrites, and replacement/rename rotation, and never keeps an audit file handle between polls. An absent file is treated as temporarily unavailable while following. `SIGINT` and `SIGTERM` stop the follower promptly, abandon pending output safely, remove signal listeners and temporary staging files, and do not start or signal an upstream process.
 
-The reader uses fixed-size chunks and bounds an unterminated record at 64 KiB. This prevents an unbounded partial line from consuming memory, but means a record that exceeds that boundary is represented by the malformed-record marker rather than recovered. Audit output is an integrity and observability interface, not a replacement for retaining the original audit file under an external rotation and retention policy.
+The reader uses fixed-size chunks and bounds an unterminated record at 64 KiB. This prevents an unbounded partial line from consuming memory, but means a record that exceeds that boundary is represented by the malformed-record marker rather than recovered.
+
+### Rotation, export, and verification
+
+When `audit.rotation` or `audit.integrity` is configured, a finite `logs` read snapshots the retained managed segments plus the active file before it emits output. Retention keeps only Miftah-managed regular archives and refuses unsafe paths; it does not traverse symlinks or clean outside the configured audit directory. The managed follower carries a stable file identity across a rename rotation so it does not lose or duplicate completed records at that boundary. If the platform cannot provide that identity and a rotation boundary is ambiguous, it stops with a safe error rather than risk silently omitting completed records.
+
+```sh
+miftah audit-export --config "$HOME/Miftah configs/work wrapper.json" --output ./support-audit.jsonl
+miftah audit-export --config "$HOME/Miftah configs/work wrapper.json" --output ./support-audit.jsonl --include-arguments
+miftah audit-verify --config "$HOME/Miftah configs/work wrapper.json"
+miftah audit-verify --config "$HOME/Miftah configs/work wrapper.json" --json
+```
+
+`audit-export` is deliberately explicit: it creates a new output and refuses an existing destination. It runs redaction again and strips stored `arguments` by default, even if the journal was configured to record them. `--include-arguments` opts in to the stored values after redaction; it cannot reconstruct arguments that were never recorded. The command is local-only and does not upload telemetry or start an upstream.
+
+`audit-verify` reports a safe first broken segment/record/reason and never writes a raw record, hash, or absolute path. Hash chaining provides local tamper evidence, not a signature or a remote immutable audit trail; keep required evidence in an independently protected destination.
