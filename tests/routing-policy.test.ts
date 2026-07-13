@@ -187,6 +187,43 @@ describe("routing and policy", () => {
     });
   });
 
+  it.each([
+    {
+      provider: "github",
+      toolName: "github__search_issues",
+      args: { repo: "acme/miftah" },
+      match: { github: { repositories: ["acme/miftah"] } }
+    },
+    {
+      provider: "sentry",
+      toolName: "sentry__get_issue",
+      args: { organization: "acme", project: "api" },
+      match: { sentry: { projects: ["acme/api"] } }
+    },
+    {
+      provider: "jira",
+      toolName: "jira__get_issue",
+      args: { site: "https://acme.atlassian.net", project: "OPS" },
+      match: { jira: { sites: ["https://acme.atlassian.net"], projects: ["OPS"] } }
+    },
+    {
+      provider: "linear",
+      toolName: "linear__get_issue",
+      args: { workspace: "acme", team: "eng" },
+      match: { linear: { workspaces: ["acme"], teams: ["eng"] } }
+    },
+    {
+      provider: "posthog",
+      toolName: "posthog__query",
+      args: { host: "https://app.posthog.com", project: "123" },
+      match: { posthog: { hosts: ["https://app.posthog.com"], projects: ["123"] } }
+    }
+  ])("routes through the configured $provider matcher", ({ provider, toolName, args, match }) => {
+    const engine = new RoutingEngine({}, "personal", "personal", { work: { routing: { match } } });
+
+    expect(engine.resolve({ toolName, args })).toMatchObject({ profile: "work", reason: `matcher:${provider}` });
+  });
+
   it("keeps an explicit rule ahead of an otherwise matching static provider binding", () => {
     const engine = new RoutingEngine(
       { rules: [{ name: "explicit", when: { "args.repo": "acme/miftah" }, profile: "rule" }] },
