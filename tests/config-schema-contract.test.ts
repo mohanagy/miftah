@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { generateConfigSchema } from "../src/config/generate-json-schema.js";
-import type { MiftahConfig } from "../src/config/types.js";
+import type { AuditConfig, AuditIntegrityConfig, AuditRotationConfig, MiftahConfig } from "../src/config/types.js";
+
+type AssertFalse<Value extends false> = Value;
 
 const publicConfig: MiftahConfig = {
   version: "1",
@@ -38,6 +40,41 @@ const invalidAuditConfig: MiftahConfig = {
   }
 };
 void invalidAuditConfig;
+
+const validRotatingIntegrityAuditConfig: MiftahConfig = {
+  ...publicConfig,
+  audit: {
+    path: "audit/events.jsonl",
+    rotation: { maxBytes: 1_024, retainFiles: 7 },
+    integrity: { algorithm: "sha256-chain" }
+  }
+};
+void validRotatingIntegrityAuditConfig;
+
+type ManagedAuditWithoutPathMustBeRejected = AssertFalse<
+  { rotation: AuditRotationConfig } extends AuditConfig ? true : false
+>;
+void (0 as unknown as ManagedAuditWithoutPathMustBeRejected);
+
+type DisabledManagedAuditMustBeRejected = AssertFalse<
+  { path: string; enabled: false; integrity: AuditIntegrityConfig } extends AuditConfig ? true : false
+>;
+void (0 as unknown as DisabledManagedAuditMustBeRejected);
+
+// @ts-expect-error Rotation must have a size or age trigger, not retention alone.
+const invalidAuditRotationConfig: AuditRotationConfig = { retainFiles: 7 };
+void invalidAuditRotationConfig;
+
+const invalidIntegrityAuditConfig: MiftahConfig = {
+  ...publicConfig,
+  audit: {
+    integrity: {
+      // @ts-expect-error The public integrity contract has one reviewed algorithm.
+      algorithm: "sha512-chain"
+    }
+  }
+};
+void invalidIntegrityAuditConfig;
 
 const validStateConfig: MiftahConfig = {
   ...publicConfig,
@@ -100,6 +137,7 @@ interface SchemaNode {
   additionalProperties?: boolean | SchemaNode;
   required?: string[];
   oneOf?: SchemaNode[];
+  anyOf?: SchemaNode[];
   allOf?: SchemaNode[];
 }
 
@@ -134,6 +172,8 @@ describe("published config schema", () => {
     const process = root?.process?.properties;
     const security = root?.security?.properties;
     const audit = root?.audit?.properties;
+    const auditRotation = audit?.rotation?.properties;
+    const auditIntegrity = audit?.integrity?.properties;
     const tooling = root?.tooling?.properties;
     const secrets = root?.secrets?.properties;
     const state = root?.state?.properties;
@@ -250,8 +290,24 @@ describe("published config schema", () => {
     expect(audit).toMatchObject({
       format: { const: "jsonl" },
       redact: { const: true },
-      failureMode: { enum: ["fail-open", "fail-closed"] }
+      failureMode: { enum: ["fail-open", "fail-closed"] },
+      rotation: {
+        type: "object",
+        additionalProperties: false,
+        required: ["retainFiles"]
+      },
+      integrity: {
+        type: "object",
+        additionalProperties: false,
+        required: ["algorithm"]
+      }
     });
+    expect(auditRotation).toMatchObject({
+      maxBytes: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
+      maxAgeMs: { type: "integer", minimum: 0, maximum: 31_536_000_000 },
+      retainFiles: { type: "integer", minimum: 0, maximum: 2_000 }
+    });
+    expect(auditIntegrity).toMatchObject({ algorithm: { const: "sha256-chain" } });
     expect(tooling).not.toHaveProperty("managementToolPrefix");
     expect(tooling).not.toHaveProperty("upstreamToolNamespace");
     expect(tooling).toMatchObject({
@@ -298,6 +354,45 @@ describe("published config schema", () => {
     expect(schema.allOf).toContainEqual({
       oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]
     });
+  });
+
+  it("requires a size or age trigger for generated audit rotation", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+    const rotation = schema.properties?.audit?.properties?.rotation;
+
+    expect(rotation).toMatchObject({
+      required: ["retainFiles"],
+      anyOf: [{ required: ["maxBytes"] }, { required: ["maxAgeMs"] }]
+    });
+  });
+
+  it("requires a path and enabled audit for generated managed audit options", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+
+    expect(schema.allOf).toEqual(
+      expect.arrayContaining([
+        {
+          if: {
+            required: ["audit"],
+            properties: {
+              audit: {
+                anyOf: [{ required: ["rotation"] }, { required: ["integrity"] }]
+              }
+            }
+          },
+          then: {
+            properties: {
+              audit: {
+                required: ["path"],
+                properties: {
+                  enabled: { not: { const: false } }
+                }
+              }
+            }
+          }
+        }
+      ])
+    );
   });
 
   it("requires an explicit opt-in for durable active-profile state in generated JSON Schema", () => {

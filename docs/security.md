@@ -10,6 +10,8 @@ Miftah is a credential broker, so safe defaults are part of the product contract
 - destructive and ambiguous requests are not silently routed;
 - audit records contain metadata, not sensitive payloads or arguments, by default;
 - audit files and directories are owner-only where platform support permits it, and audit-write failures are explicit;
+- audit rotation retains only managed, single-link regular archive files with stable identities and does not follow symlinks or externally linked paths outside its configured directory;
+- audit export is explicit and local-only; it applies redaction again and omits stored arguments unless an operator opts in;
 - durable active-profile state is opt-in, uses derived owner-restricted paths, and stores no credentials;
 - MCP tool annotations are ignored for risk downgrades unless the operator explicitly trusts the configured upstream that supplied them;
 - provider tokens should be separate, least-privilege tokens per account and risk level.
@@ -23,6 +25,8 @@ Docker/Podman can provide a stronger file boundary only when the container recei
 Windows profile credential isolation fails closed before it creates or copies a runtime file. Node's POSIX-style mode API does not establish or verify a restrictive Windows DACL, so pretending that `0600`/`0700` protects a Windows credential would be unsafe. This limitation does not affect Windows secret-provider process containment.
 
 Audit writes default to fail-closed: Miftah verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared. A terminal write can fail after an upstream side effect has completed, so a post-dispatch `AUDIT_WRITE_FAILED` has an indeterminate outcome and must not prompt a blind retry of a non-idempotent operation. An operator can set `audit.failureMode` to `"fail-open"` for availability-sensitive deployments; Miftah then preserves the request outcome but exposes a redacted `AUDIT_WRITE_FAILED` health entry. This mode trades complete auditability for availability.
+
+When configured, audit rotation occurs only at completed JSONL batch boundaries and retention acts only on Miftah-managed, single-link regular archive names with stable file identities within the configured directory. Its kernel-released coordination is local to one host, so a managed journal must not be concurrently shared across machines through a network filesystem. The optional `sha256-chain` integrity mode hashes already-redacted records and tracks the retained segment set so `audit-verify` can identify the first safe broken record. It is tamper evidence, not a cryptographic signature, nonrepudiation mechanism, or remotely anchored immutable log: a party able to replace every local journal and its integrity metadata can defeat the evidence. Preserve compliance or incident evidence in an independently protected destination. `audit-export` is a user-invoked local transformation, not telemetry; it repeats redaction and drops stored `arguments` unless `--include-arguments` is explicitly requested.
 
 An approval bearer is a short-lived capability for one pending, exact MCP operation, not a credential or proof of a human identity. Miftah binds it to the connection and target context, stores only keyed digests, and invalidates it on denial, consumption, expiry, or a new connection. Prefer MCP form elicitation when the client supports it. Do not copy a fallback bearer into logs, tickets, or another connection; approval audit events deliberately omit both the bearer and full operation arguments.
 

@@ -231,6 +231,51 @@ describe("config runtime parity", () => {
     expect(config.secrets?.providerTimeoutMs).toBe(15_000);
   });
 
+  it("accepts explicit bounded audit rotation and retention controls", () => {
+    const config = validateConfig(
+      baseConfig({
+        audit: {
+          path: "audit/events.jsonl",
+          rotation: { maxBytes: 1_024, maxAgeMs: 60_000, retainFiles: 3 }
+        }
+      })
+    );
+
+    expect(config.audit?.rotation).toEqual({ maxBytes: 1_024, maxAgeMs: 60_000, retainFiles: 3 });
+  });
+
+  it("requires an audit rotation trigger when retention is configured", () => {
+    const error = validationError(
+      baseConfig({
+        audit: { rotation: { retainFiles: 3 } }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("audit.rotation");
+  });
+
+  it("accepts the explicit SHA-256 audit integrity chain", () => {
+    const config = validateConfig(
+      baseConfig({
+        audit: { path: "audit/events.jsonl", integrity: { algorithm: "sha256-chain" } }
+      })
+    );
+
+    expect(config.audit?.integrity).toEqual({ algorithm: "sha256-chain" });
+  });
+
+  it("rejects unsupported audit integrity algorithms", () => {
+    const error = validationError(
+      baseConfig({
+        audit: { integrity: { algorithm: "signature" } }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("audit.integrity.algorithm");
+  });
+
   it.each([0, 99, 120_001, 1.5])("rejects an out-of-range secret-provider timeout of %s", (providerTimeoutMs) => {
     const error = validationError(
       baseConfig({

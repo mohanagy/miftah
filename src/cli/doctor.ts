@@ -349,7 +349,12 @@ async function addAuditChecks(
     return;
   }
   try {
-    await new AuditLogger(config.audit.path, { redactor, failureMode: "fail-closed" }).ensureWritable();
+    await new AuditLogger(config.audit.path, {
+      redactor,
+      failureMode: "fail-closed",
+      rotation: config.audit.rotation,
+      integrity: config.audit.integrity
+    }).ensureWritable();
     checks.push(
       check(
         DOCTOR_CODES.AUDIT_WRITABLE,

@@ -16,6 +16,8 @@ export interface AuditJsonlReadOptions {
   readonly path: string;
   readonly redactor: SecretRedactor;
   readonly write: AuditJsonlWriter;
+  /** Existing log rendering retains persisted arguments; exports must opt in explicitly. */
+  readonly includeArguments?: boolean;
   readonly temporaryDirectory?: string;
 }
 
@@ -234,10 +236,19 @@ function changedDuringRead(before: AuditFileVersion, after: AuditFileVersion): b
   return !sameVersion(before, after);
 }
 
-function normalizeRecord(record: Buffer, redactor: SecretRedactor): string {
+function normalizeRecord(record: Buffer, redactor: SecretRedactor, includeArguments: boolean): string {
   if (!isUtf8(record)) return MALFORMED_AUDIT_RECORD;
   try {
-    return JSON.stringify(redactor.redactForAudit(JSON.parse(record.toString("utf8"))));
+    const parsed: unknown = JSON.parse(record.toString("utf8"));
+    const value =
+      includeArguments || typeof parsed !== "object" || parsed === null || Array.isArray(parsed)
+        ? parsed
+        : (() => {
+            const withoutArguments = { ...(parsed as Record<string, unknown>) };
+            delete withoutArguments.arguments;
+            return withoutArguments;
+          })();
+    return JSON.stringify(redactor.redactForAudit(value));
   } catch {
     return MALFORMED_AUDIT_RECORD;
   }
@@ -247,6 +258,7 @@ async function stageCompleteRecords(
   state: AuditReadState,
   contents: Buffer,
   redactor: SecretRedactor,
+  includeArguments: boolean,
   write: AuditJsonlWriter
 ): Promise<void> {
   let recordStart = 0;
@@ -276,7 +288,7 @@ async function stageCompleteRecords(
     state.pendingLength += fragmentLength;
     if (lineEnd === -1) break;
 
-    stagedRecords.push(`${normalizeRecord(state.pending.subarray(0, state.pendingLength), redactor)}\n`);
+    stagedRecords.push(`${normalizeRecord(state.pending.subarray(0, state.pendingLength), redactor, includeArguments)}\n`);
     state.pendingLength = 0;
     recordStart = lineEnd + 1;
   }
@@ -287,6 +299,7 @@ async function stageAuditSnapshot(
   path: string,
   state: AuditReadState,
   redactor: SecretRedactor,
+  includeArguments: boolean,
   signal?: AbortSignal,
   follow = false,
   temporaryDirectory?: string
@@ -334,7 +347,7 @@ async function stageAuditSnapshot(
       async (chunk) => {
         prefixHash.update(chunk);
         deltaHash.update(chunk);
-        await stageCompleteRecords(candidate, chunk, redactor, async (record) => {
+        await stageCompleteRecords(candidate, chunk, redactor, includeArguments, async (record) => {
           if (spool === undefined) spool = await createTemporarySpool(temporaryDirectory);
           await spool.handle.writeFile(record, "utf8");
         });
@@ -465,12 +478,13 @@ async function pollAuditFile(
   path: string,
   state: AuditReadState,
   redactor: SecretRedactor,
+  includeArguments: boolean,
   write: AuditJsonlWriter,
   signal?: AbortSignal,
   follow = false,
   temporaryDirectory?: string
 ): Promise<"aborted" | "stable" | "unstable"> {
-  const attempt = await stageAuditSnapshot(path, state, redactor, signal, follow, temporaryDirectory);
+  const attempt = await stageAuditSnapshot(path, state, redactor, includeArguments, signal, follow, temporaryDirectory);
   if (attempt.kind !== "staged") return attempt.kind;
   try {
     if (!(await forwardStagedOutput(attempt.spool, write, signal))) return "aborted";
@@ -515,6 +529,7 @@ export async function readAuditJsonl(options: AuditJsonlReadOptions): Promise<vo
         options.path,
         state,
         options.redactor,
+        options.includeArguments ?? true,
         options.write,
         undefined,
         false,
@@ -537,6 +552,7 @@ export async function followAuditJsonl(options: AuditJsonlFollowOptions): Promis
         options.path,
         state,
         options.redactor,
+        options.includeArguments ?? true,
         options.write,
         options.signal,
         true,

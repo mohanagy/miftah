@@ -517,27 +517,87 @@ const processSchema = z
   })
   .strict();
 
+const auditRotationSchema = z
+  .object({
+    maxBytes: z.number().int().positive().max(2_147_483_647).optional(),
+    maxAgeMs: z.number().int().positive().max(31_536_000_000).optional(),
+    retainFiles: z.number().int().min(0).max(2_000)
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.maxBytes === undefined && value.maxAgeMs === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "audit rotation requires maxBytes or maxAgeMs"
+      });
+    }
+  });
+
+const auditIntegritySchema = z
+  .object({
+    algorithm: z.literal("sha256-chain")
+  })
+  .strict();
+
+function validateManagedAuditOptions(
+  value: {
+    enabled?: boolean;
+    path?: string;
+    rotation?: unknown;
+    integrity?: unknown;
+  },
+  context: z.RefinementCtx
+): void {
+  if (value.rotation === undefined && value.integrity === undefined) return;
+
+  if (value.path === undefined || value.path.length === 0) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["path"],
+      "audit.path is required when rotation or integrity is configured",
+      "Set audit.path to a non-empty JSONL journal path or remove audit.rotation and audit.integrity."
+    );
+  }
+
+  if (value.enabled === false) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["enabled"],
+      "audit.enabled cannot be false when rotation or integrity is configured",
+      "Enable audit or remove audit.rotation and audit.integrity."
+    );
+  }
+}
+
 const publicAuditSchema = z
   .object({
     enabled: z.boolean().optional(),
-    path: z.string().optional(),
+    path: z.string().min(1).optional(),
     format: z.literal("jsonl").optional(),
     includeArguments: z.boolean().optional(),
     redact: z.literal(true).optional(),
-    failureMode: z.enum(["fail-open", "fail-closed"]).optional()
+    failureMode: z.enum(["fail-open", "fail-closed"]).optional(),
+    rotation: auditRotationSchema.optional(),
+    integrity: auditIntegritySchema.optional()
   })
-  .strict();
+  .strict()
+  .superRefine(validateManagedAuditOptions);
 
 const auditSchema = z
   .object({
     enabled: z.boolean().optional(),
-    path: z.string().optional(),
+    path: z.string().min(1).optional(),
     format: z.literal("jsonl").optional(),
     includeArguments: z.boolean().optional(),
     redact: z.boolean().optional(),
-    failureMode: z.enum(["fail-open", "fail-closed"]).optional()
+    failureMode: z.enum(["fail-open", "fail-closed"]).optional(),
+    rotation: auditRotationSchema.optional(),
+    integrity: auditIntegritySchema.optional()
   })
-  .strict();
+  .strict()
+  .superRefine(validateManagedAuditOptions);
 
 const publicToolingSchema = z
   .object({

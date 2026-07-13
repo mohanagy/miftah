@@ -129,6 +129,26 @@ Set `audit.path` to record one terminal JSONL event for every supported MCP oper
 
 New audit directories and files use owner-only permissions where the platform supports them. `audit.failureMode` defaults to `"fail-closed"`, which verifies the audit sink before dispatch and refuses the request if it cannot be prepared. A terminal write can still fail after an upstream side effect completes, so treat a post-dispatch `AUDIT_WRITE_FAILED` as an indeterminate outcome and do not blindly retry non-idempotent tools. Set it to `"fail-open"` only when availability outweighs that guarantee; the original operation remains available and `miftah_health` reports a redacted `AUDIT_WRITE_FAILED` audit-health entry.
 
+Optional rotation keeps a bounded local journal without breaking JSONL records:
+
+```json
+{
+  "audit": {
+    "path": "./audit/events.jsonl",
+    "rotation": {
+      "maxBytes": 10485760,
+      "maxAgeMs": 86400000,
+      "retainFiles": 14
+    },
+    "integrity": { "algorithm": "sha256-chain" }
+  }
+}
+```
+
+At least one rotation trigger is required; `retainFiles` is the number of completed archive segments to keep in addition to the active file (maximum `2000`). Rotation and integrity require a non-empty `audit.path` and cannot be combined with `audit.enabled: false`. Miftah manages only its own regular archive files in the configured audit directory and refuses unsafe paths. Journal coordination is local to one host, so do not concurrently share a managed journal through a network filesystem. The optional integrity chain provides local tamper evidence across retained segments; use `miftah audit-verify --config <file>` to report the first safe broken location. It is not a signature or a remote immutable log, so preserve required evidence in an independently protected system.
+
+`miftah audit-export --config <file> --output <file>` is an explicit local support export: it never uploads telemetry, redacts records again, and removes stored `arguments` by default. `--include-arguments` is an intentional opt-in and still redacts those values.
+
 ## CLI
 
 Use `miftah --help` for the generated command list and `miftah <command> --help` for command-specific options. The available commands are:
@@ -143,6 +163,8 @@ Use `miftah --help` for the generated command list and `miftah <command> --help`
 | `miftah list-tools --config <file> [--profile <name>]` | Discover upstream tools as JSON. |
 | `miftah test-profile --config <file> [--profile <name>]` | Start and initialize one profile; writes JSON. |
 | `miftah logs --config <file> [--follow]` | Read normalized, redacted audit JSONL; follow rotation safely when requested. |
+| `miftah audit-export --config <file> --output <file> [--include-arguments]` | Create an explicit, redacted audit support export. |
+| `miftah audit-verify --config <file> [--json]` | Verify configured local audit-chain integrity without starting an upstream. |
 | `miftah --version` / `miftah -v` / `miftah version [--json]` | Print the package SemVer. `--json` intentionally preserves bare SemVer output. |
 
 Structured success output is written to stdout with stderr empty. Stable nonzero categories are usage (`2`), configuration (`3`), secret resolution (`4`), upstream (`5`), and policy (`6`); `1` is an uncategorized operational failure. Quote config and output paths with spaces. `logs --follow` handles appends, truncation, and rotation, and exits cleanly on `SIGINT` or `SIGTERM` without starting an upstream. See the complete [CLI reference](docs/cli.md) for help behavior, defaults, JSON contracts, redaction, and audit reader boundaries.
@@ -164,7 +186,7 @@ Structured success output is written to stdout with stderr empty. Stable nonzero
 
 ## Current boundaries
 
-The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching with opt-in scoped persistence, hybrid routing rules plus provider routing matchers, policies, optional upstream identity verification, namespaced tools/resources/prompts for account bundles, resilient healthy-upstream discovery, configurable local process lifecycle controls, in-memory process/session caching, redacted JSONL audit logging, and a packageable CLI. Local process controls cover startup and shutdown deadlines, optional idle cleanup, opt-in crash recovery with a bounded retry budget, and no-eviction profile-session capacity limits. UI, routing plugins, `process.startMode`, `process.cache`, custom state paths, and configurable tool namespaces are rejected with `UNSUPPORTED_CONFIG_OPTION` rather than silently ignored.
+The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching with opt-in scoped persistence, hybrid routing rules plus provider routing matchers, policies, optional upstream identity verification, namespaced tools/resources/prompts for account bundles, resilient healthy-upstream discovery, configurable local process lifecycle controls, in-memory process/session caching, rotated redacted JSONL audit journals with optional local tamper evidence, and a packageable CLI. Local process controls cover startup and shutdown deadlines, optional idle cleanup, opt-in crash recovery with a bounded retry budget, and no-eviction profile-session capacity limits. UI, routing plugins, `process.startMode`, `process.cache`, custom state paths, and configurable tool namespaces are rejected with `UNSUPPORTED_CONFIG_OPTION` rather than silently ignored.
 
 ## License
 

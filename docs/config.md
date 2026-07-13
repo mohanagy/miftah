@@ -272,6 +272,30 @@ Audit logging writes local JSONL when a path is configured. Every supported MCP 
 
 `audit.failureMode` accepts `"fail-closed"` (the default) or `"fail-open"`. Fail-closed verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared; a terminal write error also surfaces as `AUDIT_WRITE_FAILED`. Because terminal writes occur after an upstream operation, that error can leave a non-idempotent operation's outcome indeterminate; do not blindly retry it. Fail-open preserves the request result and exposes a redacted `AUDIT_WRITE_FAILED` entry through `miftah_health`; it should be used only when availability is more important than complete auditability.
 
+### Audit journal rotation and integrity
+
+`audit.rotation` is opt-in and requires `retainFiles` plus at least one positive trigger: `maxBytes` or `maxAgeMs`. Rotation and integrity both require a non-empty `audit.path` and cannot be combined with `audit.enabled: false`. `retainFiles` is a count of completed archive segments (maximum `2000`); the active JSONL file remains separately available. Miftah rotates only between complete write batches, so a successful event is never split across JSONL records or a rotation boundary. It keeps only managed, single-link regular archive files with stable identities below the configured audit directory, refuses unsafe active/managed paths (including externally hard-linked paths), and never follows a symlink during retention. Journal coordination is local to one host; do not concurrently write one managed journal through a shared filesystem from multiple machines. Disk-full, permissions, corrupt-journal, or rotation failures before the event commits obey `audit.failureMode`. If post-commit retention cleanup cannot finish, Miftah warns and preserves the completed segments for a later safe retry rather than turning an acknowledged event into a retry duplicate.
+
+```json
+{
+  "audit": {
+    "path": "./audit/events.jsonl",
+    "rotation": {
+      "maxBytes": 10485760,
+      "maxAgeMs": 86400000,
+      "retainFiles": 14
+    },
+    "integrity": { "algorithm": "sha256-chain" }
+  }
+}
+```
+
+`audit.integrity.algorithm: "sha256-chain"` adds a hash-chain envelope to already-redacted audit records and maintains continuation metadata across rotation and retention. `miftah audit-verify --config <file>` scans the managed retained set and reports only the first segment name, record number, and stable reason when verification fails; it does not start an upstream or print audit bytes, hashes, or absolute paths. Enable integrity before writing the journal: Miftah will not silently adopt a nonempty unchained active file.
+
+This is local tamper evidence, not signing, nonrepudiation, or remote immutable storage. An attacker able to replace every local journal and its local integrity metadata can defeat it; preserve required evidence externally under an independent protection boundary.
+
+`miftah audit-export --config <file> --output <file>` takes an explicit private snapshot, repeats configured redaction, and writes a new JSONL export without stored `arguments` by default. It does not upload telemetry or contact an upstream. `--include-arguments` is an explicit support opt-in; values remain subject to redaction, and arguments omitted when the event was recorded cannot be reconstructed.
+
 ## Runtime-supported controls
 
 Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules`, profile-local static matchers, and `routing.fallback` to control its behavior. Routing plugins, profile metadata, UI settings, and configurable management-tool namespaces are not available yet.
