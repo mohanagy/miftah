@@ -85,9 +85,14 @@ const invalidStateConfig: MiftahConfig = {
 void invalidStateConfig;
 
 interface SchemaNode {
+  type?: string;
   const?: boolean | string;
+  enum?: unknown[];
   minimum?: number;
   maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  uniqueItems?: boolean;
   properties?: Record<string, SchemaNode>;
   items?: SchemaNode;
   additionalProperties?: boolean | SchemaNode;
@@ -142,6 +147,21 @@ describe("published config schema", () => {
     expect(routing).not.toHaveProperty("plugins");
     expect(profile.properties).toHaveProperty("headers");
     expect(profile.properties).toHaveProperty("upstreams");
+    expect(profile.properties?.lease).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["ttlMs", "requiredForRisk"],
+      properties: {
+        ttlMs: { type: "integer", minimum: 1_000, maximum: 3_600_000 },
+        requiredForRisk: {
+          type: "array",
+          minItems: 1,
+          maxItems: 2,
+          uniqueItems: true,
+          items: { enum: ["write", "destructive"] }
+        }
+      }
+    });
     expect(profile.properties).not.toHaveProperty("metadata");
     expect(profile.properties).not.toHaveProperty("routing");
     expect(profileUpstreamOverride.properties).toHaveProperty("args");
@@ -159,8 +179,12 @@ describe("published config schema", () => {
       "maxRestarts",
       "maxConcurrentProfiles"
     ]);
-    expect(security).toMatchObject({ redactSecrets: { const: true } });
-    expect(security).not.toHaveProperty("requireProfileSwitchConfirmation");
+    expect(security).toMatchObject({
+      redactSecrets: { const: true },
+      requireProfileSwitchConfirmation: { type: "boolean" },
+      allowProfileLockingFromMcp: { type: "boolean" },
+      requireExplicitSelectionForDestructive: { type: "boolean" }
+    });
     expect(audit).toMatchObject({
       format: { const: "jsonl" },
       redact: { const: true },

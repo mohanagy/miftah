@@ -107,7 +107,7 @@ describe("identity verification documentation contract", () => {
     expect(identityConfig).toContain("Read discovery, resource reads, and prompt retrieval are not gated");
 
     expect(server).toContain('tool("miftah_verify_identity"');
-    expect(server).toContain("args.profile === undefined ? this.profiles.current().activeProfile");
+    expect(server).toContain("args.profile === undefined ? source.activeProfile");
     expect(server).toContain("const targetUpstreams = this.identityTargetUpstreams(requestedUpstream);");
     expect(server).toContain('requestedUpstream === "default" && configured.length === 1 && configured[0] === undefined');
     expect(server).toContain("if (requestedUpstream === undefined) return configured;");

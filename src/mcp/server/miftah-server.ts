@@ -24,7 +24,11 @@ import {
 import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
 import { ApprovalStore, type ApprovalBinding, type ApprovalSummary } from "../../approvals/approval-store.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
-import { ProfileManager } from "../../profiles/profile-manager.js";
+import {
+  bindProfileTransitionConfirmationVerifier,
+  ProfileManager,
+  type ProfileTransitionOptions
+} from "../../profiles/profile-manager.js";
 import { RoutingEngine } from "../../routing/routing-engine.js";
 import type {
   RoutingContextMcpRoot,
@@ -35,8 +39,8 @@ import type { ToolRiskMetadata } from "../../policy/risk-classifier.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
 import type { IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
-import { AuditScope, AuditTrail, type AuditScopeResult } from "../../audit/audit-trail.js";
-import type { ApprovalAuditAction, AuditStatus } from "../../audit/audit-types.js";
+import { AuditScope, AuditTrail, type AuditProfileInput, type AuditScopeResult } from "../../audit/audit-trail.js";
+import type { ApprovalAuditAction, AuditStatus, ProfileAuditAction } from "../../audit/audit-types.js";
 import {
   UpstreamProcessManager,
   type UpstreamHealth,
@@ -67,6 +71,8 @@ const managementTools: Tool[] = [
   tool("miftah_current_profile", "Show the active and default profile."),
   tool("miftah_use_profile", "Switch the active profile according to the configured state scope.", ["profile"]),
   tool("miftah_reset_profile", "Reset the active profile to the configured default."),
+  tool("miftah_lock_profile", "Lock the current profile for this MCP connection when enabled."),
+  tool("miftah_unlock_profile", "Unlock the current profile for this MCP connection when enabled."),
   tool("miftah_profile_info", "Show non-secret metadata for a profile.", ["profile"]),
   tool("miftah_health", "Show redacted wrapper and upstream health."),
   tool("miftah_validate_config", "Validate the loaded wrapper configuration."),
@@ -142,6 +148,8 @@ function textResult(text: string, isError = false): CallToolResult {
 function managementOperation(name: string): string {
   if (name === "miftah_use_profile") return "profiles/switch";
   if (name === "miftah_reset_profile") return "profiles/reset";
+  if (name === "miftah_lock_profile") return "profiles/lock";
+  if (name === "miftah_unlock_profile") return "profiles/unlock";
   if (name === "miftah_restart_profile") return "upstreams/restart";
   return `management/${name.replace(/^miftah_/, "").replaceAll("_", "-")}`;
 }
@@ -151,6 +159,7 @@ function managementName(name: string, args: Record<string, unknown>): string {
     return typeof args.profile === "string" ? args.profile : "profile";
   }
   if (name === "miftah_reset_profile") return "default";
+  if (name === "miftah_lock_profile" || name === "miftah_unlock_profile") return "active-profile";
   if (name === "miftah_list_profiles") return "profiles";
   if (name === "miftah_list_upstream_tools") return typeof args.profile === "string" ? args.profile : "active-profile";
   return name;
@@ -173,6 +182,57 @@ type ApprovalResolution =
   | { readonly kind: "fallback"; readonly token: string }
   | { readonly kind: "form"; readonly token: string };
 
+interface ApprovalErrorFactory {
+  required(binding: ApprovalBinding, token: string): MiftahError;
+  notAccepted(binding: ApprovalBinding): MiftahError;
+}
+
+interface ProfileAuditRequest {
+  readonly action: ProfileAuditAction;
+  readonly input: {
+    readonly sourceProfile: string;
+    readonly profile: string;
+    readonly operation: string;
+    readonly name: string;
+    readonly state?: CapturedProfileState;
+  };
+}
+
+interface ProfileTransitionConfirmationBinding {
+  readonly session: number;
+  readonly action: "switch" | "reset";
+  readonly profile: string;
+  readonly revision: number;
+}
+
+type ProfileStateSnapshot = ReturnType<ProfileManager["current"]>;
+
+const genericApprovalErrors: ApprovalErrorFactory = {
+  required: (binding, token) =>
+    new MiftahError(
+      "POLICY_CONFIRMATION_REQUIRED",
+      `POLICY_CONFIRMATION_REQUIRED: approval required for '${binding.displayName}'. Use miftah_approve with approval '${token}' then retry the exact operation.`
+    ),
+  notAccepted: (binding) =>
+    new MiftahError(
+      "POLICY_CONFIRMATION_REQUIRED",
+      `POLICY_CONFIRMATION_REQUIRED: approval was not accepted for '${binding.displayName}'`
+    )
+};
+
+const profileSwitchApprovalErrors: ApprovalErrorFactory = {
+  required: (binding, token) =>
+    new MiftahError(
+      "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
+      `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation required for ${binding.displayName}. Use miftah_approve with approval '${token}' then retry the exact operation.`
+    ),
+  notAccepted: (binding) =>
+    new MiftahError(
+      "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
+      `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation was not accepted for ${binding.displayName}`
+    )
+};
+
 /** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
   readonly server: Server;
@@ -185,6 +245,9 @@ export class MiftahServer {
   private readonly toolRegistry: ToolRegistry;
   private readonly operationPipeline: OperationPipeline;
   private readonly approvals = new ApprovalStore();
+  /** One-time, connection-bound proofs accepted only by the profile manager attached to this server. */
+  private profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
+  private profileTransitionSession = 0;
   private readonly identities: IdentityManager;
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
@@ -214,6 +277,17 @@ export class MiftahServer {
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager,
     private readonly routingContextCollector?: RoutingContextCollector
   ) {
+    bindProfileTransitionConfirmationVerifier(profiles, (request) => {
+      const binding = this.profileTransitionConfirmations.get(request.proof);
+      this.profileTransitionConfirmations.delete(request.proof);
+      return (
+        binding !== undefined &&
+        binding.session === this.profileTransitionSession &&
+        binding.action === request.action &&
+        binding.profile === request.profile &&
+        binding.revision === request.revision
+      );
+    });
     this.redactor = upstreams.getRedactor();
     this.resourcePromptProxy = this.resourcePromptProxyAvailability();
     this.server = new Server(
@@ -279,7 +353,23 @@ export class MiftahServer {
       redactor: this.redactor,
       routingContext: this.provideRoutingContext,
       identities: this.identities,
-      approvals: { requireApproval: (binding, context) => this.requireApproval(binding, context) }
+      approvals: { requireApproval: (binding, context) => this.requireApproval(binding, context) },
+      profileAudits: {
+        leaseExpired: ({ source, profile, operation }) =>
+          this.writeProfileAction("lease-expired", {
+            sourceProfile: source.activeProfile,
+            profile,
+            operation,
+            name: profile,
+            state: {
+              ...source,
+              lease:
+                "expiresAt" in source.lease
+                  ? { ...source.lease, state: "expired" }
+                  : source.lease
+            }
+          })
+      }
     });
     this.server.oninitialized = () => this.handleClientInitialized();
     this.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
@@ -300,6 +390,8 @@ export class MiftahServer {
 
   async connect(transport: Transport): Promise<void> {
     await this.profileTransitions;
+    this.profileTransitionSession += 1;
+    this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
     await this.enqueueApprovalTransition(async () => {
       this.approvals.beginSession();
     });
@@ -320,6 +412,8 @@ export class MiftahServer {
   }
 
   async close(): Promise<void> {
+    this.profileTransitionSession += 1;
+    this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
     await this.server.close();
     await this.upstreams.close();
     await this.auditTrail.writeLifecycle({
@@ -401,7 +495,7 @@ export class MiftahServer {
 
   private registerHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const source = this.profiles.current();
+      const source = await this.captureStableProfileState();
       return this.runAudited(
         { operation: "tools/list", name: "tools", sourceProfile: source.activeProfile },
         async (audit) => {
@@ -417,7 +511,7 @@ export class MiftahServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name;
       const args = request.params.arguments ?? {};
-      const source = this.profiles.current();
+      const source = await this.captureStableProfileState();
       const isManagementTool = managementTools.some((tool) => tool.name === name);
       const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
       return this.runAudited(
@@ -429,7 +523,10 @@ export class MiftahServer {
         },
         (audit) =>
           isManagementTool
-            ? this.handleManagement(name, args, audit, source)
+            ? this.handleManagement(name, args, audit, source, {
+                requestId: extra.requestId,
+                signal: extra.signal
+              })
             : this.handleUpstreamTool(name, args, audit, source, {
                 requestId: extra.requestId,
                 signal: extra.signal
@@ -445,7 +542,7 @@ export class MiftahServer {
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
       this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
-        const source = this.profiles.current();
+        const source = await this.captureStableProfileState();
         return this.runAudited(
           {
             operation: "resources/list",
@@ -469,7 +566,7 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
-        const source = this.profiles.current();
+        const source = await this.captureStableProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         return this.runAudited(
           {
@@ -492,7 +589,7 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
-        const source = this.profiles.current();
+        const source = await this.captureStableProfileState();
         return this.runAudited(
           {
             operation: "prompts/list",
@@ -516,7 +613,7 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
-        const source = this.profiles.current();
+        const source = await this.captureStableProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         return this.runAudited(
           {
@@ -576,6 +673,7 @@ export class MiftahServer {
           return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
         },
         requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
+        requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
         resolveTarget: async (profile) => {
           const target = (await this.toolRegistry.get(profile)).resolve(name);
           if (!target) {
@@ -613,25 +711,21 @@ export class MiftahServer {
     name: string,
     args: Record<string, unknown>,
     audit: AuditScope,
-    source: CapturedProfileState
+    source: ProfileStateSnapshot,
+    approvalContext?: ApprovalRequestContext
   ): Promise<CallToolResult> {
     if (name === "miftah_list_profiles") {
-      const activeProfile = this.profiles.current().activeProfile;
+      const activeProfile = source.activeProfile;
       return textResult(JSON.stringify(this.profiles.list().map((profile) => ({
         ...profile,
         active: profile.name === activeProfile
       }))));
     }
     if (name === "miftah_current_profile") {
-      const current = this.profiles.current();
+      const current = this.currentProfileState(source);
       return textResult(
         JSON.stringify({
-          activeProfile: current.activeProfile,
-          defaultProfile: current.defaultProfile,
-          selectionSource: current.selectionSource,
-          selectedAt: current.selectedAt,
-          scope: current.scope,
-          ...(current.stateDiagnostic === undefined ? {} : { stateDiagnostic: current.stateDiagnostic }),
+          ...current,
           routingMode: this.config.routing?.mode ?? "hybrid",
           identity: this.identityStatuses(current.activeProfile)
         })
@@ -639,9 +733,37 @@ export class MiftahServer {
     }
     if (name === "miftah_use_profile") {
       const profile = requiredString(args, "profile");
+      const transition = await this.requireProfileTransitionConfirmation(
+        "switch",
+        profile,
+        source,
+        approvalContext
+      );
       return this.enqueueProfileTransition(async () => {
         const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
-        const switched = await this.profiles.switchPersisted(profile);
+        const switched = await this.profiles.mutateAudited(
+          () => this.profiles.switchPersisted(profile, transition),
+          async (result) => {
+            const actions: ProfileAuditRequest[] = [
+              {
+                action: "switch",
+                input: {
+                  sourceProfile: result.previousProfile,
+                  profile: result.activeProfile,
+                  operation: "profiles/switch",
+                  name: result.activeProfile
+                }
+              }
+            ];
+            const leaseIssued = this.leaseIssuedAuditAction(
+              result.previousProfile,
+              "profiles/switch",
+              result.activeProfile
+            );
+            if (leaseIssued !== undefined) actions.push(leaseIssued);
+            await this.writeProfileActions(actions);
+          }
+        );
         audit.update({ name: switched.activeProfile, profile: switched.activeProfile });
         this.routing.setActiveProfile(switched.activeProfile);
         this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
@@ -650,10 +772,71 @@ export class MiftahServer {
         return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
       });
     }
+    if (name === "miftah_lock_profile") {
+      return this.enqueueProfileTransition(async () => {
+        const locked = await this.profiles.mutateAudited(
+          () => this.profiles.lock(),
+          (result) =>
+            this.writeProfileAction("lock", {
+              sourceProfile: result.profile,
+              profile: result.profile,
+              operation: "profiles/lock",
+              name: result.profile
+            })
+        );
+        audit.update({ name: locked.profile, profile: locked.profile });
+        return textResult(JSON.stringify({ profileState: this.currentProfileState() }));
+      });
+    }
+    if (name === "miftah_unlock_profile") {
+      return this.enqueueProfileTransition(async () => {
+        const unlocked = await this.profiles.mutateAudited(
+          () => this.profiles.unlock(),
+          (result) =>
+            this.writeProfileAction("unlock", {
+              sourceProfile: result.profile,
+              profile: result.profile,
+              operation: "profiles/unlock",
+              name: result.profile
+            })
+        );
+        audit.update({ name: unlocked.profile, profile: unlocked.profile });
+        return textResult(JSON.stringify({ profileState: this.currentProfileState() }));
+      });
+    }
     if (name === "miftah_reset_profile") {
+      const profile = source.defaultProfile;
+      const transition = await this.requireProfileTransitionConfirmation(
+        "reset",
+        profile,
+        source,
+        approvalContext
+      );
       return this.enqueueProfileTransition(async () => {
         const previousSnapshot = this.toolRegistry.peek(this.profiles.current().activeProfile);
-        const reset = await this.profiles.resetPersisted();
+        const reset = await this.profiles.mutateAudited(
+          () => this.profiles.resetPersisted(transition),
+          async (result) => {
+            const actions: ProfileAuditRequest[] = [
+              {
+                action: "reset",
+                input: {
+                  sourceProfile: result.previousProfile,
+                  profile: result.activeProfile,
+                  operation: "profiles/reset",
+                  name: result.activeProfile
+                }
+              }
+            ];
+            const leaseIssued = this.leaseIssuedAuditAction(
+              result.previousProfile,
+              "profiles/reset",
+              result.activeProfile
+            );
+            if (leaseIssued !== undefined) actions.push(leaseIssued);
+            await this.writeProfileActions(actions);
+          }
+        );
         audit.update({ name: reset.activeProfile, profile: reset.activeProfile });
         this.routing.setActiveProfile(reset.activeProfile);
         this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
@@ -672,7 +855,8 @@ export class MiftahServer {
       return textResult(
         JSON.stringify({
           configValid: true,
-          activeProfile: this.profiles.current().activeProfile,
+          activeProfile: source.activeProfile,
+          profileState: this.currentProfileState(source),
           resourcePromptProxy: this.resourcePromptProxy.available
             ? { available: true }
             : { available: false, reason: this.resourcePromptProxy.reason },
@@ -724,7 +908,7 @@ export class MiftahServer {
       });
     }
     if (name === "miftah_list_upstream_tools") {
-      const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
+      const profile = args.profile === undefined ? source.activeProfile : requiredString(args, "profile");
       audit.update({ name: profile, profile });
       const tools = (await this.toolRegistry.get(profile)).getTools();
       return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
@@ -736,7 +920,7 @@ export class MiftahServer {
       return textResult("Profile restarted.");
     }
     if (name === "miftah_verify_identity") {
-      const profile = args.profile === undefined ? this.profiles.current().activeProfile : requiredString(args, "profile");
+      const profile = args.profile === undefined ? source.activeProfile : requiredString(args, "profile");
       this.profiles.get(profile);
       const requestedUpstream = optionalString(args, "upstream");
       const targetUpstreams = this.identityTargetUpstreams(requestedUpstream);
@@ -807,6 +991,58 @@ export class MiftahServer {
     throw new MiftahError("TOOL_NOT_FOUND", `TOOL_NOT_FOUND: management tool '${name}' is not registered`);
   }
 
+  private currentProfileState(current: ProfileStateSnapshot = this.profiles.current()) {
+    return {
+      activeProfile: current.activeProfile,
+      defaultProfile: current.defaultProfile,
+      selectionSource: current.selectionSource,
+      selectedAt: current.selectedAt,
+      scope: current.scope,
+      confirmation: current.confirmation,
+      lease: current.lease,
+      lock: current.lock,
+      ...(current.stateDiagnostic === undefined ? {} : { stateDiagnostic: current.stateDiagnostic })
+    };
+  }
+
+  private async requireProfileTransitionConfirmation(
+    action: "switch" | "reset",
+    profile: string,
+    source: CapturedProfileState,
+    context?: ApprovalRequestContext
+  ): Promise<ProfileTransitionOptions | undefined> {
+    this.profiles.get(profile);
+    if (this.config.security?.requireProfileSwitchConfirmation !== true) return undefined;
+    const session = this.profileTransitionSession;
+    await this.requireApproval(
+      {
+        sourceProfile: source.activeProfile,
+        profile,
+        upstream: "profiles",
+        operation: `profiles/${action}`,
+        name: profile,
+        displayName: `profile '${profile}'`,
+        arguments: { profile, selectionRevision: source.revision }
+      },
+      context,
+      profileSwitchApprovalErrors
+    );
+    if (session !== this.profileTransitionSession) {
+      throw new MiftahError(
+        "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
+        "PROFILE_SWITCH_CONFIRMATION_REQUIRED: profile confirmation was invalidated by a new MCP connection"
+      );
+    }
+    const confirmation = Object.freeze({});
+    this.profileTransitionConfirmations.set(confirmation, {
+      session,
+      action,
+      profile,
+      revision: source.revision
+    });
+    return { confirmation, expectedRevision: source.revision };
+  }
+
   private exposedToolName(name: string, upstreamName?: string): string {
     return resolveClientVisibleToolName(name, upstreamName, this.config.tooling?.collisionStrategy);
   }
@@ -818,7 +1054,11 @@ export class MiftahServer {
     };
   }
 
-  private async requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void> {
+  private async requireApproval(
+    binding: ApprovalBinding,
+    context?: ApprovalRequestContext,
+    errors: ApprovalErrorFactory = genericApprovalErrors
+  ): Promise<void> {
     const supportsFormElicitation =
       context !== undefined && this.server.getClientCapabilities()?.elicitation?.form !== undefined;
     const resolution = await this.enqueueApprovalTransition(async (): Promise<ApprovalResolution> => {
@@ -858,10 +1098,7 @@ export class MiftahServer {
     });
     if (resolution.kind === "consumed") return;
     if (resolution.kind === "fallback") {
-      throw new MiftahError(
-        "POLICY_CONFIRMATION_REQUIRED",
-        `POLICY_CONFIRMATION_REQUIRED: approval required for '${binding.displayName}'. Use miftah_approve with approval '${resolution.token}' then retry the exact operation.`
-      );
+      throw errors.required(binding, resolution.token);
     }
     if (context === undefined) throw new Error("Form approval requires an MCP request context.");
     let result;
@@ -880,14 +1117,14 @@ export class MiftahServer {
       );
     } catch {
       await this.finalizeNativeApproval(resolution.token, binding, false);
-      throw this.approvalNotAccepted(binding);
+      throw errors.notAccepted(binding);
     }
     if (result.action === "accept" && result.content?.approved === true) {
       await this.finalizeNativeApproval(resolution.token, binding, true);
       return;
     }
     await this.finalizeNativeApproval(resolution.token, binding, false);
-    throw this.approvalNotAccepted(binding);
+    throw errors.notAccepted(binding);
   }
 
   private async finalizeNativeApproval(token: string, binding: ApprovalBinding, accepted: boolean): Promise<void> {
@@ -918,13 +1155,6 @@ export class MiftahServer {
         throw error;
       }
     });
-  }
-
-  private approvalNotAccepted(binding: ApprovalBinding): MiftahError {
-    return new MiftahError(
-      "POLICY_CONFIRMATION_REQUIRED",
-      `POLICY_CONFIRMATION_REQUIRED: approval was not accepted for '${binding.displayName}'`
-    );
   }
 
   private async expireApprovals(): Promise<void> {
@@ -982,7 +1212,7 @@ export class MiftahServer {
     action: ApprovalAuditAction,
     approval: ApprovalSummary
   ): Promise<void> {
-    await this.auditTrail.writeApproval({
+    const approvalInput = {
       approvalId: approval.id,
       approvalSessionId: this.approvals.activeSessionId,
       approvalAction: action,
@@ -992,7 +1222,64 @@ export class MiftahServer {
       operation: approval.operation,
       name: approval.name,
       expiresAt: approval.expiresAt
-    });
+    };
+    const profileAction = profileConfirmationAction(action, approval.operation);
+    if (profileAction === undefined) {
+      await this.auditTrail.writeApproval(approvalInput);
+      return;
+    }
+    await this.auditTrail.writeApprovalAndProfile(
+      approvalInput,
+      this.profileAuditInput(profileAction, {
+        sourceProfile: approval.sourceProfile,
+        profile: approval.profile,
+        operation: approval.operation,
+        name: approval.name
+      })
+    );
+  }
+
+  private leaseIssuedAuditAction(
+    sourceProfile: string,
+    operation: string,
+    profile: string
+  ): ProfileAuditRequest | undefined {
+    if (this.profiles.current().lease.state !== "active") return undefined;
+    return { action: "lease-issued", input: { sourceProfile, profile, operation, name: profile } };
+  }
+
+  private async writeProfileAction(
+    action: ProfileAuditAction,
+    input: {
+      sourceProfile: string;
+      profile: string;
+      operation: string;
+      name: string;
+      state?: CapturedProfileState;
+    }
+  ): Promise<void> {
+    await this.writeProfileActions([{ action, input }]);
+  }
+
+  private async writeProfileActions(actions: readonly ProfileAuditRequest[]): Promise<void> {
+    await this.auditTrail.writeProfiles(actions.map(({ action, input }) => this.profileAuditInput(action, input)));
+  }
+
+  private profileAuditInput(
+    action: ProfileAuditAction,
+    input: ProfileAuditRequest["input"]
+  ): AuditProfileInput {
+    const { state, ...event } = input;
+    const current = state ?? this.profiles.current();
+    return {
+      profileAction: action,
+      ...event,
+      profileSelectionSource: current.selectionSource,
+      profileConfirmation: current.confirmation,
+      profileLeaseState: current.lease.state,
+      ...("expiresAt" in current.lease ? { profileLeaseExpiresAt: current.lease.expiresAt } : {}),
+      profileLockState: current.lock.state
+    };
   }
 
   private trustsToolAnnotations(upstreamName: string | undefined): boolean {
@@ -1177,6 +1464,7 @@ export class MiftahServer {
         name: params.uri,
         args: { uri: params.uri },
         ...(approvalContext === undefined ? {} : { approvalContext }),
+        requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
         resolveTarget: async (profile) => {
           if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
           const auditUpstream = this.auditUpstreamName(upstreamName);
@@ -1209,6 +1497,7 @@ export class MiftahServer {
         name: params.name,
         args: { ...(params.arguments ?? {}), name: params.name },
         ...(approvalContext === undefined ? {} : { approvalContext }),
+        requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
         resolveTarget: async (profile) => {
           if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
           const auditUpstream = this.auditUpstreamName(upstreamName);
@@ -1385,11 +1674,22 @@ export class MiftahServer {
     if (
       error.code === "POLICY_BLOCKED" ||
       error.code === "ROUTING_BLOCKED" ||
-      error.code === "PROFILE_SWITCH_DISABLED"
+      error.code === "PROFILE_SWITCH_DISABLED" ||
+      error.code === "PROFILE_LOCKING_DISABLED" ||
+      error.code === "PROFILE_LOCKED" ||
+      error.code === "PROFILE_SELECTION_STALE" ||
+      error.code === "PROFILE_LEASE_REQUIRED" ||
+      error.code === "PROFILE_LEASE_EXPIRED" ||
+      error.code === "PROFILE_SELECTION_REQUIRED"
     ) {
       return "denied";
     }
-    if (error.code === "POLICY_CONFIRMATION_REQUIRED") return "confirmation-required";
+    if (
+      error.code === "POLICY_CONFIRMATION_REQUIRED" ||
+      error.code === "PROFILE_SWITCH_CONFIRMATION_REQUIRED"
+    ) {
+      return "confirmation-required";
+    }
     if (error.code === "ROUTING_AMBIGUOUS") return "ambiguous";
     return "failure";
   }
@@ -1402,9 +1702,18 @@ export class MiftahServer {
     return new MiftahError("UPSTREAM_CALL_FAILED", `UPSTREAM_CALL_FAILED: ${message}`);
   }
 
+  /** Prevents a request from capturing profile state while a required-audit transition can still roll it back. */
+  private async captureStableProfileState(): Promise<ProfileStateSnapshot> {
+    for (;;) {
+      const transitions = this.profileTransitions;
+      await transitions;
+      if (transitions === this.profileTransitions) return this.profiles.current();
+    }
+  }
+
   private async activeToolSnapshot(): Promise<{ profile: string; snapshot: ToolSnapshot }> {
     for (;;) {
-      const state = this.profiles.current();
+      const state = await this.captureStableProfileState();
       const previous =
         this.toolRegistry.peek(state.activeProfile) ?? this.invalidatedToolSnapshots.get(state.activeProfile);
       const snapshot = await this.toolRegistry.get(state.activeProfile);
@@ -1565,6 +1874,18 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 function identityAuditErrorCode(status: IdentityStatus): string {
   if (status.status === "unconfigured") return "IDENTITY_NOT_CONFIGURED";
   return status.errorCode ?? "IDENTITY_VERIFICATION_FAILED";
+}
+
+function profileConfirmationAction(
+  action: ApprovalAuditAction,
+  operation: string
+): Extract<ProfileAuditAction, `confirmation-${string}`> | undefined {
+  if (operation !== "profiles/switch" && operation !== "profiles/reset") return undefined;
+  if (action === "requested") return "confirmation-requested";
+  if (action === "approved") return "confirmation-accepted";
+  if (action === "denied") return "confirmation-denied";
+  if (action === "expired") return "confirmation-expired";
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -4,6 +4,7 @@ import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
@@ -118,6 +119,237 @@ describe("approval fallback", () => {
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a connection-bound approval before switching profiles when configured", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "profile-switch-approval-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const requested = await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      const requestText = textContent(requested);
+      const token = requestText.match(/approval '([A-Za-z0-9_-]+)'/u)?.[1];
+
+      expect(requested).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("PROFILE_SWITCH_CONFIRMATION_REQUIRED") }]
+      });
+      expect(profiles.current().activeProfile).toBe("work");
+      if (!token) throw new Error(`Expected a profile-switch approval token, received: ${requestText}`);
+
+      expect(await client.callTool({ name: "miftah_approve", arguments: { approval: token } })).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("Approval granted") }]
+      });
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("personal") }]
+      });
+      expect(profiles.current()).toMatchObject({ activeProfile: "personal", confirmation: "confirmed" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("revokes a profile confirmation when its coupled approval and profile audit batch fails", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    let auditBatches = 0;
+    const host = wrapper as unknown as {
+      approvals: ApprovalStore;
+      auditTrail: {
+        writeApprovalAndProfile(approval: unknown, profile: unknown): Promise<void>;
+      };
+    };
+    host.auditTrail.writeApprovalAndProfile = async () => {
+      auditBatches += 1;
+      throw new MiftahError("AUDIT_WRITE_FAILED", "AUDIT_WRITE_FAILED: test confirmation audit batch rejected transition");
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "profile-confirmation-audit-batch-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("AUDIT_WRITE_FAILED") }]
+      });
+      expect(auditBatches).toBe(1);
+      expect(host.approvals.list()).toEqual([]);
+      expect(profiles.current()).toMatchObject({ activeProfile: "work", confirmation: "not-confirmed" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("uses native elicitation to confirm a profile switch for form-capable clients", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "profile-switch-elicit-client", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } }
+    );
+    const elicitationRequests: unknown[] = [];
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      elicitationRequests.push(request);
+      return { action: "accept", content: { approved: true } };
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("personal") }]
+      });
+      expect(elicitationRequests).toHaveLength(1);
+      expect(elicitationRequests[0]).toMatchObject({
+        params: {
+          mode: "form",
+          requestedSchema: {
+            properties: { approved: { type: "boolean" } },
+            required: ["approved"]
+          }
+        }
+      });
+      expect(JSON.stringify(elicitationRequests)).not.toContain("approval '");
+      expect(profiles.current()).toMatchObject({ activeProfile: "personal", confirmation: "confirmed" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("keeps the active profile unchanged when native switch confirmation is declined", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "profile-switch-decline-client", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } }
+    );
+    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "accept", content: { approved: false } }));
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("PROFILE_SWITCH_CONFIRMATION_REQUIRED") }]
+      });
+      expect(profiles.current()).toMatchObject({ activeProfile: "work", confirmation: "not-confirmed" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("does not hold the profile-transition queue while a profile confirmation form is open", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {}, personal: {} },
+      security: {
+        allowProfileSwitchingFromMcp: true,
+        requireProfileSwitchConfirmation: true,
+        allowProfileLockingFromMcp: true
+      },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "profile-switch-queue-client", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } }
+    );
+    let formOpened!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      formOpened = resolve;
+    });
+    let acceptForm: (() => void) | undefined;
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      formOpened();
+      return new Promise((resolve) => {
+        acceptForm = () => resolve({ action: "accept", content: { approved: true } });
+      });
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const switching = client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await opened;
+
+      const lock = await Promise.race([
+        client.callTool({ name: "miftah_lock_profile", arguments: {} }),
+        delay(1_000).then(() => {
+          throw new Error("Profile lock waited for an unresolved confirmation form.");
+        })
+      ]);
+      expect(lock).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("profileState") }] });
+      if (!acceptForm) throw new Error("Expected a pending profile confirmation form.");
+      acceptForm();
+      expect(await switching).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("PROFILE_LOCKED") }]
+      });
+      expect(profiles.current()).toMatchObject({ activeProfile: "work", lock: { state: "runtime" } });
+    } finally {
+      acceptForm?.();
+      await client.close();
+      await wrapper.close();
     }
   });
 

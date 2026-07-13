@@ -139,6 +139,22 @@ const identitySchema = z
     }
   });
 
+const profileLeaseSchema = z
+  .object({
+    ttlMs: z.number().int().min(1_000).max(3_600_000),
+    requiredForRisk: z.array(z.enum(["write", "destructive"])).nonempty().max(2)
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.requiredForRisk).size !== value.requiredForRisk.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requiredForRisk"],
+        message: "profile lease requiredForRisk entries must be unique"
+      });
+    }
+  });
+
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -166,6 +182,7 @@ const publicProfileShape = {
   headers: z.record(z.string(), z.string()).optional(),
   policy: z.string().optional(),
   identity: identitySchema.optional(),
+  lease: profileLeaseSchema.optional(),
   upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
 };
 
@@ -219,7 +236,10 @@ const publicSecuritySchema = z
     allowPlaintextSecrets: z.boolean().optional(),
     redactSecrets: z.literal(true).optional(),
     allowProfileSwitchingFromMcp: z.boolean().optional(),
+    requireProfileSwitchConfirmation: z.boolean().optional(),
+    allowProfileLockingFromMcp: z.boolean().optional(),
     requireExplicitProfileForDestructive: z.boolean().optional(),
+    requireExplicitSelectionForDestructive: z.boolean().optional(),
     lockToProfile: z.string().nullable().optional()
   })
   .strict();
@@ -229,8 +249,10 @@ const securitySchema = z
     allowPlaintextSecrets: z.boolean().optional(),
     redactSecrets: z.boolean().optional(),
     allowProfileSwitchingFromMcp: z.boolean().optional(),
-    requireProfileSwitchConfirmation: unsupportedOptionSchema,
+    requireProfileSwitchConfirmation: z.boolean().optional(),
+    allowProfileLockingFromMcp: z.boolean().optional(),
     requireExplicitProfileForDestructive: z.boolean().optional(),
+    requireExplicitSelectionForDestructive: z.boolean().optional(),
     lockToProfile: z.string().nullable().optional()
   })
   .strict();
@@ -577,12 +599,6 @@ export const miftahConfigSchema = z
       );
     }
 
-    if (value.security?.requireProfileSwitchConfirmation !== undefined) {
-      rejectUnsupportedOption(
-        ["security", "requireProfileSwitchConfirmation"],
-        "profile switch confirmation is not implemented; use allowProfileSwitchingFromMcp or lockToProfile"
-      );
-    }
     if (value.security?.redactSecrets === false) {
       rejectUnsupportedOption(["security", "redactSecrets"], "secret redaction is always enabled and cannot be disabled");
     }

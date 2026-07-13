@@ -17,6 +17,7 @@ export type {
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileLeaseConfig,
   ProfileUpstreamOverride,
   RiskLevel,
   RoutingConfig,

@@ -1,10 +1,34 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { miftahPublicConfigSchema } from "./schema.js";
 
+type SchemaObject = Record<string, unknown>;
+
+function requireSchemaObject(value: unknown, description: string): SchemaObject {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Generated configuration schema is missing ${description}.`);
+  }
+  return value as SchemaObject;
+}
+
+/** zod-to-json-schema cannot emit the uniqueness half of this Zod super-refinement. */
+function addProfileLeaseArrayConstraints(schema: SchemaObject): void {
+  const rootProperties = requireSchemaObject(schema.properties, "root properties");
+  const profiles = requireSchemaObject(rootProperties.profiles, "profiles schema");
+  const profile = requireSchemaObject(profiles.additionalProperties, "profile schema");
+  const profileProperties = requireSchemaObject(profile.properties, "profile properties");
+  const lease = requireSchemaObject(profileProperties.lease, "profile lease schema");
+  const leaseProperties = requireSchemaObject(lease.properties, "profile lease properties");
+  const requiredForRisk = requireSchemaObject(leaseProperties.requiredForRisk, "profile lease risk requirements");
+  requiredForRisk.maxItems = 2;
+  requiredForRisk.uniqueItems = true;
+}
+
 /** Generates the editor-facing JSON Schema from the same strict Zod contract used after validation. */
 export function generateConfigSchema(): Record<string, unknown> {
+  const schema = zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }) as SchemaObject;
+  addProfileLeaseArrayConstraints(schema);
   return {
-    ...zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }),
+    ...schema,
     allOf: [
       {
         oneOf: [{ required: ["upstream"] }, { required: ["upstreams"] }]

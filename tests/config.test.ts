@@ -30,6 +30,88 @@ describe("config foundation", () => {
     ).toEqual({ API_TOKEN: "secret-value", ACCOUNT: "work" });
   });
 
+  it("accepts an explicit profile-switch confirmation requirement", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: { work: {}, personal: {} },
+      security: { requireProfileSwitchConfirmation: true }
+    });
+
+    expect(config.security?.requireProfileSwitchConfirmation).toBe(true);
+  });
+
+  it("accepts an explicit runtime profile-locking opt-in", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileLockingFromMcp: true }
+    });
+
+    expect(config.security?.allowProfileLockingFromMcp).toBe(true);
+  });
+
+  it("accepts an explicit-selection guard for destructive operations", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: { work: {}, personal: {} },
+      security: { requireExplicitSelectionForDestructive: true }
+    });
+
+    expect(config.security?.requireExplicitSelectionForDestructive).toBe(true);
+  });
+
+  it("accepts an explicit profile lease for risky operations", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          lease: { ttlMs: 60_000, requiredForRisk: ["write", "destructive"] }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.lease).toEqual({ ttlMs: 60_000, requiredForRisk: ["write", "destructive"] });
+  });
+
+  it.each([
+    ["an empty risk list", { ttlMs: 60_000, requiredForRisk: [] }, "profiles.work.lease.requiredForRisk"],
+    ["a duplicate risk", { ttlMs: 60_000, requiredForRisk: ["write", "write"] }, "profiles.work.lease.requiredForRisk"],
+    ["the unsupported read risk", { ttlMs: 60_000, requiredForRisk: ["read"] }, "profiles.work.lease.requiredForRisk.0"],
+    ["a zero TTL", { ttlMs: 0, requiredForRisk: ["write"] }, "profiles.work.lease.ttlMs"],
+    ["a negative TTL", { ttlMs: -1, requiredForRisk: ["write"] }, "profiles.work.lease.ttlMs"],
+    ["an oversized TTL", { ttlMs: 3_600_001, requiredForRisk: ["write"] }, "profiles.work.lease.ttlMs"],
+    ["an unknown lease option", { ttlMs: 60_000, requiredForRisk: ["write"], extra: true }, "profiles.work.lease.extra"]
+  ])("rejects a profile lease with %s at its exact path", (_label, lease, expectedPath) => {
+    let thrown: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: { work: { lease } }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MiftahError);
+    const diagnostics = (thrown as MiftahError).details?.diagnostics ?? [];
+    expect(diagnostics.map((diagnostic) => diagnostic.path)).toContain(expectedPath);
+  });
+
   it("accepts an opt-in profile identity verifier for risky operations", () => {
     const config = validateConfig({
       version: "1",

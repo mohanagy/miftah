@@ -64,7 +64,9 @@ When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as 
 
 ### MCP profile management
 
-`miftah_current_profile` returns the active/default profile plus safe selection metadata: `selectionSource`, `selectedAt`, and `scope`. When stored active-profile state is corrupt, stale, or unavailable, it additionally returns a stable `stateDiagnostic`; it never returns the state-file path or raw state contents. `miftah_use_profile` changes the active profile according to the configured scope. `miftah_reset_profile` returns to the configured default and writes that default when the scope is durable.
+`miftah_current_profile` returns the active/default profile plus safe selection metadata: `selectionSource`, `selectedAt`, and `scope`, plus `confirmation`, `lease`, and `lock`. When stored active-profile state is corrupt, stale, or unavailable, it additionally returns a stable `stateDiagnostic`; it never returns the state-file path or raw state contents. `miftah_use_profile` changes the active profile according to the configured scope. `miftah_reset_profile` returns to the configured default and writes that default when the scope is durable. When `security.requireProfileSwitchConfirmation` is enabled, a form-capable client confirms the exact switch with a generic boolean form; a fallback client must use the connection-bound bearer from the failed result with `miftah_approve` and retry the same request.
+
+`miftah_lock_profile` and `miftah_unlock_profile` are advertised for a stable MCP surface. Calls reject with `PROFILE_LOCKING_DISABLED` unless `security.allowProfileLockingFromMcp` is enabled. When enabled, they return JSON containing `profileState`, operate only for the current MCP connection, and never modify durable selection state. A configured `security.lockToProfile` cannot be changed with either tool.
 
 ## Global version options
 
