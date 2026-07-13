@@ -159,11 +159,74 @@ describe("config foundation", () => {
     ).toThrow(/profiles\.work\.isolation\.files\.0\.environment/u);
   });
 
+  it("rejects a container environment binding that does not map the same isolated file", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            isolation: {
+              files: [
+                {
+                  source: "credentials/work-oauth.json",
+                  destination: "credentials/oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ],
+              containerVolumes: [
+                {
+                  source: "credentials/other.json",
+                  destination: "/run/miftah/oauth.json",
+                  environment: "OAUTH_CREDENTIAL_PATH"
+                }
+              ]
+            }
+          }
+        }
+      })
+    ).toThrow(/profiles\.work\.isolation\.containerVolumes\.0\.environment/u);
+  });
+
+  it("allows a container environment binding for the exact copied file it mounts", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          isolation: {
+            files: [
+              {
+                source: "credentials/work-oauth.json",
+                destination: "credentials/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ],
+            containerVolumes: [
+              {
+                source: "credentials/oauth.json",
+                destination: "/run/miftah/oauth.json",
+                environment: "OAUTH_CREDENTIAL_PATH"
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.isolation?.containerVolumes?.[0]?.environment).toBe("OAUTH_CREDENTIAL_PATH");
+  });
+
   it.each([
     ["a parent-directory source", "../credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
     ["a Windows drive-relative source", "C:credentials/work-oauth.json", "credentials/oauth.json", "profiles.work.isolation.files.0.source"],
     ["an absolute destination", "credentials/work-oauth.json", "/tmp/oauth.json", "profiles.work.isolation.files.0.destination"],
     ["a traversal destination", "credentials/work-oauth.json", "credentials/../oauth.json", "profiles.work.isolation.files.0.destination"],
+    ["a comma-delimited container source", "credentials/oauth,dst=/override", "/run/miftah/oauth.json", "profiles.work.isolation.containerVolumes.0.source"],
     ["an invalid container destination", "credentials/oauth.json", "run/miftah/oauth.json", "profiles.work.isolation.containerVolumes.0.destination"]
   ])("rejects %s in isolation mappings", (_label, source, destination, expectedPath) => {
     const isolation = expectedPath.includes("containerVolumes")

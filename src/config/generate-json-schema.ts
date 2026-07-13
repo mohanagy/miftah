@@ -23,10 +23,27 @@ function addProfileLeaseArrayConstraints(schema: SchemaObject): void {
   requiredForRisk.uniqueItems = true;
 }
 
+/** Zod object-array refinements need an explicit editor-schema duplicate-item constraint. */
+function addProfileIsolationArrayConstraints(schema: SchemaObject): void {
+  const rootProperties = requireSchemaObject(schema.properties, "root properties");
+  const profiles = requireSchemaObject(rootProperties.profiles, "profiles schema");
+  const profile = requireSchemaObject(profiles.additionalProperties, "profile schema");
+  const profileProperties = requireSchemaObject(profile.properties, "profile properties");
+  // zod-to-json-schema shares the named-upstream shape through a reference to this first occurrence.
+  const isolationProperties = requireSchemaObject(
+    requireSchemaObject(profileProperties.isolation, "profile isolation schema").properties,
+    "profile isolation schema properties"
+  );
+  for (const name of ["files", "containerVolumes"] as const) {
+    requireSchemaObject(isolationProperties[name], `profile isolation ${name}`).uniqueItems = true;
+  }
+}
+
 /** Generates the editor-facing JSON Schema from the same strict Zod contract used after validation. */
 export function generateConfigSchema(): Record<string, unknown> {
   const schema = zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }) as SchemaObject;
   addProfileLeaseArrayConstraints(schema);
+  addProfileIsolationArrayConstraints(schema);
   return {
     ...schema,
     allOf: [

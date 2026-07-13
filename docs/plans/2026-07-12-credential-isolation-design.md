@@ -20,7 +20,7 @@ Mapped files are copies from existing regular files canonically located under th
 
 ## Public configuration contract
 
-Add `isolation` to `ProfileConfig` and `ProfileUpstreamOverride`. A named-upstream isolation object augments the profile isolation object for that target: profile file mappings remain available to the target, while target-specific files and container volumes are added after them. Duplicate destinations or generated bindings fail closed rather than selecting a winner.
+Add `isolation` to `ProfileConfig` and `ProfileUpstreamOverride`. A named-upstream isolation object augments the profile isolation object for that target: profile file mappings remain available to the target, while target-specific files and container volumes are added after them. Duplicate destinations and bindings fail closed. The one deliberate exception is a container volume whose `source` exactly names a mapped file and whose `environment` matches that file mapping: native STDIO receives the generated host path, while Docker/Podman receives the explicit container destination through `--env`; no child sees an ambiguous value.
 
 ```ts
 interface ProfileIsolationConfig {

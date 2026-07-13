@@ -168,42 +168,39 @@ const generatedIsolationEnvironmentNames = new Set([
   "XDG_RUNTIME_DIR"
 ]);
 
+const runtimeRelativePathPattern = new RegExp(
+  String.raw`^(?![A-Za-z]:)(?![\\/])(?!.*(?:^|[\\/])(?:\.{1,2})(?:[\\/]|$))[^\\/\u0000]+(?:[\\/][^\\/\u0000]+)*$`,
+  "u"
+);
+const containerRuntimeRelativePathPattern = new RegExp(
+  String.raw`^(?![A-Za-z]:)(?![\\/])(?!.*(?:^|[\\/])(?:\.{1,2})(?:[\\/]|$))[^\\/,\u0000]+(?:[\\/][^\\/,\u0000]+)*$`,
+  "u"
+);
+const containerDestinationPathPattern = new RegExp(
+  String.raw`^\/(?!.*(?:^|\/)(?:\.{1,2})(?:\/|$))[^\\/,\u0000]+(?:\/[^\\/,\u0000]+)*$`,
+  "u"
+);
+
 const runtimeRelativePathSchema = z
   .string()
   .min(1)
   .max(512)
-  .superRefine((value, context) => {
-    if (
-      value.includes("\u0000") ||
-      value.startsWith("/") ||
-      /^[A-Za-z]:/u.test(value) ||
-      value.split(/[\\/]/u).some((segment) => segment.length === 0 || segment === "." || segment === "..")
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "isolation paths must be non-empty relative paths without traversal"
-      });
-    }
-  });
+  .regex(runtimeRelativePathPattern, "isolation paths must be non-empty relative paths without traversal");
+
+const containerRuntimeRelativePathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(
+    containerRuntimeRelativePathPattern,
+    "container isolation source paths must be relative, traversal-free, and safe for Docker mount grammar"
+  );
 
 const containerDestinationPathSchema = z
   .string()
   .min(1)
   .max(512)
-  .superRefine((value, context) => {
-    if (
-      value.includes("\u0000") ||
-      value.includes("\\") ||
-      value.includes(",") ||
-      !value.startsWith("/") ||
-      value.split("/").some((segment, index) => index > 0 && (segment.length === 0 || segment === "." || segment === ".."))
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "container isolation destinations must be normalized absolute POSIX paths"
-      });
-    }
-  });
+  .regex(containerDestinationPathPattern, "container isolation destinations must be normalized absolute POSIX paths");
 
 const profileIsolationFileSchema = z
   .object({
@@ -215,7 +212,7 @@ const profileIsolationFileSchema = z
 
 const profileIsolationContainerVolumeSchema = z
   .object({
-    source: runtimeRelativePathSchema,
+    source: containerRuntimeRelativePathSchema,
     destination: containerDestinationPathSchema,
     readOnly: z.boolean().optional(),
     environment: isolationEnvironmentNameSchema.optional()
@@ -238,14 +235,15 @@ const profileIsolationSchema = z
       for (const [index, item] of values.entries()) {
         const candidate = item[property];
         if (typeof candidate !== "string") continue;
-        if (seen.has(candidate)) {
+        const normalizedCandidate = property === "environment" ? candidate.toUpperCase() : candidate;
+        if (seen.has(normalizedCandidate)) {
           context.addIssue({
             code: z.ZodIssueCode.custom,
             path: [path, index, property],
             message: `isolation ${path} ${property} entries must be unique`
           });
         }
-        seen.add(candidate);
+        seen.add(normalizedCandidate);
       }
     };
 
@@ -274,6 +272,24 @@ const profileIsolationSchema = z
 
     rejectGeneratedEnvironmentName(value.files ?? [], "files");
     rejectGeneratedEnvironmentName(value.containerVolumes ?? [], "containerVolumes");
+
+    const fileDestinationsByEnvironment = new Map<string, string>();
+    for (const file of value.files ?? []) {
+      if (file.environment !== undefined) {
+        fileDestinationsByEnvironment.set(file.environment.toUpperCase(), file.destination);
+      }
+    }
+    for (const [index, volume] of (value.containerVolumes ?? []).entries()) {
+      if (volume.environment === undefined) continue;
+      const mappedFileDestination = fileDestinationsByEnvironment.get(volume.environment.toUpperCase());
+      if (mappedFileDestination !== undefined && mappedFileDestination !== volume.source) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["containerVolumes", index, "environment"],
+          message: "a shared isolation environment binding must mount the matching copied file"
+        });
+      }
+    }
   });
 
 const publicProfileUpstreamOverrideShape = {

@@ -86,6 +86,7 @@ void invalidStateConfig;
 
 interface SchemaNode {
   type?: string;
+  pattern?: string;
   const?: boolean | string;
   enum?: unknown[];
   minimum?: number;
@@ -152,11 +153,13 @@ describe("published config schema", () => {
       properties: {
         files: {
           type: "array",
-          maxItems: 32
+          maxItems: 32,
+          uniqueItems: true
         },
         containerVolumes: {
           type: "array",
-          maxItems: 32
+          maxItems: 32,
+          uniqueItems: true
         }
       }
     });
@@ -224,6 +227,25 @@ describe("published config schema", () => {
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);
     expect(root?.routing?.properties?.rules?.items?.properties?.when?.additionalProperties).toEqual({});
+  });
+
+  it("encodes isolation path safety in the generated editor schema", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+    const profile = mapValue(schema.properties?.profiles, "profiles");
+    const isolation = profile.properties?.isolation;
+    const fileSourcePattern = isolation?.properties?.files?.items?.properties?.source?.pattern;
+    const containerSourcePattern = isolation?.properties?.containerVolumes?.items?.properties?.source?.pattern;
+    const containerDestinationPattern = isolation?.properties?.containerVolumes?.items?.properties?.destination?.pattern;
+
+    if (!fileSourcePattern || !containerSourcePattern || !containerDestinationPattern) {
+      throw new Error("Expected generated schema patterns for every isolation path boundary.");
+    }
+
+    expect(new RegExp(fileSourcePattern, "u").test("../credentials/oauth.json")).toBe(false);
+    expect(new RegExp(fileSourcePattern, "u").test("C:credentials/oauth.json")).toBe(false);
+    expect(new RegExp(containerSourcePattern, "u").test("credentials/oauth,dst=/override")).toBe(false);
+    expect(new RegExp(containerDestinationPattern, "u").test("/run/miftah/../oauth.json")).toBe(false);
+    expect(new RegExp(containerDestinationPattern, "u").test("/run/miftah/oauth.json")).toBe(true);
   });
 
   it("requires exactly one upstream declaration in generated JSON Schema", () => {
