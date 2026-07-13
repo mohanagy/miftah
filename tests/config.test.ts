@@ -141,6 +141,11 @@ describe("config foundation", () => {
       "profiles.work.routing.match.jira.sites.0"
     ],
     [
+      "a default HTTPS port in a Jira site",
+      { jira: { sites: ["https://acme.atlassian.net:443"] } },
+      "profiles.work.routing.match.jira.sites.0"
+    ],
+    [
       "a PostHog host query",
       { posthog: { hosts: ["https://app.posthog.com?token=secret"] } },
       "profiles.work.routing.match.posthog.hosts.0"

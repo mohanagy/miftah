@@ -220,6 +220,8 @@ describe("published config schema", () => {
     for (const pattern of [jiraSitePattern, posthogHostPattern]) {
       const expression = new RegExp(pattern, "u");
       expect(expression.test("https://acme.atlassian.net")).toBe(true);
+      expect(expression.test("https://acme.atlassian.net:8443")).toBe(true);
+      expect(expression.test("https://acme.atlassian.net:443")).toBe(false);
       expect(expression.test("https://admin:secret@acme.atlassian.net/private?token=secret#fragment")).toBe(false);
       expect(expression.test("https://acme.atlassian.net/")).toBe(false);
     }
