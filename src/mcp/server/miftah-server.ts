@@ -532,7 +532,18 @@ export class MiftahServer {
         policyName: mapped.originalName,
         name: mapped.originalName,
         args,
-        riskMetadata: this.riskMetadata(mapped),
+        riskMetadataForProfile: (profile) => {
+          const target = this.toolRegistry.peek(profile)?.resolve(name);
+          if (
+            target === undefined ||
+            target.fingerprint !== mapped.fingerprint ||
+            target.originalName !== mapped.originalName ||
+            target.upstreamName !== mapped.upstreamName
+          ) {
+            return undefined;
+          }
+          return this.riskMetadata(target);
+        },
         requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
         resolveTarget: async (profile) => {
           const target = (await this.toolRegistry.get(profile)).resolve(name);
@@ -546,6 +557,12 @@ export class MiftahServer {
             throw new MiftahError(
               "TOOL_SCHEMA_MISMATCH",
               `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
+            );
+          }
+          if (target.upstreamName !== mapped.upstreamName) {
+            throw new MiftahError(
+              "TOOL_SCHEMA_MISMATCH",
+              `TOOL_SCHEMA_MISMATCH: tool '${name}' resolves to a different upstream for routed profile '${profile}'`
             );
           }
           return {
@@ -700,12 +717,15 @@ export class MiftahServer {
           ? undefined
           : this.toolRegistry.peek(route.profile)?.resolve(toolName);
       const hasCompatibleCachedTarget =
-        sourceTool !== undefined && targetTool !== undefined && sourceTool.fingerprint === targetTool.fingerprint;
+        sourceTool !== undefined &&
+        targetTool !== undefined &&
+        sourceTool.fingerprint === targetTool.fingerprint &&
+        sourceTool.upstreamName === targetTool.upstreamName;
       const policyName = sourceTool?.originalName ?? toolName;
       const policy = this.policy.evaluate(
         profile.policy,
         policyName,
-        hasCompatibleCachedTarget && sourceTool !== undefined ? this.riskMetadata(sourceTool) : undefined
+        hasCompatibleCachedTarget && targetTool !== undefined ? this.riskMetadata(targetTool) : undefined
       );
       audit.update({
         profile: route.profile,

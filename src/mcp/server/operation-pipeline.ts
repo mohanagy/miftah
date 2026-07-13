@@ -35,6 +35,8 @@ export interface ProxiedOperation<Result> {
   readonly name: string;
   readonly args: Record<string, unknown>;
   readonly riskMetadata?: ToolRiskMetadata;
+  /** Reads only already-cached target risk evidence; it must not discover or start an upstream. */
+  riskMetadataForProfile?(profile: string): ToolRiskMetadata | undefined;
   readonly requireExplicitRuleForDestructive?: boolean;
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
 }
@@ -72,7 +74,11 @@ export class OperationPipeline {
       );
       const profile = route.profile;
       const profileConfig = this.options.profiles.get(profile);
-      const decision = this.options.policy.evaluate(profileConfig.policy, operation.policyName, operation.riskMetadata);
+      const decision = this.options.policy.evaluate(
+        profileConfig.policy,
+        operation.policyName,
+        operation.riskMetadataForProfile?.(profile) ?? operation.riskMetadata
+      );
       audit.update({
         profile,
         routingReason: route.reason,

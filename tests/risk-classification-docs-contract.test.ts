@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+const changelogRiskClassificationPattern = /\[#26\][\s\S]*risk classification/iu;
+
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
@@ -29,6 +31,6 @@ describe("risk classification documentation contract", () => {
     expect(security).toContain("profile override cannot change");
     expect(architecture).toContain("normalizes only the four MCP behavioral booleans");
     expect(libraryApi).toContain("UnknownToolRisk");
-    expect(changelog).toMatch(/\[#26\][\s\S]*risk classification/iu);
+    expect(changelog).toMatch(changelogRiskClassificationPattern);
   });
 });

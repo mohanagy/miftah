@@ -11,6 +11,9 @@ const checkedInExamples = [
   "sentry.miftah.json"
 ];
 const unsupportedConfigOption = "UNSUPPORTED_CONFIG_OPTION";
+const upstreamTrustPathPattern = /upstream\.trustToolAnnotations/u;
+const unknownToolRiskPathPattern = /tooling\.unknownToolRisk/u;
+const profileUpstreamTrustPathPattern = /profiles\.default\.upstreams\.primary\.trustToolAnnotations/u;
 
 function baseConfig(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -98,16 +101,14 @@ describe("config runtime parity", () => {
     expect(config.upstream?.trustToolAnnotations).toBe(true);
     expect(config.tooling?.unknownToolRisk).toBe("destructive");
     expect(() => validateConfig(baseConfig({ upstream: { transport: "stdio", command: "node", trustToolAnnotations: "true" } }))).toThrow(
-      /upstream\.trustToolAnnotations/u
+      upstreamTrustPathPattern
     );
-    expect(() => validateConfig(baseConfig({ tooling: { unknownToolRisk: "read" } }))).toThrow(
-      /tooling\.unknownToolRisk/u
-    );
+    expect(() => validateConfig(baseConfig({ tooling: { unknownToolRisk: "read" } }))).toThrow(unknownToolRiskPathPattern);
     expect(() => validateConfig(baseConfig({
       upstreams: { primary: { transport: "stdio", command: "node" } },
       upstream: undefined,
       profiles: { default: { upstreams: { primary: { trustToolAnnotations: true } } } }
-    }))).toThrow(/profiles\.default\.upstreams\.primary\.trustToolAnnotations/u);
+    }))).toThrow(profileUpstreamTrustPathPattern);
   });
 
   it.each([
