@@ -1,5 +1,5 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { miftahPublicConfigSchema } from "./schema.js";
+import { CANONICAL_HTTPS_ORIGIN_PATTERN, miftahPublicConfigSchema } from "./schema.js";
 
 type SchemaObject = Record<string, unknown>;
 
@@ -53,6 +53,7 @@ function addProfileRoutingMatcherArrayConstraints(schema: SchemaObject): void {
     requireSchemaObject(routingProperties.match, "profile routing match schema").properties,
     "profile routing match schema properties"
   );
+  requireSchemaObject(routingProperties.match, "profile routing match schema").minProperties = 1;
   const providerFields = {
     github: ["repositories", "organizations"],
     sentry: ["organizations", "projects", "environments"],
@@ -61,12 +62,21 @@ function addProfileRoutingMatcherArrayConstraints(schema: SchemaObject): void {
     posthog: ["hosts", "projects"]
   } as const;
   for (const [provider, fields] of Object.entries(providerFields)) {
+    const providerSchema = requireSchemaObject(matchProperties[provider], `${provider} matcher schema`);
+    providerSchema.minProperties = 1;
     const properties = requireSchemaObject(
-      requireSchemaObject(matchProperties[provider], `${provider} matcher schema`).properties,
+      providerSchema.properties,
       `${provider} matcher schema properties`
     );
     for (const field of fields) {
-      requireSchemaObject(properties[field], `${provider} matcher ${field}`).uniqueItems = true;
+      const fieldSchema = requireSchemaObject(properties[field], `${provider} matcher ${field}`);
+      fieldSchema.uniqueItems = true;
+      if ((provider === "jira" && field === "sites") || (provider === "posthog" && field === "hosts")) {
+        fieldSchema.items = {
+          ...requireSchemaObject(fieldSchema.items, `${provider} matcher ${field} item`),
+          pattern: CANONICAL_HTTPS_ORIGIN_PATTERN.source
+        };
+      }
     }
   }
 }

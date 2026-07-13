@@ -302,7 +302,10 @@ const sentryEnvironmentSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,1
 const jiraProjectSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,9}$/u);
 const linearSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u);
 const posthogProjectSchema = z.string().regex(/^[1-9][0-9]{0,17}$/u);
-const canonicalHttpsOriginSchema = z.string().max(256).superRefine((value, context) => {
+/** Shared with JSON Schema generation so editor validation enforces the same safe origin grammar. */
+export const CANONICAL_HTTPS_ORIGIN_PATTERN =
+  /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$/u;
+const canonicalHttpsOriginSchema = z.string().max(256).regex(CANONICAL_HTTPS_ORIGIN_PATTERN).superRefine((value, context) => {
   try {
     const parsed = new URL(value);
     if (
