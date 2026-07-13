@@ -27,19 +27,39 @@ export class AuditLogger {
   }
 
   async log(event: AuditEvent): Promise<void> {
-    const timestamp = new Date().toISOString();
-    const safeEvent = this.redactor.redactForAudit(
+    await this.logWithMode([event], false);
+  }
+
+  /** Writes a transition that must be auditable even when ordinary operation logging is configured fail-open. */
+  async logRequired(event: AuditEvent): Promise<void> {
+    await this.logWithMode([event], true);
+  }
+
+  /** Appends related required transitions through one serialized write operation. */
+  async logRequiredBatch(events: readonly AuditEvent[]): Promise<void> {
+    await this.logWithMode(events, true);
+  }
+
+  private async logWithMode(events: readonly AuditEvent[], required: boolean): Promise<void> {
+    if (events.length === 0) return;
+    const lines = events
+      .map((event) => JSON.stringify({ timestamp: new Date().toISOString(), ...this.safeEvent(event) }))
+      .join("\n");
+    try {
+      await this.enqueue(() => this.writeLine(`${lines}\n`));
+      this.lastFailure = undefined;
+    } catch (error) {
+      const failure = this.recordFailure(error);
+      if (required || this.options.failureMode === "fail-closed") throw failure;
+    }
+  }
+
+  private safeEvent(event: AuditEvent): AuditEvent {
+    return this.redactor.redactForAudit(
       !this.options.includeArguments
         ? { ...event, arguments: undefined }
         : event
     );
-    try {
-      await this.enqueue(() => this.writeLine(`${JSON.stringify({ timestamp, ...safeEvent })}\n`));
-      this.lastFailure = undefined;
-    } catch (error) {
-      const failure = this.recordFailure(error);
-      if (this.options.failureMode === "fail-closed") throw failure;
-    }
   }
 
   /** Verifies that a fail-closed sink is writable before an operation can make a side effect. */

@@ -21,6 +21,7 @@ import type {
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileLeaseConfig,
   ProfileUpstreamOverride,
   RiskLevel,
   RoutingConfig,
@@ -74,6 +75,7 @@ const supportedTypeExports = [
   "PolicyConfig",
   "ProcessConfig",
   "ProfileConfig",
+  "ProfileLeaseConfig",
   "ProfileUpstreamOverride",
   "RiskLevel",
   "RoutingConfig",
@@ -102,6 +104,7 @@ type PublicTypeImportCoverage = [
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileLeaseConfig,
   ProfileUpstreamOverride,
   RiskLevel,
   RoutingConfig,
@@ -153,6 +156,19 @@ const invalidDuplicateRiskIdentityConfig: IdentityConfig = {
   // @ts-expect-error Identity risk requirements must be unique.
   requiredForRisk: ["write", "write"]
 };
+
+const validProfileLeaseConfig: ProfileLeaseConfig = {
+  ttlMs: 60_000,
+  requiredForRisk: ["write", "destructive"]
+};
+void validProfileLeaseConfig;
+
+const invalidDuplicateProfileLeaseConfig: ProfileLeaseConfig = {
+  ttlMs: 60_000,
+  // @ts-expect-error Profile lease risk requirements must be unique.
+  requiredForRisk: ["write", "write"]
+};
+void invalidDuplicateProfileLeaseConfig;
 
 const validJsonIdentityConfig: IdentityConfig = {
   expected: { organization: "lubab" },

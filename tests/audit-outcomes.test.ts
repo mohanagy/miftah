@@ -365,6 +365,48 @@ describe("audit outcomes", () => {
     }
   });
 
+  it("keeps profile mutations fail-closed when ordinary audit logging is configured fail-open", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-profile-fail-open-"));
+    const blockingPath = join(directory, "not-a-directory");
+    await writeFile(blockingPath, "file");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      security: { allowProfileSwitchingFromMcp: true, allowProfileLockingFromMcp: true },
+      audit: { path: join(blockingPath, "audit.jsonl"), failureMode: "fail-open" }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 1_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "profile-fail-open-audit-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("AUDIT_WRITE_FAILED") }]
+      });
+      expect(profiles.current()).toMatchObject({ activeProfile: "work", lock: { state: "none" } });
+      expect(await client.callTool({ name: "miftah_lock_profile", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("AUDIT_WRITE_FAILED") }]
+      });
+      expect(profiles.current()).toMatchObject({ activeProfile: "work", lock: { state: "none" } });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("records upstream crash and automatic recovery outcomes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-recovery-"));
     const auditPath = join(directory, "audit.jsonl");
@@ -440,6 +482,89 @@ describe("audit outcomes", () => {
         auditPath,
         (event) => event.operation === "profiles/switch" && event.errorCode === "PROFILE_SWITCH_DISABLED"
       )).toMatchObject({ status: "denied" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records safe profile confirmation, transition, lease, and runtime-lock actions", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-profile-actions-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: {
+          lease: { ttlMs: 60_000, requiredForRisk: ["write"] },
+          env: { TEST_ACCOUNT_NAME: "personal" }
+        }
+      },
+      security: {
+        allowProfileSwitchingFromMcp: true,
+        requireProfileSwitchConfirmation: true,
+        allowProfileLockingFromMcp: true
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 1_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "profile-audit-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const requested = CallToolResultSchema.parse(
+        await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })
+      );
+      const requestText = requested.content.find((item) => item.type === "text")?.text;
+      const token = requestText?.match(/approval '([A-Za-z0-9_-]+)'/u)?.[1];
+      if (!token) throw new Error("Expected a profile confirmation token.");
+      await client.callTool({ name: "miftah_approve", arguments: { approval: token } });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await client.callTool({ name: "miftah_lock_profile", arguments: {} });
+      await client.callTool({ name: "miftah_unlock_profile", arguments: {} });
+
+      const profileEvents = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "profile");
+      expect(profileEvents.map((event) => event.profileAction)).toEqual([
+        "confirmation-requested",
+        "confirmation-accepted",
+        "switch",
+        "lease-issued",
+        "lock",
+        "unlock"
+      ]);
+      expect(profileEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            profileAction: "switch",
+            sourceProfile: "work",
+            profile: "personal",
+            operation: "profiles/switch",
+            profileLeaseState: "active"
+          }),
+          expect.objectContaining({
+            profileAction: "lock",
+            profile: "personal",
+            profileLockState: "runtime"
+          }),
+          expect.objectContaining({
+            profileAction: "unlock",
+            profile: "personal",
+            profileLockState: "none"
+          })
+        ])
+      );
+      expect(JSON.stringify(profileEvents)).not.toContain(token);
     } finally {
       await client.close();
       await wrapper.close();

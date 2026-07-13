@@ -15,10 +15,10 @@ import { MiftahError } from "../../utils/errors.js";
 
 export type ProxiedOperationType = "tools/call" | "resources/read" | "prompts/get";
 
-export interface CapturedProfileState {
-  readonly activeProfile: string;
-  readonly revision: number;
-}
+export type CapturedProfileState = Pick<
+  ReturnType<ProfileManager["current"]>,
+  "activeProfile" | "revision" | "selectionSource" | "confirmation" | "lease" | "lock"
+>;
 
 export interface ApprovalRequestContext {
   readonly requestId: string | number;
@@ -45,6 +45,7 @@ export interface ProxiedOperation<Result> {
   riskMetadataForProfile?(profile: string): ToolRiskMetadata | undefined;
   readonly approvalContext?: ApprovalRequestContext;
   readonly requireExplicitRuleForDestructive?: boolean;
+  readonly requireExplicitSelectionForDestructive?: boolean;
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
 }
 
@@ -61,13 +62,21 @@ interface PipelineOptions {
   readonly approvals: {
     requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void>;
   };
+  readonly profileAudits?: {
+    leaseExpired(input: { source: CapturedProfileState; profile: string; operation: ProxiedOperationType }): Promise<void>;
+  };
+  readonly now?: () => Date;
 }
 
 /**
  * Applies the common safety sequence to every proxied MCP operation.
  */
 export class OperationPipeline {
-  constructor(private readonly options: PipelineOptions) {}
+  private readonly now: () => Date;
+
+  constructor(private readonly options: PipelineOptions) {
+    this.now = options.now ?? (() => new Date());
+  }
 
   async execute<Result>(operation: ProxiedOperation<Result>, audit: AuditScope): Promise<Result> {
     try {
@@ -99,7 +108,9 @@ export class OperationPipeline {
         riskSource: decision.riskSource,
         riskConfidence: decision.riskConfidence
       });
+      this.updateSelectionAudit(audit, operation.source);
       this.assertPolicyAllows(operation, route, decision, profile);
+      await this.assertProfileSelectionAllows(operation, profile, profileConfig.lease, decision.risk);
 
       const target = await operation.resolveTarget(profile);
       audit.update({
@@ -124,6 +135,7 @@ export class OperationPipeline {
         audit.update({ identity: this.options.redactor.redactForAudit(identity) });
         await this.options.identities.requireVerified(profile, target.identityUpstreamName, session);
       }
+      await this.assertProfileSelectionAllows(operation, profile, profileConfig.lease, decision.risk);
       return this.options.redactor.redact(target.redact(await target.execute(session)));
     } catch (error) {
       throw this.toSafeError(error);
@@ -152,6 +164,79 @@ export class OperationPipeline {
         `POLICY_BLOCKED: operation '${operation.policyName}' is blocked for profile '${profile}'`
       );
     }
+  }
+
+  private async assertProfileSelectionAllows(
+    operation: ProxiedOperation<unknown>,
+    profile: string,
+    lease: { readonly requiredForRisk: readonly ("write" | "destructive")[] } | undefined,
+    risk: "read" | "write" | "destructive"
+  ): Promise<void> {
+    const source = operation.source;
+    if (
+      operation.requireExplicitSelectionForDestructive === true &&
+      risk === "destructive" &&
+      !this.hasExplicitCurrentSessionSelection(source, profile)
+    ) {
+      throw new MiftahError(
+        "PROFILE_SELECTION_REQUIRED",
+        `PROFILE_SELECTION_REQUIRED: destructive operation '${operation.policyName}' requires an explicit current-session profile selection`
+      );
+    }
+    if (lease === undefined || !lease.requiredForRisk.includes(risk as "write" | "destructive")) return;
+    await this.assertCapturedLeaseAllows(operation, source, profile, risk as "write" | "destructive");
+  }
+
+  private hasExplicitCurrentSessionSelection(source: CapturedProfileState, profile: string): boolean {
+    if (source.activeProfile !== profile) return false;
+    if (source.lock.state === "configured" && source.lock.profile === profile) return true;
+    return (
+      (source.selectionSource === "mcp-switch" || source.selectionSource === "reset") &&
+      source.confirmation !== "not-confirmed"
+    );
+  }
+
+  private async assertCapturedLeaseAllows(
+    operation: ProxiedOperation<unknown>,
+    source: CapturedProfileState,
+    profile: string,
+    risk: "write" | "destructive"
+  ): Promise<void> {
+    const lease = source.lease;
+    if (
+      source.activeProfile !== profile ||
+      lease.state === "not-required" ||
+      lease.state === "required" ||
+      lease.profile !== profile ||
+      !lease.requiredForRisk.includes(risk)
+    ) {
+      throw new MiftahError(
+        "PROFILE_LEASE_REQUIRED",
+        `PROFILE_LEASE_REQUIRED: profile '${profile}' requires an explicit unexpired lease for ${risk} operations`
+      );
+    }
+    if (lease.state === "expired" || this.leaseHasExpired(lease)) {
+      await this.options.profileAudits?.leaseExpired({ source, profile, operation: operation.operation });
+      throw new MiftahError(
+        "PROFILE_LEASE_EXPIRED",
+        `PROFILE_LEASE_EXPIRED: profile '${profile}' lease has expired for ${risk} operations`
+      );
+    }
+  }
+
+  private leaseHasExpired(lease: { readonly expiresAt: string }): boolean {
+    const expiresAtMs = Date.parse(lease.expiresAt);
+    return !Number.isFinite(expiresAtMs) || expiresAtMs <= this.now().getTime();
+  }
+
+  private updateSelectionAudit(audit: AuditScope, source: CapturedProfileState): void {
+    audit.update({
+      profileSelectionSource: source.selectionSource,
+      profileConfirmation: source.confirmation,
+      profileLeaseState: source.lease.state,
+      profileLockState: source.lock.state,
+      ...("expiresAt" in source.lease ? { profileLeaseExpiresAt: source.lease.expiresAt } : {})
+    });
   }
 
   private auditName(operation: ProxiedOperation<unknown>, name: string): string {

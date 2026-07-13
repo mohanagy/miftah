@@ -85,6 +85,16 @@ export interface ProfileUpstreamOverride {
   identity?: IdentityConfig;
 }
 
+/** Requires a fresh explicit profile selection before the named risky operations can run. */
+export interface ProfileLeaseConfig {
+  ttlMs: number;
+  requiredForRisk:
+    | ["write"]
+    | ["destructive"]
+    | ["write", "destructive"]
+    | ["destructive", "write"];
+}
+
 export interface ProfileConfig {
   description?: string;
   tags?: string[];
@@ -94,6 +104,7 @@ export interface ProfileConfig {
   headers?: Record<string, string>;
   policy?: string;
   identity?: IdentityConfig;
+  lease?: ProfileLeaseConfig;
   upstreams?: Record<string, ProfileUpstreamOverride>;
 }
 
@@ -130,7 +141,10 @@ export interface SecurityConfig {
   allowPlaintextSecrets?: boolean;
   redactSecrets?: true;
   allowProfileSwitchingFromMcp?: boolean;
+  requireProfileSwitchConfirmation?: boolean;
+  allowProfileLockingFromMcp?: boolean;
   requireExplicitProfileForDestructive?: boolean;
+  requireExplicitSelectionForDestructive?: boolean;
   lockToProfile?: string | null;
 }
 

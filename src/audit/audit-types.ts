@@ -6,6 +6,7 @@ import type {
 } from "../policy/policy-types.js";
 import type { RoutingContextEvidence } from "../routing/routing-types.js";
 import type { IdentityStatus } from "../identity/identity-types.js";
+import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "../profiles/profile-manager.js";
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
@@ -20,10 +21,21 @@ export interface AuditHealth {
   lastFailure?: AuditWriteFailure;
 }
 
-export type AuditEventKind = "operation" | "lifecycle" | "approval";
+export type AuditEventKind = "operation" | "lifecycle" | "approval" | "profile";
 export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
 export type AuditRoutingSource = "rule" | "active-profile" | "default-profile";
 export type ApprovalAuditAction = "requested" | "approved" | "denied" | "expired" | "consumed";
+export type ProfileAuditAction =
+  | "confirmation-requested"
+  | "confirmation-accepted"
+  | "confirmation-denied"
+  | "confirmation-expired"
+  | "switch"
+  | "reset"
+  | "lock"
+  | "unlock"
+  | "lease-issued"
+  | "lease-expired";
 
 export interface AuditEvent {
   wrapper: string;
@@ -37,8 +49,14 @@ export interface AuditEvent {
   approvalId?: string;
   approvalSessionId?: string;
   approvalAction?: ApprovalAuditAction;
+  profileAction?: ProfileAuditAction;
   expiresAt?: string;
   lockToProfile?: string;
+  profileSelectionSource?: ProfileSelection["selectionSource"];
+  profileConfirmation?: ProfileSelection["confirmation"];
+  profileLeaseState?: ProfileLeaseStatus["state"];
+  profileLeaseExpiresAt?: string;
+  profileLockState?: ProfileLockStatus["state"];
   operation: "tools/call" | "resources/read" | "prompts/get" | string;
   name: string;
   status: AuditStatus;

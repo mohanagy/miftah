@@ -226,6 +226,38 @@ Only safe selection metadata is stored: a format version, scope, config identity
 
 At startup, Miftah validates a stored profile against the current configuration. A `security.lockToProfile` always wins. Corrupt state, an unknown profile, or an unreadable state file falls back safely to the configured default; `miftah_current_profile` reports its `selectionSource`, `selectedAt`, `scope`, and, when applicable, `stateDiagnostic` (`PROFILE_STATE_INVALID`, `PROFILE_STATE_STALE`, or `PROFILE_STATE_UNAVAILABLE`). `miftah_reset_profile` persists the configured default for a durable scope.
 
+### Profile confirmation, locks, and leases
+
+Profile changes can require connection-bound confirmation:
+
+```json
+{
+  "security": {
+    "requireProfileSwitchConfirmation": true,
+    "allowProfileLockingFromMcp": true,
+    "requireExplicitSelectionForDestructive": true
+  },
+  "profiles": {
+    "work": {
+      "lease": {
+        "ttlMs": 300000,
+        "requiredForRisk": ["write", "destructive"]
+      }
+    }
+  }
+}
+```
+
+`security.requireProfileSwitchConfirmation` makes each `miftah_use_profile` and `miftah_reset_profile` exact-action confirmation-bound. Form-capable MCP clients receive a generic boolean form. Other clients receive one short-lived fallback bearer for `miftah_approve` or `miftah_deny`, then must retry the exact same change; the fallback cannot bypass confirmation, change profile, source selection generation, or connection session.
+
+`security.allowProfileLockingFromMcp` is an explicit opt-in for `miftah_lock_profile` and `miftah_unlock_profile`. A runtime lock is connection-bound, in-memory, and clears for a new transport. It does not change `state` files. `security.lockToProfile` remains the stronger operator-controlled lock and cannot be removed through MCP.
+
+A profile `lease` is optional and has `ttlMs` from 1,000 through 3,600,000 milliseconds plus a nonempty, unique `requiredForRisk` list containing only `"write"` and/or `"destructive"`. An explicit successful `miftah_use_profile` or `miftah_reset_profile` issues that profile's lease. Configured defaults, persisted selections, hints, and fallback routing do not silently issue one. Miftah checks the captured lease before target resolution and again immediately before execution; a route to another profile cannot borrow a lease from the active profile.
+
+`security.requireExplicitSelectionForDestructive` blocks destructive operations unless the captured target is a current-connection `miftah_use_profile`/`miftah_reset_profile` selection or a configured static lock. It is independent of `security.requireExplicitProfileForDestructive`, which still requires an explicit routing rule. A runtime lock alone does not turn a default or persisted selection into an explicit destructive authorization.
+
+`miftah_current_profile` exposes only safe `confirmation`, `lease`, and `lock` summaries in addition to existing selection metadata. `miftah_health` returns the same summary under `profileState`; lock and unlock management results also return `profileState`. Dedicated profile audit events contain action names and safe selection state only; no approval bearer, raw request data, state path, or lease credential is recorded.
+
 ### Process lifecycle
 
 `process` controls real profile-bound upstream session behavior:

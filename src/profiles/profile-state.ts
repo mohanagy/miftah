@@ -99,6 +99,12 @@ export class ProfileStateStore {
     };
     await writeAtomically(this.path, JSON.stringify(record));
   }
+
+  /** Removes a durable record when a later audit failure rolls back an otherwise-committed profile transition. */
+  async clear(): Promise<void> {
+    if (this.path === undefined || (this.scope !== "workspace" && this.scope !== "global")) return;
+    await rm(this.path, { force: true });
+  }
 }
 
 function profileStateIdentity(configPath: string): string {

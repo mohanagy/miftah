@@ -5,7 +5,8 @@ import type {
   AuditEvent,
   AuditHealth,
   AuditRoutingSource,
-  AuditStatus
+  AuditStatus,
+  ProfileAuditAction
 } from "./audit-types.js";
 import type { RoutingContextEvidence } from "../routing/routing-types.js";
 
@@ -30,6 +31,11 @@ export interface AuditScopeUpdate {
   riskConfidence?: AuditEvent["riskConfidence"];
   identity?: AuditEvent["identity"];
   routingEvidence?: RoutingContextEvidence;
+  profileSelectionSource?: AuditEvent["profileSelectionSource"];
+  profileConfirmation?: AuditEvent["profileConfirmation"];
+  profileLeaseState?: AuditEvent["profileLeaseState"];
+  profileLeaseExpiresAt?: AuditEvent["profileLeaseExpiresAt"];
+  profileLockState?: AuditEvent["profileLockState"];
 }
 
 export interface AuditScopeResult {
@@ -59,6 +65,20 @@ export interface AuditApprovalInput {
   expiresAt?: string;
 }
 
+export interface AuditProfileInput {
+  profileAction: ProfileAuditAction;
+  sourceProfile: string;
+  profile: string;
+  operation: string;
+  name: string;
+  profileSelectionSource?: AuditEvent["profileSelectionSource"];
+  profileConfirmation?: AuditEvent["profileConfirmation"];
+  profileLeaseState?: AuditEvent["profileLeaseState"];
+  profileLeaseExpiresAt?: AuditEvent["profileLeaseExpiresAt"];
+  profileLockState?: AuditEvent["profileLockState"];
+  status?: AuditStatus;
+}
+
 /** Creates one final audit record per MCP request when audit logging is configured. */
 export class AuditTrail {
   readonly sessionId = randomUUID();
@@ -85,6 +105,16 @@ export class AuditTrail {
     await this.logger?.log(event);
   }
 
+  /** Writes a stateful security transition with fail-closed semantics regardless of the ordinary audit availability mode. */
+  async writeRequired(event: AuditEvent): Promise<void> {
+    await this.logger?.logRequired(event);
+  }
+
+  /** Writes related stateful transitions as one required append. */
+  async writeRequiredBatch(events: readonly AuditEvent[]): Promise<void> {
+    await this.logger?.logRequiredBatch(events);
+  }
+
   async writeLifecycle(input: AuditLifecycleInput): Promise<void> {
     await this.write({
       wrapper: this.wrapperName,
@@ -105,7 +135,16 @@ export class AuditTrail {
 
   /** Records a safe state transition for a one-time approval without serializing its bearer or arguments. */
   async writeApproval(input: AuditApprovalInput): Promise<void> {
-    await this.write({
+    await this.write(this.approvalEvent(input));
+  }
+
+  /** Writes a profile-confirmation approval and its dedicated state event through one required serialized append. */
+  async writeApprovalAndProfile(input: AuditApprovalInput, profile: AuditProfileInput): Promise<void> {
+    await this.writeRequiredBatch([this.approvalEvent(input), this.profileEvent(profile)]);
+  }
+
+  private approvalEvent(input: AuditApprovalInput): AuditEvent {
+    return {
       wrapper: this.wrapperName,
       kind: "approval",
       eventId: randomUUID(),
@@ -121,7 +160,42 @@ export class AuditTrail {
       status: input.approvalAction === "denied" ? "denied" : "success",
       durationMs: 0,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt })
-    });
+    };
+  }
+
+  /** Records a safe connection-bound profile state transition without any persisted-state paths or approval bearers. */
+  async writeProfile(input: AuditProfileInput): Promise<void> {
+    await this.writeProfiles([input]);
+  }
+
+  /** Records related profile state transitions through one required serialized append. */
+  async writeProfiles(inputs: readonly AuditProfileInput[]): Promise<void> {
+    await this.writeRequiredBatch(inputs.map((input) => this.profileEvent(input)));
+  }
+
+  private profileEvent(input: AuditProfileInput): AuditEvent {
+    return {
+      wrapper: this.wrapperName,
+      kind: "profile",
+      eventId: randomUUID(),
+      sessionId: this.sessionId,
+      sourceProfile: input.sourceProfile,
+      profile: input.profile,
+      operation: input.operation,
+      name: input.name,
+      profileAction: input.profileAction,
+      status: input.status ?? profileActionStatus(input.profileAction),
+      durationMs: 0,
+      ...(input.profileSelectionSource === undefined
+        ? {}
+        : { profileSelectionSource: input.profileSelectionSource }),
+      ...(input.profileConfirmation === undefined ? {} : { profileConfirmation: input.profileConfirmation }),
+      ...(input.profileLeaseState === undefined ? {} : { profileLeaseState: input.profileLeaseState }),
+      ...(input.profileLeaseExpiresAt === undefined
+        ? {}
+        : { profileLeaseExpiresAt: input.profileLeaseExpiresAt }),
+      ...(input.profileLockState === undefined ? {} : { profileLockState: input.profileLockState })
+    };
   }
 
   /** Records a background lifecycle event without letting audit I/O disrupt process management. */
@@ -132,6 +206,14 @@ export class AuditTrail {
   wrapper(): string {
     return this.wrapperName;
   }
+}
+
+function profileActionStatus(action: ProfileAuditAction): AuditStatus {
+  if (action === "confirmation-requested") return "confirmation-required";
+  if (action === "confirmation-denied" || action === "confirmation-expired" || action === "lease-expired") {
+    return "denied";
+  }
+  return "success";
 }
 
 /** Accumulates request context and prevents duplicate terminal records. */
@@ -190,6 +272,15 @@ export class AuditScope {
       ...(this.event.riskConfidence === undefined ? {} : { riskConfidence: this.event.riskConfidence }),
       ...(this.event.identity === undefined ? {} : { identity: this.event.identity }),
       ...(this.event.routingEvidence === undefined ? {} : { routingEvidence: this.event.routingEvidence }),
+      ...(this.event.profileSelectionSource === undefined
+        ? {}
+        : { profileSelectionSource: this.event.profileSelectionSource }),
+      ...(this.event.profileConfirmation === undefined ? {} : { profileConfirmation: this.event.profileConfirmation }),
+      ...(this.event.profileLeaseState === undefined ? {} : { profileLeaseState: this.event.profileLeaseState }),
+      ...(this.event.profileLeaseExpiresAt === undefined
+        ? {}
+        : { profileLeaseExpiresAt: this.event.profileLeaseExpiresAt }),
+      ...(this.event.profileLockState === undefined ? {} : { profileLockState: this.event.profileLockState }),
       ...(this.event.arguments === undefined ? {} : { arguments: this.event.arguments }),
       ...(terminalResult.errorCode === undefined ? {} : { errorCode: terminalResult.errorCode })
     });

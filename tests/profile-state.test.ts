@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { resolveProfileStatePath } from "../src/profiles/profile-state.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const directories: string[] = [];
 
@@ -240,5 +241,26 @@ describe("profile state", () => {
     await manager.initialize();
     await expect(manager.switchPersisted("personal")).rejects.toMatchObject({ code: "PROFILE_STATE_WRITE_FAILED" });
     expect(manager.current()).toMatchObject({ activeProfile: "work", selectionSource: "configured-default" });
+  });
+
+  it("restores durable profile state when a required profile audit write fails", async () => {
+    const directory = await createDirectory();
+    const configPath = join(directory, "miftah.json");
+    const state = { persistActiveProfile: true as const, scope: "workspace" as const, configPath };
+    const manager = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+
+    await manager.initialize();
+    await manager.switchPersisted("personal");
+    await expect(
+      manager.mutateAudited(
+        () => manager.switchPersisted("work"),
+        async () => {
+          throw new MiftahError("AUDIT_WRITE_FAILED", "AUDIT_WRITE_FAILED: test audit sink rejected profile transition");
+        }
+      )
+    ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+
+    expect(manager.current()).toMatchObject({ activeProfile: "personal", selectionSource: "mcp-switch" });
+    expect(JSON.parse(await readFile(resolveProfileStatePath(state), "utf8"))).toMatchObject({ profile: "personal" });
   });
 });

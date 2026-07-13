@@ -51,8 +51,6 @@ describe("config runtime parity", () => {
     ["profiles.default.metadata", { profiles: { default: { metadata: "team" } } }],
     ["profiles.default.routing.match", { profiles: { default: { routing: { match: { repo: "acme/miftah" } } } } }],
     ["profiles.default.routing.match", { profiles: { default: { routing: { match: "acme/miftah" } } } }],
-    ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: true } }],
-    ["security.requireProfileSwitchConfirmation", { security: { requireProfileSwitchConfirmation: "true" } }],
     ["security.redactSecrets", { security: { redactSecrets: false } }],
     ["audit.redact", { audit: { redact: false } }],
     ["tooling.managementToolPrefix", { tooling: { managementToolPrefix: "safe_" } }],
@@ -68,6 +66,16 @@ describe("config runtime parity", () => {
 
     expect(error.code).toBe(unsupportedConfigOption);
     expect(error.message).toContain(path);
+  });
+
+  it("accepts a boolean profile-switch confirmation requirement and rejects a malformed one", () => {
+    expect(validateConfig(baseConfig({ security: { requireProfileSwitchConfirmation: true } })).security).toEqual({
+      requireProfileSwitchConfirmation: true
+    });
+
+    const malformed = validationError(baseConfig({ security: { requireProfileSwitchConfirmation: "true" } }));
+    expect(malformed.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(malformed.message).toContain("security.requireProfileSwitchConfirmation");
   });
 
   it("accepts explicit active-profile state scopes and requires durable scopes to opt in", () => {
