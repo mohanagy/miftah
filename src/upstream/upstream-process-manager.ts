@@ -346,7 +346,7 @@ export class UpstreamProcessManager {
     try {
       reserved = this.limiter.acquire(profile, this.upstreamName);
       this.setProcessState(profile, "starting", { resetCapabilities: true, pid: null });
-      const { environment, headers, args } = await this.resolveProfileOptions(
+      const { environment, headers, args, suppressStderr } = await this.resolveProfileOptions(
         profile,
         profileConfig,
         profileConfig.args ?? this.upstream.args ?? []
@@ -361,7 +361,7 @@ export class UpstreamProcessManager {
           stderr: "pipe"
         });
         transport = stdioTransport;
-        this.attachStderr(profile, stdioTransport.stderr);
+        this.attachStderr(profile, stdioTransport.stderr, suppressStderr);
       } else {
         if (!this.upstream.url) {
           throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: remote upstream requires a url");
@@ -465,6 +465,7 @@ export class UpstreamProcessManager {
     environment: Record<string, string>;
     headers: Record<string, string>;
     args: string[];
+    suppressStderr: boolean;
   }> {
     const upstreamEnvironment = this.upstream.env
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.env)
@@ -475,6 +476,7 @@ export class UpstreamProcessManager {
       : undefined;
     const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
     let isolationEnvironment: Record<string, string> | undefined;
+    let suppressStderr = false;
     if (profile.isolation !== undefined) {
       if (this.options.isolation === undefined) {
         throw new MiftahError(
@@ -482,9 +484,14 @@ export class UpstreamProcessManager {
           "UPSTREAM_START_FAILED: profile runtime isolation could not be prepared"
         );
       }
-      isolationEnvironment = (
-        await this.options.isolation.prepare(profileName, this.upstreamName, profile.isolation, this.upstream.transport)
-      ).environment;
+      const preparedIsolation = await this.options.isolation.prepare(
+        profileName,
+        this.upstreamName,
+        profile.isolation,
+        this.upstream.transport
+      );
+      isolationEnvironment = preparedIsolation.environment;
+      suppressStderr = preparedIsolation.suppressStderr;
     }
     const environment = mergeEnvironment(
       getDefaultEnvironment(),
@@ -506,11 +513,20 @@ export class UpstreamProcessManager {
         this.redactor.add(value);
       }
     }
-    return { environment, headers, args };
+    return { environment, headers, args, suppressStderr };
   }
 
   /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
-  private attachStderr(profile: string, stderr: Stream | null): void {
+  private attachStderr(profile: string, stderr: Stream | null, suppressOutput = false): void {
+    if (suppressOutput) {
+      let emitted = false;
+      stderr?.on("data", () => {
+        if (emitted) return;
+        emitted = true;
+        this.options.onStderr?.(profile, "[REDACTED]\n");
+      });
+      return;
+    }
     const streamRedactor = this.redactor.createTextStream();
     const emit = (value: string): void => {
       if (value.length > 0) this.options.onStderr?.(profile, value);

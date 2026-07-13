@@ -89,6 +89,14 @@ if (isolationReportPath) {
   if (process.env.TEST_ISOLATION_EMIT_CREDENTIAL === "true") {
     process.stderr.write(`test isolated credential: ${credential}\n`);
   }
+  const credentialField = process.env.TEST_ISOLATION_EMIT_CREDENTIAL_FIELD;
+  if (credentialField) {
+    const fieldValue = JSON.parse(credential)[credentialField];
+    if (typeof fieldValue !== "string") {
+      throw new Error("test isolation fixture requires a string credential field");
+    }
+    process.stderr.write(`test isolated credential field: ${fieldValue}\n`);
+  }
 }
 
 if (startCountPath) {

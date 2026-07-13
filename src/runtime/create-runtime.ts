@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { ProfileManager } from "../profiles/profile-manager.js";
 import { ProfileRuntimeIsolation } from "../isolation/profile-runtime-isolation.js";
 import { resolvePath } from "../config/path-resolve.js";
@@ -12,7 +13,8 @@ import { resolveRuntimeConfig, type RuntimeResolutionScope } from "./resolve-run
  * @returns The resolved configuration, upstream process manager, and profile manager.
  */
 export async function createRuntime(configPath: string, scope?: RuntimeResolutionScope) {
-  const runtimeConfigPath = resolvePath(configPath);
+  const configuredPath = resolvePath(configPath);
+  const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
   const { config, upstream, secretValues, redactor } = await resolveRuntimeConfig(runtimeConfigPath, scope);
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
   const managerOptions = { ...config.process, secretValues: [...secretValues], redactor, isolation };

@@ -27,6 +27,35 @@ async function readReport(path: string): Promise<IsolationReport> {
 }
 
 describe("profile runtime isolation", () => {
+  it("namespaces runtime state by canonical config file rather than only its directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-config-identity-"));
+    const workConfigPath = join(directory, "work.miftah.json");
+    const personalConfigPath = join(directory, "personal.miftah.json");
+    await writeFile(workConfigPath, "{}", "utf8");
+    await writeFile(personalConfigPath, "{}", "utf8");
+    const workRedactor = new SecretRedactor();
+    const personalRedactor = new SecretRedactor();
+
+    try {
+      const work = await new ProfileRuntimeIsolation({ configPath: workConfigPath, redactor: workRedactor }).prepare(
+        "default",
+        "default",
+        {},
+        "stdio"
+      );
+      const personal = await new ProfileRuntimeIsolation({ configPath: personalConfigPath, redactor: personalRedactor }).prepare(
+        "default",
+        "default",
+        {},
+        "stdio"
+      );
+
+      expect(dirname(work.environment.HOME!)).not.toBe(dirname(personal.environment.HOME!));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("wires configuration-relative file isolation through the production runtime factory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-runtime-"));
     const credentialsDirectory = join(directory, "credentials");
@@ -145,7 +174,8 @@ describe("profile runtime isolation", () => {
           HOME: "unsafe-work-home",
           XDG_CONFIG_HOME: "unsafe-work-xdg",
           TEST_ISOLATION_REPORT_PATH: workReportPath,
-          TEST_ISOLATION_EMIT_CREDENTIAL: "true"
+          TEST_ISOLATION_EMIT_CREDENTIAL: "true",
+          TEST_ISOLATION_EMIT_CREDENTIAL_FIELD: "refresh_token"
         },
         isolation: {
           files: [
@@ -162,7 +192,8 @@ describe("profile runtime isolation", () => {
           HOME: "unsafe-personal-home",
           XDG_CONFIG_HOME: "unsafe-personal-xdg",
           TEST_ISOLATION_REPORT_PATH: personalReportPath,
-          TEST_ISOLATION_EMIT_CREDENTIAL: "true"
+          TEST_ISOLATION_EMIT_CREDENTIAL: "true",
+          TEST_ISOLATION_EMIT_CREDENTIAL_FIELD: "refresh_token"
         },
         isolation: {
           files: [
@@ -200,6 +231,8 @@ describe("profile runtime isolation", () => {
       expect(work.xdgRuntimeDir).toContain(dirname(work.home));
       expect(stderr.join("\n")).not.toContain(workCredential);
       expect(stderr.join("\n")).not.toContain(personalCredential);
+      expect(stderr.join("\n")).not.toContain("work-oauth-secret");
+      expect(stderr.join("\n")).not.toContain("personal-oauth-secret");
       expect(stderr.join("\n")).toContain("[REDACTED]");
       expect(redactor.redactText(workCredential)).toContain("[REDACTED]");
 
@@ -351,12 +384,70 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("rejects Windows-equivalent runtime destinations before materializing either file", async () => {
+  it("rejects mapped files that would override a managed isolation environment", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-reserved-environment-"));
+    const configPath = join(directory, "miftah.json");
+    const credentialsDirectory = join(directory, "credentials");
+    await writeFile(configPath, "{}", "utf8");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(join(credentialsDirectory, "oauth.json"), "reserved-environment-secret", "utf8");
+    const redactor = new SecretRedactor();
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor });
+
+    try {
+      await expect(
+        isolation.prepare(
+          "work",
+          "default",
+          {
+            files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json", environment: "home" }]
+          },
+          "stdio"
+        )
+      ).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      expect(redactor.redactText("reserved-environment-secret")).toBe("reserved-environment-secret");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || typeof process.getuid !== "function")(
+    "rejects a pre-existing runtime tree owned by another user",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-owner-"));
+      const configPath = join(directory, "miftah.json");
+      await writeFile(configPath, "{}", "utf8");
+      const ownerUid = process.getuid!();
+      const initial = new ProfileRuntimeIsolation({ configPath, redactor: new SecretRedactor() });
+      const mismatchedOwner = new ProfileRuntimeIsolation({
+        configPath,
+        redactor: new SecretRedactor(),
+        ownerUid: ownerUid + 1
+      });
+
+      try {
+        await initial.prepare("work", "default", {}, "stdio");
+        await expect(mismatchedOwner.prepare("work", "default", {}, "stdio")).rejects.toMatchObject({
+          code: "UPSTREAM_START_FAILED"
+        });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.each(["win32", "darwin"] as const)(
+    "rejects %s-equivalent runtime destinations before materializing either file",
+    async (platform) => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-windows-"));
     const configPath = join(directory, "miftah.json");
+    const credentialsDirectory = join(directory, "credentials");
     await writeFile(configPath, "{}", "utf8");
+    await mkdir(credentialsDirectory, { recursive: true });
+    await writeFile(join(credentialsDirectory, "first.json"), "first-secret", "utf8");
+    await writeFile(join(credentialsDirectory, "second.json"), "second-secret", "utf8");
     const redactor = new SecretRedactor();
-    const isolation = new ProfileRuntimeIsolation({ configPath, redactor, platform: "win32" });
+    const isolation = new ProfileRuntimeIsolation({ configPath, redactor, platform });
 
     try {
       await expect(
@@ -375,5 +466,6 @@ describe("profile runtime isolation", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
+    }
+  );
 });
