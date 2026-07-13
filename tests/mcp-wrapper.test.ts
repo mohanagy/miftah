@@ -900,6 +900,49 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("routes a client-visible multi-upstream GitHub tool through its static matcher binding", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"] } } },
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-work" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-work" } }
+          }
+        },
+        personal: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github-personal" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry-personal" } }
+          }
+        }
+      },
+      audit: { enabled: false }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "provider-matcher-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "github__whoami", arguments: { repo: "acme/miftah" } })).toMatchObject({
+        content: [{ type: "text", text: "github-work" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("records collector evidence when route preview context is ambiguous", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-preview-ambiguous-"));
     const auditPath = join(directory, "audit.jsonl");

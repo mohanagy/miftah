@@ -37,6 +37,8 @@ export interface ProxiedOperation<Result> {
   readonly source: CapturedProfileState;
   readonly operation: ProxiedOperationType;
   readonly routingName: string;
+  /** Client-visible name used only by fixed provider matcher token recognition. */
+  readonly matcherToolName?: string;
   readonly policyName: string;
   readonly name: string;
   readonly args: Record<string, unknown>;
@@ -85,8 +87,10 @@ export class OperationPipeline {
       const route = this.options.routing.resolve(
         {
           toolName: operation.routingName,
+          matcherToolName: operation.matcherToolName ?? operation.routingName,
           args: operation.args,
           context: snapshot.context,
+          matcherContext: snapshot.matcherContext,
           profileHints: snapshot.profileHints
         },
         operation.source.activeProfile

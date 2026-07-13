@@ -312,7 +312,7 @@ export class MiftahServer {
         ].join(" ")
       }
     );
-    this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile);
+    this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile, config.profiles);
     this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {}, {
       unknownRisk: config.tooling?.unknownToolRisk
     });
@@ -664,6 +664,7 @@ export class MiftahServer {
         source: sourceState,
         operation: "tools/call",
         routingName: mapped.originalName,
+        matcherToolName: name,
         policyName: mapped.originalName,
         name: mapped.originalName,
         args,
@@ -959,8 +960,10 @@ export class MiftahServer {
       audit.update({ routingEvidence: evidence });
       const route = this.routing.resolve({
         toolName,
+        matcherToolName: toolName,
         args: isRecord(args.args) ? args.args : {},
         context: snapshot.context,
+        matcherContext: snapshot.matcherContext,
         profileHints: snapshot.profileHints
       }, source.activeProfile);
       const profile = this.profiles.get(route.profile);

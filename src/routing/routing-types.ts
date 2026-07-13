@@ -3,14 +3,26 @@ import type { ProviderMatcherContext } from "./provider-matcher-types.js";
 
 export interface RoutingInput {
   toolName: string;
+  /** Client-visible tool name reserved for fixed provider matcher token recognition. */
+  matcherToolName?: string;
   args?: Record<string, unknown>;
   context?: Record<string, unknown>;
+  matcherContext?: ProviderMatcherContext;
   profileHints?: readonly RoutingContextProfileHint[];
+}
+
+/** Bounded, canonical static-matcher evidence safe for routing decisions and audit records. */
+export interface RoutingMatcherEvidence {
+  readonly profile: string;
+  readonly provider: "github" | "sentry" | "jira" | "linear" | "posthog";
+  readonly kind: "repository" | "organization" | "project" | "environment" | "site" | "workspace" | "team" | "host";
+  readonly value: string;
 }
 
 export interface RoutingDecision {
   profile: string;
   reason: string;
+  matcherEvidence?: readonly RoutingMatcherEvidence[];
 }
 
 /** A root supplied by an MCP client during initialization. */

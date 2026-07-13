@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RoutingEngine } from "../src/routing/routing-engine.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 describe("routing and policy", () => {
   it("routes by tool arguments before falling back to the active profile", () => {
@@ -167,6 +168,91 @@ describe("routing and policy", () => {
       profile: "rule",
       reason: "rule:matching-rule"
     });
+  });
+
+  it("uses a static provider matcher after explicit routing and before active-profile fallback", () => {
+    const engine = new RoutingEngine(
+      { fallback: "activeProfile" },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(engine.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah" } })).toEqual({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [
+        { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+      ]
+    });
+  });
+
+  it("keeps an explicit rule ahead of an otherwise matching static provider binding", () => {
+    const engine = new RoutingEngine(
+      { rules: [{ name: "explicit", when: { "args.repo": "acme/miftah" }, profile: "rule" }] },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(engine.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah" } })).toEqual({
+      profile: "rule",
+      reason: "rule:explicit"
+    });
+  });
+
+  it("keeps same-profile matcher signals together and reports distinct profiles with bounded stable evidence", () => {
+    const sameProfile = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"], organizations: ["acme"] } } }
+        }
+      }
+    );
+    expect(
+      sameProfile.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah", organization: "acme" } })
+    ).toMatchObject({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [
+        { profile: "work", provider: "github", kind: "organization", value: "acme" },
+        { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+      ]
+    });
+
+    const ambiguous = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        zeta: { routing: { match: { github: { repositories: ["acme/miftah"] } } } },
+        alpha: { routing: { match: { github: { repositories: ["acme/miftah"] } } } }
+      }
+    );
+    let failure: unknown;
+    try {
+      ambiguous.resolve({
+        toolName: "github__search_issues",
+        args: { repo: "acme/miftah", accessToken: "must-not-reach-ambiguity-evidence" }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect(failure).toMatchObject({
+      code: "ROUTING_AMBIGUOUS",
+      details: {
+        matcherEvidence: [
+          { profile: "alpha", provider: "github", kind: "repository", value: "acme/miftah" },
+          { profile: "zeta", provider: "github", kind: "repository", value: "acme/miftah" }
+        ]
+      }
+    });
+    expect(JSON.stringify((failure as MiftahError).details)).not.toContain("must-not-reach-ambiguity-evidence");
   });
 
   it("returns an ambiguity error when ask fallback has multiple matches", () => {
