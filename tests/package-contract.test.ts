@@ -82,7 +82,7 @@ function consumerInstallCommand(tarballPath: string): NpmCommand {
       "--no-package-lock",
       "--no-audit",
       "--no-fund",
-      "--prefer-offline",
+      "--offline",
       tarballPath
     ],
     timeoutMs: consumerInstallTimeoutMs
@@ -271,7 +271,7 @@ describe("package metadata contract", () => {
 });
 
 describe("packed artifact contract", () => {
-  it("gives the fresh consumer install deterministic offline options and its own timeout", () => {
+  it("requires a cache-only fresh consumer install and its own timeout", () => {
     expect(consumerInstallCommand("miftah-0.1.1.tgz")).toEqual({
       args: [
         "install",
@@ -279,7 +279,7 @@ describe("packed artifact contract", () => {
         "--no-package-lock",
         "--no-audit",
         "--no-fund",
-        "--prefer-offline",
+        "--offline",
         "miftah-0.1.1.tgz"
       ],
       timeoutMs: 120_000
