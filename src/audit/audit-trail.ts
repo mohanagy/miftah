@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { AuditLogger } from "./audit-logger.js";
-import type { AuditEvent, AuditHealth, AuditRoutingSource, AuditStatus } from "./audit-types.js";
+import type {
+  ApprovalAuditAction,
+  AuditEvent,
+  AuditHealth,
+  AuditRoutingSource,
+  AuditStatus
+} from "./audit-types.js";
 import type { RoutingContextEvidence } from "../routing/routing-types.js";
 
 export interface AuditOperationInput {
@@ -39,6 +45,18 @@ export interface AuditLifecycleInput {
   lockToProfile?: string;
   status: AuditStatus;
   errorCode?: string;
+}
+
+export interface AuditApprovalInput {
+  approvalId: string;
+  approvalSessionId: string;
+  approvalAction: ApprovalAuditAction;
+  sourceProfile: string;
+  profile: string;
+  upstream: string;
+  operation: string;
+  name: string;
+  expiresAt?: string;
 }
 
 /** Creates one final audit record per MCP request when audit logging is configured. */
@@ -82,6 +100,27 @@ export class AuditTrail {
       ...(input.upstream === undefined ? {} : { upstream: input.upstream }),
       ...(input.lockToProfile === undefined ? {} : { lockToProfile: input.lockToProfile }),
       ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode })
+    });
+  }
+
+  /** Records a safe state transition for a one-time approval without serializing its bearer or arguments. */
+  async writeApproval(input: AuditApprovalInput): Promise<void> {
+    await this.write({
+      wrapper: this.wrapperName,
+      kind: "approval",
+      eventId: randomUUID(),
+      sessionId: this.sessionId,
+      approvalId: input.approvalId,
+      approvalSessionId: input.approvalSessionId,
+      approvalAction: input.approvalAction,
+      sourceProfile: input.sourceProfile,
+      profile: input.profile,
+      upstream: input.upstream,
+      operation: input.operation,
+      name: input.name,
+      status: input.approvalAction === "denied" ? "denied" : "success",
+      durationMs: 0,
+      ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt })
     });
   }
 

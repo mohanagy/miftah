@@ -169,7 +169,7 @@ Identity gating is applied only after routing, policy, and target resolution and
 
 Miftah applies one safety pipeline to every proxied upstream tool call, resource read, and prompt retrieval. It captures the active profile once at request start, resolves the routing rule using that immutable fallback, evaluates the selected profile's policy before resolving an aggregate route or forwarding, redacts the result or error, and records the terminal operation metadata in audit output.
 
-Routing rules receive a tool's original arguments unchanged. Resource reads expose the requested URI as `args.uri`; prompt retrieval exposes the prompt arguments and always sets `args.name` to the requested prompt name. Policies evaluate upstream tools by their original tool name, resource reads as `resources/read`, and prompt retrieval as `prompts/get`. For example, `deny: ["resources/read"]` blocks all resource reads for the selected profile, while `requireConfirmation: ["prompts/get"]` returns `POLICY_CONFIRMATION_REQUIRED` without forwarding the request.
+Routing rules receive a tool's original arguments unchanged. Resource reads expose the requested URI as `args.uri`; prompt retrieval exposes the prompt arguments and always sets `args.name` to the requested prompt name. Policies evaluate upstream tools by their original tool name, resource reads as `resources/read`, and prompt retrieval as `prompts/get`. For example, `deny: ["resources/read"]` blocks all resource reads for the selected profile, while `requireConfirmation: ["prompts/get"]` requires an approval before forwarding the request.
 
 Policies classify operations as `read`, `write`, or `destructive` in this order:
 
@@ -181,6 +181,14 @@ Policies classify operations as `read`, `write`, or `destructive` in this order:
 MCP annotations are hints, not authority. They cannot lower risk unless the operator explicitly trusts that configured upstream; profile-level upstream overrides cannot alter this trust boundary. A trusted `readOnlyHint: true` classifies as read, a trusted non-read-only `destructiveHint: false` classifies as write, and any contradictory `readOnlyHint`/`destructiveHint` combination classifies as destructive. `idempotentHint` and `openWorldHint` are retained as metadata but never lower mutation risk. Exact local overrides always win, including when an upstream annotation is incorrect.
 
 Every policy decision carries stable `riskSource` and `riskConfidence` values. Route previews and audit events expose only those enum values, never raw upstream annotations or tool output. `denyRisk` takes precedence over `allowRisk`; `requireConfirmation` returns a structured error instead of forwarding the operation.
+
+### MCP approvals
+
+When `requireConfirmation` matches, Miftah binds one approval to the current MCP connection, the source and routed profiles, upstream, operation kind, exact target, a normalized argument digest, and a short expiry. It never forwards the protected operation until that approval is consumed, and a consumed, denied, expired, or prior-connection approval cannot be replayed.
+
+Clients that advertise MCP **form elicitation** receive a generic boolean form (`approved`) and never receive the target arguments, digest, or bearer. Clients without that capability receive a one-time fallback bearer in `POLICY_CONFIRMATION_REQUIRED`; use `miftah_approve` with its `approval` field, then retry the exact operation. `miftah_deny` rejects that pending approval, and `miftah_list_approvals` returns only safe pending metadata. A fallback bearer is connection-bound and should be treated as a short-lived capability, not as a durable credential or a human-identity assertion.
+
+Approval lifecycle events record request, approval, denial, expiry, and consumption when audit logging is configured. They contain safe profile/upstream/operation metadata and expiry only; they never contain the fallback bearer or full operation arguments.
 
 Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 

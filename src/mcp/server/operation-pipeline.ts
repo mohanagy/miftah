@@ -1,4 +1,5 @@
 import type { AuditScope } from "../../audit/audit-trail.js";
+import type { ApprovalBinding } from "../../approvals/approval-store.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
@@ -19,6 +20,11 @@ export interface CapturedProfileState {
   readonly revision: number;
 }
 
+export interface ApprovalRequestContext {
+  readonly requestId: string | number;
+  readonly signal: AbortSignal;
+}
+
 export interface ResolvedOperation<Result> {
   readonly upstreamName?: string;
   readonly identityUpstreamName?: string;
@@ -37,6 +43,7 @@ export interface ProxiedOperation<Result> {
   readonly riskMetadata?: ToolRiskMetadata;
   /** Reads only already-cached target risk evidence; it must not discover or start an upstream. */
   riskMetadataForProfile?(profile: string): ToolRiskMetadata | undefined;
+  readonly approvalContext?: ApprovalRequestContext;
   readonly requireExplicitRuleForDestructive?: boolean;
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
 }
@@ -51,6 +58,9 @@ interface PipelineOptions {
   readonly redactor: SecretRedactor;
   readonly routingContext: RoutingContextProvider;
   readonly identities: IdentityManager;
+  readonly approvals: {
+    requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void>;
+  };
 }
 
 /**
@@ -96,6 +106,18 @@ export class OperationPipeline {
         name: this.auditName(operation, target.name),
         ...(target.upstreamName === undefined ? {} : { upstream: target.upstreamName })
       });
+      if (decision.action === "confirm") {
+        const binding: ApprovalBinding = {
+          sourceProfile: operation.source.activeProfile,
+          profile,
+          upstream: target.upstreamName ?? "default",
+          operation: operation.operation,
+          name: target.name,
+          displayName: this.auditName(operation, target.name),
+          arguments: operation.args
+        };
+        await this.options.approvals.requireApproval(binding, operation.approvalContext);
+      }
       const session = await this.options.upstreams.get(profile, target.upstreamName);
       if (this.options.identities.requiresVerification(profile, target.identityUpstreamName, decision.risk)) {
         const identity = await this.options.identities.verify(profile, target.identityUpstreamName, session);
@@ -128,12 +150,6 @@ export class OperationPipeline {
       throw new MiftahError(
         "POLICY_BLOCKED",
         `POLICY_BLOCKED: operation '${operation.policyName}' is blocked for profile '${profile}'`
-      );
-    }
-    if (decision.action === "confirm") {
-      throw new MiftahError(
-        "POLICY_CONFIRMATION_REQUIRED",
-        `POLICY_CONFIRMATION_REQUIRED: operation '${operation.policyName}' requires confirmation for profile '${profile}'`
       );
     }
   }

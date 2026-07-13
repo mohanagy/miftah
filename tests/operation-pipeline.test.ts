@@ -1249,7 +1249,8 @@ describe("operation pipeline routed risk", () => {
       } as unknown as UpstreamProcessManager,
       redactor: new SecretRedactor(),
       routingContext: async () => ({ context: {}, evidence: { cwd: "", fileRoots: [] }, profileHints: [] }),
-      identities: { requiresVerification: () => false } as unknown as IdentityManager
+      identities: { requiresVerification: () => false } as unknown as IdentityManager,
+      approvals: { requireApproval: async () => undefined }
     });
     const audit = new AuditTrail("test").beginOperation({
       operation: "tools/call",
