@@ -1,15 +1,32 @@
 import type { RoutingConfig } from "../config/types.js";
+import type {
+  ProviderMatcherContext,
+  ProviderMatcherKind,
+  ProviderMatcherProvider
+} from "./provider-matcher-types.js";
 
 export interface RoutingInput {
   toolName: string;
+  /** Client-visible tool name reserved for fixed provider matcher token recognition. */
+  matcherToolName?: string;
   args?: Record<string, unknown>;
   context?: Record<string, unknown>;
+  matcherContext?: ProviderMatcherContext;
   profileHints?: readonly RoutingContextProfileHint[];
+}
+
+/** Bounded, canonical static-matcher evidence safe for routing decisions and audit records. */
+export interface RoutingMatcherEvidence {
+  readonly profile: string;
+  readonly provider: ProviderMatcherProvider;
+  readonly kind: ProviderMatcherKind;
+  readonly value: string;
 }
 
 export interface RoutingDecision {
   profile: string;
   reason: string;
+  matcherEvidence?: readonly RoutingMatcherEvidence[];
 }
 
 /** A root supplied by an MCP client during initialization. */
@@ -59,6 +76,8 @@ export interface RoutingContextSnapshot {
   readonly context: Record<string, unknown>;
   readonly evidence: RoutingContextEvidence;
   readonly profileHints: readonly RoutingContextProfileHint[];
+  /** Safe, canonical provider metadata reserved for the fixed matcher registry. */
+  readonly matcherContext?: ProviderMatcherContext;
 }
 
 export type { RoutingConfig };

@@ -89,6 +89,100 @@ describe("config foundation", () => {
     expect(config.profiles.work?.lease).toEqual({ ttlMs: 60_000, requiredForRisk: ["write", "destructive"] });
   });
 
+  it("accepts typed profile-local bindings for every built-in provider matcher", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "provider-routing",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          routing: {
+            match: {
+              github: { repositories: ["acme/work"], organizations: ["acme"] },
+              sentry: { organizations: ["acme"], projects: ["acme/api"], environments: ["production"] },
+              jira: { sites: ["https://acme.atlassian.net"], projects: ["OPS"] },
+              linear: { workspaces: ["acme"], teams: ["eng"] },
+              posthog: { hosts: ["https://app.posthog.com"], projects: ["123"] }
+            }
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.routing?.match?.github?.repositories).toEqual(["acme/work"]);
+    expect(config.profiles.work?.routing?.match?.posthog?.projects).toEqual(["123"]);
+  });
+
+  it.each([
+    [
+      "an empty profile matcher declaration",
+      {},
+      "profiles.work.routing.match"
+    ],
+    [
+      "an empty GitHub matcher declaration",
+      { github: {} },
+      "profiles.work.routing.match.github"
+    ],
+    [
+      "a duplicate GitHub repository",
+      { github: { repositories: ["acme/work", "acme/work"] } },
+      "profiles.work.routing.match.github.repositories.1"
+    ],
+    [
+      "a noncanonical GitHub repository",
+      { github: { repositories: ["Acme/work"] } },
+      "profiles.work.routing.match.github.repositories.0"
+    ],
+    [
+      "Jira site credentials",
+      { jira: { sites: ["https://admin:secret@acme.atlassian.net"] } },
+      "profiles.work.routing.match.jira.sites.0"
+    ],
+    [
+      "a default HTTPS port in a Jira site",
+      { jira: { sites: ["https://acme.atlassian.net:443"] } },
+      "profiles.work.routing.match.jira.sites.0"
+    ],
+    [
+      "a PostHog host query",
+      { posthog: { hosts: ["https://app.posthog.com?token=secret"] } },
+      "profiles.work.routing.match.posthog.hosts.0"
+    ],
+    [
+      "an oversized Jira site",
+      { jira: { sites: [`https://${"a".repeat(246)}.com`] } },
+      "profiles.work.routing.match.jira.sites.0"
+    ],
+    [
+      "a non-decimal PostHog project",
+      { posthog: { projects: ["project-one"] } },
+      "profiles.work.routing.match.posthog.projects.0"
+    ],
+    [
+      "a noncanonical Linear workspace",
+      { linear: { workspaces: ["Acme"] } },
+      "profiles.work.routing.match.linear.workspaces.0"
+    ]
+  ])("rejects %s in profile routing matcher configuration", (_label, match, expectedPath) => {
+    let failure: unknown;
+    try {
+      validateConfig({
+        version: "1",
+        name: "provider-routing",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: { work: { routing: { match } } }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect((failure as MiftahError).details?.diagnostics?.map((diagnostic) => diagnostic.path)).toContain(expectedPath);
+  });
+
   it("accepts a profile isolation declaration and additional named-upstream configuration", () => {
     const config = validateConfig({
       version: "1",

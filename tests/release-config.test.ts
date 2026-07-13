@@ -98,7 +98,8 @@ describe("continuous integration workflow contract", () => {
     }
     for (const source of [npmHelper, packVerifier]) {
       expect(source).toContain("command: process.execPath");
-      expect(source).not.toContain("shell:");
+      expect(source).toContain("shell: false");
+      expect(source).not.toContain("shell: true");
     }
   });
 

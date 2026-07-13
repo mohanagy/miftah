@@ -1,6 +1,14 @@
-import type { RoutingConfig, RoutingRule } from "../config/types.js";
+import type { ProfileConfig, RoutingConfig, RoutingRule } from "../config/types.js";
 import { MiftahError } from "../utils/errors.js";
-import type { RoutingDecision, RoutingInput } from "./routing-types.js";
+import {
+  isCanonicalProviderMatcherEvidence,
+  matchProviderBindings,
+  projectProviderMatcherInput
+} from "./provider-matchers.js";
+import type { ProviderMatcherCandidate } from "./provider-matcher-types.js";
+import type { RoutingDecision, RoutingInput, RoutingMatcherEvidence } from "./routing-types.js";
+
+const MAX_ROUTING_MATCHER_EVIDENCE = 64;
 
 function getPath(input: RoutingInput, path: string): unknown {
   const [root, ...parts] = path.split(".");
@@ -43,7 +51,8 @@ export class RoutingEngine {
   constructor(
     private readonly config: RoutingConfig = {},
     private activeProfile: string,
-    private readonly defaultProfile = activeProfile
+    private readonly defaultProfile = activeProfile,
+    private readonly profiles: Readonly<Record<string, ProfileConfig>> = {}
   ) {}
 
   setActiveProfile(profile: string): void {
@@ -86,6 +95,27 @@ export class RoutingEngine {
       return { profile: profiles[0]!, reason: `rule:${rule?.name ?? "unnamed"}` };
     }
 
+    const matcherCandidates = matchProviderBindings(
+      this.profiles,
+      projectProviderMatcherInput(input.matcherToolName ?? input.toolName, input.args, input.matcherContext)
+    );
+    const matcherProfiles = [...new Set(matcherCandidates.map((candidate) => candidate.profile))].sort();
+    const matcherEvidence = routingMatcherEvidence(matcherCandidates);
+    if (matcherProfiles.length > 1) {
+      throw new MiftahError(
+        "ROUTING_AMBIGUOUS",
+        `ROUTING_AMBIGUOUS: static matcher profiles are ${matcherProfiles.join(", ")}`,
+        { matcherEvidence }
+      );
+    }
+    if (matcherProfiles.length === 1) {
+      return {
+        profile: matcherProfiles[0]!,
+        reason: `matcher:${matcherEvidence[0]!.provider}`,
+        matcherEvidence
+      };
+    }
+
     const fallback = this.config.fallback ?? "activeProfile";
     if (fallback === "activeProfile") return { profile: activeProfile, reason: "active-profile" };
     if (fallback === "default") return { profile: this.defaultProfile, reason: "default-profile" };
@@ -97,4 +127,77 @@ export class RoutingEngine {
       "ROUTING_AMBIGUOUS: no routing rule matched this request"
     );
   }
+}
+
+function routingMatcherEvidence(candidates: readonly ProviderMatcherCandidate[]): readonly RoutingMatcherEvidence[] {
+  return candidates.slice(0, MAX_ROUTING_MATCHER_EVIDENCE).map((candidate) => ({
+    profile: candidate.profile,
+    provider: candidate.evidence.provider,
+    kind: candidate.evidence.kind,
+    value: candidate.evidence.value
+  }));
+}
+
+/** Extracts only structurally safe static-matcher evidence from an ambiguity error. */
+export function matcherEvidenceFromError(error: unknown): readonly RoutingMatcherEvidence[] | undefined {
+  if (!(error instanceof MiftahError) || error.code !== "ROUTING_AMBIGUOUS") return undefined;
+  const source = error.details?.matcherEvidence;
+  if (!Array.isArray(source) || source.length === 0 || source.length > MAX_ROUTING_MATCHER_EVIDENCE) return undefined;
+  const evidence: RoutingMatcherEvidence[] = [];
+  for (const item of source) {
+    if (!isRoutingMatcherEvidence(item)) return undefined;
+    evidence.push({
+      profile: item.profile,
+      provider: item.provider,
+      kind: item.kind,
+      value: item.value
+    });
+  }
+  return isSortedMatcherEvidence(evidence) ? evidence : undefined;
+}
+
+function isRoutingMatcherEvidence(value: unknown): value is RoutingMatcherEvidence {
+  if (!isRecord(value) || !isBoundedPlainText(value.profile, 256) || !isBoundedPlainText(value.value, 256)) return false;
+  return isCanonicalProviderMatcherEvidence(value.provider, value.kind, value.value);
+}
+
+function isBoundedPlainText(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSortedMatcherEvidence(evidence: readonly RoutingMatcherEvidence[]): boolean {
+  for (let index = 1; index < evidence.length; index += 1) {
+    if (compareMatcherEvidence(evidence[index - 1]!, evidence[index]!) > 0) return false;
+  }
+  return true;
+}
+
+function compareMatcherEvidence(first: RoutingMatcherEvidence, second: RoutingMatcherEvidence): number {
+  for (const comparison of [
+    compareText(first.provider, second.provider),
+    compareText(first.kind, second.kind),
+    compareText(first.value, second.value),
+    compareText(first.profile, second.profile)
+  ]) {
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
+}
+
+function compareText(first: string, second: string): number {
+  if (first < second) return -1;
+  if (first > second) return 1;
+  return 0;
 }

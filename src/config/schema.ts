@@ -292,6 +292,104 @@ const profileIsolationSchema = z
     }
   });
 
+const githubOrganizationSchema = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/u);
+const githubRepositorySchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/u);
+const sentrySlugSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/u);
+const sentryProjectSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}\/[a-z0-9][a-z0-9_-]{0,127}$/u);
+const sentryEnvironmentSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u);
+const jiraProjectSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,9}$/u);
+const linearSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u);
+const posthogProjectSchema = z.string().regex(/^[1-9][0-9]{0,17}$/u);
+/** Shared with JSON Schema generation so editor validation enforces the same safe origin grammar. */
+export const CANONICAL_HTTPS_ORIGIN_PATTERN =
+  /^https:\/\/(?!.*:443$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$/u;
+const canonicalHttpsOriginSchema = z.string().max(256).regex(CANONICAL_HTTPS_ORIGIN_PATTERN).superRefine((value, context) => {
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username.length > 0 ||
+      parsed.password.length > 0 ||
+      parsed.pathname !== "/" ||
+      parsed.search.length > 0 ||
+      parsed.hash.length > 0 ||
+      value !== `https://${parsed.host}`
+    ) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "matcher hosts must be canonical credential-free HTTPS origins" });
+    }
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "matcher hosts must be canonical credential-free HTTPS origins" });
+  }
+});
+
+function matcherIdentifierListSchema<T extends z.ZodTypeAny>(item: T) {
+  return z.array(item).min(1).max(32).superRefine((values, context) => {
+    const seen = new Set<string>();
+    for (const [index, value] of values.entries()) {
+      if (seen.has(value)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: "matcher identifiers must be unique" });
+      }
+      seen.add(value);
+    }
+  });
+}
+
+function requireMatcherIdentifiers(value: object, context: z.RefinementCtx, message: string): void {
+  if (Object.values(value).every((entry) => entry === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message });
+  }
+}
+
+const githubProfileRoutingMatchSchema = z
+  .object({
+    repositories: matcherIdentifierListSchema(githubRepositorySchema).optional(),
+    organizations: matcherIdentifierListSchema(githubOrganizationSchema).optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "GitHub matcher declarations require an identifier"));
+const sentryProfileRoutingMatchSchema = z
+  .object({
+    organizations: matcherIdentifierListSchema(sentrySlugSchema).optional(),
+    projects: matcherIdentifierListSchema(sentryProjectSchema).optional(),
+    environments: matcherIdentifierListSchema(sentryEnvironmentSchema).optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "Sentry matcher declarations require an identifier"));
+const jiraProfileRoutingMatchSchema = z
+  .object({
+    sites: matcherIdentifierListSchema(canonicalHttpsOriginSchema).optional(),
+    projects: matcherIdentifierListSchema(jiraProjectSchema).optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "Jira matcher declarations require an identifier"));
+const linearProfileRoutingMatchSchema = z
+  .object({
+    workspaces: matcherIdentifierListSchema(linearSlugSchema).optional(),
+    teams: matcherIdentifierListSchema(linearSlugSchema).optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "Linear matcher declarations require an identifier"));
+const posthogProfileRoutingMatchSchema = z
+  .object({
+    hosts: matcherIdentifierListSchema(canonicalHttpsOriginSchema).optional(),
+    projects: matcherIdentifierListSchema(posthogProjectSchema).optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "PostHog matcher declarations require an identifier"));
+const profileRoutingMatchSchema = z
+  .object({
+    github: githubProfileRoutingMatchSchema.optional(),
+    sentry: sentryProfileRoutingMatchSchema.optional(),
+    jira: jiraProfileRoutingMatchSchema.optional(),
+    linear: linearProfileRoutingMatchSchema.optional(),
+    posthog: posthogProfileRoutingMatchSchema.optional()
+  })
+  .strict()
+  .superRefine((value, context) => requireMatcherIdentifiers(value, context, "profile routing matches require a provider"));
+const profileRoutingSchema = z.object({ match: profileRoutingMatchSchema }).strict();
+
 const publicProfileUpstreamOverrideShape = {
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -322,6 +420,7 @@ const publicProfileShape = {
   identity: identitySchema.optional(),
   lease: profileLeaseSchema.optional(),
   isolation: profileIsolationSchema.optional(),
+  routing: profileRoutingSchema.optional(),
   upstreams: z.record(z.string(), publicProfileUpstreamOverrideSchema).optional()
 };
 
@@ -330,7 +429,6 @@ const profileSchema = z
   .object({
     ...publicProfileShape,
     metadata: unsupportedOptionSchema,
-    routing: z.object({ match: unsupportedOptionSchema }).strict().optional(),
     upstreams: z.record(z.string(), profileUpstreamOverrideSchema).optional()
   })
   .strict();
@@ -885,12 +983,6 @@ export const miftahConfigSchema = z
         rejectUnsupportedOption(
           ["profiles", profileName, "metadata"],
           "profile metadata has no runtime consumer; remove it or store it outside the Miftah config"
-        );
-      }
-      if (profile.routing?.match !== undefined) {
-        rejectUnsupportedOption(
-          ["profiles", profileName, "routing", "match"],
-          "profile routing matchers are not implemented; use routing.rules instead"
         );
       }
       for (const [upstreamName, override] of Object.entries(profile.upstreams ?? {})) {

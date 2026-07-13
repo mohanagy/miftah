@@ -8,7 +8,7 @@ import type {
   AuditStatus,
   ProfileAuditAction
 } from "./audit-types.js";
-import type { RoutingContextEvidence } from "../routing/routing-types.js";
+import type { RoutingContextEvidence, RoutingMatcherEvidence } from "../routing/routing-types.js";
 
 export interface AuditOperationInput {
   operation: string;
@@ -31,6 +31,7 @@ export interface AuditScopeUpdate {
   riskConfidence?: AuditEvent["riskConfidence"];
   identity?: AuditEvent["identity"];
   routingEvidence?: RoutingContextEvidence;
+  routingMatcherEvidence?: readonly RoutingMatcherEvidence[];
   profileSelectionSource?: AuditEvent["profileSelectionSource"];
   profileConfirmation?: AuditEvent["profileConfirmation"];
   profileLeaseState?: AuditEvent["profileLeaseState"];
@@ -272,6 +273,9 @@ export class AuditScope {
       ...(this.event.riskConfidence === undefined ? {} : { riskConfidence: this.event.riskConfidence }),
       ...(this.event.identity === undefined ? {} : { identity: this.event.identity }),
       ...(this.event.routingEvidence === undefined ? {} : { routingEvidence: this.event.routingEvidence }),
+      ...(this.event.routingMatcherEvidence === undefined
+        ? {}
+        : { routingMatcherEvidence: this.event.routingMatcherEvidence }),
       ...(this.event.profileSelectionSource === undefined
         ? {}
         : { profileSelectionSource: this.event.profileSelectionSource }),

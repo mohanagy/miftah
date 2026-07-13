@@ -1,13 +1,17 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PackageManifest {
+  name?: string;
   version?: string;
+  dependencies?: Record<string, string>;
   repository?: unknown;
   homepage?: unknown;
   bugs?: unknown;
@@ -30,12 +34,19 @@ interface NpmCommand {
   timeoutMs: number;
 }
 
+interface PackageLock {
+  lockfileVersion?: number;
+  requires?: boolean;
+  packages?: Record<string, Record<string, unknown>>;
+}
+
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const npmCommandTimeoutMs = 25_000;
 // A fresh consumer resolves package dependencies and is slower on Windows than local pack/build/check commands.
 const consumerInstallTimeoutMs = 120_000;
 const packedArtifactContractTimeoutMs = consumerInstallTimeoutMs + npmCommandTimeoutMs;
 const npmDiagnosticOutputLimit = 8_000;
+const npmTerminationGraceMs = 250;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
@@ -64,6 +75,41 @@ function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
 }
 
+async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
+  const manifest = readPackageManifest();
+  if (!manifest.name) throw new Error("Package manifest is missing a name.");
+
+  const source = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+  const rootPackage = source.packages?.[""];
+  if (!rootPackage || source.lockfileVersion === undefined) {
+    throw new Error("Package lock is missing the root package entry.");
+  }
+
+  const tarball = `file:${basename(tarballPath)}`;
+  const consumerManifest = {
+    name: "miftah-packed-artifact-contract",
+    private: true,
+    dependencies: { [manifest.name]: tarball }
+  };
+  const packedPackage = { ...rootPackage };
+  delete packedPackage.devDependencies;
+  const consumerLock = {
+    name: consumerManifest.name,
+    lockfileVersion: source.lockfileVersion,
+    requires: source.requires,
+    packages: {
+      ...source.packages,
+      "": consumerManifest,
+      [`node_modules/${manifest.name}`]: { ...packedPackage, resolved: tarball }
+    }
+  };
+
+  await Promise.all([
+    writeFile(join(directory, "package.json"), JSON.stringify(consumerManifest)),
+    writeFile(join(directory, "package-lock.json"), JSON.stringify(consumerLock))
+  ]);
+}
+
 function npmInvocation(args: readonly string[]): { command: string; args: readonly string[] } {
   if (npmCliPath) {
     return { command: process.execPath, args: [npmCliPath, ...args] };
@@ -74,16 +120,15 @@ function npmInvocation(args: readonly string[]): { command: string; args: readon
   return { command: "npm", args };
 }
 
-function consumerInstallCommand(tarballPath: string): NpmCommand {
+function consumerInstallCommand(): NpmCommand {
   return {
     args: [
-      "install",
+      "ci",
+      "--omit=dev",
       "--ignore-scripts",
-      "--no-package-lock",
       "--no-audit",
       "--no-fund",
-      "--prefer-offline",
-      tarballPath
+      "--offline"
     ],
     timeoutMs: consumerInstallTimeoutMs
   };
@@ -105,31 +150,122 @@ function npmDiagnostics(stdout: string | null, stderr: string | null): string {
   return outputs.length === 0 ? "" : `\nCaptured npm output:\n${outputs.join("\n")}`;
 }
 
-function runNpm(args: readonly string[], cwd = repositoryRoot, timeoutMs = npmCommandTimeoutMs) {
-  const invocation = npmInvocation(args);
-  const result = spawnSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, npm_config_loglevel: "silent" },
-    timeout: timeoutMs,
-    killSignal: "SIGTERM"
+interface NpmCommandResult {
+  readonly status: 0;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+interface NpmProcess {
+  readonly stdout: Readable;
+  readonly stderr: Readable;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "close", listener: (status: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+interface NpmSpawnOptions {
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly stdio: ["ignore", "pipe", "pipe"];
+}
+
+type NpmSpawner = (
+  command: string,
+  args: readonly string[],
+  options: NpmSpawnOptions
+) => NpmProcess;
+
+const spawnNpm: NpmSpawner = (command, args, options) =>
+  spawn(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    shell: options.shell,
+    windowsHide: options.windowsHide,
+    stdio: options.stdio
   });
-  if (result.error) {
-    const timedOut = "code" in result.error && result.error.code === "ETIMEDOUT";
-    const reason =
-      timedOut
-        ? `timed out after ${timeoutMs}ms`
-        : `could not start: ${result.error.message}`;
-    throw new Error(`npm ${args.join(" ")} ${reason}.${npmDiagnostics(result.stdout, result.stderr)}`);
+
+async function runNpm(
+  args: readonly string[],
+  cwd = repositoryRoot,
+  timeoutMs = npmCommandTimeoutMs,
+  spawnProcess: NpmSpawner = spawnNpm
+): Promise<NpmCommandResult> {
+  const invocation = npmInvocation(args);
+  return new Promise<NpmCommandResult>((resolve, reject) => {
+    const child = spawnProcess(invocation.command, invocation.args, {
+      cwd,
+      env: { ...process.env, npm_config_loglevel: "silent" },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = () => new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
+    const settle = (result: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKill !== undefined) clearTimeout(forceKill);
+      result();
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      forceKill = setTimeout(() => {
+        if (settled) return;
+        child.kill("SIGKILL");
+        settle(() => {
+          reject(timeoutError());
+        });
+      }, npmTerminationGraceMs);
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => {
+        reject(new Error(`npm ${args.join(" ")} could not start: ${error.message}.${npmDiagnostics(stdout, stderr)}`));
+      });
+    });
+    child.once("close", (status, signal) => {
+      settle(() => {
+        if (timedOut) {
+          reject(timeoutError());
+          return;
+        }
+        if (status !== 0) {
+          const outcome = status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`;
+          reject(new Error(`npm ${args.join(" ")} ${outcome}.${npmDiagnostics(stdout, stderr)}`));
+          return;
+        }
+        resolve({ status: 0, stdout, stderr });
+      });
+    });
+  });
+}
+
+class TermIgnoringNpmProcess extends EventEmitter implements NpmProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly signals: NodeJS.Signals[] = [];
+
+  kill(signal?: NodeJS.Signals): boolean {
+    if (signal !== undefined) this.signals.push(signal);
+    return true;
   }
-  if (result.status !== 0) {
-    const outcome =
-      result.status === null
-        ? `terminated by ${result.signal ?? "an unknown signal"}`
-        : `exited with status ${result.status}`;
-    throw new Error(`npm ${args.join(" ")} ${outcome}.${npmDiagnostics(result.stdout, result.stderr)}`);
-  }
-  return result;
 }
 
 function quoteForWindowsCommand(value: string): string {
@@ -185,8 +321,8 @@ async function loadPackVerifier(): Promise<PackVerifier> {
 }
 
 beforeAll(
-  () => {
-    const build = runNpm(["run", "build"]);
+  async () => {
+    const build = await runNpm(["run", "build"]);
     if (build.status !== 0) {
       throw new Error(`Package-contract build failed:\n${build.stderr || build.stdout}`);
     }
@@ -233,23 +369,35 @@ describe("package metadata contract", () => {
 });
 
 describe("packed artifact contract", () => {
-  it("gives the fresh consumer install deterministic offline options and its own timeout", () => {
-    expect(consumerInstallCommand("miftah-0.1.1.tgz")).toEqual({
+  it("requires a locked cache-only consumer install and its own timeout", () => {
+    expect(consumerInstallCommand()).toEqual({
       args: [
-        "install",
+        "ci",
+        "--omit=dev",
         "--ignore-scripts",
-        "--no-package-lock",
         "--no-audit",
         "--no-fund",
-        "--prefer-offline",
-        "miftah-0.1.1.tgz"
+        "--offline"
       ],
       timeoutMs: 120_000
     });
   });
 
-  it("includes captured output when an npm command exits unsuccessfully", () => {
-    expect(() =>
+  it("keeps the test worker responsive while an npm subprocess is running", async () => {
+    let completed = false;
+    const running = Promise.resolve(
+      runNpm(["exec", "--", process.execPath, "--eval", "setTimeout(() => process.exit(0), 100)"])
+    ).finally(() => {
+      completed = true;
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(completed).toBe(false);
+    await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("includes captured output when an npm command exits unsuccessfully", async () => {
+    await expect(
       runNpm([
         "exec",
         "--",
@@ -257,9 +405,24 @@ describe("packed artifact contract", () => {
         "--eval",
         'process.stdout.write("miftah-diagnostic-out"); process.stderr.write("miftah-diagnostic-err"); process.exit(1);'
       ])
-    ).toThrow(
+    ).rejects.toThrow(
       /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
     );
+  });
+
+  it("escalates an npm timeout when its child ignores SIGTERM", async () => {
+    const child = new TermIgnoringNpmProcess();
+    const spawnTermIgnoringChild: NpmSpawner = () => child;
+    const outcome = await Promise.race([
+      runNpm(["ignored"], repositoryRoot, 5, spawnTermIgnoringChild).then(
+        () => "resolved",
+        (error: unknown) => error
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 500))
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
   it("loads its verifier from a shebang-free ESM module", async () => {
@@ -271,8 +434,8 @@ describe("packed artifact contract", () => {
     );
   });
 
-  it("contains required runtime, documentation, and example files from a real dry run", () => {
-    const packed = runNpm(["pack", "--dry-run", "--json"]);
+  it("contains required runtime, documentation, and example files from a real dry run", async () => {
+    const packed = await runNpm(["pack", "--dry-run", "--json"]);
 
     expect(packed.status, packed.stderr).toBe(0);
     const results = JSON.parse(packed.stdout) as PackResult[];
@@ -319,8 +482,8 @@ describe("packed artifact contract", () => {
     );
   });
 
-  it("runs the checked package command against the real npm pack output", () => {
-    const checked = runNpm(["run", "check:pack"]);
+  it("runs the checked package command against the real npm pack output", async () => {
+    const checked = await runNpm(["run", "check:pack"]);
 
     expect(checked.status, checked.stderr || checked.stdout).toBe(0);
     expect(checked.stdout).toMatch(/Package contract verified \(\d+ files\)\./u);
@@ -331,14 +494,19 @@ describe("packed artifact contract", () => {
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "miftah-packed-artifact-"));
       try {
-        const packed = runNpm(["pack", "--json", "--pack-destination", directory]);
+        const packed = await runNpm(["pack", "--json", "--pack-destination", directory]);
         expect(packed.status, packed.stderr).toBe(0);
         const [result] = JSON.parse(packed.stdout) as PackResult[];
         if (!result) throw new Error("npm pack did not report an artifact.");
 
-        const consumerInstall = consumerInstallCommand(join(directory, result.filename));
-        const install = runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
+        await prepareLockedConsumer(directory, join(directory, result.filename));
+        const consumerInstall = consumerInstallCommand();
+        const install = await runNpm(consumerInstall.args, directory, consumerInstall.timeoutMs);
         expect(install.status, install.stderr || install.stdout).toBe(0);
+        const installedManifest = JSON.parse(
+          await readFile(join(directory, "node_modules", "@lubab", "miftah", "package.json"), "utf8")
+        ) as PackageManifest;
+        expect(installedManifest.dependencies).toEqual(readPackageManifest().dependencies);
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");
@@ -394,13 +562,13 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
             "",
             "type SupportedTypes = [",
-            "  ActiveProfileStateScope, AuditConfig, ConfigDiagnostic, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, MiftahConfig,",
+            "  ActiveProfileStateScope, AuditConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
-            "  PolicyConfig, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
-            "  RoutingRule, SecurityConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
+            "  PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
+            "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
             "  ValidatedRoutingConfig",
             "];",
             "declare const types: SupportedTypes;",
@@ -413,6 +581,13 @@ describe("packed artifact contract", () => {
             'const isolatedFile: ProfileIsolationFile = { source: "credentials/oauth.json", destination: "credentials/oauth.json" };',
             'const isolatedVolume: ProfileIsolationContainerVolume = { source: "credentials/oauth.json", destination: "/run/miftah/oauth.json" };',
             'const isolation: ProfileIsolationConfig = { files: [isolatedFile], containerVolumes: [isolatedVolume] };',
+            'const githubMatcher: GitHubProfileRoutingMatch = { repositories: ["acme/miftah"] };',
+            'const sentryMatcher: SentryProfileRoutingMatch = { projects: ["acme/api"] };',
+            'const jiraMatcher: JiraProfileRoutingMatch = { projects: ["OPS"] };',
+            'const linearMatcher: LinearProfileRoutingMatch = { workspaces: ["acme"] };',
+            'const posthogMatcher: PostHogProfileRoutingMatch = { projects: ["123"] };',
+            'const profileRoutingMatch: ProfileRoutingMatchConfig = { github: githubMatcher, sentry: sentryMatcher, jira: jiraMatcher, linear: linearMatcher, posthog: posthogMatcher };',
+            'const profileRouting: ProfileRoutingConfig = { match: profileRoutingMatch };',
             "// @ts-expect-error Profile lease risk requirements must be unique.",
             'const invalidDuplicateProfileLease: ProfileLeaseConfig = { ttlMs: 60_000, requiredForRisk: ["write", "write"] };',
             'const unknownRisk: UnknownToolRisk = "destructive";',

@@ -1,5 +1,5 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { miftahPublicConfigSchema } from "./schema.js";
+import { CANONICAL_HTTPS_ORIGIN_PATTERN, miftahPublicConfigSchema } from "./schema.js";
 
 type SchemaObject = Record<string, unknown>;
 
@@ -39,11 +39,54 @@ function addProfileIsolationArrayConstraints(schema: SchemaObject): void {
   }
 }
 
+/** Zod matcher-array refinements need explicit editor-schema duplicate-item constraints. */
+function addProfileRoutingMatcherArrayConstraints(schema: SchemaObject): void {
+  const rootProperties = requireSchemaObject(schema.properties, "root properties");
+  const profiles = requireSchemaObject(rootProperties.profiles, "profiles schema");
+  const profile = requireSchemaObject(profiles.additionalProperties, "profile schema");
+  const profileProperties = requireSchemaObject(profile.properties, "profile properties");
+  const routingProperties = requireSchemaObject(
+    requireSchemaObject(profileProperties.routing, "profile routing schema").properties,
+    "profile routing schema properties"
+  );
+  const matchProperties = requireSchemaObject(
+    requireSchemaObject(routingProperties.match, "profile routing match schema").properties,
+    "profile routing match schema properties"
+  );
+  requireSchemaObject(routingProperties.match, "profile routing match schema").minProperties = 1;
+  const providerFields = {
+    github: ["repositories", "organizations"],
+    sentry: ["organizations", "projects", "environments"],
+    jira: ["sites", "projects"],
+    linear: ["workspaces", "teams"],
+    posthog: ["hosts", "projects"]
+  } as const;
+  for (const [provider, fields] of Object.entries(providerFields)) {
+    const providerSchema = requireSchemaObject(matchProperties[provider], `${provider} matcher schema`);
+    providerSchema.minProperties = 1;
+    const properties = requireSchemaObject(
+      providerSchema.properties,
+      `${provider} matcher schema properties`
+    );
+    for (const field of fields) {
+      const fieldSchema = requireSchemaObject(properties[field], `${provider} matcher ${field}`);
+      fieldSchema.uniqueItems = true;
+      if ((provider === "jira" && field === "sites") || (provider === "posthog" && field === "hosts")) {
+        fieldSchema.items = {
+          ...requireSchemaObject(fieldSchema.items, `${provider} matcher ${field} item`),
+          pattern: CANONICAL_HTTPS_ORIGIN_PATTERN.source
+        };
+      }
+    }
+  }
+}
+
 /** Generates the editor-facing JSON Schema from the same strict Zod contract used after validation. */
 export function generateConfigSchema(): Record<string, unknown> {
   const schema = zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }) as SchemaObject;
   addProfileLeaseArrayConstraints(schema);
   addProfileIsolationArrayConstraints(schema);
+  addProfileRoutingMatcherArrayConstraints(schema);
   return {
     ...schema,
     allOf: [

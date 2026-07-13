@@ -185,6 +185,63 @@ describe("routing context collector", () => {
     expect(unavailableGit.evidence.git).toBeUndefined();
   });
 
+  it.each([
+    "https://github.com/acme/miftah.git",
+    "ssh://git@github.com/acme/miftah.git",
+    "git@github.com:acme/miftah.git"
+  ])("derives a canonical GitHub matcher repository from a supported Git remote: %s", async (origin) => {
+    const root = await createProject();
+    await execFile("git", ["init"], { cwd: root });
+    await execFile("git", ["remote", "add", "origin", origin], { cwd: root });
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: [],
+      cwd: root,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.matcherContext).toEqual({ githubRepositories: ["acme/miftah"] });
+  });
+
+  it("omits unsafe Git remote text from the provider matcher context", async () => {
+    const root = await createProject();
+    await execFile("git", ["init"], { cwd: root });
+    await execFile("git", ["remote", "add", "origin", "ssh://admin:secret@github.com/acme/miftah.git?token=secret"], {
+      cwd: root
+    });
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: [],
+      cwd: root,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.matcherContext).toBeUndefined();
+    expect(JSON.stringify(snapshot)).not.toContain("secret");
+  });
+
+  it("derives a canonical GitHub matcher repository from allowlisted package metadata", async () => {
+    const root = await createProject();
+    await writeJson(join(root, "package.json"), {
+      name: "@acme/miftah",
+      repository: { type: "git", url: "git+https://github.com/acme/miftah.git" }
+    });
+
+    const snapshot = await collectRoutingContext({
+      wrapperName: "github",
+      knownProfileNames: [],
+      cwd: root,
+      environment: {},
+      mcpRoots: [fileUri(root)]
+    });
+
+    expect(snapshot.matcherContext).toEqual({ githubRepositories: ["acme/miftah"] });
+  });
+
   it("reads only a local Git origin rather than a global configuration value", async () => {
     const root = await createProject();
     const gitHome = await createProject();

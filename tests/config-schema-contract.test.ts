@@ -93,6 +93,7 @@ interface SchemaNode {
   maximum?: number;
   minItems?: number;
   maxItems?: number;
+  minProperties?: number;
   uniqueItems?: boolean;
   properties?: Record<string, SchemaNode>;
   items?: SchemaNode;
@@ -180,7 +181,50 @@ describe("published config schema", () => {
       }
     });
     expect(profile.properties).not.toHaveProperty("metadata");
-    expect(profile.properties).not.toHaveProperty("routing");
+    expect(profile.properties?.routing).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["match"],
+      properties: {
+        match: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            github: {
+              type: "object",
+              additionalProperties: false,
+              minProperties: 1,
+              properties: {
+                repositories: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 32,
+                  uniqueItems: true
+                }
+              }
+            },
+            sentry: { type: "object", additionalProperties: false },
+            jira: { type: "object", additionalProperties: false },
+            linear: { type: "object", additionalProperties: false },
+            posthog: { type: "object", additionalProperties: false }
+          },
+          minProperties: 1
+        }
+      }
+    });
+    const jiraSitePattern = profile.properties?.routing?.properties?.match?.properties?.jira?.properties?.sites?.items?.pattern;
+    const posthogHostPattern = profile.properties?.routing?.properties?.match?.properties?.posthog?.properties?.hosts?.items?.pattern;
+    if (!jiraSitePattern || !posthogHostPattern) {
+      throw new Error("Expected generated matcher-origin patterns.");
+    }
+    for (const pattern of [jiraSitePattern, posthogHostPattern]) {
+      const expression = new RegExp(pattern, "u");
+      expect(expression.test("https://acme.atlassian.net")).toBe(true);
+      expect(expression.test("https://acme.atlassian.net:8443")).toBe(true);
+      expect(expression.test("https://acme.atlassian.net:443")).toBe(false);
+      expect(expression.test("https://admin:secret@acme.atlassian.net/private?token=secret#fragment")).toBe(false);
+      expect(expression.test("https://acme.atlassian.net/")).toBe(false);
+    }
     expect(profileUpstreamOverride.properties).toHaveProperty("args");
     expect(profileUpstreamOverride.properties).toHaveProperty("env");
     expect(profileUpstreamOverride.properties).toHaveProperty("cwd");

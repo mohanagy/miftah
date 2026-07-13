@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { RoutingEngine } from "../src/routing/routing-engine.js";
+import { matcherEvidenceFromError, RoutingEngine } from "../src/routing/routing-engine.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 describe("routing and policy", () => {
   it("routes by tool arguments before falling back to the active profile", () => {
@@ -167,6 +168,231 @@ describe("routing and policy", () => {
       profile: "rule",
       reason: "rule:matching-rule"
     });
+  });
+
+  it("uses a static provider matcher after explicit routing and before active-profile fallback", () => {
+    const engine = new RoutingEngine(
+      { fallback: "activeProfile" },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(engine.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah" } })).toEqual({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [
+        { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+      ]
+    });
+  });
+
+  it("routes a resource read from a canonical provider URI", () => {
+    const engine = new RoutingEngine(
+      { fallback: "activeProfile" },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(
+      engine.resolve({
+        toolName: "resources/read",
+        args: { uri: "https://github.com/acme/miftah/issues/30" }
+      })
+    ).toEqual({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [{ profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }]
+    });
+  });
+
+  it.each([
+    {
+      provider: "github",
+      toolName: "github__search_issues",
+      args: { repo: "acme/miftah" },
+      match: { github: { repositories: ["acme/miftah"] } }
+    },
+    {
+      provider: "sentry",
+      toolName: "sentry__get_issue",
+      args: { organization: "acme", project: "api" },
+      match: { sentry: { projects: ["acme/api"] } }
+    },
+    {
+      provider: "jira",
+      toolName: "jira__get_issue",
+      args: { site: "https://acme.atlassian.net", project: "OPS" },
+      match: { jira: { sites: ["https://acme.atlassian.net"], projects: ["OPS"] } }
+    },
+    {
+      provider: "linear",
+      toolName: "linear__get_issue",
+      args: { workspace: "acme", team: "eng" },
+      match: { linear: { workspaces: ["acme"], teams: ["eng"] } }
+    },
+    {
+      provider: "posthog",
+      toolName: "posthog__query",
+      args: { host: "https://app.posthog.com", project: "123" },
+      match: { posthog: { hosts: ["https://app.posthog.com"], projects: ["123"] } }
+    }
+  ])("routes through the configured $provider matcher", ({ provider, toolName, args, match }) => {
+    const engine = new RoutingEngine({}, "personal", "personal", { work: { routing: { match } } });
+
+    expect(engine.resolve({ toolName, args })).toMatchObject({ profile: "work", reason: `matcher:${provider}` });
+  });
+
+  it("keeps an explicit rule ahead of an otherwise matching static provider binding", () => {
+    const engine = new RoutingEngine(
+      { rules: [{ name: "explicit", when: { "args.repo": "acme/miftah" }, profile: "rule" }] },
+      "personal",
+      "personal",
+      { work: { routing: { match: { github: { repositories: ["acme/miftah"] } } } } }
+    );
+
+    expect(engine.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah" } })).toEqual({
+      profile: "rule",
+      reason: "rule:explicit"
+    });
+  });
+
+  it("keeps same-profile matcher signals together and reports distinct profiles with bounded stable evidence", () => {
+    const sameProfile = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        work: {
+          routing: { match: { github: { repositories: ["acme/miftah"], organizations: ["acme"] } } }
+        }
+      }
+    );
+    expect(
+      sameProfile.resolve({ toolName: "github__search_issues", args: { repo: "acme/miftah", organization: "acme" } })
+    ).toMatchObject({
+      profile: "work",
+      reason: "matcher:github",
+      matcherEvidence: [
+        { profile: "work", provider: "github", kind: "organization", value: "acme" },
+        { profile: "work", provider: "github", kind: "repository", value: "acme/miftah" }
+      ]
+    });
+
+    const ambiguous = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        zeta: { routing: { match: { github: { repositories: ["acme/miftah"] } } } },
+        alpha: { routing: { match: { github: { repositories: ["acme/miftah"] } } } }
+      }
+    );
+    let failure: unknown;
+    try {
+      ambiguous.resolve({
+        toolName: "github__search_issues",
+        args: { repo: "acme/miftah", accessToken: "must-not-reach-ambiguity-evidence" }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect(failure).toMatchObject({
+      code: "ROUTING_AMBIGUOUS",
+      details: {
+        matcherEvidence: [
+          { profile: "alpha", provider: "github", kind: "repository", value: "acme/miftah" },
+          { profile: "zeta", provider: "github", kind: "repository", value: "acme/miftah" }
+        ]
+      }
+    });
+    expect(JSON.stringify((failure as MiftahError).details)).not.toContain("must-not-reach-ambiguity-evidence");
+    expect(matcherEvidenceFromError(failure)).toEqual([
+      { profile: "alpha", provider: "github", kind: "repository", value: "acme/miftah" },
+      { profile: "zeta", provider: "github", kind: "repository", value: "acme/miftah" }
+    ]);
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "https://admin:secret@github.com/acme/miftah?token=secret"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "raw-unclassified-secret"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
+    expect(
+      matcherEvidenceFromError(
+        new MiftahError("ROUTING_AMBIGUOUS", "unsafe details", {
+          matcherEvidence: [
+            {
+              profile: "work",
+              provider: "github",
+              kind: "repository",
+              value: "AcMe/MifTah"
+            }
+          ]
+        })
+      )
+    ).toBeUndefined();
+  });
+
+  it("treats conflicting canonical provider aliases as ambiguity instead of silently preferring one", () => {
+    const engine = new RoutingEngine(
+      {},
+      "personal",
+      "personal",
+      {
+        alpha: { routing: { match: { github: { repositories: ["acme/alpha"] } } } },
+        beta: { routing: { match: { github: { repositories: ["acme/beta"] } } } }
+      }
+    );
+
+    let failure: unknown;
+    try {
+      engine.resolve({
+        toolName: "github__get_issue",
+        args: {
+          repository: "acme/alpha",
+          repo: "acme/beta",
+          accessToken: "must-not-reach-ambiguity-evidence"
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "ROUTING_AMBIGUOUS",
+      details: {
+        matcherEvidence: [
+          { profile: "alpha", provider: "github", kind: "repository", value: "acme/alpha" },
+          { profile: "beta", provider: "github", kind: "repository", value: "acme/beta" }
+        ]
+      }
+    });
+    expect(JSON.stringify((failure as MiftahError).details)).not.toContain("must-not-reach-ambiguity-evidence");
   });
 
   it("returns an ambiguity error when ask fallback has multiple matches", () => {
