@@ -501,10 +501,14 @@ type ProfileIsolationReferenceInput = {
   containerVolumes?: readonly IsolationContainerVolumeInput[];
 };
 
+type UpstreamTransportReference = {
+  transport: "stdio" | "http" | "sse" | "streamable-http";
+};
+
 type ConfigReferenceInput = {
   defaultProfile: string;
-  upstream?: unknown;
-  upstreams?: Record<string, unknown>;
+  upstream?: UpstreamTransportReference;
+  upstreams?: Record<string, UpstreamTransportReference>;
   profiles: Record<
     string,
     {
@@ -564,7 +568,8 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
 
   const profileNames = new Set(Object.keys(value.profiles));
   const policyNames = new Set(Object.keys(value.policies ?? {}));
-  const upstreamNames = new Set(Object.keys(value.upstreams ?? {}));
+  const namedUpstreams = value.upstreams ?? {};
+  const upstreamNames = new Set(Object.keys(namedUpstreams));
   if (!profileNames.has(value.defaultProfile)) {
     addConfigIssue(
       context,
@@ -585,6 +590,25 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
         "Choose a policy name defined under `policies`."
       );
     }
+    if (profile.isolation !== undefined) {
+      if (value.upstream !== undefined) {
+        validateIsolationTransport(
+          ["profiles", profileName, "isolation"],
+          "the configured upstream",
+          value.upstream.transport,
+          context
+        );
+      } else {
+        for (const [upstreamName, upstream] of Object.entries(namedUpstreams)) {
+          validateIsolationTransport(
+            ["profiles", profileName, "isolation"],
+            `upstream '${upstreamName}'`,
+            upstream.transport,
+            context
+          );
+        }
+      }
+    }
     for (const upstreamName of Object.keys(profile.upstreams ?? {})) {
       if (!upstreamNames.has(upstreamName)) {
         addConfigIssue(
@@ -598,6 +622,15 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
       const override = profile.upstreams?.[upstreamName];
       if (override !== undefined) {
         validateMergedIsolationDestinations(profileName, upstreamName, profile.isolation, override.isolation, context);
+        const upstream = namedUpstreams[upstreamName];
+        if (upstream !== undefined && override.isolation !== undefined) {
+          validateIsolationTransport(
+            ["profiles", profileName, "upstreams", upstreamName, "isolation"],
+            `upstream '${upstreamName}'`,
+            upstream.transport,
+            context
+          );
+        }
       }
     }
   }
@@ -625,6 +658,22 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
       );
     }
   }
+}
+
+function validateIsolationTransport(
+  path: (string | number)[],
+  target: string,
+  transport: UpstreamTransportReference["transport"],
+  context: z.RefinementCtx
+): void {
+  if (transport === "stdio") return;
+  addConfigIssue(
+    context,
+    "CONFIG_SCHEMA_INVALID",
+    path,
+    `profile isolation requires a stdio transport; ${target} uses '${transport}'`,
+    "Remove isolation for this target, or configure the target upstream with transport 'stdio'."
+  );
 }
 
 function validateMergedIsolationDestinations(

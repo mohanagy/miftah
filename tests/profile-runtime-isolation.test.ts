@@ -306,7 +306,8 @@ describe("profile runtime isolation", () => {
       expect(await readFile(sourcePath, "utf8")).toBe("second-oauth-secret");
 
       await manager.close();
-      await expect(stat(second.credentialPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      const finalStats = await stat(second.credentialPath);
+      expect(finalStats.isFile()).toBe(true);
     } finally {
       await manager.close().catch(() => undefined);
       await rm(directory, { recursive: true, force: true });
@@ -348,7 +349,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("rejects a configuration-root source symlink before reading its target", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("rejects a configuration-root source symlink before reading its target", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-symlink-"));
     const configPath = join(directory, "miftah.json");
     const credentialsDirectory = join(directory, "credentials");
@@ -816,7 +817,7 @@ describe("profile runtime isolation", () => {
     }
   });
 
-  it("rejects remote container engines and a symlinked runtime root", async () => {
+  it.skipIf(!supportsNativeProfileRuntimeIsolation)("rejects remote container engines and a symlinked runtime root", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-container-engine-"));
     const linkedRoot = join(dirname(root), `${basename(root)}-link`);
     await mkdir(join(root, "home"), { recursive: true });

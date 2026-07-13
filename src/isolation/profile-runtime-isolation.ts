@@ -9,6 +9,10 @@ const maximumMappedFileBytes = 1_048_576;
 const markerName = ".miftah-profile-isolation.json";
 const runtimeVersion = "v1";
 const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
+const trailingWindowsPathSuffixPattern = /[. ]+$/u;
+const shortContainerEnvironmentOrVolumeFlagPattern = /[ev]/iu;
+const windowsDrivePrefixPattern = /^[A-Za-z]:/u;
+const pathSegmentSeparatorPattern = /[\\/]/u;
 const generatedEnvironmentNames = new Set([
   "HOME",
   "USERPROFILE",
@@ -285,7 +289,7 @@ export class ProfileRuntimeIsolation {
   private pathKey(segments: readonly string[]): string {
     const normalized =
       this.platform === "win32" || this.platform === "darwin"
-        ? segments.map((segment) => segment.replace(/[. ]+$/u, "").toLocaleLowerCase("en-US"))
+        ? segments.map((segment) => segment.replace(trailingWindowsPathSuffixPattern, "").toLocaleLowerCase("en-US"))
         : [...segments];
     if (normalized.some((segment) => segment.length === 0)) throw isolationFailure();
     return normalized.join("/");
@@ -573,7 +577,7 @@ function isContainerMountArgument(argument: string): boolean {
     argument.startsWith("--device=") ||
     argument === "-v" ||
     (argument.startsWith("-v") && argument.length > 2) ||
-    (argument.startsWith("-") && !argument.startsWith("--") && /[ev]/iu.test(argument.slice(1)))
+    (argument.startsWith("-") && !argument.startsWith("--") && shortContainerEnvironmentOrVolumeFlagPattern.test(argument.slice(1)))
   );
 }
 
@@ -615,11 +619,11 @@ function safeRelativeSegments(value: string): string[] {
     value.includes("\u0000") ||
     value.startsWith("/") ||
     value.startsWith("\\") ||
-    /^[A-Za-z]:/u.test(value)
+    windowsDrivePrefixPattern.test(value)
   ) {
     throw isolationFailure();
   }
-  const segments = value.split(/[\\/]/u);
+  const segments = value.split(pathSegmentSeparatorPattern);
   if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
     throw isolationFailure();
   }

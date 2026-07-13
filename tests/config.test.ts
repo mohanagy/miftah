@@ -9,6 +9,10 @@ const duplicateIdentityRiskPattern = /profiles\.work\.identity\.requiredForRisk/
 const identityProbeProviderPattern = /profiles\.work\.identity\.probe\.provider/u;
 const identityExpectedLoginPattern = /profiles\.work\.identity\.expected\.login/u;
 const insecureRemoteUrlPattern = /CONFIG_SCHEMA_INVALID.*upstream\.url/u;
+const profileIsolationTransportPattern = /profiles\.work\.isolation/u;
+const namedUpstreamIsolationTransportPattern = /profiles\.work\.upstreams\.remote\.isolation/u;
+const homeBindingReplacementPathPattern = /profiles\.work\.isolation\.files\.0\.environment/u;
+const containerVolumeEnvironmentMismatchPathPattern = /profiles\.work\.isolation\.containerVolumes\.0\.environment/u;
 
 describe("config foundation", () => {
   it("accepts a valid wrapper and expands profile environment references", () => {
@@ -135,6 +139,94 @@ describe("config foundation", () => {
     ]);
   });
 
+  it("rejects profile isolation for a non-stdio default upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "remote-isolation",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: "https://example.test/mcp" },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+            }
+          }
+        }
+      })
+    ).toThrow(profileIsolationTransportPattern);
+  });
+
+  it("rejects named-upstream isolation for a non-stdio upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "named-remote-isolation",
+        defaultProfile: "work",
+        upstreams: {
+          remote: { transport: "sse", url: "https://example.test/mcp" }
+        },
+        profiles: {
+          work: {
+            upstreams: {
+              remote: {
+                isolation: {
+                  files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+                }
+              }
+            }
+          }
+        }
+      })
+    ).toThrow(namedUpstreamIsolationTransportPattern);
+  });
+
+  it("rejects profile isolation inherited by a non-stdio named upstream during configuration validation", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "mixed-transport-isolation",
+        defaultProfile: "work",
+        upstreams: {
+          local: { transport: "stdio", command: "node", args: ["server.js"] },
+          remote: { transport: "http", url: "https://example.test/mcp" }
+        },
+        profiles: {
+          work: {
+            isolation: {
+              files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+            }
+          }
+        }
+      })
+    ).toThrow(profileIsolationTransportPattern);
+  });
+
+  it("allows a named stdio isolation override when a sibling upstream is remote", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "targeted-isolation",
+      defaultProfile: "work",
+      upstreams: {
+        local: { transport: "stdio", command: "node", args: ["server.js"] },
+        remote: { transport: "http", url: "https://example.test/mcp" }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            local: {
+              isolation: {
+                files: [{ source: "credentials/oauth.json", destination: "credentials/oauth.json" }]
+              }
+            }
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.upstreams?.local?.isolation?.files).toHaveLength(1);
+  });
+
   it("rejects duplicate isolation destinations added by a named-upstream override", () => {
     let failure: unknown;
     try {
@@ -249,7 +341,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.isolation\.files\.0\.environment/u);
+    ).toThrow(homeBindingReplacementPathPattern);
   });
 
   it("rejects a container environment binding that does not map the same isolated file", () => {
@@ -280,7 +372,7 @@ describe("config foundation", () => {
           }
         }
       })
-    ).toThrow(/profiles\.work\.isolation\.containerVolumes\.0\.environment/u);
+    ).toThrow(containerVolumeEnvironmentMismatchPathPattern);
   });
 
   it("allows a container environment binding for the exact copied file it mounts", () => {
