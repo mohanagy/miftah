@@ -163,7 +163,18 @@ $stage = 'bootstrap'
 try {
   $stage = 'request'
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
-  if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
+  if ($null -eq $encoded) {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:missing')
+    exit 1
+  }
+  if ($encoded.Length -eq 0) {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:empty')
+    exit 1
+  }
+  if ($encoded.Length -gt 16384) {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:oversize')
+    exit 1
+  }
   $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST')
@@ -242,7 +253,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
     )?.[0];
     if (stage !== undefined) return stage;
     const requestFailure = diagnostic.match(
-      /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(field-count-[1-9][0-9]*|operation)/
+      /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
   }
