@@ -1,5 +1,7 @@
 # Architecture
 
+The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks.
+
 Miftah is an MCP-aware proxy, not a byte-level reverse proxy:
 
 ```text

@@ -22,4 +22,4 @@ Remove real tokens, personal data, and unrelated customer data. Use disposable l
 
 Maintainers aim to acknowledge a report within five business days, then coordinate validation, remediation, release timing, and credit. Please allow a reasonable remediation period before public disclosure. If the private reporting form is unavailable, contact a maintainer privately to request a secure channel without sharing vulnerability details publicly.
 
-For the package's security boundaries and operating guidance, see [docs/security.md](docs/security.md).
+For the package's security boundaries and operating guidance, see [docs/security.md](docs/security.md) and the public [threat model](docs/threat-model.md).
