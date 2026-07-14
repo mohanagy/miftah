@@ -110,6 +110,7 @@ try {
   if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
   $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+  [Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_PARSE')
   $request = $json | ConvertFrom-Json
   if ($null -eq $request -or $request.operation -ne 'create-private-directory' -or $request.directory -isnot [string]) { exit 1 }
   $stage = 'directory'
@@ -174,6 +175,9 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:(bootstrap|request|directory|identity|descriptor|rule|create|verify)(?::(permission|missing|invalid|other))?/
     )?.[0];
     if (stage !== undefined) return stage;
+  }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_PARSE")) {
+    return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:parse";
   }
   if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_SECTIONS")) {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:sections";
