@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -277,6 +277,24 @@ class TermIgnoringNpmProcess extends EventEmitter implements NpmProcess {
   }
 }
 
+class DelayedNpmProcess extends EventEmitter implements NpmProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+
+  constructor(delayMs: number) {
+    super();
+    setTimeout(() => this.emit("close", 0, null), delayMs);
+  }
+
+  kill(): boolean {
+    return true;
+  }
+}
+
+function fixtureLifecycleDiagnostic(startedPath: string, initializedPath: string): string {
+  return `Fixture lifecycle markers: source-loaded=${existsSync(startedPath)}, initialized=${existsSync(initializedPath)}`;
+}
+
 function quoteForWindowsCommand(value: string): string {
   return `"${value.replace(/"/gu, '""')}"`;
 }
@@ -474,10 +492,12 @@ describe("packed artifact contract", () => {
     });
   });
 
-  it("keeps the test worker responsive while an npm subprocess is running", async () => {
+  it("keeps the test worker responsive while a spawned npm process is pending", async () => {
     let completed = false;
+    const child = new DelayedNpmProcess(100);
+    const spawnDelayedChild: NpmSpawner = () => child;
     const running = Promise.resolve(
-      runNpm(["exec", "--", process.execPath, "--eval", "setTimeout(() => process.exit(0), 100)"])
+      runNpm(["exec", "--", process.execPath, "--eval", "process.exit(0)"], repositoryRoot, 1_000, spawnDelayedChild)
     ).finally(() => {
       completed = true;
     });
@@ -804,12 +824,22 @@ describe("packed artifact contract", () => {
           profiles: { work: { env } },
           process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
         });
+        const healthyStartedPath = join(directory, "doctor-healthy-started");
+        const healthyInitializedPath = join(directory, "doctor-healthy-initialized");
         const healthyConfigPath = await writeDoctorConfig(
           "doctor-healthy.json",
-          doctorConfig("packed-doctor-healthy")
+          doctorConfig("packed-doctor-healthy", {
+            TEST_START_COUNT_PATH: healthyStartedPath,
+            TEST_INITIALIZED_PATH: healthyInitializedPath
+          })
         );
         const healthyDoctor = runInstalledBinary(binary, ["doctor", "--config", healthyConfigPath], directory);
-        expect(healthyDoctor.status, healthyDoctor.stderr || healthyDoctor.stdout).toBe(0);
+        expect(
+          healthyDoctor.status,
+          [healthyDoctor.stderr || healthyDoctor.stdout, fixtureLifecycleDiagnostic(healthyStartedPath, healthyInitializedPath)]
+            .filter(Boolean)
+            .join("\n")
+        ).toBe(0);
         expect(healthyDoctor.stderr).toBe("");
         expect(healthyDoctor.stdout).toContain("Doctor: healthy");
         expect(healthyDoctor.stdout).toContain("DOCTOR_CONFIGURATION");
