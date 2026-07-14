@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
+const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -35,6 +36,16 @@ function aclEnvironment(request: string): NodeJS.ProcessEnv {
     if (value !== undefined) environment[name] = value;
   }
   environment[requestEnvironmentName] = request;
+  return environment;
+}
+
+function restrictedAclEnvironment(request: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { SystemRoot: "C:\\Windows", windir: "C:\\Windows" };
+  for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
+    const value = environmentValue(process.env, name);
+    if (value !== undefined) environment[name] = value;
+  }
+  environment[privateDirectoryRequestEnvironmentName] = request;
   return environment;
 }
 
@@ -87,6 +98,60 @@ try {
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 
+const privateDirectoryProbe = String.raw`$ErrorActionPreference = 'Stop'
+$requestName = '${privateDirectoryRequestEnvironmentName}'
+$directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+$stage = 'bootstrap'
+try {
+  $stage = 'request'
+  $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
+  if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
+  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+  $request = $json | ConvertFrom-Json
+  if ($null -eq $request -or $request.operation -ne 'create-private-directory' -or $request.directory -isnot [string]) { exit 1 }
+  $stage = 'directory'
+  $directory = New-Object System.IO.DirectoryInfo($request.directory)
+  if ($directory.Exists) { exit 1 }
+  $stage = 'identity'
+  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  if ($null -eq $identity) { exit 1 }
+  $stage = 'descriptor'
+  $security = New-Object System.Security.AccessControl.DirectorySecurity
+  $security.SetAccessRuleProtection($true, $false)
+  $security.SetOwner($identity)
+  $stage = 'rule'
+  $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $identity,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    [System.Security.AccessControl.InheritanceFlags]$inheritance,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow
+  )
+  $security.SetAccessRule($rule)
+  $expected = $security.GetSecurityDescriptorSddlForm($directorySections)
+  $stage = 'create'
+  $directory.Create($security)
+  $stage = 'verify'
+  $directory.Refresh()
+  $actual = $directory.GetAccessControl()
+  if (-not $actual.AreAccessRulesProtected) { exit 1 }
+  if ($actual.GetSecurityDescriptorSddlForm($directorySections) -ne $expected) { exit 1 }
+  exit 0
+} catch {
+  $suffix = switch ($_.CategoryInfo.Category.ToString()) {
+    'PermissionDenied' { ':permission' }
+    'ObjectNotFound' { ':missing' }
+    'InvalidOperation' { ':invalid' }
+    default { ':other' }
+  }
+  [Console]::Out.Write("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:" + $stage + $suffix)
+  exit 1
+}`;
+
+const encodedPrivateDirectoryProbe = Buffer.from(privateDirectoryProbe, "utf16le").toString("base64");
+
 function safeAclProbeStage(output: readonly Buffer[]): string {
   const bytes = Buffer.concat(output);
   for (const encoding of ["utf8", "utf16le"] as const) {
@@ -97,6 +162,18 @@ function safeAclProbeStage(output: readonly Buffer[]): string {
     if (stage !== undefined) return stage;
   }
   return "MIFTAH_ACL_PROBE_STAGE:unavailable";
+}
+
+function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
+  const bytes = Buffer.concat(output);
+  for (const encoding of ["utf8", "utf16le"] as const) {
+    const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
+    const stage = diagnostic.match(
+      /MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:(bootstrap|request|directory|identity|descriptor|rule|create|verify)(?::(permission|missing|invalid|other))?/
+    )?.[0];
+    if (stage !== undefined) return stage;
+  }
+  return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:unavailable";
 }
 
 async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
@@ -126,7 +203,53 @@ async function windowsAclSddl(path: string, operation: "read" | "restrict"): Pro
   });
 }
 
+async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
+  const request = Buffer.from(JSON.stringify({ operation: "create-private-directory", directory }), "utf8").toString("base64");
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      trustedPowerShellExecutable(),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPrivateDirectoryProbe],
+      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    const output: Buffer[] = [];
+    const errorOutput: Buffer[] = [];
+    const timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // The probe has no verified result after its bounded execution time.
+      }
+      reject(new Error("Windows private-directory ACL probe timed out"));
+    }, 5_000);
+    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
+    child.once("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Windows private-directory ACL probe could not start"));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Windows private-directory ACL probe failed: ${safePrivateDirectoryProbeStage([...output, ...errorOutput])}`));
+    });
+  });
+}
+
 describe("Windows migration ACL contract", () => {
+  it.runIf(process.platform === "win32")(
+    "creates a private migration directory under the production ACL environment",
+    async () => {
+      const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-private-directory-"));
+      temporaryDirectories.push(parentDirectory);
+
+      await expect(windowsPrivateDirectoryProbe(join(parentDirectory, ".miftah-migrate-transaction"))).resolves.toBeUndefined();
+    },
+    10_000
+  );
+
   it.runIf(process.platform === "win32")(
     "preserves a restrictive source owner/group/DACL on the migrated config and exact backup",
     async () => {
