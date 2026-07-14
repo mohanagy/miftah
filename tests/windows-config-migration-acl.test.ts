@@ -286,6 +286,16 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
   return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:unavailable";
 }
 
+/** Windows marks an unprotected DACL containing inherited ACEs as auto-inherited when it persists the descriptor. */
+function expectedPersistedInheritedDaclSddl(sourceSddl: string): string {
+  const daclIndex = sourceSddl.indexOf("D:");
+  const dacl = sourceSddl.slice(daclIndex + 2);
+  if (daclIndex < 0 || !dacl.startsWith("(") || !dacl.includes(";ID;")) {
+    throw new Error("Windows ACL fixture must use an unmarked DACL with an inherited ACE");
+  }
+  return `${sourceSddl.slice(0, daclIndex)}D:AI${dacl}`;
+}
+
 async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
   const request = Buffer.from(JSON.stringify({ path, operation }), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
@@ -460,7 +470,7 @@ describe("Windows migration ACL contract", () => {
         await targetHandle.close();
       }
 
-      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
     10_000
   );
@@ -482,13 +492,13 @@ describe("Windows migration ACL contract", () => {
       await targetHandle.close();
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
-      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
     10_000
   );
 
   it.runIf(process.platform === "win32")(
-    "diagnoses inherited-control preservation with a fresh target security object",
+    "preserves inherited descriptor data when Windows marks the persisted DACL auto-inherited",
     async () => {
       const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-inherited-fresh-acl-"));
       temporaryDirectories.push(parentDirectory);
@@ -504,7 +514,7 @@ describe("Windows migration ACL contract", () => {
       await targetHandle.close();
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "fresh-security")).resolves.toBeUndefined();
-      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
     10_000
   );
