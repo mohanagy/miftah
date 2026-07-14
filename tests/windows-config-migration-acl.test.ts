@@ -189,16 +189,17 @@ try {
   $stage = 'source'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-get')
   $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $sections)
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-sddl')
-  $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($sections)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-binary')
-  $sourceDescriptor = [Convert]::ToBase64String($sourceAcl.GetSecurityDescriptorBinaryForm())
+  $sourceDescriptor = $sourceAcl.GetSecurityDescriptorBinaryForm()
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-raw')
+  $sourceRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new($sourceDescriptor, 0)
+  if ($null -eq $sourceRaw.DiscretionaryAcl) { exit 1 }
   $stage = 'target'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-get')
   $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
   $stage = 'apply'
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-set')
-  $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $sections)
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-set-binary')
+  $targetAcl.SetSecurityDescriptorBinaryForm($sourceDescriptor, $sections)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-apply')
   [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
   $stage = 'verify'
@@ -206,7 +207,7 @@ try {
   $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-binary')
   $verifiedDescriptor = [Convert]::ToBase64String($verifiedAcl.GetSecurityDescriptorBinaryForm())
-  if ($sourceDescriptor -ne $verifiedDescriptor) { exit 1 }
+  if ([Convert]::ToBase64String($sourceDescriptor) -ne $verifiedDescriptor) { exit 1 }
   exit 0
 } catch {
   $suffix = switch ($_.CategoryInfo.Category.ToString()) {
@@ -266,7 +267,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
-    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-sddl|source-binary|target-get|target-set|target-apply|verify-get|verify-binary)/g);
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-set-binary|target-apply|verify-get|verify-binary)/g);
     const boundary = boundaries?.[boundaries.length - 1];
     if (boundary !== undefined) return boundary;
   }
