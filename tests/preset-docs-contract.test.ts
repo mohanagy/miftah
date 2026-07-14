@@ -11,6 +11,7 @@ function parseRepositoryJson(path: string): unknown {
   return JSON.parse(readRepositoryFile(path)) as unknown;
 }
 
+/** Returns pending changes, or the latest release notes once a release empties Unreleased. */
 function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
   if (afterHeading === undefined) {
