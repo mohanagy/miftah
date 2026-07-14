@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ToolRiskAnnotations } from "../../policy/policy-types.js";
+import type { UpstreamRequestOptions } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 
 export interface DiscoveredTools {
@@ -29,7 +30,7 @@ export interface ToolSnapshot {
   isComplete(): boolean;
 }
 
-export type ToolDiscovery = (profile: string) => Promise<ToolDiscoveryResult>;
+export type ToolDiscovery = (profile: string, options?: UpstreamRequestOptions) => Promise<ToolDiscoveryResult>;
 export type ToolNameResolver = (name: string, upstreamName?: string) => string;
 
 interface SnapshotState extends ToolSnapshot {
@@ -38,7 +39,14 @@ interface SnapshotState extends ToolSnapshot {
 
 interface PendingSnapshot {
   generation: number;
+  readonly controller: AbortController;
+  readonly consumers: Set<PendingConsumer>;
   promise: Promise<SnapshotState>;
+  settled: boolean;
+}
+
+interface PendingConsumer {
+  readonly onprogress?: UpstreamRequestOptions["onprogress"];
 }
 
 /**
@@ -54,38 +62,36 @@ export class ToolRegistry {
     private readonly resolveName: ToolNameResolver
   ) {}
 
-  async get(profile: string): Promise<ToolSnapshot> {
+  async get(profile: string, options?: UpstreamRequestOptions): Promise<ToolSnapshot> {
     for (;;) {
+      if (options?.signal?.aborted) throw new Error("Tool discovery cancelled");
       const generation = this.generation(profile);
       const cached = this.snapshots.get(profile);
       if (cached?.generation === generation && cached.isComplete()) return cached;
 
-      const current = this.pending.get(profile);
-      if (current?.generation === generation) {
-        const snapshot = await current.promise;
-        if (this.generation(profile) === generation) return snapshot;
-      } else {
-        const pending: PendingSnapshot = {
-          generation,
-          promise: this.build(profile, generation)
-        };
-        this.pending.set(profile, pending);
-        try {
-          const snapshot = await pending.promise;
-          if (this.generation(profile) === generation) {
-            this.snapshots.set(profile, snapshot);
-            return snapshot;
-          }
-        } finally {
-          if (this.pending.get(profile) === pending) this.pending.delete(profile);
-        }
-      }
+      const existing = this.pending.get(profile);
+      const pending =
+        existing?.generation === generation && !existing.controller.signal.aborted && !existing.settled
+          ? existing
+          : this.createPending(profile, generation);
+      if (this.pending.get(profile) !== pending) this.pending.set(profile, pending);
+      const snapshot = await this.awaitPending(pending, options);
+      if (this.generation(profile) === generation) return snapshot;
     }
   }
 
   peek(profile: string): ToolSnapshot | undefined {
     const snapshot = this.snapshots.get(profile);
     return snapshot?.generation === this.generation(profile) ? snapshot : undefined;
+  }
+
+  hasPending(profile: string): boolean {
+    const pending = this.pending.get(profile);
+    return (
+      pending?.generation === this.generation(profile) &&
+      !pending.settled &&
+      !pending.controller.signal.aborted
+    );
   }
 
   invalidate(profile: string): void {
@@ -101,8 +107,82 @@ export class ToolRegistry {
     return this.generations.get(profile) ?? 0;
   }
 
-  private async build(profile: string, generation: number): Promise<SnapshotState> {
-    const discovery = await this.discover(profile);
+  private createPending(profile: string, generation: number): PendingSnapshot {
+    const pending: PendingSnapshot = {
+      generation,
+      controller: new AbortController(),
+      consumers: new Set(),
+      promise: Promise.resolve(undefined as never),
+      settled: false
+    };
+    pending.promise = Promise.resolve()
+      .then(() => this.build(profile, generation, this.pendingRequestOptions(pending)))
+      .then((snapshot) => {
+        // A cancelled sole caller may be replaced with a new shared discovery
+        // before the old upstream request finishes. Only the current pending
+        // discovery may publish its result for this generation.
+        if (this.generation(profile) === generation && this.pending.get(profile) === pending) {
+          this.snapshots.set(profile, snapshot);
+        }
+        return snapshot;
+      })
+      .finally(() => {
+        pending.settled = true;
+        if (this.pending.get(profile) === pending) this.pending.delete(profile);
+      });
+    // Consumers may all cancel before a failed discovery settles. Keep the
+    // shared completion observed so that rejection cannot become unhandled.
+    void pending.promise.catch(() => undefined);
+    return pending;
+  }
+
+  private async awaitPending(
+    pending: PendingSnapshot,
+    options?: UpstreamRequestOptions
+  ): Promise<SnapshotState> {
+    if (options?.signal?.aborted) throw new Error("Tool discovery cancelled");
+    const consumer: PendingConsumer = { onprogress: options?.onprogress };
+    pending.consumers.add(consumer);
+    const signal = options?.signal;
+    let abort: (() => void) | undefined;
+    const cancelled = signal === undefined
+      ? undefined
+      : new Promise<never>((_, reject) => {
+          abort = () => {
+            pending.consumers.delete(consumer);
+            this.abortPendingIfUnused(pending);
+            reject(new Error("Tool discovery cancelled"));
+          };
+          signal.addEventListener("abort", abort, { once: true });
+        });
+    try {
+      return await (cancelled === undefined ? pending.promise : Promise.race([pending.promise, cancelled]));
+    } finally {
+      if (abort !== undefined) signal?.removeEventListener("abort", abort);
+      pending.consumers.delete(consumer);
+      this.abortPendingIfUnused(pending);
+    }
+  }
+
+  private abortPendingIfUnused(pending: PendingSnapshot): void {
+    if (!pending.settled && pending.consumers.size === 0) pending.controller.abort();
+  }
+
+  private pendingRequestOptions(pending: PendingSnapshot): UpstreamRequestOptions {
+    return {
+      signal: pending.controller.signal,
+      onprogress: (progress) => {
+        for (const consumer of pending.consumers) consumer.onprogress?.(progress);
+      }
+    };
+  }
+
+  private async build(
+    profile: string,
+    generation: number,
+    options?: UpstreamRequestOptions
+  ): Promise<SnapshotState> {
+    const discovery = await this.discover(profile, options);
     const discovered = discovery.discovered;
     const routes = new Map<string, RegisteredTool>();
     const tools: Tool[] = [];

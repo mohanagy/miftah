@@ -123,7 +123,10 @@ describe("multi-upstream wrapper", () => {
       if (text?.type !== "text") throw new Error("Expected a text health result");
       expect(JSON.parse(text.text)).toMatchObject({
         resourcePromptProxy: { available: true },
-        upstreams: []
+        upstreams: [
+          { profile: "work", upstreamName: "github", processState: "stopped" },
+          { profile: "work", upstreamName: "sentry", processState: "stopped" }
+        ]
       });
     } finally {
       await client.close();
@@ -1448,6 +1451,10 @@ describe("multi-upstream wrapper", () => {
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      // Subscription-capability probing starts and closes each upstream before the client connects.
+      // Reset fixture-only restart sentinels so the normal first-use sessions remain the test's initial start.
+      await Promise.all([unlink(githubFailurePath), unlink(sentryBlockPath)]);
 
       await client.listTools();
       const restart = client.callTool(

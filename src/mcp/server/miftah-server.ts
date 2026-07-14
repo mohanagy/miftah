@@ -1,24 +1,36 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
+  ErrorCode,
   GetPromptRequestSchema,
   RootsListChangedNotificationSchema,
   ListPromptsRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
   type CallToolResult,
   type GetPromptRequest,
   type GetPromptResult,
   type ListPromptsRequest,
   type ListPromptsResult,
+  type ListResourceTemplatesRequest,
+  type ListResourceTemplatesResult,
   type ListResourcesRequest,
   type ListResourcesResult,
   type Prompt,
   type ReadResourceResult,
   type ReadResourceRequest,
   type Resource,
+  type ResourceTemplate,
+  type ServerNotification,
+  type ServerRequest,
+  type SubscribeRequest,
+  type UnsubscribeRequest,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
@@ -47,7 +59,7 @@ import {
   type UpstreamLifecycleEvent
 } from "../../upstream/upstream-process-manager.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
-import type { UpstreamSession } from "../../upstream/upstream-session.js";
+import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 import { MIFTAH_VERSION } from "../../version.js";
 import {
@@ -86,6 +98,7 @@ const managementTools: Tool[] = [
 ];
 
 const EMPTY_MCP_ROOTS: readonly RoutingContextMcpRoot[] = Object.freeze([]);
+const defaultResourceSubscriptionCleanupTimeoutMs = 5_000;
 const emptyRoutingContext: RoutingContextSnapshot = {
   context: Object.freeze({}),
   evidence: Object.freeze({ cwd: "", fileRoots: Object.freeze([]) }),
@@ -205,6 +218,38 @@ interface ProfileTransitionConfirmationBinding {
   readonly revision: number;
 }
 
+type ProxiedRequestExtra = Pick<
+  RequestHandlerExtra<ServerRequest, ServerNotification>,
+  "_meta" | "sendNotification" | "signal"
+>;
+
+interface UpstreamRequestContext {
+  readonly options: UpstreamRequestOptions;
+  flush(): Promise<void>;
+}
+
+interface ToolListSnapshotLoad {
+  readonly snapshot: ToolSnapshot;
+  finish(published: boolean): void;
+}
+
+interface ResourceSubscriptionRoute {
+  readonly profile: string;
+  readonly upstreamName?: string;
+  readonly originalUri: string;
+  readonly exposedUri: string;
+}
+
+interface ResourceSubscription extends ResourceSubscriptionRoute {
+  readonly session: UpstreamSession;
+  state: "pending" | "active";
+  pendingUpdates: number;
+  cleanupRequested?: boolean;
+  abortPending?: () => void;
+  cleanupPromise?: Promise<void>;
+  release?: () => void;
+}
+
 type ProfileStateSnapshot = ReturnType<ProfileManager["current"]>;
 
 const genericApprovalErrors: ApprovalErrorFactory = {
@@ -252,8 +297,16 @@ export class MiftahServer {
   private readonly resourcePromptRegistry?: ResourcePromptRegistry;
   private readonly invalidatedToolSnapshots = new Map<string, ToolSnapshot>();
   private readonly restartingProfiles = new Map<string, Promise<void>>();
+  private readonly deferredToolInvalidations = new Set<string>();
+  private readonly activeToolListDiscoveries = new Map<string, number>();
   private readonly pendingResourceListChanges = new Set<string>();
   private readonly pendingPromptListChanges = new Set<string>();
+  private readonly boundUpstreamSessions = new WeakSet<UpstreamSession>();
+  private readonly resourceSubscriptions = new Map<string, ResourceSubscription>();
+  private readonly resourceSubscriptionTransitions = new Map<string, Promise<void>>();
+  private resourceSubscriptionEpoch = 0;
+  private resourceSubscriptionCapabilityConfigured = false;
+  private resourceSubscriptionsAvailable = false;
   /** Serializes approval state changes through their audit records; native elicitation runs outside this queue. */
   private approvalTransitions: Promise<void> = Promise.resolve();
   private profileTransitions: Promise<void> = Promise.resolve();
@@ -318,18 +371,20 @@ export class MiftahServer {
     });
     this.identities = new IdentityManager(config);
     this.toolRegistry = new ToolRegistry(
-      (profile) => this.discoverTools(profile),
+      (profile, options) => this.discoverTools(profile, options),
       (name, upstreamName) => this.exposedToolName(name, upstreamName)
     );
     if (this.upstreams instanceof MultiUpstreamProcessManager && this.upstreams.listUpstreams().length > 1) {
       const multiUpstreams = this.upstreams;
       this.resourcePromptRegistry = new ResourcePromptRegistry(
         () => multiUpstreams.listUpstreams(),
-        (profile, upstreamName, params) => this.discoverResources(profile, upstreamName, params),
-        (profile, upstreamName, params) => this.discoverPrompts(profile, upstreamName, params),
+        (profile, upstreamName, params, options) => this.discoverResources(profile, upstreamName, params, options),
+        (profile, upstreamName, params, options) => this.discoverPrompts(profile, upstreamName, params, options),
         (value) => this.redactor.redact(value),
         undefined,
-        config.tooling?.toolDiscoveryMode ?? "permissive"
+        config.tooling?.toolDiscoveryMode ?? "permissive",
+        (profile, upstreamName, params, options) =>
+          this.discoverResourceTemplates(profile, upstreamName, params, options)
       );
     }
     this.upstreams.addHealthListener((health) => this.handleUpstreamHealthChange(health));
@@ -344,6 +399,13 @@ export class MiftahServer {
     }
     this.auditTrail = new AuditTrail(config.name, this.audit);
     this.upstreams.addLifecycleListener((event) => {
+      if (event.type !== "start") {
+        this.dropResourceSubscriptions(
+          (subscription) =>
+            subscription.profile === event.profile &&
+            this.resourceSubscriptionUpstreamName(subscription.upstreamName) === event.upstreamName
+        );
+      }
       this.identities.invalidate(event.profile, event.upstreamName);
       this.recordUpstreamLifecycle(event);
     });
@@ -355,6 +417,7 @@ export class MiftahServer {
       redactor: this.redactor,
       routingContext: this.provideRoutingContext,
       identities: this.identities,
+      onSession: (session, target) => this.bindUpstreamSession(session, target.identityUpstreamName),
       approvals: { requireApproval: (binding, context) => this.requireApproval(binding, context) },
       profileAudits: {
         leaseExpired: ({ source, profile, operation }) =>
@@ -401,8 +464,9 @@ export class MiftahServer {
     await this.profiles.beginSession();
     const activeProfile = this.profiles.current().activeProfile;
     this.routing.setActiveProfile(activeProfile);
-    if (previousProfile !== activeProfile) this.invalidateResourcePromptProfiles(previousProfile, activeProfile);
+    if (previousProfile !== activeProfile) await this.invalidateResourcePromptProfiles(previousProfile, activeProfile);
     this.resetMcpRoots();
+    await this.configureResourceSubscriptionCapability();
     await this.server.connect(transport);
     await this.auditTrail.writeLifecycle({
       operation: "wrapper/start",
@@ -416,6 +480,7 @@ export class MiftahServer {
   async close(): Promise<void> {
     this.profileTransitionSession += 1;
     this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
+    await this.unsubscribeResourceSubscriptions(() => true);
     await this.server.close();
     await this.upstreams.close();
     await this.auditTrail.writeLifecycle({
@@ -424,6 +489,183 @@ export class MiftahServer {
       profile: this.profiles.current().activeProfile,
       status: "success"
     }).catch(() => undefined);
+  }
+
+  private async configureResourceSubscriptionCapability(): Promise<void> {
+    if (this.resourceSubscriptionCapabilityConfigured) return;
+    this.resourceSubscriptionCapabilityConfigured = true;
+    if (!this.resourcePromptProxy.available) return;
+    const upstreamNames =
+      this.upstreams instanceof MultiUpstreamProcessManager
+        ? this.upstreams.listUpstreams()
+        : [this.resourcePromptProxy.upstreamName];
+    let supported = upstreamNames.length > 0;
+    for (const profile of Object.keys(this.config.profiles).sort((left, right) => left.localeCompare(right))) {
+      try {
+        for (const upstreamName of upstreamNames) {
+          try {
+            const session = await this.upstreams.get(profile, upstreamName);
+            this.bindUpstreamSession(session, upstreamName);
+            supported &&= session.supportsResourceSubscriptions();
+          } catch (error) {
+            supported = false;
+            this.reportResourceSubscriptionCapabilityFailure(error);
+          }
+        }
+      } finally {
+        try {
+          await this.upstreams.closeProfile(profile);
+        } catch (error) {
+          supported = false;
+          this.reportResourceSubscriptionCapabilityFailure(error);
+        }
+      }
+    }
+    this.resourceSubscriptionsAvailable = supported;
+    if (this.resourceSubscriptionsAvailable) {
+      this.server.registerCapabilities({ resources: { subscribe: true } });
+    }
+  }
+
+  private bindUpstreamSession(session: UpstreamSession, upstreamName: string | undefined): void {
+    if (this.boundUpstreamSessions.has(session)) return;
+    this.boundUpstreamSessions.add(session);
+    session.addResourceUpdatedListener((uri) => {
+      void this.forwardUpstreamResourceUpdated(session, upstreamName, uri).catch((error: unknown) => {
+        this.reportUpstreamNotificationFailure(error);
+      });
+    });
+    session.addListChangedListener((kind) => {
+      void this.handleUpstreamListChanged(session.profile, kind).catch((error: unknown) => {
+        this.reportUpstreamNotificationFailure(error);
+      });
+    });
+  }
+
+  private async forwardUpstreamResourceUpdated(
+    session: UpstreamSession,
+    upstreamName: string | undefined,
+    originalUri: string
+  ): Promise<void> {
+    if (!this.server.transport) return;
+    const activeSubscriptions: ResourceSubscription[] = [];
+    for (const subscription of this.resourceSubscriptions.values()) {
+      if (
+        subscription.session !== session ||
+        subscription.upstreamName !== upstreamName ||
+        subscription.originalUri !== originalUri
+      ) {
+        continue;
+      }
+      if (subscription.state === "pending") {
+        subscription.pendingUpdates += 1;
+      } else {
+        activeSubscriptions.push(subscription);
+      }
+    }
+    await Promise.all(activeSubscriptions.map((subscription) => this.server.sendResourceUpdated({ uri: subscription.exposedUri })));
+  }
+
+  private resourceSubscriptionUpstreamName(upstreamName: string | undefined): string {
+    return upstreamName ?? "default";
+  }
+
+  private async handleUpstreamListChanged(profile: string, kind: "prompts" | "resources" | "tools"): Promise<void> {
+    if (kind === "tools") {
+      // An upstream may notify while its initial tools/list response is building
+      // this profile's first snapshot. Defer the invalidation until that request
+      // publishes its response: invalidating immediately would restart discovery
+      // and can livelock when an upstream emits a notification for every list.
+      if (this.toolRegistry.hasPending(profile) && this.hasActiveToolListDiscovery(profile)) {
+        this.deferredToolInvalidations.add(profile);
+      } else {
+        this.deferredToolInvalidations.delete(profile);
+        if (this.toolRegistry.peek(profile) !== undefined) this.toolRegistry.invalidate(profile);
+      }
+      if (profile === this.profiles.current().activeProfile && this.server.transport) {
+        await this.server.sendToolListChanged();
+      }
+      return;
+    }
+    if (kind === "resources") {
+      this.resourcePromptRegistry?.invalidateResources(profile);
+      if (profile === this.profiles.current().activeProfile) await this.notifyResourceListChanged();
+      return;
+    }
+    this.resourcePromptRegistry?.invalidatePrompts(profile);
+    if (profile === this.profiles.current().activeProfile) await this.notifyPromptListChanged();
+  }
+
+  /**
+   * Applies a tools/list_changed notification that arrived before the initial
+   * snapshot was published. The caller may still return that in-flight list
+   * response, but no later operation may reuse its routes.
+   */
+  private consumeDeferredToolInvalidation(profile: string): boolean {
+    if (!this.deferredToolInvalidations.delete(profile)) return false;
+    this.toolRegistry.invalidate(profile);
+    return true;
+  }
+
+  private assertToolSnapshotCurrent(profile: string): void {
+    if (!this.consumeDeferredToolInvalidation(profile)) return;
+    throw new MiftahError(
+      "UPSTREAM_DISCOVERY_FAILED",
+      "UPSTREAM_DISCOVERY_FAILED: upstream tools changed during discovery; retry the request"
+    );
+  }
+
+  private hasActiveToolListDiscovery(profile: string): boolean {
+    return (this.activeToolListDiscoveries.get(profile) ?? 0) > 0;
+  }
+
+  private async loadToolSnapshotForList(
+    profile: string,
+    options?: UpstreamRequestOptions
+  ): Promise<ToolListSnapshotLoad> {
+    // A list notification observed while a direct tools/call warms an idle
+    // snapshot does not make that call's newly returned routes stale. Track
+    // only client-visible list discovery so such a notification can defer the
+    // cache invalidation until that list response has been published.
+    const tracked = !this.toolRegistry.peek(profile)?.isComplete();
+    if (tracked) {
+      this.activeToolListDiscoveries.set(profile, (this.activeToolListDiscoveries.get(profile) ?? 0) + 1);
+    }
+    let finished = false;
+    const finish = (published: boolean): void => {
+      if (finished) return;
+      finished = true;
+      if (!tracked) return;
+
+      const remaining = Math.max(0, (this.activeToolListDiscoveries.get(profile) ?? 1) - 1);
+      if (remaining === 0) this.activeToolListDiscoveries.delete(profile);
+      else this.activeToolListDiscoveries.set(profile, remaining);
+
+      if (published) {
+        this.consumeDeferredToolInvalidation(profile);
+      } else if (remaining === 0 && this.deferredToolInvalidations.delete(profile)) {
+        // The final client-visible list did not publish the snapshot that was
+        // current when the notification arrived. Do not leave its deferred
+        // marker to poison a later cold tools/call.
+        this.toolRegistry.invalidate(profile);
+      }
+    };
+    try {
+      return { snapshot: await this.toolRegistry.get(profile, options), finish };
+    } catch (error) {
+      finish(false);
+      throw error;
+    }
+  }
+
+  private reportUpstreamNotificationFailure(error: unknown): void {
+    const safeError = this.toSafeError(error);
+    process.emitWarning(safeError.message, { code: "MIFTAH_UPSTREAM_NOTIFICATION_FAILED" });
+  }
+
+  private reportResourceSubscriptionCapabilityFailure(error: unknown): void {
+    const safeError = this.toSafeError(error);
+    process.emitWarning(safeError.message, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" });
   }
 
   private resetMcpRoots(): void {
@@ -496,14 +738,18 @@ export class MiftahServer {
   }
 
   private registerHandlers(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
       const source = await this.captureStableProfileState();
+      const upstreamRequest = this.upstreamRequestContext(extra);
       return this.runAudited(
         { operation: "tools/list", name: "tools", sourceProfile: source.activeProfile },
         async (audit) => {
           const upstream = this.auditUpstreamName();
           if (upstream) audit.update({ upstream });
-          const { profile, snapshot } = await this.activeToolSnapshot();
+          const { profile, snapshot } = await this.runWithUpstreamRequest(
+            upstreamRequest,
+            () => this.activeToolSnapshot(upstreamRequest.options)
+          );
           audit.update({ profile });
           return { tools: [...managementTools, ...snapshot.getTools()] };
         }
@@ -516,6 +762,7 @@ export class MiftahServer {
       const source = await this.captureStableProfileState();
       const isManagementTool = managementTools.some((tool) => tool.name === name);
       const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
+      const upstreamRequest = this.upstreamRequestContext(extra);
       return this.runAudited(
         {
           operation: isManagementTool ? managementOperation(name) : "tools/call",
@@ -525,14 +772,26 @@ export class MiftahServer {
         },
         (audit) =>
           isManagementTool
-            ? this.handleManagement(name, args, audit, source, {
-                requestId: extra.requestId,
-                signal: extra.signal
-              })
-            : this.handleUpstreamTool(name, args, audit, source, {
-                requestId: extra.requestId,
-                signal: extra.signal
-              }),
+            ? this.runWithUpstreamRequest(
+                upstreamRequest,
+                () =>
+                  this.handleManagement(
+                    name,
+                    args,
+                    audit,
+                    source,
+                    { requestId: extra.requestId, signal: extra.signal },
+                    upstreamRequest
+                  )
+              )
+            : this.handleUpstreamTool(
+                name,
+                args,
+                audit,
+                source,
+                { requestId: extra.requestId, signal: extra.signal },
+                upstreamRequest
+              ),
         (error) => textResult(error.message, true),
         (result) =>
           result.isError
@@ -543,8 +802,88 @@ export class MiftahServer {
 
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
-      this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+      this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request, extra) => {
         const source = await this.captureStableProfileState();
+        const upstreamRequest = this.upstreamRequestContext(extra);
+        return this.runAudited(
+          {
+            operation: "resources/templates/list",
+            name: "resource-templates",
+            sourceProfile: source.activeProfile,
+            arguments: request.params ?? {}
+          },
+          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
+            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+            if (upstream) audit.update({ upstream });
+            if (this.resourcePromptRegistry) {
+              try {
+                return await this.resourcePromptRegistry.listResourceTemplates(
+                  source.activeProfile,
+                  request.params?.cursor,
+                  upstreamRequest.options
+                );
+              } finally {
+                await this.notifyResourceAvailabilityChange(source.activeProfile);
+              }
+            }
+            return redactDirectResourceTemplateList(
+              await this.discoverResourceTemplates(source.activeProfile, upstreamName, request.params, upstreamRequest.options)
+            );
+          })
+        );
+      });
+
+      this.server.setRequestHandler(SubscribeRequestSchema, async (request, extra) => {
+        const source = await this.captureStableProfileState();
+        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
+        const upstreamRequest = this.upstreamRequestContext(extra);
+        return this.runAudited(
+          {
+            operation: "resources/subscribe",
+            name: this.redactor.redactUri(request.params.uri),
+            sourceProfile: source.activeProfile,
+            arguments: { uri: this.redactor.redactUri(request.params.uri) }
+          },
+          async (audit) => {
+            if (!this.resourceSubscriptionsAvailable) {
+              throw new MiftahError(
+                "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+                "RESOURCE_SUBSCRIPTION_UNSUPPORTED: no active upstream supports resource subscriptions"
+              );
+            }
+            await this.subscribeResource(source, upstreamName, request.params, audit, approvalContext, upstreamRequest);
+            return {};
+          }
+        );
+      });
+
+      this.server.setRequestHandler(UnsubscribeRequestSchema, async (request, extra) => {
+        const source = await this.captureStableProfileState();
+        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
+        const upstreamRequest = this.upstreamRequestContext(extra);
+        return this.runAudited(
+          {
+            operation: "resources/unsubscribe",
+            name: this.redactor.redactUri(request.params.uri),
+            sourceProfile: source.activeProfile,
+            arguments: { uri: this.redactor.redactUri(request.params.uri) }
+          },
+          async (audit) => {
+            if (!this.resourceSubscriptionsAvailable) {
+              throw new MiftahError(
+                "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+                "RESOURCE_SUBSCRIPTION_UNSUPPORTED: no active upstream supports resource subscriptions"
+              );
+            }
+            await this.unsubscribeResource(source, request.params, audit, approvalContext, upstreamRequest);
+            return {};
+          }
+        );
+      });
+
+      this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => {
+        const source = await this.captureStableProfileState();
+        const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/list",
@@ -552,24 +891,31 @@ export class MiftahServer {
             sourceProfile: source.activeProfile,
             arguments: request.params ?? {}
           },
-          async (audit) => {
+          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
             const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
             if (upstream) audit.update({ upstream });
             if (this.resourcePromptRegistry) {
               try {
-                return await this.resourcePromptRegistry.listResources(source.activeProfile, request.params?.cursor);
+                return await this.resourcePromptRegistry.listResources(
+                  source.activeProfile,
+                  request.params?.cursor,
+                  upstreamRequest.options
+                );
               } finally {
                 await this.notifyResourceAvailabilityChange(source.activeProfile);
               }
             }
-            return redactDirectResourceList(await this.discoverResources(source.activeProfile, upstreamName, request.params));
-          }
+            return redactDirectResourceList(
+              await this.discoverResources(source.activeProfile, upstreamName, request.params, upstreamRequest.options)
+            );
+          })
         );
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
         const source = await this.captureStableProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
+        const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/read",
@@ -580,18 +926,19 @@ export class MiftahServer {
           async (audit) => {
             if (this.resourcePromptRegistry) {
               try {
-                return await this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext);
+                return await this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext, upstreamRequest);
               } finally {
                 await this.notifyResourceAvailabilityChange(source.activeProfile);
               }
             }
-            return this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext);
+            return this.executeResourceRead(source, upstreamName, request.params, audit, approvalContext, upstreamRequest);
           }
         );
       });
 
-      this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+      this.server.setRequestHandler(ListPromptsRequestSchema, async (request, extra) => {
         const source = await this.captureStableProfileState();
+        const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "prompts/list",
@@ -599,24 +946,31 @@ export class MiftahServer {
             sourceProfile: source.activeProfile,
             arguments: request.params ?? {}
           },
-          async (audit) => {
+          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
             const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
             if (upstream) audit.update({ upstream });
             if (this.resourcePromptRegistry) {
               try {
-                return await this.resourcePromptRegistry.listPrompts(source.activeProfile, request.params?.cursor);
+                return await this.resourcePromptRegistry.listPrompts(
+                  source.activeProfile,
+                  request.params?.cursor,
+                  upstreamRequest.options
+                );
               } finally {
                 await this.notifyPromptAvailabilityChange(source.activeProfile);
               }
             }
-            return redactDirectPromptList(await this.discoverPrompts(source.activeProfile, upstreamName, request.params));
-          }
+            return redactDirectPromptList(
+              await this.discoverPrompts(source.activeProfile, upstreamName, request.params, upstreamRequest.options)
+            );
+          })
         );
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
         const source = await this.captureStableProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
+        const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "prompts/get",
@@ -627,15 +981,64 @@ export class MiftahServer {
           async (audit) => {
             if (this.resourcePromptRegistry) {
               try {
-                return await this.executePromptGet(source, upstreamName, request.params, audit, approvalContext);
+                return await this.executePromptGet(source, upstreamName, request.params, audit, approvalContext, upstreamRequest);
               } finally {
                 await this.notifyPromptAvailabilityChange(source.activeProfile);
               }
             }
-            return this.executePromptGet(source, upstreamName, request.params, audit, approvalContext);
+            return this.executePromptGet(source, upstreamName, request.params, audit, approvalContext, upstreamRequest);
           }
         );
       });
+    }
+  }
+
+  private upstreamRequestContext(extra: ProxiedRequestExtra): UpstreamRequestContext {
+    const progressToken = extra._meta?.progressToken;
+    let forwardingFailure: unknown;
+    let pending = Promise.resolve();
+    const options: UpstreamRequestOptions = {
+      signal: extra.signal,
+      ...(progressToken === undefined
+        ? {}
+        : {
+            onprogress: ({ progress, total, message }) => {
+              const safeMessage = message === undefined ? undefined : this.redactor.redactText(message);
+              pending = pending
+                .then(() =>
+                  extra.sendNotification({
+                    method: "notifications/progress",
+                    params: {
+                      progressToken,
+                      progress,
+                      ...(total === undefined ? {} : { total }),
+                      ...(safeMessage === undefined ? {} : { message: safeMessage })
+                    }
+                  })
+                )
+                .catch((error: unknown) => {
+                  forwardingFailure ??= error;
+                });
+            }
+          })
+    };
+    return {
+      options,
+      async flush(): Promise<void> {
+        await pending;
+        if (forwardingFailure !== undefined) throw forwardingFailure;
+      }
+    };
+  }
+
+  private async runWithUpstreamRequest<Result>(
+    upstreamRequest: UpstreamRequestContext | undefined,
+    operation: () => Promise<Result>
+  ): Promise<Result> {
+    try {
+      return await operation();
+    } finally {
+      await upstreamRequest?.flush();
     }
   }
 
@@ -644,70 +1047,77 @@ export class MiftahServer {
     args: Record<string, unknown>,
     audit: AuditScope,
     sourceState: CapturedProfileState,
-    approvalContext?: ApprovalRequestContext
+    approvalContext?: ApprovalRequestContext,
+    upstreamRequest?: UpstreamRequestContext
   ): Promise<CallToolResult> {
-    const sourceProfile = sourceState.activeProfile;
-    const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
-    const sourceSnapshot = await this.toolRegistry.get(sourceProfile);
-    if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
-      await this.notifyToolListChanged(previous, sourceSnapshot);
-      this.invalidatedToolSnapshots.delete(sourceProfile);
-    }
-    const mapped = sourceSnapshot.resolve(name);
-    if (!mapped) {
-      throw new MiftahError(
-        "TOOL_NOT_FOUND",
-        `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
-      );
-    }
-    audit.update({ name: mapped.originalName });
-    return this.operationPipeline.execute(
-      {
-        source: sourceState,
-        operation: "tools/call",
-        routingName: mapped.originalName,
-        matcherToolName: name,
-        policyName: mapped.originalName,
-        name: mapped.originalName,
-        args,
-        ...(approvalContext === undefined ? {} : { approvalContext }),
-        riskMetadataForProfile: (profile) => {
-          const target = this.toolRegistry.peek(profile)?.resolve(name);
-          return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
+    return this.runWithUpstreamRequest(upstreamRequest, async () => {
+      const sourceProfile = sourceState.activeProfile;
+      const previous = this.toolRegistry.peek(sourceProfile) ?? this.invalidatedToolSnapshots.get(sourceProfile);
+      const sourceSnapshot = await this.toolRegistry.get(sourceProfile, upstreamRequest?.options);
+      this.assertToolSnapshotCurrent(sourceProfile);
+      if (this.profiles.current().revision === sourceState.revision && previous !== undefined) {
+        await this.notifyToolListChanged(previous, sourceSnapshot);
+        this.invalidatedToolSnapshots.delete(sourceProfile);
+      }
+      const mapped = sourceSnapshot.resolve(name);
+      if (!mapped) {
+        throw new MiftahError(
+          "TOOL_NOT_FOUND",
+          `TOOL_NOT_FOUND: tool '${name}' is not exposed for profile '${sourceProfile}'`
+        );
+      }
+      audit.update({ name: mapped.originalName });
+      return this.operationPipeline.execute(
+        {
+          source: sourceState,
+          operation: "tools/call",
+          routingName: mapped.originalName,
+          matcherToolName: name,
+          policyName: mapped.originalName,
+          name: mapped.originalName,
+          args,
+          ...(approvalContext === undefined ? {} : { approvalContext }),
+          ...(upstreamRequest === undefined ? {} : { upstreamRequestOptions: upstreamRequest.options }),
+          riskMetadataForProfile: (profile) => {
+            const target = this.toolRegistry.peek(profile)?.resolve(name);
+            return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
+          },
+          requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
+          requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
+          resolveTarget: async (profile) => {
+            const targetSnapshot = await this.toolRegistry.get(profile, upstreamRequest?.options);
+            this.assertToolSnapshotCurrent(profile);
+            const target = targetSnapshot.resolve(name);
+            if (!target) {
+              throw new MiftahError(
+                "TOOL_NOT_FOUND",
+                `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${profile}'`
+              );
+            }
+            if (target.fingerprint !== mapped.fingerprint || target.originalName !== mapped.originalName) {
+              throw new MiftahError(
+                "TOOL_SCHEMA_MISMATCH",
+                `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
+              );
+            }
+            if (target.upstreamName !== mapped.upstreamName) {
+              throw new MiftahError(
+                "TOOL_SCHEMA_MISMATCH",
+                `TOOL_SCHEMA_MISMATCH: tool '${name}' resolves to a different upstream for routed profile '${profile}'`
+              );
+            }
+            return {
+              upstreamName: this.auditUpstreamName(target.upstreamName),
+              identityUpstreamName: target.upstreamName,
+              name: target.originalName,
+              execute: (session, options) => session.callTool({ name: target.originalName, arguments: args }, options),
+              redact: (result) => result
+            };
+          }
         },
-        requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
-        requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
-        resolveTarget: async (profile) => {
-          const target = (await this.toolRegistry.get(profile)).resolve(name);
-          if (!target) {
-            throw new MiftahError(
-              "TOOL_NOT_FOUND",
-              `TOOL_NOT_FOUND: tool '${name}' is not exposed for routed profile '${profile}'`
-            );
-          }
-          if (target.fingerprint !== mapped.fingerprint || target.originalName !== mapped.originalName) {
-            throw new MiftahError(
-              "TOOL_SCHEMA_MISMATCH",
-              `TOOL_SCHEMA_MISMATCH: tool '${name}' has a different schema for routed profile '${profile}'`
-            );
-          }
-          if (target.upstreamName !== mapped.upstreamName) {
-            throw new MiftahError(
-              "TOOL_SCHEMA_MISMATCH",
-              `TOOL_SCHEMA_MISMATCH: tool '${name}' resolves to a different upstream for routed profile '${profile}'`
-            );
-          }
-          return {
-            upstreamName: this.auditUpstreamName(target.upstreamName),
-            identityUpstreamName: target.upstreamName,
-            name: target.originalName,
-            execute: (session) => session.callTool({ name: target.originalName, arguments: args }),
-            redact: (result) => result
-          };
-        }
-      },
-      audit
-    );
+        audit
+      );
+    });
   }
 
   private async handleManagement(
@@ -715,7 +1125,8 @@ export class MiftahServer {
     args: Record<string, unknown>,
     audit: AuditScope,
     source: ProfileStateSnapshot,
-    approvalContext?: ApprovalRequestContext
+    approvalContext?: ApprovalRequestContext,
+    upstreamRequest?: UpstreamRequestContext
   ): Promise<CallToolResult> {
     if (name === "miftah_list_profiles") {
       const activeProfile = source.activeProfile;
@@ -769,7 +1180,7 @@ export class MiftahServer {
         );
         audit.update({ name: switched.activeProfile, profile: switched.activeProfile });
         this.routing.setActiveProfile(switched.activeProfile);
-        this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
+        await this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
         await this.notifyResourcePromptListChanged();
         return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
@@ -842,7 +1253,7 @@ export class MiftahServer {
         );
         audit.update({ name: reset.activeProfile, profile: reset.activeProfile });
         this.routing.setActiveProfile(reset.activeProfile);
-        this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
+        await this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
         await this.notifyResourcePromptListChanged();
         return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
@@ -913,8 +1324,15 @@ export class MiftahServer {
     if (name === "miftah_list_upstream_tools") {
       const profile = args.profile === undefined ? source.activeProfile : requiredString(args, "profile");
       audit.update({ name: profile, profile });
-      const tools = (await this.toolRegistry.get(profile)).getTools();
-      return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
+      const loaded = await this.loadToolSnapshotForList(profile, upstreamRequest?.options);
+      try {
+        const tools = loaded.snapshot.getTools();
+        loaded.finish(true);
+        return textResult(JSON.stringify(tools.map((item) => ({ name: item.name, description: item.description }))));
+      } catch (error) {
+        loaded.finish(false);
+        throw error;
+      }
     }
     if (name === "miftah_restart_profile") {
       const profile = requiredString(args, "profile");
@@ -942,7 +1360,11 @@ export class MiftahServer {
           } catch {
             return this.identities.recordAcquisitionFailure(profile, upstreamName);
           }
-          return this.identities.verify(profile, upstreamName, session, { force: true });
+          this.bindUpstreamSession(session, upstreamName);
+          return this.identities.verify(profile, upstreamName, session, {
+            force: true,
+            request: upstreamRequest?.options
+          });
         })
       );
       const identity = statuses
@@ -1335,10 +1757,25 @@ export class MiftahServer {
     return names.length === 1 ? names[0] : undefined;
   }
 
-  private async discoverTools(profile: string): Promise<ToolDiscoveryResult> {
+  private async discoverTools(profile: string, options?: UpstreamRequestOptions): Promise<ToolDiscoveryResult> {
     const profiles =
       this.config.tooling?.toolDiscoveryMode === "strict" ? Object.keys(this.config.profiles).sort() : [profile];
-    const outcomes = await Promise.all(profiles.map(async (name) => [name, await this.discoverToolsForProfile(name)] as const));
+    const upstreamNames = this.upstreamNames();
+    const optionsForUpstream = aggregateProgressOptions(
+      options,
+      profiles.flatMap((profileName) => upstreamNames.map((upstreamName) => toolDiscoveryProgressKey(profileName, upstreamName)))
+    );
+    const outcomes = await Promise.all(
+      profiles.map(async (name) => [
+        name,
+        await this.discoverToolsForProfile(
+          name,
+          upstreamNames,
+          (upstreamName) => optionsForUpstream(toolDiscoveryProgressKey(name, upstreamName))
+        )
+      ] as const)
+    );
+    this.assertUpstreamRequestActive(options);
     const failures = outcomes.flatMap(([profileName, outcome]) =>
       outcome.failures.map((failure) => ({ profile: profileName, ...failure }))
     );
@@ -1376,15 +1813,18 @@ export class MiftahServer {
     };
   }
 
-  private async discoverToolsForProfile(profile: string): Promise<{
+  private async discoverToolsForProfile(
+    profile: string,
+    upstreamNames: readonly (string | undefined)[],
+    optionsForUpstream: (upstreamName: string | undefined) => UpstreamRequestOptions | undefined
+  ): Promise<{
     discovered: DiscoveredTools[];
     failures: Array<{ upstreamName: string; code: string; message: string }>;
   }> {
-    const upstreamNames = this.upstreamNames();
     const discoveries = await Promise.allSettled(
       upstreamNames.map(async (upstreamName) => ({
         upstreamName,
-        tools: await this.upstreams.listTools(profile, upstreamName)
+        tools: await this.discoverUpstreamTools(profile, upstreamName, optionsForUpstream(upstreamName))
       }))
     );
     return {
@@ -1402,6 +1842,27 @@ export class MiftahServer {
         ];
       })
     };
+  }
+
+  private async discoverUpstreamTools(
+    profile: string,
+    upstreamName: string | undefined,
+    options?: UpstreamRequestOptions
+  ): Promise<Tool[]> {
+    try {
+      const tools = (await this.callUpstream(profile, upstreamName, (session) => session.listTools(options))).tools;
+      this.upstreams.recordCapabilitySuccess(profile, "tools", upstreamName);
+      return tools;
+    } catch (error) {
+      if (options?.signal?.aborted) throw upstreamRequestCancelled();
+      const failure = new MiftahError(
+        "UPSTREAM_TOOL_LIST_FAILED",
+        `UPSTREAM_TOOL_LIST_FAILED: unable to list tools for '${profile}'`,
+        { cause: this.redactor.redactText(error instanceof Error ? error.message : String(error)) }
+      );
+      this.upstreams.recordCapabilityFailure(profile, "tools", failure, upstreamName);
+      throw failure;
+    }
   }
 
   private assertStrictToolSchemas(
@@ -1465,14 +1926,239 @@ export class MiftahServer {
     return { available: true };
   }
 
+  private async subscribeResource(
+    source: CapturedProfileState,
+    upstreamName: string | undefined,
+    params: SubscribeRequest["params"],
+    audit: AuditScope,
+    approvalContext: ApprovalRequestContext,
+    upstreamRequest: UpstreamRequestContext
+  ): Promise<void> {
+    const subscriptionEpoch = this.resourceSubscriptionEpoch;
+    return this.enqueueResourceSubscriptionTransition(params.uri, () =>
+      this.subscribeResourceOnce(source, upstreamName, params, audit, approvalContext, upstreamRequest, subscriptionEpoch)
+    );
+  }
+
+  private async subscribeResourceOnce(
+    source: CapturedProfileState,
+    upstreamName: string | undefined,
+    params: SubscribeRequest["params"],
+    audit: AuditScope,
+    approvalContext: ApprovalRequestContext,
+    upstreamRequest: UpstreamRequestContext,
+    subscriptionEpoch: number
+  ): Promise<void> {
+    if (!this.resourceSubscriptionsAvailable) {
+      throw new MiftahError(
+        "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+        "RESOURCE_SUBSCRIPTION_UNSUPPORTED: Miftah cannot proxy resource subscriptions for every selectable upstream"
+      );
+    }
+    if (this.resourceSubscriptions.has(params.uri)) return;
+    let subscription: ResourceSubscription | undefined;
+    await this.runWithUpstreamRequest(upstreamRequest, () => this.operationPipeline.execute<void>(
+      {
+        source,
+        operation: "resources/subscribe",
+        routingName: "resources/read",
+        policyName: "resources/read",
+        name: params.uri,
+        args: { uri: params.uri },
+        approvalContext,
+        upstreamRequestOptions: upstreamRequest.options,
+        requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
+        resolveTarget: async (profile) => {
+          this.assertResourceSubscriptionEpoch(subscriptionEpoch);
+          const route = await this.resolveResourceSubscription(profile, upstreamName, params.uri, upstreamRequest.options);
+          this.assertResourceSubscriptionEpoch(subscriptionEpoch);
+          return {
+            ...(route.upstreamName === undefined ? {} : { upstreamName: route.upstreamName }),
+            ...(route.upstreamName === undefined ? {} : { identityUpstreamName: route.upstreamName }),
+            name: route.originalUri,
+            execute: async (session, options) => {
+              this.assertResourceSubscriptionEpoch(subscriptionEpoch);
+              if (!session.supportsResourceSubscriptions()) {
+                throw new MiftahError(
+                  "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+                  "RESOURCE_SUBSCRIPTION_UNSUPPORTED: the selected upstream does not support resource subscriptions"
+                );
+              }
+              const candidate: ResourceSubscription = { ...route, session, state: "pending", pendingUpdates: 0 };
+              subscription = candidate;
+              this.resourceSubscriptions.set(params.uri, candidate);
+              const controller = new AbortController();
+              const parentSignal = options?.signal;
+              const abort = () => controller.abort();
+              if (parentSignal?.aborted) abort();
+              else parentSignal?.addEventListener("abort", abort, { once: true });
+              candidate.abortPending = abort;
+              try {
+                await session.subscribeResource({ uri: route.originalUri }, { ...options, signal: controller.signal });
+                candidate.abortPending = undefined;
+                if (this.resourceSubscriptions.get(params.uri) !== candidate || candidate.cleanupRequested) {
+                  candidate.cleanupRequested = true;
+                  await this.cleanupResourceSubscriptionOnce(candidate);
+                  subscription = undefined;
+                  throw new MiftahError(
+                    "RESOURCE_SUBSCRIPTION_NOT_FOUND",
+                    "RESOURCE_SUBSCRIPTION_NOT_FOUND: the resource subscription was invalidated before it became active"
+                  );
+                }
+                candidate.release = session.retain();
+                candidate.state = "active";
+                await this.flushPendingResourceUpdates(candidate);
+              } catch (error) {
+                const invalidated = this.resourceSubscriptions.get(params.uri) !== candidate || candidate.cleanupRequested;
+                candidate.abortPending = undefined;
+                if (this.resourceSubscriptions.get(params.uri) === candidate) {
+                  this.resourceSubscriptions.delete(params.uri);
+                }
+                // MCP cancellation is advisory: the upstream can still finish the
+                // subscribe request after its client-side promise has rejected.
+                // Keep the bounded cleanup in this URI's transition so a retry
+                // cannot be unsubscribed by a late cleanup from this attempt.
+                candidate.cleanupRequested = true;
+                await this.cleanupResourceSubscriptionOnce(candidate);
+                subscription = undefined;
+                if (invalidated) {
+                  throw new MiftahError(
+                    "RESOURCE_SUBSCRIPTION_NOT_FOUND",
+                    "RESOURCE_SUBSCRIPTION_NOT_FOUND: the resource subscription was invalidated before it became active"
+                  );
+                }
+                throw error;
+              } finally {
+                parentSignal?.removeEventListener("abort", abort);
+              }
+            },
+            redact: () => undefined
+          };
+        }
+      },
+      audit
+    ));
+    if (subscription === undefined) {
+      throw new MiftahError(
+        "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+        "RESOURCE_SUBSCRIPTION_UNSUPPORTED: the selected upstream did not establish a resource subscription"
+      );
+    }
+  }
+
+  private async unsubscribeResource(
+    source: CapturedProfileState,
+    params: UnsubscribeRequest["params"],
+    audit: AuditScope,
+    approvalContext: ApprovalRequestContext,
+    upstreamRequest: UpstreamRequestContext
+  ): Promise<void> {
+    return this.enqueueResourceSubscriptionTransition(params.uri, () =>
+      this.unsubscribeResourceOnce(source, params, audit, approvalContext, upstreamRequest)
+    );
+  }
+
+  private assertResourceSubscriptionEpoch(epoch: number): void {
+    if (epoch === this.resourceSubscriptionEpoch) return;
+    throw new MiftahError(
+      "RESOURCE_SUBSCRIPTION_NOT_FOUND",
+      "RESOURCE_SUBSCRIPTION_NOT_FOUND: the resource subscription was invalidated before it became active"
+    );
+  }
+
+  private async unsubscribeResourceOnce(
+    source: CapturedProfileState,
+    params: UnsubscribeRequest["params"],
+    audit: AuditScope,
+    approvalContext: ApprovalRequestContext,
+    upstreamRequest: UpstreamRequestContext
+  ): Promise<void> {
+    const subscription = this.resourceSubscriptions.get(params.uri);
+    if (!subscription) {
+      throw new MiftahError(
+        "RESOURCE_SUBSCRIPTION_NOT_FOUND",
+        "RESOURCE_SUBSCRIPTION_NOT_FOUND: the resource is not subscribed for this connection"
+      );
+    }
+    try {
+      await this.runWithUpstreamRequest(upstreamRequest, () => this.operationPipeline.execute<void>(
+        {
+          source,
+          operation: "resources/unsubscribe",
+          routingName: "resources/read",
+          policyName: "resources/read",
+          name: subscription.originalUri,
+          args: { uri: params.uri },
+          approvalContext,
+          upstreamRequestOptions: upstreamRequest.options,
+          requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
+          resolveTarget: async (profile) => {
+            if (profile !== subscription.profile) {
+              throw new MiftahError(
+                "RESOURCE_SUBSCRIPTION_NOT_FOUND",
+                "RESOURCE_SUBSCRIPTION_NOT_FOUND: the resource subscription is not active for the routed profile"
+              );
+            }
+            return {
+              ...(subscription.upstreamName === undefined ? {} : { upstreamName: subscription.upstreamName }),
+              ...(subscription.upstreamName === undefined ? {} : { identityUpstreamName: subscription.upstreamName }),
+              name: subscription.originalUri,
+              execute: async (session, options) => {
+                if (!session.supportsResourceSubscriptions()) {
+                  throw new MiftahError(
+                    "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
+                    "RESOURCE_SUBSCRIPTION_UNSUPPORTED: the selected upstream does not support resource subscriptions"
+                  );
+                }
+                await session.unsubscribeResource({ uri: subscription.originalUri }, options);
+              },
+              redact: () => undefined
+            };
+          }
+        },
+        audit
+      ));
+    } catch (error) {
+      if (upstreamRequest.options.signal?.aborted && this.resourceSubscriptions.get(params.uri) === subscription) {
+        // MCP cancellation is advisory. Stop forwarding updates and retain the
+        // session only long enough to issue one bounded cleanup unsubscribe.
+        this.resourceSubscriptions.delete(params.uri);
+        subscription.cleanupRequested = true;
+        await this.cleanupResourceSubscriptionOnce(subscription);
+      }
+      throw error;
+    }
+    this.resourceSubscriptions.delete(params.uri);
+    subscription.release?.();
+  }
+
+  private async resolveResourceSubscription(
+    profile: string,
+    upstreamName: string | undefined,
+    exposedUri: string,
+    options?: UpstreamRequestOptions
+  ): Promise<ResourceSubscriptionRoute> {
+    if (this.resourcePromptRegistry) {
+      const route = await this.resolveAggregatedResource(profile, { uri: exposedUri }, options);
+      return {
+        profile,
+        upstreamName: route.upstreamName,
+        originalUri: route.name,
+        exposedUri
+      };
+    }
+    return { profile, upstreamName, originalUri: exposedUri, exposedUri };
+  }
+
   private async executeResourceRead(
     source: CapturedProfileState,
     upstreamName: string | undefined,
     params: ReadResourceRequest["params"],
     audit: AuditScope,
-    approvalContext?: ApprovalRequestContext
+    approvalContext?: ApprovalRequestContext,
+    upstreamRequest?: UpstreamRequestContext
   ): Promise<ReadResourceResult> {
-    return this.operationPipeline.execute(
+    return this.runWithUpstreamRequest(upstreamRequest, () => this.operationPipeline.execute(
       {
         source,
         operation: "resources/read",
@@ -1481,21 +2167,22 @@ export class MiftahServer {
         name: params.uri,
         args: { uri: params.uri },
         ...(approvalContext === undefined ? {} : { approvalContext }),
+        ...(upstreamRequest === undefined ? {} : { upstreamRequestOptions: upstreamRequest.options }),
         requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
         resolveTarget: async (profile) => {
-          if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params);
+          if (this.resourcePromptRegistry) return this.resolveAggregatedResource(profile, params, upstreamRequest?.options);
           const auditUpstream = this.auditUpstreamName(upstreamName);
           return {
             ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
             ...(upstreamName === undefined ? {} : { identityUpstreamName: upstreamName }),
             name: params.uri,
-            execute: (session) => session.readResource(params),
+            execute: (session, options) => session.readResource(params, options),
             redact: redactDirectReadResult
           };
         }
       },
       audit
-    );
+    ));
   }
 
   private async executePromptGet(
@@ -1503,9 +2190,10 @@ export class MiftahServer {
     upstreamName: string | undefined,
     params: GetPromptRequest["params"],
     audit: AuditScope,
-    approvalContext?: ApprovalRequestContext
+    approvalContext?: ApprovalRequestContext,
+    upstreamRequest?: UpstreamRequestContext
   ): Promise<GetPromptResult> {
-    return this.operationPipeline.execute(
+    return this.runWithUpstreamRequest(upstreamRequest, () => this.operationPipeline.execute(
       {
         source,
         operation: "prompts/get",
@@ -1514,33 +2202,64 @@ export class MiftahServer {
         name: params.name,
         args: { ...(params.arguments ?? {}), name: params.name },
         ...(approvalContext === undefined ? {} : { approvalContext }),
+        ...(upstreamRequest === undefined ? {} : { upstreamRequestOptions: upstreamRequest.options }),
         requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
         resolveTarget: async (profile) => {
-          if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params);
+          if (this.resourcePromptRegistry) return this.resolveAggregatedPrompt(profile, params, upstreamRequest?.options);
           const auditUpstream = this.auditUpstreamName(upstreamName);
           return {
             ...(auditUpstream === undefined ? {} : { upstreamName: auditUpstream }),
             ...(upstreamName === undefined ? {} : { identityUpstreamName: upstreamName }),
             name: params.name,
-            execute: (session) => session.getPrompt(params),
+            execute: (session, options) => session.getPrompt(params, options),
             redact: redactDirectPromptResult
           };
         }
       },
       audit
-    );
+    ));
   }
 
   private async discoverResources(
     profile: string,
     upstreamName: string | undefined,
-    params?: ListResourcesRequest["params"]
+    params?: ListResourcesRequest["params"],
+    options?: UpstreamRequestOptions
   ): Promise<ListResourcesResult> {
     try {
-      const result = await this.callUpstream(profile, upstreamName, (session) => session.listResources(params));
+      const result = await this.callUpstream(profile, upstreamName, (session) => session.listResources(params, options));
       this.upstreams.recordCapabilitySuccess(profile, "resources", upstreamName);
       return result;
     } catch (error) {
+      if (options?.signal?.aborted) throw upstreamRequestCancelled();
+      this.upstreams.recordCapabilityFailure(profile, "resources", error, upstreamName);
+      throw error;
+    }
+  }
+
+  private async discoverResourceTemplates(
+    profile: string,
+    upstreamName: string | undefined,
+    params?: ListResourceTemplatesRequest["params"],
+    options?: UpstreamRequestOptions
+  ): Promise<ListResourceTemplatesResult> {
+    try {
+      const result = await this.callUpstream(
+        profile,
+        upstreamName,
+        (session) => session.listResourceTemplates(params, options),
+        (error) =>
+          !isMethodNotFoundError(error)
+            ? undefined
+            : new MiftahError(
+                "RESOURCE_TEMPLATES_UNAVAILABLE",
+                `RESOURCE_TEMPLATES_UNAVAILABLE: upstream '${this.auditUpstreamName(upstreamName) ?? "default"}' does not implement resource templates`
+              )
+      );
+      this.upstreams.recordCapabilitySuccess(profile, "resources", upstreamName);
+      return result;
+    } catch (error) {
+      if (options?.signal?.aborted) throw upstreamRequestCancelled();
       this.upstreams.recordCapabilityFailure(profile, "resources", error, upstreamName);
       throw error;
     }
@@ -1549,13 +2268,15 @@ export class MiftahServer {
   private async discoverPrompts(
     profile: string,
     upstreamName: string | undefined,
-    params?: ListPromptsRequest["params"]
+    params?: ListPromptsRequest["params"],
+    options?: UpstreamRequestOptions
   ): Promise<ListPromptsResult> {
     try {
-      const result = await this.callUpstream(profile, upstreamName, (session) => session.listPrompts(params));
+      const result = await this.callUpstream(profile, upstreamName, (session) => session.listPrompts(params, options));
       this.upstreams.recordCapabilitySuccess(profile, "prompts", upstreamName);
       return result;
     } catch (error) {
+      if (options?.signal?.aborted) throw upstreamRequestCancelled();
       this.upstreams.recordCapabilityFailure(profile, "prompts", error, upstreamName);
       throw error;
     }
@@ -1564,26 +2285,33 @@ export class MiftahServer {
   private async callUpstream<Result>(
     profile: string,
     upstreamName: string | undefined,
-    operation: (session: UpstreamSession) => Promise<Result>
+    operation: (session: UpstreamSession) => Promise<Result>,
+    mapError?: (error: unknown) => MiftahError | undefined
   ): Promise<Result> {
     try {
       const session = await this.upstreams.get(profile, upstreamName);
+      this.bindUpstreamSession(session, upstreamName);
       return await operation(session);
     } catch (error) {
-      throw this.toSafeError(error);
+      throw mapError?.(error) ?? this.toSafeError(error);
     }
+  }
+
+  private assertUpstreamRequestActive(options?: UpstreamRequestOptions): void {
+    if (options?.signal?.aborted) throw upstreamRequestCancelled();
   }
 
   private async resolveAggregatedResource(
     profile: string,
-    params: ReadResourceRequest["params"]
+    params: ReadResourceRequest["params"],
+    options?: UpstreamRequestOptions
   ): Promise<ResolvedOperation<ReadResourceResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Resource aggregation is unavailable");
     const registry = this.resourcePromptRegistry;
     let epoch = registry.captureEpoch(profile);
     let route = registry.resolveResource(profile, params.uri);
     if (!route) {
-      await this.listResourcesForCapturedOperation(profile, registry);
+      await this.listResourcesForCapturedOperation(profile, registry, options);
       epoch = registry.captureEpoch(profile);
       registry.assertResourceEpoch(profile, epoch);
       route = registry.resolveResource(profile, params.uri);
@@ -1599,21 +2327,22 @@ export class MiftahServer {
       upstreamName: route.upstreamName,
       identityUpstreamName: route.upstreamName,
       name: route.originalUri,
-      execute: (session) => session.readResource({ ...params, uri: route.originalUri }),
+      execute: (session, options) => session.readResource({ ...params, uri: route.originalUri }, options),
       redact: (result) => registry.redactReadResult(route, result, epoch)
     };
   }
 
   private async resolveAggregatedPrompt(
     profile: string,
-    params: GetPromptRequest["params"]
+    params: GetPromptRequest["params"],
+    options?: UpstreamRequestOptions
   ): Promise<ResolvedOperation<GetPromptResult>> {
     if (!this.resourcePromptRegistry) throw new Error("Prompt aggregation is unavailable");
     const registry = this.resourcePromptRegistry;
     let epoch = registry.captureEpoch(profile);
     let route = registry.resolvePrompt(profile, params.name);
     if (!route) {
-      await this.listPromptsForCapturedOperation(profile, registry);
+      await this.listPromptsForCapturedOperation(profile, registry, options);
       epoch = registry.captureEpoch(profile);
       registry.assertPromptEpoch(profile, epoch);
       route = registry.resolvePrompt(profile, params.name);
@@ -1629,28 +2358,36 @@ export class MiftahServer {
       upstreamName: route.upstreamName,
       identityUpstreamName: route.upstreamName,
       name: route.originalName,
-      execute: (session) => session.getPrompt({ ...params, name: route.originalName }),
+      execute: (session, options) => session.getPrompt({ ...params, name: route.originalName }, options),
       redact: (result) => registry.redactPromptResult(route, result, epoch)
     };
   }
 
-  private async listResourcesForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+  private async listResourcesForCapturedOperation(
+    profile: string,
+    registry: ResourcePromptRegistry,
+    options?: UpstreamRequestOptions
+  ): Promise<void> {
     try {
-      await registry.listResources(profile);
+      await registry.listResources(profile, undefined, options);
     } catch (error) {
       if (!(error instanceof MiftahError) || error.code !== "RESOURCE_DISCOVERY_INVALIDATED") throw error;
-      await registry.listResources(profile);
+      await registry.listResources(profile, undefined, options);
     } finally {
       await this.notifyResourceAvailabilityChange(profile);
     }
   }
 
-  private async listPromptsForCapturedOperation(profile: string, registry: ResourcePromptRegistry): Promise<void> {
+  private async listPromptsForCapturedOperation(
+    profile: string,
+    registry: ResourcePromptRegistry,
+    options?: UpstreamRequestOptions
+  ): Promise<void> {
     try {
-      await registry.listPrompts(profile);
+      await registry.listPrompts(profile, undefined, options);
     } catch (error) {
       if (!(error instanceof MiftahError) || error.code !== "PROMPT_DISCOVERY_INVALIDATED") throw error;
-      await registry.listPrompts(profile);
+      await registry.listPrompts(profile, undefined, options);
     } finally {
       await this.notifyPromptAvailabilityChange(profile);
     }
@@ -1728,16 +2465,24 @@ export class MiftahServer {
     }
   }
 
-  private async activeToolSnapshot(): Promise<{ profile: string; snapshot: ToolSnapshot }> {
+  private async activeToolSnapshot(options?: UpstreamRequestOptions): Promise<{ profile: string; snapshot: ToolSnapshot }> {
     for (;;) {
       const state = await this.captureStableProfileState();
       const previous =
         this.toolRegistry.peek(state.activeProfile) ?? this.invalidatedToolSnapshots.get(state.activeProfile);
-      const snapshot = await this.toolRegistry.get(state.activeProfile);
-      if (this.profiles.current().revision === state.revision) {
-        if (previous !== undefined) await this.notifyToolListChanged(previous, snapshot);
+      const loaded = await this.loadToolSnapshotForList(state.activeProfile, options);
+      if (this.profiles.current().revision !== state.revision) {
+        loaded.finish(false);
+        continue;
+      }
+      try {
+        if (previous !== undefined) await this.notifyToolListChanged(previous, loaded.snapshot);
         this.invalidatedToolSnapshots.delete(state.activeProfile);
-        return { profile: state.activeProfile, snapshot };
+        loaded.finish(true);
+        return { profile: state.activeProfile, snapshot: loaded.snapshot };
+      } catch (error) {
+        loaded.finish(false);
+        throw error;
       }
     }
   }
@@ -1768,6 +2513,7 @@ export class MiftahServer {
   }
 
   private async restartUpstreamProfileOnce(profile: string): Promise<void> {
+    this.dropResourceSubscriptions((subscription) => subscription.profile === profile);
     try {
       if (this.upstreams instanceof MultiUpstreamProcessManager) {
         await this.upstreams.restartProfile(profile);
@@ -1820,9 +2566,10 @@ export class MiftahServer {
   private invalidateResourcePromptAfterUpstreamFailure(profile: string): void {
     if (this.resourcePromptRegistry) {
       const hadResources = this.resourcePromptRegistry.hasResourceRoutes(profile);
+      const hadResourceTemplates = this.resourcePromptRegistry.hasResourceTemplateRoutes(profile);
       const hadPrompts = this.resourcePromptRegistry.hasPromptRoutes(profile);
       this.resourcePromptRegistry.invalidate(profile);
-      if (hadResources) this.pendingResourceListChanges.add(profile);
+      if (hadResources || hadResourceTemplates) this.pendingResourceListChanges.add(profile);
       if (hadPrompts) this.pendingPromptListChanges.add(profile);
     }
   }
@@ -1866,12 +2613,121 @@ export class MiftahServer {
     }
   }
 
-  private invalidateResourcePromptProfiles(...profiles: string[]): void {
-    for (const profile of new Set(profiles)) {
+  private async invalidateResourcePromptProfiles(...profiles: string[]): Promise<void> {
+    this.resourceSubscriptionEpoch += 1;
+    const invalidatedProfiles = new Set(profiles);
+    await this.unsubscribeResourceSubscriptions(() => true);
+    for (const profile of invalidatedProfiles) {
       this.resourcePromptRegistry?.invalidate(profile);
       this.pendingResourceListChanges.delete(profile);
       this.pendingPromptListChanges.delete(profile);
     }
+  }
+
+  private dropResourceSubscriptions(predicate: (subscription: ResourceSubscription) => boolean): void {
+    for (const [uri, subscription] of [...this.resourceSubscriptions]) {
+      if (!predicate(subscription)) continue;
+      this.resourceSubscriptions.delete(uri);
+      if (subscription.state === "pending") {
+        subscription.cleanupRequested = true;
+        subscription.abortPending?.();
+        continue;
+      }
+      subscription.release?.();
+    }
+  }
+
+  private enqueueResourceSubscriptionTransition<Result>(uri: string, operation: () => Promise<Result>): Promise<Result> {
+    const previous = this.resourceSubscriptionTransitions.get(uri) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.resourceSubscriptionTransitions.set(uri, settled);
+    void settled.then(() => {
+      if (this.resourceSubscriptionTransitions.get(uri) === settled) {
+        this.resourceSubscriptionTransitions.delete(uri);
+      }
+    });
+    return result;
+  }
+
+  private async unsubscribeResourceSubscriptions(
+    predicate: (subscription: ResourceSubscription) => boolean
+  ): Promise<void> {
+    const subscriptions: Array<readonly [string, ResourceSubscription]> = [];
+    const pendingTransitions: Promise<void>[] = [];
+    for (const [uri, subscription] of this.resourceSubscriptions) {
+      if (!predicate(subscription)) continue;
+      if (subscription.state === "pending") {
+        if (this.resourceSubscriptions.get(uri) === subscription) {
+          this.resourceSubscriptions.delete(uri);
+          subscription.cleanupRequested = true;
+          subscription.abortPending?.();
+          const transition = this.resourceSubscriptionTransitions.get(uri);
+          if (transition !== undefined) pendingTransitions.push(transition);
+        }
+        continue;
+      }
+      subscriptions.push([uri, subscription]);
+    }
+    await Promise.all(
+      [...pendingTransitions, ...subscriptions.map(([uri, subscription]) =>
+        this.enqueueResourceSubscriptionTransition(uri, async () => {
+          // A client-initiated unsubscribe may already be ahead of this cleanup.
+          // Its completion removes the route, so sending another upstream unsubscribe
+          // here would duplicate a protocol transition.
+          if (this.resourceSubscriptions.get(uri) !== subscription) return;
+          this.resourceSubscriptions.delete(uri);
+          await this.cleanupResourceSubscriptionOnce(subscription);
+        })
+      )]
+    );
+  }
+
+  private async flushPendingResourceUpdates(subscription: ResourceSubscription): Promise<void> {
+    if (!this.server.transport || subscription.pendingUpdates === 0) return;
+    const pendingUpdates = subscription.pendingUpdates;
+    subscription.pendingUpdates = 0;
+    try {
+      await Promise.all(
+        Array.from({ length: pendingUpdates }, () => this.server.sendResourceUpdated({ uri: subscription.exposedUri }))
+      );
+    } catch (error) {
+      this.reportUpstreamNotificationFailure(error);
+    }
+  }
+
+  private cleanupResourceSubscriptionOnce(subscription: ResourceSubscription): Promise<void> {
+    if (subscription.cleanupPromise === undefined) {
+      subscription.cleanupPromise = this.cleanupResourceSubscription(subscription);
+    }
+    return subscription.cleanupPromise;
+  }
+
+  private async cleanupResourceSubscription(subscription: ResourceSubscription): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      this.config.process?.shutdownTimeoutMs ?? defaultResourceSubscriptionCleanupTimeoutMs
+    );
+    try {
+      await subscription.session.unsubscribeResource(
+        { uri: subscription.originalUri },
+        { signal: controller.signal }
+      );
+    } catch (error) {
+      this.reportResourceSubscriptionCleanupFailure(error);
+    } finally {
+      clearTimeout(timeout);
+      subscription.release?.();
+    }
+  }
+
+  private reportResourceSubscriptionCleanupFailure(error: unknown): void {
+    const safeError = this.toSafeError(error);
+    process.emitWarning(safeError.message, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CLEANUP_FAILED" });
   }
 }
 
@@ -1909,10 +2765,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isMethodNotFoundError(error: unknown): error is { readonly code: number } {
+  return isRecord(error) && error.code === ErrorCode.MethodNotFound;
+}
+
+function upstreamRequestCancelled(): Error {
+  return new Error("Upstream request cancelled");
+}
+
+function toolDiscoveryProgressKey(profile: string, upstreamName: string | undefined): string {
+  return `${profile}\u0000${upstreamName ?? "default"}`;
+}
+
+/**
+ * Maps concurrent upstream progress streams onto one downstream token. A
+ * combined operation deliberately omits `total`: upstream totals are local to
+ * each provider and cannot be represented faithfully as one shared total.
+ */
+function aggregateProgressOptions(
+  options: UpstreamRequestOptions | undefined,
+  keys: readonly string[]
+): (key: string) => UpstreamRequestOptions | undefined {
+  const onprogress = options?.onprogress;
+  const uniqueKeys = [...new Set(keys)];
+  if (onprogress === undefined || uniqueKeys.length <= 1) return () => options;
+
+  const contributions = new Map(uniqueKeys.map((key) => [key, 0]));
+  let lastProgress = 0;
+  return (key) => ({
+    ...options,
+    onprogress: ({ progress, total, message }) => {
+      const safeProgress = Number.isFinite(progress) ? Math.max(0, progress) : 0;
+      const contribution =
+        total !== undefined && Number.isFinite(total) && total > 0
+          ? Math.min(1, safeProgress / total)
+          : safeProgress;
+      contributions.set(key, Math.max(contributions.get(key) ?? 0, contribution));
+      const aggregate = [...contributions.values()].reduce((sum, value) => sum + value, 0);
+      if (aggregate <= lastProgress) return;
+      lastProgress = aggregate;
+      onprogress({ progress: aggregate, ...(message === undefined ? {} : { message }) });
+    }
+  });
+}
+
 function redactDirectResourceList(result: ListResourcesResult): ListResourcesResult {
   return {
     ...result,
     resources: result.resources.map(redactDirectResource)
+  };
+}
+
+function redactDirectResourceTemplateList(result: ListResourceTemplatesResult): ListResourceTemplatesResult {
+  return {
+    ...result,
+    resourceTemplates: result.resourceTemplates.map(redactDirectResourceTemplate)
   };
 }
 
@@ -1966,6 +2873,14 @@ function redactDirectResource(resource: Resource): Resource {
     ...resource,
     uri: redactSensitiveUri(resource.uri),
     icons: redactDirectIconSources(resource.icons)
+  };
+}
+
+function redactDirectResourceTemplate(template: ResourceTemplate): ResourceTemplate {
+  return {
+    ...template,
+    uriTemplate: redactSensitiveUri(template.uriTemplate),
+    icons: redactDirectIconSources(template.icons)
   };
 }
 

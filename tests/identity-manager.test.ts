@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -107,6 +107,116 @@ describe("identity verifier", () => {
 
     expect(result).toMatchObject({ status: "failed", errorCode: "IDENTITY_VERIFICATION_FAILED" });
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("forwards cancellation through identity probe discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-identity-cancellation-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const listCountPath = join(directory, "tools-count");
+    const callCountPath = join(directory, "probe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "mona",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath,
+            TEST_LIST_TOOLS_COUNT_PATH: listCountPath,
+            TEST_CALL_TOOL_COUNT_PATH: callCountPath
+          },
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000
+          }
+        }
+      }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config);
+    const controller = new AbortController();
+
+    try {
+      const session = await upstreams.get("work");
+      const cancelled = verifier.verify("work", undefined, session, {
+        request: { signal: controller.signal }
+      });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(cancelled).rejects.toThrow();
+      expect(verifier.status("work", undefined)).toMatchObject({ status: "not-verified" });
+      await expect(verifier.verify("work", undefined, session)).resolves.toMatchObject({
+        status: "verified",
+        actual: { login: "mona" }
+      });
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await expect(readFile(listCountPath, "utf8")).resolves.toBe("1\n1\n");
+      await expect(readFile(callCountPath, "utf8")).resolves.toBe("1\n");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a shared identity probe alive when one request cancels", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-identity-shared-cancellation-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const listCountPath = join(directory, "tools-count");
+    const callCountPath = join(directory, "probe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "mona",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath,
+            TEST_LIST_TOOLS_COUNT_PATH: listCountPath,
+            TEST_CALL_TOOL_COUNT_PATH: callCountPath
+          },
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000
+          }
+        }
+      }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config);
+    const controller = new AbortController();
+
+    try {
+      const session = await upstreams.get("work");
+      const cancelled = verifier.verify("work", undefined, session, {
+        request: { signal: controller.signal }
+      });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      const joined = verifier.verify("work", undefined, session);
+      await delay(25);
+      controller.abort("test cancellation");
+
+      await expect(cancelled).rejects.toThrow();
+      await expect(joined).resolves.toMatchObject({ status: "verified", actual: { login: "mona" } });
+      await expect(access(cancelledPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(listCountPath, "utf8")).resolves.toBe("1\n");
+      await expect(readFile(callCountPath, "utf8")).resolves.toBe("1\n");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("does not invoke a probe that declares required input", async () => {

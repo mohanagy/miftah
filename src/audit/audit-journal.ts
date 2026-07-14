@@ -666,7 +666,7 @@ function localLockGreeting(key: string): string {
   return `${localLockProtocol} ${key}\n`;
 }
 
-type LocalLockPortState = "available" | "held" | "occupied";
+type LocalLockPortState = "available" | "held" | "occupied" | "unknown";
 
 interface LocalJournalLock {
   readonly server: Server;
@@ -685,7 +685,10 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
       socket.destroy();
       resolve(state);
     };
-    const timeout = setTimeout(() => settle("occupied"), localLockProbeMilliseconds);
+    // A timeout may be a slow holder for this journal rather than an unrelated
+    // listener. Treat it as unknown so a contender retries this candidate
+    // instead of selecting a different port and bypassing the same lock.
+    const timeout = setTimeout(() => settle("unknown"), localLockProbeMilliseconds);
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
       response += chunk;
@@ -750,7 +753,7 @@ async function acquireJournalLock(location: AuditJournalLocation): Promise<() =>
         throw new Error("Audit journal lock could not be acquired.");
       }
       const state = await inspectLocalLockPort(port, key);
-      if (state === "held") {
+      if (state === "held" || state === "unknown") {
         break;
       }
       if (state === "available") {

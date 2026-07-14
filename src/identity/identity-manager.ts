@@ -1,18 +1,34 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { IdentityConfig, IdentityFingerprint, MiftahConfig, RiskLevel, ToolingConfig } from "../config/types.js";
 import { classifyRisk } from "../policy/risk-classifier.js";
-import type { UpstreamSession } from "../upstream/upstream-session.js";
+import type { UpstreamRequestOptions, UpstreamSession } from "../upstream/upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
 import type { IdentityStatus } from "./identity-types.js";
 
 const maxIdentityFieldLength = 256;
 const maxIdentityResponseLength = 4_096;
 
+export interface IdentityVerificationOptions {
+  readonly force?: boolean;
+  readonly request?: UpstreamRequestOptions;
+}
+
+interface PendingVerification {
+  readonly controller: AbortController;
+  readonly consumers: Set<PendingVerificationConsumer>;
+  promise: Promise<IdentityStatus>;
+  settled: boolean;
+}
+
+interface PendingVerificationConsumer {
+  readonly onprogress?: UpstreamRequestOptions["onprogress"];
+}
+
 /** Verifies configured, non-secret upstream account fingerprints. */
 export class IdentityManager {
   private readonly statuses = new Map<string, IdentityStatus>();
   private readonly cache = new Map<string, Map<string, IdentityStatus>>();
-  private readonly inFlight = new Map<string, Map<string, Promise<IdentityStatus>>>();
+  private readonly inFlight = new Map<string, Map<string, PendingVerification>>();
   private readonly epochs = new Map<string, number>();
 
   constructor(private readonly config: MiftahConfig) {}
@@ -67,11 +83,12 @@ export class IdentityManager {
     profile: string,
     upstreamName: string | undefined,
     session: UpstreamSession,
-    options: { force?: boolean } = {}
+    options: IdentityVerificationOptions = {}
   ): Promise<IdentityStatus> {
     const effectiveUpstream = this.effectiveUpstreamName(upstreamName);
     const identity = this.identityConfig(profile, effectiveUpstream);
     if (!identity) return this.status(profile, effectiveUpstream);
+    if (options.request?.signal?.aborted) throw identityVerificationCancelled();
 
     const targetKey = statusKey(profile, effectiveUpstream);
     const epoch = this.epoch(targetKey);
@@ -80,38 +97,28 @@ export class IdentityManager {
     if (!options.force && cached && isFresh(cached, identity.maxAgeMs)) return structuredClone(cached);
 
     const current = this.inFlight.get(targetKey)?.get(sessionKey);
-    if (current) return structuredClone(await current);
-
-    const verification = this.probe(profile, effectiveUpstream, identity, session);
-    let targetInFlight = this.inFlight.get(targetKey);
-    if (!targetInFlight) {
-      targetInFlight = new Map();
-      this.inFlight.set(targetKey, targetInFlight);
-    }
-    targetInFlight.set(sessionKey, verification);
-    try {
-      const result = await verification;
-      if (this.epoch(targetKey) === epoch) {
-        let targetCache = this.cache.get(targetKey);
-        if (!targetCache) {
-          targetCache = new Map();
-          this.cache.set(targetKey, targetCache);
-        }
-        targetCache.set(sessionKey, result);
-        this.statuses.set(targetKey, result);
+    const pending =
+      current !== undefined && !current.controller.signal.aborted && !current.settled
+        ? current
+        : this.createPending(targetKey, sessionKey, epoch, profile, effectiveUpstream, identity, session);
+    if (this.inFlight.get(targetKey)?.get(sessionKey) !== pending) {
+      let targetInFlight = this.inFlight.get(targetKey);
+      if (!targetInFlight) {
+        targetInFlight = new Map();
+        this.inFlight.set(targetKey, targetInFlight);
       }
-      return structuredClone(result);
-    } finally {
-      const activeInFlight = this.inFlight.get(targetKey);
-      if (activeInFlight?.get(sessionKey) === verification) {
-        activeInFlight.delete(sessionKey);
-        if (activeInFlight.size === 0) this.inFlight.delete(targetKey);
-      }
+      targetInFlight.set(sessionKey, pending);
     }
+    return structuredClone(await this.awaitPending(pending, options.request));
   }
 
-  async requireVerified(profile: string, upstreamName: string | undefined, session: UpstreamSession): Promise<IdentityStatus> {
-    const status = await this.verify(profile, upstreamName, session);
+  async requireVerified(
+    profile: string,
+    upstreamName: string | undefined,
+    session: UpstreamSession,
+    options: IdentityVerificationOptions = {}
+  ): Promise<IdentityStatus> {
+    const status = await this.verify(profile, upstreamName, session, options);
     if (status.status === "verified") return status;
 
     const code =
@@ -150,11 +157,97 @@ export class IdentityManager {
     return this.epochs.get(key) ?? 0;
   }
 
-  private async probe(
+  private createPending(
+    targetKey: string,
+    sessionKey: string,
+    epoch: number,
     profile: string,
     upstreamName: string | undefined,
     identity: IdentityConfig,
     session: UpstreamSession
+  ): PendingVerification {
+    const pending: PendingVerification = {
+      controller: new AbortController(),
+      consumers: new Set(),
+      promise: Promise.resolve(undefined as never),
+      settled: false
+    };
+    pending.promise = Promise.resolve()
+      .then(() => this.probe(profile, upstreamName, identity, session, this.pendingRequestOptions(pending)))
+      .then((result) => {
+        if (this.epoch(targetKey) === epoch && this.inFlight.get(targetKey)?.get(sessionKey) === pending) {
+          let targetCache = this.cache.get(targetKey);
+          if (!targetCache) {
+            targetCache = new Map();
+            this.cache.set(targetKey, targetCache);
+          }
+          targetCache.set(sessionKey, result);
+          this.statuses.set(targetKey, result);
+        }
+        return result;
+      })
+      .finally(() => {
+        pending.settled = true;
+        const activeInFlight = this.inFlight.get(targetKey);
+        if (activeInFlight?.get(sessionKey) === pending) {
+          activeInFlight.delete(sessionKey);
+          if (activeInFlight.size === 0) this.inFlight.delete(targetKey);
+        }
+      });
+    // All callers may cancel before the shared upstream request settles.
+    // Keep that completion observed so its rejection cannot become unhandled.
+    void pending.promise.catch(() => undefined);
+    return pending;
+  }
+
+  private async awaitPending(
+    pending: PendingVerification,
+    options?: UpstreamRequestOptions
+  ): Promise<IdentityStatus> {
+    if (options?.signal?.aborted) throw identityVerificationCancelled();
+    const consumer: PendingVerificationConsumer = { onprogress: options?.onprogress };
+    pending.consumers.add(consumer);
+    const signal = options?.signal;
+    let abort: (() => void) | undefined;
+    const cancelled =
+      signal === undefined
+        ? undefined
+        : new Promise<never>((_, reject) => {
+            abort = () => {
+              pending.consumers.delete(consumer);
+              this.abortPendingIfUnused(pending);
+              reject(identityVerificationCancelled());
+            };
+            signal.addEventListener("abort", abort, { once: true });
+          });
+    try {
+      return await (cancelled === undefined ? pending.promise : Promise.race([pending.promise, cancelled]));
+    } finally {
+      if (abort !== undefined) signal?.removeEventListener("abort", abort);
+      pending.consumers.delete(consumer);
+      this.abortPendingIfUnused(pending);
+    }
+  }
+
+  private abortPendingIfUnused(pending: PendingVerification): void {
+    if (!pending.settled && pending.consumers.size === 0) pending.controller.abort();
+  }
+
+  private pendingRequestOptions(pending: PendingVerification): UpstreamRequestOptions {
+    return {
+      signal: pending.controller.signal,
+      onprogress: (progress) => {
+        for (const consumer of pending.consumers) consumer.onprogress?.(progress);
+      }
+    };
+  }
+
+  private async probe(
+    profile: string,
+    upstreamName: string | undefined,
+    identity: IdentityConfig,
+    session: UpstreamSession,
+    options?: UpstreamRequestOptions
   ): Promise<IdentityStatus> {
     const base = {
       profile,
@@ -164,11 +257,11 @@ export class IdentityManager {
     };
 
     try {
-      const tool = (await session.listTools()).tools.find((candidate) => candidate.name === identity.probe.tool);
+      const tool = (await session.listTools(options)).tools.find((candidate) => candidate.name === identity.probe.tool);
       if (!tool || !isSafeProbeTool(tool, identity.probe.tool, this.config.tooling?.toolRiskOverrides)) {
         return { ...base, status: "unsupported", errorCode: "IDENTITY_PROBE_UNSUPPORTED" };
       }
-      const response = await session.callTool({ name: identity.probe.tool, arguments: {} });
+      const response = await session.callTool({ name: identity.probe.tool, arguments: {} }, options);
       if (response.isError === true) {
         return { ...base, status: "failed", errorCode: "IDENTITY_VERIFICATION_FAILED" };
       }
@@ -180,9 +273,14 @@ export class IdentityManager {
       }
       return { ...base, status: "verified", actual: observed };
     } catch {
+      if (options?.signal?.aborted) throw identityVerificationCancelled();
       return { ...base, status: "failed", errorCode: "IDENTITY_VERIFICATION_FAILED" };
     }
   }
+}
+
+function identityVerificationCancelled(): Error {
+  return new Error("Identity verification cancelled");
 }
 
 function statusKey(profile: string, upstreamName?: string): string {
