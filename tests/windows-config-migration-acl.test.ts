@@ -72,7 +72,16 @@ try {
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sddl)))
   exit 0
 } catch {
-  [Console]::Out.Write("MIFTAH_ACL_PROBE_STAGE:" + $stage)
+  $suffix = ''
+  if ($stage -eq 'apply') {
+    $suffix = switch ($_.CategoryInfo.Category.ToString()) {
+      'PermissionDenied' { ':permission' }
+      'ObjectNotFound' { ':missing' }
+      'InvalidOperation' { ':invalid' }
+      default { ':other' }
+    }
+  }
+  [Console]::Out.Write("MIFTAH_ACL_PROBE_STAGE:" + $stage + $suffix)
   exit 1
 }`;
 
@@ -82,7 +91,9 @@ function safeAclProbeStage(output: readonly Buffer[]): string {
   const bytes = Buffer.concat(output);
   for (const encoding of ["utf8", "utf16le"] as const) {
     const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
-    const stage = diagnostic.match(/MIFTAH_ACL_PROBE_STAGE:(bootstrap|request|identity|descriptor|apply|verify)/)?.[0];
+    const stage = diagnostic.match(
+      /MIFTAH_ACL_PROBE_STAGE:(bootstrap|request|identity|descriptor|apply|verify)(?::(permission|missing|invalid|other))?/
+    )?.[0];
     if (stage !== undefined) return stage;
   }
   return "MIFTAH_ACL_PROBE_STAGE:unavailable";
