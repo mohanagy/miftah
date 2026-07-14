@@ -1,7 +1,8 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { isIP, type Socket } from "node:net";
+import { type Socket } from "node:net";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isCanonicalHttpHost, isLiteralLoopbackBindHost } from "../config/schema.js";
 import { resolveRuntimeConfig } from "../runtime/resolve-runtime-config.js";
 import { createHttpSessionRuntime, type MiftahRuntime } from "../runtime/create-miftah-runtime.js";
 import { MiftahError } from "../utils/errors.js";
@@ -11,7 +12,12 @@ const defaultPort = 3000;
 const defaultMaxSessions = 32;
 const defaultSessionIdleTimeoutMs = 15 * 60_000;
 const defaultMaxRequestBytes = 1_048_576;
-const hostPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/u;
+const bracketedHostPortPattern = /^\[([0-9a-f:]+)\](?::(\d{1,5}))?$/iu;
+const decimalPortPattern = /^\d{1,5}$/u;
+const decimalPattern = /^\d+$/u;
+const requestTimeoutMs = 60_000;
+const headersTimeoutMs = 10_000;
+const connectionsCheckingIntervalMs = 5_000;
 
 type SessionRuntimeFactory = (configPath: string) => Promise<MiftahRuntime>;
 
@@ -79,11 +85,6 @@ function singleHeader(request: IncomingMessage, name: string): string | undefine
   return values.length === 1 ? values[0] : null;
 }
 
-function isCanonicalHost(value: string): boolean {
-  if (value.length === 0 || value.length > 253) return false;
-  return hostPattern.test(value) || isIP(value) === 6;
-}
-
 function hasForbiddenHeaderCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
@@ -97,7 +98,7 @@ function hostFromHeader(value: string): string | undefined {
   let host: string;
   let port: string | undefined;
   if (value.startsWith("[")) {
-    const match = /^\[([0-9a-f:]+)\](?::(\d{1,5}))?$/iu.exec(value);
+    const match = bracketedHostPortPattern.exec(value);
     if (!match) return undefined;
     host = match[1]!.toLowerCase();
     port = match[2];
@@ -111,13 +112,9 @@ function hostFromHeader(value: string): string | undefined {
       host = value.toLowerCase();
     }
   }
-  if (!isCanonicalHost(host)) return undefined;
-  if (port !== undefined && (!/^\d{1,5}$/u.test(port) || Number(port) > 65_535)) return undefined;
+  if (!isCanonicalHttpHost(host)) return undefined;
+  if (port !== undefined && (!decimalPortPattern.test(port) || Number(port) > 65_535)) return undefined;
   return host;
-}
-
-function isLiteralLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "::1";
 }
 
 function isBearerToken(value: string): boolean {
@@ -144,7 +141,7 @@ function writeResponse(response: ServerResponse, error: HttpRequestError): void 
 
 async function readJsonBody(request: IncomingMessage, maximumBytes: number): Promise<unknown> {
   const contentLength = singleHeader(request, "content-length");
-  if (contentLength === null || (contentLength !== undefined && !/^\d+$/u.test(contentLength))) {
+  if (contentLength === null || (contentLength !== undefined && !decimalPattern.test(contentLength))) {
     throw new HttpRequestError(400, "Bad Request");
   }
   if (contentLength !== undefined && Number(contentLength) > maximumBytes) {
@@ -497,7 +494,11 @@ export async function startMiftahHttpServer(
     sessionIdleTimeoutMs: config?.sessionIdleTimeoutMs ?? defaultSessionIdleTimeoutMs,
     maxRequestBytes: config?.maxRequestBytes ?? defaultMaxRequestBytes
   };
-  const server = createServer();
+  const server = createServer({
+    requestTimeout: requestTimeoutMs,
+    headersTimeout: headersTimeoutMs,
+    connectionsCheckingInterval: connectionsCheckingIntervalMs
+  });
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
       server.off("listening", onListening);
@@ -510,8 +511,8 @@ export async function startMiftahHttpServer(
     server.once("error", onError);
     server.once("listening", onListening);
     server.listen(settings.port, settings.host);
-  }).catch(() => {
-    throw new Error("Unable to start the Miftah HTTP server.");
+  }).catch((error: unknown) => {
+    throw new Error("Unable to start the Miftah HTTP server.", { cause: error });
   });
   const address = server.address();
   if (address === null || typeof address === "string") {
@@ -534,7 +535,7 @@ export async function startMiftahHttpServer(
   server.on("request", (request, response) => {
     void hostServer.handle(request, response);
   });
-  if (!isLiteralLoopbackHost(settings.host)) {
+  if (!isLiteralLoopbackBindHost(settings.host)) {
     (options.onWarning ?? ((message) => process.stderr.write(`${message}\n`)))(
       "WARNING: Miftah HTTP serving is bound to a non-loopback host with bearer authentication enabled."
     );

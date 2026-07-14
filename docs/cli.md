@@ -32,7 +32,7 @@ Every command also accepts `--help` and `-h`; those generated per-command help s
 
 ### `serve` transports
 
-`miftah serve --config <file>` and `miftah serve --transport stdio --config <file>` accept one STDIO client transport. `miftah serve --transport http --config <file>` starts the `/mcp` Streamable HTTP endpoint from `server.http`; it defaults to `http://127.0.0.1:3000/mcp` when that configuration is absent. The listener URL is written to stderr so STDIO's MCP protocol stream remains untouched. Signals stop new HTTP admissions and close the per-session runtimes and upstream transports.
+`miftah serve --config <file>` and `miftah serve --transport stdio --config <file>` accept one STDIO client transport. `miftah serve --transport http --config <file>` starts the `/mcp` Streamable HTTP endpoint from `server.http`; it defaults to `http://127.0.0.1:3000/mcp` when that configuration is absent. The listener URL is written to stdout; HTTP mode does not use the STDIO MCP protocol stream. Signals stop new HTTP admissions and close the per-session runtimes and upstream transports.
 
 HTTP bearer authentication is configured only through `server.http.authToken` as a secret reference. The CLI never accepts a bearer token option and never writes one to its listener or error output. See [HTTP server transport](config.md#http-server-transport) for loopback, non-loopback, Host, Origin, session, and request-limit requirements.
 

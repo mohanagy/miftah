@@ -649,7 +649,7 @@ const stateSchema = z
 const httpHostPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/u;
 const secretReferencePattern = /^(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|secretref:[a-z][a-z0-9+.-]*:.*)$/u;
 
-function isCanonicalHttpHost(value: string): boolean {
+export function isCanonicalHttpHost(value: string): boolean {
   if (value.length === 0 || value.length > 253 || value !== value.toLowerCase()) return false;
   return httpHostPattern.test(value) || isIP(value) === 6;
 }
@@ -671,7 +671,7 @@ function isCanonicalHttpOrigin(value: string): boolean {
   }
 }
 
-function isLiteralLoopbackBindHost(value: string): boolean {
+export function isLiteralLoopbackBindHost(value: string): boolean {
   return value === "127.0.0.1" || value === "::1";
 }
 

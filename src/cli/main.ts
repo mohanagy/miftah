@@ -19,7 +19,7 @@ import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.j
 async function serve(configPath: string, transportKind = "stdio"): Promise<void> {
   if (transportKind === "http") {
     const server = await startMiftahHttpServer(configPath);
-    process.stderr.write(`Miftah HTTP server listening on ${server.url.toString()}\n`);
+    process.stdout.write(`Miftah HTTP server listening on ${server.url.toString()}\n`);
     const shutdown = (): void => {
       void server.close().catch(() => {
         process.stderr.write("Miftah HTTP server shutdown failed.\n");

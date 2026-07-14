@@ -1,5 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function writeHttpConfig(
-  options: { maxSessions?: number; sessionIdleTimeoutMs?: number; maxRequestBytes?: number } = {}
+  options: { port?: number; maxSessions?: number; sessionIdleTimeoutMs?: number; maxRequestBytes?: number } = {}
 ): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "miftah-http-server-"));
   temporaryDirectories.push(directory);
@@ -39,7 +39,7 @@ async function writeHttpConfig(
       state: { persistActiveProfile: true, scope: "workspace" },
       server: {
         http: {
-          port: 0,
+          port: options.port ?? 0,
           maxSessions: options.maxSessions ?? 3,
           sessionIdleTimeoutMs: options.sessionIdleTimeoutMs ?? 1_000,
           maxRequestBytes: options.maxRequestBytes
@@ -156,6 +156,32 @@ async function connectClient(url: URL, name: string): Promise<Client> {
 }
 
 describe("Miftah Streamable HTTP server", () => {
+  it("sets bounded listener timeouts before accepting HTTP requests", async () => {
+    const server = await startMiftahHttpServer(await writeHttpConfig());
+
+    try {
+      const listener = (server as unknown as { readonly server: Server }).server;
+      expect(listener.requestTimeout).toBe(60_000);
+      expect(listener.headersTimeout).toBe(10_000);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves the listener startup failure as the cause", async () => {
+    const first = await startMiftahHttpServer(await writeHttpConfig());
+
+    try {
+      const port = Number(first.url.port);
+      await expect(startMiftahHttpServer(await writeHttpConfig({ port }))).rejects.toMatchObject({
+        message: "Unable to start the Miftah HTTP server.",
+        cause: expect.objectContaining({ code: "EADDRINUSE" })
+      });
+    } finally {
+      await first.close();
+    }
+  });
+
   it("binds the literal loopback default and rejects browser origins before session creation", async () => {
     const server = await startMiftahHttpServer(await writeHttpConfig());
 
