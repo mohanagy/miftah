@@ -102,6 +102,7 @@ const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVAT
 $ErrorActionPreference = 'Stop'
 $requestName = '${privateDirectoryRequestEnvironmentName}'
 $directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_SECTIONS')
 $stage = 'bootstrap'
 try {
   $stage = 'request'
@@ -173,6 +174,9 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:(bootstrap|request|directory|identity|descriptor|rule|create|verify)(?::(permission|missing|invalid|other))?/
     )?.[0];
     if (stage !== undefined) return stage;
+  }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_SECTIONS")) {
+    return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:sections";
   }
   if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP")) {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:bootstrap";
