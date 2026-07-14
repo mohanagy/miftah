@@ -9,15 +9,6 @@ const aclCommandTimeoutMs = 5_000;
 // system root rather than a caller-controlled environment override; unsupported
 // non-default layouts fail closed instead of launching an arbitrary executable.
 const trustedWindowsRoot = "C:\\Windows";
-// ConvertFrom-Json is provided by Windows PowerShell's built-in Utility module.
-// Provide only its protected module root rather than an inherited search path.
-const trustedPowerShellModulePath = win32.join(
-  trustedWindowsRoot,
-  "System32",
-  "WindowsPowerShell",
-  "v1.0",
-  "Modules"
-);
 
 interface CopyFileSecurityRequest {
   readonly operation: "copy-file-security";
@@ -61,7 +52,10 @@ function requestHasNul(request: WindowsConfigAclRequest): boolean {
 }
 
 function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
-  const bytes = Buffer.from(JSON.stringify(request), "utf8");
+  const fields = request.operation === "copy-file-security"
+    ? [request.operation, request.source, request.target]
+    : [request.operation, request.directory];
+  const bytes = Buffer.from(fields.join("\u0000"), "utf8");
   return bytes.byteLength <= maximumRequestBytes ? bytes.toString("base64") : undefined;
 }
 
@@ -77,11 +71,7 @@ function trustedPowerShellExecutable(): string | undefined {
 }
 
 function aclEnvironment(request: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {
-    SystemRoot: trustedWindowsRoot,
-    windir: trustedWindowsRoot,
-    PSModulePath: trustedPowerShellModulePath
-  };
+  const environment: NodeJS.ProcessEnv = { SystemRoot: trustedWindowsRoot, windir: trustedWindowsRoot };
   for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
     const value = environmentValue(process.env, name);
     if (value !== undefined) environment[name] = value;
@@ -140,34 +130,30 @@ $directorySections = [System.Security.AccessControl.AccessControlSections]::Acce
 try {
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
-  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-  $request = $json | ConvertFrom-Json
-  if ($null -eq $request -or $request.operation -isnot [string]) { exit 1 }
 
-  if ($request.operation -eq 'copy-file-security') {
-    if ($request.source -isnot [string] -or $request.target -isnot [string]) { exit 1 }
-    $sourceAcl = [System.IO.File]::GetAccessControl($request.source, $accessSections)
+  if ($fields.Count -eq 3 -and $fields[0] -eq 'copy-file-security') {
+    $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $accessSections)
     $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($accessSections)
-    $targetAcl = [System.IO.File]::GetAccessControl($request.target, $accessSections)
+    $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
     $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $accessSections)
-    [System.IO.File]::SetAccessControl($request.target, $targetAcl)
-    $verifiedAcl = [System.IO.File]::GetAccessControl($request.target, $accessSections)
+    [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
+    $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
     if ($sourceSddl -ne $verifiedAcl.GetSecurityDescriptorSddlForm($accessSections)) { exit 1 }
     exit 0
   }
 
-  if ($request.operation -eq 'create-private-directory') {
-    if ($request.directory -isnot [string]) { exit 1 }
-    $directory = New-Object System.IO.DirectoryInfo($request.directory)
+  if ($fields.Count -eq 2 -and $fields[0] -eq 'create-private-directory') {
+    $directory = [System.IO.DirectoryInfo]::new($fields[1])
     if ($directory.Exists) { exit 1 }
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     if ($null -eq $identity) { exit 1 }
-    $security = New-Object System.Security.AccessControl.DirectorySecurity
+    $security = [System.Security.AccessControl.DirectorySecurity]::new()
     $security.SetAccessRuleProtection($true, $false)
     $security.SetOwner($identity)
     $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
       $identity,
       [System.Security.AccessControl.FileSystemRights]::FullControl,
       [System.Security.AccessControl.InheritanceFlags]$inheritance,

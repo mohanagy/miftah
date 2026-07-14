@@ -8,7 +8,6 @@ import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
-const trustedPowerShellModulePath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -41,11 +40,7 @@ function aclEnvironment(request: string): NodeJS.ProcessEnv {
 }
 
 function restrictedAclEnvironment(request: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {
-    SystemRoot: "C:\\Windows",
-    windir: "C:\\Windows",
-    PSModulePath: trustedPowerShellModulePath
-  };
+  const environment: NodeJS.ProcessEnv = { SystemRoot: "C:\\Windows", windir: "C:\\Windows" };
   for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
     const value = environmentValue(process.env, name);
     if (value !== undefined) environment[name] = value;
@@ -113,24 +108,23 @@ try {
   $stage = 'request'
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
-  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-  [Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_PARSE')
-  $request = $json | ConvertFrom-Json
-  if ($null -eq $request -or $request.operation -ne 'create-private-directory' -or $request.directory -isnot [string]) { exit 1 }
+  [Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_REQUEST')
+  if ($fields.Count -ne 2 -or $fields[0] -ne 'create-private-directory') { exit 1 }
   $stage = 'directory'
-  $directory = New-Object System.IO.DirectoryInfo($request.directory)
+  $directory = [System.IO.DirectoryInfo]::new($fields[1])
   if ($directory.Exists) { exit 1 }
   $stage = 'identity'
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if ($null -eq $identity) { exit 1 }
   $stage = 'descriptor'
-  $security = New-Object System.Security.AccessControl.DirectorySecurity
+  $security = [System.Security.AccessControl.DirectorySecurity]::new()
   $security.SetAccessRuleProtection($true, $false)
   $security.SetOwner($identity)
   $stage = 'rule'
   $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-  $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
     $identity,
     [System.Security.AccessControl.FileSystemRights]::FullControl,
     [System.Security.AccessControl.InheritanceFlags]$inheritance,
@@ -181,8 +175,8 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
     )?.[0];
     if (stage !== undefined) return stage;
   }
-  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_PARSE")) {
-    return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:parse";
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_REQUEST")) {
+    return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:request";
   }
   if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_SECTIONS")) {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:sections";
@@ -221,7 +215,7 @@ async function windowsAclSddl(path: string, operation: "read" | "restrict"): Pro
 }
 
 async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
-  const request = Buffer.from(JSON.stringify({ operation: "create-private-directory", directory }), "utf8").toString("base64");
+  const request = Buffer.from(["create-private-directory", directory].join("\u0000"), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
     const child = spawn(
       trustedPowerShellExecutable(),
