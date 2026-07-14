@@ -191,57 +191,8 @@ try {
   $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $sections)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-sddl')
   $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($sections)
-  $stage = 'native-compile'
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:native-compile')
-  Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-public static class MiftahAclNativeProbe
-{
-    private const uint OwnerSecurityInformation = 0x1;
-    private const uint GroupSecurityInformation = 0x2;
-    private const uint DaclSecurityInformation = 0x4;
-    private const uint RequestedInformation = OwnerSecurityInformation | GroupSecurityInformation | DaclSecurityInformation;
-    private const uint MaximumDescriptorBytes = 262144;
-
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileSecurityW(
-        string fileName,
-        uint requestedInformation,
-        byte[] securityDescriptor,
-        uint length,
-        out uint lengthNeeded);
-
-    public static byte[] Read(string path)
-    {
-        uint required;
-        GetFileSecurityW(path, RequestedInformation, null, 0, out required);
-        if (required == 0 || required > MaximumDescriptorBytes) throw new InvalidOperationException();
-
-        var descriptor = new byte[required];
-        uint returned;
-        if (!GetFileSecurityW(path, RequestedInformation, descriptor, (uint)descriptor.Length, out returned)
-            || returned == 0 || returned > descriptor.Length) throw new InvalidOperationException();
-        if (returned == descriptor.Length) return descriptor;
-
-        var result = new byte[returned];
-        Buffer.BlockCopy(descriptor, 0, result, 0, (int)returned);
-        return result;
-    }
-
-    public static bool Equal(byte[] left, byte[] right)
-    {
-        if (left == null || right == null || left.Length != right.Length) return false;
-        for (var index = 0; index < left.Length; index++) if (left[index] != right[index]) return false;
-        return true;
-    }
-}
-'@
-  $stage = 'source-native'
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-native')
-  $sourceDescriptor = [MiftahAclNativeProbe]::Read($fields[1])
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-binary')
+  $sourceDescriptor = [Convert]::ToBase64String($sourceAcl.GetSecurityDescriptorBinaryForm())
   $stage = 'target'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-get')
   $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
@@ -253,10 +204,9 @@ public static class MiftahAclNativeProbe
   $stage = 'verify'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-get')
   $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
-  $stage = 'verify-native'
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-native')
-  $verifiedDescriptor = [MiftahAclNativeProbe]::Read($fields[2])
-  if (-not [MiftahAclNativeProbe]::Equal($sourceDescriptor, $verifiedDescriptor)) { exit 1 }
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-binary')
+  $verifiedDescriptor = [Convert]::ToBase64String($verifiedAcl.GetSecurityDescriptorBinaryForm())
+  if ($sourceDescriptor -ne $verifiedDescriptor) { exit 1 }
   exit 0
 } catch {
   $suffix = switch ($_.CategoryInfo.Category.ToString()) {
@@ -309,14 +259,14 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
   for (const encoding of ["utf8", "utf16le"] as const) {
     const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
     const stage = diagnostic.match(
-      /MIFTAH_ACL_COPY_FILE_PROBE_STAGE:(bootstrap|request|source|native-compile|source-native|target|apply|verify|verify-native)(?::(permission|missing|invalid|other))?/
+      /MIFTAH_ACL_COPY_FILE_PROBE_STAGE:(bootstrap|request|source|target|apply|verify)(?::(permission|missing|invalid|other))?/
     )?.[0];
     if (stage !== undefined) return stage;
     const requestFailure = diagnostic.match(
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
-    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-sddl|native-compile|source-native|target-get|target-set|target-apply|verify-get|verify-native)/g);
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-sddl|source-binary|target-get|target-set|target-apply|verify-get|verify-binary)/g);
     const boundary = boundaries?.[boundaries.length - 1];
     if (boundary !== undefined) return boundary;
   }
@@ -501,6 +451,28 @@ describe("Windows migration ACL contract", () => {
         await targetHandle.close();
       }
 
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "copies an inherited source descriptor after its migration writer closes",
+    async () => {
+      const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-inherited-closed-acl-"));
+      temporaryDirectories.push(parentDirectory);
+      const originalSourcePath = join(parentDirectory, "miftah.json");
+      const privateDirectory = join(parentDirectory, ".miftah-migrate-transaction");
+      const sourcePath = join(privateDirectory, "source.miftah-migrate-hold");
+      const targetPath = join(privateDirectory, "backup.miftah-migrate.tmp");
+      await writeFile(originalSourcePath, "source", "utf8");
+      await expect(windowsPrivateDirectoryProbe(privateDirectory)).resolves.toBeUndefined();
+      await rename(originalSourcePath, sourcePath);
+      const expectedSddl = await windowsAclSddl(sourcePath, "read");
+      const targetHandle = await open(targetPath, "wx", 0o600);
+      await targetHandle.close();
+
+      await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
     10_000
