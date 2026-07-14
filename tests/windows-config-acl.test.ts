@@ -66,7 +66,7 @@ describe("Windows migration ACL boundary", () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
-  it("uses the trusted launcher with a minimal environment and no inherited sentinel", async () => {
+  it("uses the trusted launcher with a minimal environment and trusted built-in module root", async () => {
     vi.stubEnv("MIFTAH_UNRELATED_SECRET", "test-secret-sentinel");
     vi.stubEnv("PSModulePath", "C:\\attacker\\modules");
     windowsAclMocks.spawn.mockImplementation(() => {
@@ -82,7 +82,9 @@ describe("Windows migration ACL boundary", () => {
     expect(args).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", expect.any(String)]);
     expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
     expect(options?.env).not.toHaveProperty("MIFTAH_UNRELATED_SECRET");
-    expect(options?.env).not.toHaveProperty("PSModulePath");
+    expect(options?.env).toMatchObject({
+      PSModulePath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules"
+    });
   });
 
   it("does not let caller-supplied Windows-root overrides choose the ACL helper launcher", async () => {

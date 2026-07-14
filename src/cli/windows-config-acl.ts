@@ -9,6 +9,15 @@ const aclCommandTimeoutMs = 5_000;
 // system root rather than a caller-controlled environment override; unsupported
 // non-default layouts fail closed instead of launching an arbitrary executable.
 const trustedWindowsRoot = "C:\\Windows";
+// ConvertFrom-Json is provided by Windows PowerShell's built-in Utility module.
+// Provide only its protected module root rather than an inherited search path.
+const trustedPowerShellModulePath = win32.join(
+  trustedWindowsRoot,
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "Modules"
+);
 
 interface CopyFileSecurityRequest {
   readonly operation: "copy-file-security";
@@ -68,7 +77,11 @@ function trustedPowerShellExecutable(): string | undefined {
 }
 
 function aclEnvironment(request: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { SystemRoot: trustedWindowsRoot, windir: trustedWindowsRoot };
+  const environment: NodeJS.ProcessEnv = {
+    SystemRoot: trustedWindowsRoot,
+    windir: trustedWindowsRoot,
+    PSModulePath: trustedPowerShellModulePath
+  };
   for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
     const value = environmentValue(process.env, name);
     if (value !== undefined) environment[name] = value;
