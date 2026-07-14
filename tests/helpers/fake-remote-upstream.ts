@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
+  CancelledNotificationSchema,
   CallToolRequestSchema,
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
@@ -33,6 +35,8 @@ export interface FakeRemoteUpstream {
   readonly streamableHttpUrl: string;
   readonly sseUrl: string;
   requests(): readonly RemoteRequest[];
+  toolCallRequests(): number;
+  cancelledNotifications(): number;
   failNextStreamableRequest(status: number, body: string): void;
   failNextSsePost(status: number, body: string): void;
   hangStreamableDeletes(): void;
@@ -47,6 +51,13 @@ export interface FakeRemoteUpstreamOptions {
   readonly initializationStatus?: number;
   readonly initializationBody?: string;
   readonly callToolError?: { code: number; message: string };
+  readonly callToolDelayMs?: number;
+  readonly emitCallToolProgress?: boolean;
+}
+
+interface FakeRemoteCallToolState {
+  toolCallRequests: number;
+  cancelledNotifications: number;
 }
 
 /** Starts real local MCP HTTP and legacy SSE endpoints for remote transport integration tests. */
@@ -55,6 +66,7 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
   const streamableSessions = new Map<string, StreamableSession>();
   const sseSessions = new Map<string, SseSession>();
   const closedStreamableSessionIds: string[] = [];
+  const callToolState: FakeRemoteCallToolState = { toolCallRequests: 0, cancelledNotifications: 0 };
   let nextStreamableFailure: { status: number; body: string } | undefined;
   let nextSsePostFailure: { status: number; body: string } | undefined;
   let hangStreamableDeletes = false;
@@ -120,7 +132,7 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
         return;
       }
 
-      const server = createMcpServer(request.headers["x-profile"], options);
+      const server = createMcpServer(request.headers["x-profile"], options, callToolState);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: randomUUID,
         onsessioninitialized: (createdSessionId) => {
@@ -137,7 +149,7 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
     }
 
     if (url.pathname === "/sse" && request.method === "GET") {
-      const server = createMcpServer(request.headers["x-profile"], options);
+      const server = createMcpServer(request.headers["x-profile"], options, callToolState);
       const transport = new SSEServerTransport("/messages", response);
       sseSessions.set(transport.sessionId, { server, transport });
       await server.connect(transport);
@@ -186,6 +198,8 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
     streamableHttpUrl: `${baseUrl}/mcp`,
     sseUrl: `${baseUrl}/sse`,
     requests: () => requests.map((request) => ({ ...request, headers: { ...request.headers } })),
+    toolCallRequests: () => callToolState.toolCallRequests,
+    cancelledNotifications: () => callToolState.cancelledNotifications,
     failNextStreamableRequest(status: number, body: string): void {
       nextStreamableFailure = { status, body };
     },
@@ -220,7 +234,8 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
 
 function createMcpServer(
   profileHeader: string | string[] | undefined,
-  options: FakeRemoteUpstreamOptions
+  options: FakeRemoteUpstreamOptions,
+  callToolState: FakeRemoteCallToolState
 ): McpServer {
   const profile = Array.isArray(profileHeader) ? profileHeader.join(",") : profileHeader ?? "unknown";
   const server = new McpServer(
@@ -233,11 +248,22 @@ function createMcpServer(
       { name: "whoami", description: "Return the request profile.", inputSchema: { type: "object", properties: {} } }
     ]
   }));
-  server.setRequestHandler(CallToolRequestSchema, async () => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    callToolState.toolCallRequests += 1;
     if (options.callToolError) {
       throw new McpError(options.callToolError.code, options.callToolError.message);
     }
+    if (options.emitCallToolProgress && request.params._meta?.progressToken !== undefined) {
+      await extra.sendNotification({
+        method: "notifications/progress",
+        params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
+      });
+    }
+    if (options.callToolDelayMs && options.callToolDelayMs > 0) await delay(options.callToolDelayMs);
     return { content: [{ type: "text", text: profile }] };
+  });
+  server.setNotificationHandler(CancelledNotificationSchema, () => {
+    callToolState.cancelledNotifications += 1;
   });
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({
     resources: [{ uri: "account://current", name: "Current profile", mimeType: "text/plain" }]

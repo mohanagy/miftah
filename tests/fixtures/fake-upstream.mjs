@@ -1,28 +1,60 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  CancelledNotificationSchema,
   CallToolRequestSchema,
   GetPromptRequestSchema,
   InitializeRequestSchema,
   ListPromptsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
-  ReadResourceRequestSchema
+  ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
 
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const responseText =
   process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const listToolsDelayAfterNotificationMs = Number(process.env.TEST_LIST_TOOLS_DELAY_AFTER_NOTIFICATION_MS ?? "0");
 const listResourcesDelayMs = Number(process.env.TEST_LIST_RESOURCES_DELAY_MS ?? "0");
 const listPromptsDelayMs = Number(process.env.TEST_LIST_PROMPTS_DELAY_MS ?? "0");
+const listToolsProgress = process.env.TEST_LIST_TOOLS_PROGRESS === "true";
+const listResourcesProgress = process.env.TEST_LIST_RESOURCES_PROGRESS === "true";
+const listResourceTemplatesProgress = process.env.TEST_LIST_RESOURCE_TEMPLATES_PROGRESS === "true";
+const listPromptsProgress = process.env.TEST_LIST_PROMPTS_PROGRESS === "true";
+const callToolDelayMs = Number(process.env.TEST_CALL_TOOL_DELAY_MS ?? "0");
+const callToolProgress = process.env.TEST_CALL_TOOL_PROGRESS === "true";
+const callToolProgressMessage = process.env.TEST_CALL_TOOL_PROGRESS_MESSAGE;
 const readResourceDelayMs = Number(process.env.TEST_READ_RESOURCE_DELAY_MS ?? "0");
 const getPromptDelayMs = Number(process.env.TEST_GET_PROMPT_DELAY_MS ?? "0");
 const resourceName = process.env.TEST_RESOURCE_NAME ?? "Current account";
 const resourceUri = process.env.TEST_RESOURCE_URI ?? "account://current";
+const resourceTemplateName = process.env.TEST_RESOURCE_TEMPLATE_NAME ?? "account";
+const resourceTemplateUri = process.env.TEST_RESOURCE_TEMPLATE_URI;
+const resourceTemplatesUnsupported = process.env.TEST_RESOURCE_TEMPLATES_UNSUPPORTED === "true";
+const resourceSubscriptions = process.env.TEST_RESOURCE_SUBSCRIPTIONS === "true";
+const resourceSubscriptionStatefulUpdates = process.env.TEST_RESOURCE_SUBSCRIPTION_STATEFUL_UPDATES === "true";
+const failSubscribe = process.env.TEST_FAIL_SUBSCRIBE === "true";
+const resourceUpdateUri = process.env.TEST_RESOURCE_UPDATE_URI;
+const resourceUpdateDelayMs = Number(process.env.TEST_RESOURCE_UPDATE_DELAY_MS ?? "0");
+const subscribeDelayMs = Number(process.env.TEST_SUBSCRIBE_DELAY_MS ?? "0");
+const unsubscribeDelayMs = Number(process.env.TEST_UNSUBSCRIBE_DELAY_MS ?? "0");
+const subscribeCountPath = process.env.TEST_SUBSCRIBE_COUNT_PATH;
+const unsubscribeCountPath = process.env.TEST_UNSUBSCRIBE_COUNT_PATH;
+const subscribeStartedPath = process.env.TEST_SUBSCRIBE_STARTED_PATH;
+const notifyToolListChangeOnListTools = process.env.TEST_NOTIFY_TOOL_LIST_CHANGE_ON_LIST_TOOLS === "true";
+const notifyToolListChangeOnFirstListTools = process.env.TEST_NOTIFY_TOOL_LIST_CHANGE_ON_FIRST_LIST_TOOLS === "true";
+const changeToolListAfterFirstRequest = process.env.TEST_TOOL_LIST_CHANGES_AFTER_FIRST_REQUEST === "true";
+const notifyListChangesOnCallTool = process.env.TEST_NOTIFY_LIST_CHANGES_ON_CALL_TOOL === "true";
 const promptName = process.env.TEST_PROMPT_NAME ?? "account_prompt";
+let resourceSubscribed = false;
+let resourceSubscriptionGeneration = 0;
 const paginateCapabilities = process.env.TEST_PAGINATE_CAPABILITIES === "true";
 const paginateTools = process.env.TEST_PAGINATE_TOOLS === "true";
 const secondResourceName = process.env.TEST_SECOND_RESOURCE_NAME ?? "Second account";
@@ -39,6 +71,8 @@ const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
 const crashAfterInitializedPath = process.env.TEST_CRASH_AFTER_INITIALIZED_PATH;
 const startCountPath = process.env.TEST_START_COUNT_PATH;
 const createItemCountPath = process.env.TEST_CREATE_ITEM_COUNT_PATH;
+const callToolStartedPath = process.env.TEST_CALL_TOOL_STARTED_PATH;
+const cancelledPath = process.env.TEST_CANCELLED_PATH;
 const failInitialize = process.env.TEST_FAIL_INITIALIZE === "true";
 const clientInfoPath = process.env.TEST_CLIENT_INFO_PATH;
 const stderrMessage = process.env.TEST_STDERR_MESSAGE;
@@ -65,6 +99,8 @@ const identityInputSchema =
       : process.env.TEST_IDENTITY_SCHEMA === "additional-properties-false"
         ? { type: "object", properties: {}, additionalProperties: false }
       : { type: "object", properties: {} };
+
+let toolListRequests = 0;
 
 const isolationReportPath = process.env.TEST_ISOLATION_REPORT_PATH;
 if (isolationReportPath) {
@@ -176,7 +212,7 @@ const whoamiInputSchema =
 const createItemAnnotations = parseOptionalJson(process.env.TEST_CREATE_ITEM_ANNOTATIONS, "TEST_CREATE_ITEM_ANNOTATIONS");
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
-  { capabilities: { tools: {}, resources: {}, prompts: {} } }
+  { capabilities: { tools: {}, resources: resourceSubscriptions ? { subscribe: true } : {}, prompts: {} } }
 );
 server.oninitialized = () => {
   if (crashAfterInitializedPath && existsSync(crashAfterInitializedPath)) {
@@ -203,13 +239,15 @@ if (failInitialize || clientInfoPath) {
     }
     return {
       protocolVersion: request.params.protocolVersion,
-      capabilities: { tools: {}, resources: {}, prompts: {} },
+      capabilities: { tools: {}, resources: resourceSubscriptions ? { subscribe: true } : {}, prompts: {} },
       serverInfo: { name: "fake-upstream", version: "1.0.0" }
     };
   });
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+  toolListRequests += 1;
+  const changedToolList = changeToolListAfterFirstRequest && toolListRequests > 1;
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
   }
@@ -219,8 +257,23 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   if (listToolsDelayMs > 0) {
     await delay(listToolsDelayMs);
   }
+  if (listToolsProgress && request.params._meta?.progressToken !== undefined) {
+    await server.notification({
+      method: "notifications/progress",
+      params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
+    });
+  }
   if (process.env.TEST_FAIL_LIST_TOOLS === "true") {
     throw new Error(`test tool list failure: ${process.env.TEST_ERROR_MESSAGE ?? process.env.API_TOKEN}`);
+  }
+  if (
+    notifyToolListChangeOnListTools ||
+    (notifyToolListChangeOnFirstListTools && toolListRequests === 1)
+  ) {
+    await server.sendToolListChanged();
+  }
+  if (listToolsDelayAfterNotificationMs > 0) {
+    await delay(listToolsDelayAfterNotificationMs);
   }
   const secondPage = paginateTools && request.params?.cursor === "next";
   return {
@@ -253,7 +306,7 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
           ]
         : [
             {
-              name: "whoami",
+              name: changedToolList ? "whoami_reloaded" : "whoami",
               description:
                 process.env.TEST_INCLUDE_DISCOVERY_TOKEN === "true"
                   ? `Return the injected account ${process.env.API_TOKEN}`
@@ -261,7 +314,7 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
               inputSchema: whoamiInputSchema
             },
             {
-              name: "echo",
+              name: changedToolList ? "echo_reloaded" : "echo",
               description: "Echo a message.",
               inputSchema: {
                 type: "object",
@@ -270,7 +323,7 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
               }
             },
             {
-              name: "create_item",
+              name: changedToolList ? "create_reloaded_item" : "create_item",
               description: "Create an item.",
               inputSchema: {
                 type: "object",
@@ -313,6 +366,9 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (callToolStartedPath) {
+    writeFileSync(callToolStartedPath, "started");
+  }
   if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
     void delay(0).then(() => process.exit(1));
     return new Promise(() => undefined);
@@ -329,6 +385,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (process.env.TEST_RETURN_CALL_TOOL_ERROR === "true") {
     return { content: [{ type: "text", text: "test tool returned an error result" }], isError: true };
   }
+  if (callToolProgress && request.params._meta?.progressToken !== undefined) {
+    await server.notification({
+      method: "notifications/progress",
+      params: {
+        progressToken: request.params._meta.progressToken,
+        progress: 1,
+        total: 2,
+        ...(callToolProgressMessage === undefined ? {} : { message: callToolProgressMessage })
+      }
+    });
+  }
+  if (notifyListChangesOnCallTool) {
+    await Promise.all([
+      server.sendToolListChanged(),
+      server.sendResourceListChanged(),
+      server.sendPromptListChanged()
+    ]);
+  }
+  if (callToolDelayMs > 0) {
+    await delay(callToolDelayMs);
+  }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: oversizedIdentityLogin ?? account }] };
   }
@@ -341,6 +418,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return { content: [{ type: "text", text: `created:${String(request.params.arguments?.name ?? "")}` }] };
 });
 
+server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
+  if (cancelledPath) {
+    appendFileSync(cancelledPath, `${notification.params.requestId}\n`);
+  }
+});
+
 server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
   if (process.env.TEST_LIST_RESOURCES_COUNT_PATH) {
     appendFileSync(process.env.TEST_LIST_RESOURCES_COUNT_PATH, "1\n");
@@ -350,6 +433,12 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
   }
   if (listResourcesDelayMs > 0) {
     await delay(listResourcesDelayMs);
+  }
+  if (listResourcesProgress && request.params._meta?.progressToken !== undefined) {
+    await server.notification({
+      method: "notifications/progress",
+      params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
+    });
   }
   if (process.env.TEST_FAIL_LIST_RESOURCES === "true" || (failListResourcesPath && existsSync(failListResourcesPath))) {
     throw new Error(`test resource discovery failure: ${process.env.API_TOKEN}`);
@@ -371,7 +460,24 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
   };
 });
 
-server.setRequestHandler(ReadResourceRequestSchema, async () => {
+if (!resourceTemplatesUnsupported) {
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+    if (listResourceTemplatesProgress && request.params._meta?.progressToken !== undefined) {
+      await server.notification({
+        method: "notifications/progress",
+        params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
+      });
+    }
+    return {
+      resourceTemplates:
+        resourceTemplateUri === undefined
+          ? []
+          : [{ uriTemplate: resourceTemplateUri, name: resourceTemplateName, mimeType: "text/plain" }]
+    };
+  });
+}
+
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   if (process.env.TEST_READ_RESOURCE_COUNT_PATH) {
     appendFileSync(process.env.TEST_READ_RESOURCE_COUNT_PATH, "1\n");
   }
@@ -384,12 +490,52 @@ server.setRequestHandler(ReadResourceRequestSchema, async () => {
   if (process.env.TEST_FAIL_READ_RESOURCE === "true") {
     throw new Error(`test resource read failure: ${process.env.TEST_ERROR_URI ?? process.env.API_TOKEN}`);
   }
+  const templateResource =
+    resourceTemplateUri !== undefined && new UriTemplate(resourceTemplateUri).match(request.params.uri) !== null;
   return {
     contents: [
-      { uri: resourceUri, text: responseText, mimeType: "text/plain" },
+      { uri: templateResource ? request.params.uri : resourceUri, text: responseText, mimeType: "text/plain" },
       ...(additionalResourceUri ? [{ uri: additionalResourceUri, text: responseText, mimeType: "text/plain" }] : [])
     ]
   };
+});
+
+server.setRequestHandler(SubscribeRequestSchema, async () => {
+  if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
+  if (subscribeStartedPath) writeFileSync(subscribeStartedPath, "started");
+  if (subscribeCountPath) appendFileSync(subscribeCountPath, "1\n");
+  if (subscribeDelayMs > 0) await delay(subscribeDelayMs);
+  if (failSubscribe) throw new Error("test subscribe failure");
+  const subscriptionGeneration = resourceSubscriptionStatefulUpdates ? ++resourceSubscriptionGeneration : undefined;
+  if (resourceSubscriptionStatefulUpdates) resourceSubscribed = true;
+  if (resourceUpdateUri) {
+    const notify = async () => {
+      if (
+        resourceSubscriptionStatefulUpdates &&
+        (!resourceSubscribed || resourceSubscriptionGeneration !== subscriptionGeneration)
+      ) {
+        return;
+      }
+      await server.sendResourceUpdated({ uri: resourceUpdateUri });
+    };
+    if (resourceUpdateDelayMs > 0) {
+      void delay(resourceUpdateDelayMs).then(notify);
+    } else {
+      await notify();
+    }
+  }
+  return {};
+});
+
+server.setRequestHandler(UnsubscribeRequestSchema, async () => {
+  if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
+  if (unsubscribeCountPath) appendFileSync(unsubscribeCountPath, "1\n");
+  if (unsubscribeDelayMs > 0) await delay(unsubscribeDelayMs);
+  if (resourceSubscriptionStatefulUpdates) {
+    resourceSubscribed = false;
+    resourceSubscriptionGeneration += 1;
+  }
+  return {};
 });
 
 server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
@@ -401,6 +547,12 @@ server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
   }
   if (listPromptsDelayMs > 0) {
     await delay(listPromptsDelayMs);
+  }
+  if (listPromptsProgress && request.params._meta?.progressToken !== undefined) {
+    await server.notification({
+      method: "notifications/progress",
+      params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
+    });
   }
   if (process.env.TEST_FAIL_LIST_PROMPTS === "true" || (failListPromptsPath && existsSync(failListPromptsPath))) {
     throw new Error(`test prompt discovery failure: ${process.env.API_TOKEN}`);

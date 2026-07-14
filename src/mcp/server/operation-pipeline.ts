@@ -10,10 +10,15 @@ import type { RoutingContextSnapshot, RoutingDecision } from "../../routing/rout
 import { SecretRedactor } from "../../secrets/redact.js";
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
-import type { UpstreamSession } from "../../upstream/upstream-session.js";
+import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 
-export type ProxiedOperationType = "tools/call" | "resources/read" | "prompts/get";
+export type ProxiedOperationType =
+  | "tools/call"
+  | "resources/read"
+  | "resources/subscribe"
+  | "resources/unsubscribe"
+  | "prompts/get";
 
 export type CapturedProfileState = Pick<
   ReturnType<ProfileManager["current"]>,
@@ -29,7 +34,7 @@ export interface ResolvedOperation<Result> {
   readonly upstreamName?: string;
   readonly identityUpstreamName?: string;
   readonly name: string;
-  execute(session: UpstreamSession): Promise<Result>;
+  execute(session: UpstreamSession, options?: UpstreamRequestOptions): Promise<Result>;
   redact(result: Result): Result;
 }
 
@@ -46,6 +51,8 @@ export interface ProxiedOperation<Result> {
   /** Reads only already-cached target risk evidence; it must not discover or start an upstream. */
   riskMetadataForProfile?(profile: string): ToolRiskMetadata | undefined;
   readonly approvalContext?: ApprovalRequestContext;
+  /** Carries request lifecycle signals to the selected upstream after policy and approval checks complete. */
+  readonly upstreamRequestOptions?: UpstreamRequestOptions;
   readonly requireExplicitRuleForDestructive?: boolean;
   readonly requireExplicitSelectionForDestructive?: boolean;
   resolveTarget(profile: string): Promise<ResolvedOperation<Result>>;
@@ -61,6 +68,7 @@ interface PipelineOptions {
   readonly redactor: SecretRedactor;
   readonly routingContext: RoutingContextProvider;
   readonly identities: IdentityManager;
+  readonly onSession?: (session: UpstreamSession, target: ResolvedOperation<unknown>) => void | Promise<void>;
   readonly approvals: {
     requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void>;
   };
@@ -137,13 +145,18 @@ export class OperationPipeline {
         await this.options.approvals.requireApproval(binding, operation.approvalContext);
       }
       const session = await this.options.upstreams.get(profile, target.upstreamName);
+      await this.options.onSession?.(session, target);
       if (this.options.identities.requiresVerification(profile, target.identityUpstreamName, decision.risk)) {
-        const identity = await this.options.identities.verify(profile, target.identityUpstreamName, session);
+        const identity = await this.options.identities.verify(profile, target.identityUpstreamName, session, {
+          request: operation.upstreamRequestOptions
+        });
         audit.update({ identity: this.options.redactor.redactForAudit(identity) });
-        await this.options.identities.requireVerified(profile, target.identityUpstreamName, session);
+        await this.options.identities.requireVerified(profile, target.identityUpstreamName, session, {
+          request: operation.upstreamRequestOptions
+        });
       }
       await this.assertProfileSelectionAllows(operation, profile, profileConfig.lease, decision.risk);
-      return this.options.redactor.redact(target.redact(await target.execute(session)));
+      return this.options.redactor.redact(target.redact(await target.execute(session, operation.upstreamRequestOptions)));
     } catch (error) {
       const safeError = this.toSafeError(error);
       const matcherEvidence = matcherEvidenceFromError(safeError);
@@ -252,7 +265,7 @@ export class OperationPipeline {
   }
 
   private auditName(operation: ProxiedOperation<unknown>, name: string): string {
-    return operation.operation === "resources/read" ? this.options.redactor.redactUri(name) : name;
+    return operation.operation.startsWith("resources/") ? this.options.redactor.redactUri(name) : name;
   }
 
   private toSafeError(error: unknown): MiftahError {

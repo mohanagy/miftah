@@ -11,6 +11,7 @@ import { SecretRedactor } from "../secrets/redact.js";
 import { ProfileRuntimeIsolation } from "../isolation/profile-runtime-isolation.js";
 import { MiftahError } from "../utils/errors.js";
 import { ProfileSessionLimiter } from "./profile-session-limiter.js";
+import { ProgressPreservingTransport, unwrapProgressPreservingTransport } from "./progress-preserving-transport.js";
 import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MIFTAH_VERSION } from "../version.js";
@@ -378,6 +379,7 @@ export class UpstreamProcessManager {
         }
       }
 
+      transport = new ProgressPreservingTransport(transport);
       transport.onclose = () => this.handleTransportClosed(profile, token, generation);
       const client = new Client({ name: "miftah", version: MIFTAH_VERSION });
       startingAttempt = { transport, generation, pid: null };
@@ -770,9 +772,10 @@ export class UpstreamProcessManager {
   }
 
   private async terminateTransport(transport: Transport, pid: number | null): Promise<void> {
-    if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
+    const underlying = unwrapProgressPreservingTransport(transport);
+    if (underlying instanceof StreamableHTTPClientTransport && underlying.sessionId) {
       await withTimeout(
-        transport.terminateSession(),
+        underlying.terminateSession(),
         this.options.shutdownTimeoutMs,
         "UPSTREAM_SHUTDOWN_TIMEOUT",
         `UPSTREAM_SHUTDOWN_TIMEOUT: remote session termination timed out after ${this.options.shutdownTimeoutMs}ms`
@@ -796,9 +799,10 @@ export class UpstreamProcessManager {
   /** Deletes a remote Streamable HTTP session before closing its local client transport. */
   private async closeManagedSession(entry: ManagedSession): Promise<void> {
     let terminationError: unknown;
-    if (entry.transport instanceof StreamableHTTPClientTransport && entry.transport.sessionId) {
+    const underlying = unwrapProgressPreservingTransport(entry.transport);
+    if (underlying instanceof StreamableHTTPClientTransport && underlying.sessionId) {
       try {
-        await entry.transport.terminateSession();
+        await underlying.terminateSession();
       } catch (error) {
         terminationError = error;
       }

@@ -157,6 +157,29 @@ type PublicTypeImportCoverage = [
 
 void (undefined as unknown as PublicTypeImportCoverage);
 
+type PublicProtocolErrorCode = Extract<
+  MiftahErrorCode,
+  | "RESOURCE_TEMPLATE_COLLISION"
+  | "RESOURCE_TEMPLATE_CURSOR_INVALID"
+  | "RESOURCE_TEMPLATE_DISCOVERY_INVALIDATED"
+  | "RESOURCE_TEMPLATE_UNSUPPORTED"
+  | "RESOURCE_TEMPLATES_UNAVAILABLE"
+  | "RESOURCE_SUBSCRIPTION_NOT_FOUND"
+  | "RESOURCE_SUBSCRIPTION_UNSUPPORTED"
+>;
+
+const publicProtocolErrorCodes = {
+  RESOURCE_TEMPLATE_COLLISION: true,
+  RESOURCE_TEMPLATE_CURSOR_INVALID: true,
+  RESOURCE_TEMPLATE_DISCOVERY_INVALIDATED: true,
+  RESOURCE_TEMPLATE_UNSUPPORTED: true,
+  RESOURCE_TEMPLATES_UNAVAILABLE: true,
+  RESOURCE_SUBSCRIPTION_NOT_FOUND: true,
+  RESOURCE_SUBSCRIPTION_UNSUPPORTED: true
+} satisfies Record<PublicProtocolErrorCode, true>;
+
+void publicProtocolErrorCodes;
+
 const validAuditRotationConfig: AuditRotationConfig = {
   maxBytes: 1_024,
   retainFiles: 7

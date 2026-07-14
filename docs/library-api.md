@@ -38,7 +38,7 @@ The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `Au
 
 For identity configurations, format-dependent structural constraints and unique `requiredForRisk` tuples are static. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 
-Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. The wrapper factory exposes `MiftahRuntime`.
+Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. `MiftahErrorCode` includes the stable resource-template and resource-subscription protocol error categories. The wrapper factory exposes `MiftahRuntime`.
 
 ## Compatibility policy
 

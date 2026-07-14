@@ -11,6 +11,11 @@ import { SecretRedactor } from "../src/secrets/redact.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const backToBackProgressFixture = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+  "back-to-back-progress-upstream.mjs"
+);
 
 async function countStarts(path: string): Promise<number> {
   const contents = await readFile(path, "utf8");
@@ -35,6 +40,30 @@ async function waitFor<Value>(
 }
 
 describe("upstream process manager", () => {
+  it("preserves progress emitted immediately before an upstream response", async () => {
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [backToBackProgressFixture]
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000 }
+    );
+    const progress: Array<{ progress: number; total?: number }> = [];
+
+    try {
+      const session = await manager.get("work");
+      await session.listResourceTemplates(undefined, {
+        onprogress: (update) => progress.push(update)
+      });
+
+      expect(progress).toEqual([{ progress: 1, total: 2 }]);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("isolates lifecycle listener failures from upstream state transitions", async () => {
     const manager = new UpstreamProcessManager(
       {

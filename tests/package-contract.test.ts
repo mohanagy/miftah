@@ -517,7 +517,11 @@ describe("packed artifact contract", () => {
             name: "packed-public-api",
             defaultProfile: "work",
             upstream: { transport: "stdio", command: process.execPath },
-            profiles: { work: {} }
+            profiles: { work: {} },
+            // This package-entrypoint smoke deliberately uses an inert process
+            // instead of an external MCP fixture. Resource-subscription
+            // capability probing must therefore fail quickly and safely.
+            process: { startupTimeoutMs: 250 }
           })
         );
         await writeFile(

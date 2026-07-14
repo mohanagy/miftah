@@ -1,10 +1,15 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolResultSchema,
   ListRootsRequestSchema,
+  PromptListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  ResourceUpdatedNotificationSchema,
   RootsListChangedNotificationSchema,
   ToolListChangedNotificationSchema
 } from "@modelcontextprotocol/sdk/types.js";
@@ -13,7 +18,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { expectExactlyOneNotification } from "./helpers/notifications.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
@@ -1394,6 +1399,1775 @@ describe("Miftah MCP wrapper", () => {
     } finally {
       await client.close();
       await wrapper.close();
+    }
+  });
+
+  it("propagates a cancelled tool call to the selected stdio upstream and records one terminal audit outcome", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-tool-call-"));
+    const startedPath = join(directory, "call-started");
+    const cancelledPath = join(directory, "cancelled");
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_CALL_TOOL_STARTED_PATH: startedPath,
+            TEST_CALL_TOOL_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.callTool({ name: "whoami", arguments: {} }, undefined, { signal: controller.signal });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+
+      const toolCallOperations = async (): Promise<Record<string, unknown>[]> => {
+        const journal = await readFile(auditPath, "utf8").catch(() => "");
+        return journal
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .filter((event) => event.kind === "operation" && event.operation === "tools/call");
+      };
+      await expect.poll(toolCallOperations).toHaveLength(1);
+      const operations = await toolCallOperations();
+      expect(operations).toEqual([
+        expect.objectContaining({ status: "failure", errorCode: "UPSTREAM_CALL_FAILED", name: "whoami" })
+      ]);
+      expect((await readFile(cancelledPath, "utf8")).trim().split("\n")).toHaveLength(1);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates cancellation through initial tool discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-tool-discovery-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "tool-discovery-cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.listTools(undefined, { signal: controller.signal });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await delay(100);
+      const health = parseJsonToolResult(await client.callTool({ name: "miftah_health", arguments: {} }));
+      expect(health.upstreams).not.toMatchObject([
+        { capabilities: { tools: { state: "failed" } } }
+      ]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates cancellation through management tool discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-management-discovery-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "management-discovery-cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.callTool(
+        { name: "miftah_list_upstream_tools", arguments: {} },
+        undefined,
+        { signal: controller.signal }
+      );
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shared tool discovery alive when one downstream caller cancels", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-shared-tool-discovery-cancellation-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "shared-tool-discovery-cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const cancelled = client.listTools(undefined, { signal: controller.signal });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      const completed = client.listTools();
+      // Allow the second downstream request to join the in-flight shared snapshot
+      // before cancelling the first caller.
+      await delay(25);
+      controller.abort("test cancellation");
+
+      await expect(cancelled).rejects.toThrow();
+      await expect(completed).resolves.toMatchObject({ tools: expect.any(Array) });
+      await delay(75);
+      await expect(access(cancelledPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts fresh tool discovery when a prior sole caller has cancelled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-restarted-tool-discovery-cancellation-"));
+    const startedPath = join(directory, "tools-started");
+    const cancelledPath = join(directory, "cancelled");
+    const countPath = join(directory, "tools-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_COUNT_PATH: countPath,
+            TEST_LIST_TOOLS_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "restarted-tool-discovery-cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const cancelled = client.listTools(undefined, { signal: controller.signal });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+      // Start a new downstream request before the cancelled upstream request has
+      // settled. It must not join the aborted shared discovery.
+      const recovered = client.listTools();
+
+      await expect(cancelled).rejects.toThrow();
+      await expect(recovered).resolves.toMatchObject({ tools: expect.any(Array) });
+      await expect.poll(async () => readFile(countPath, "utf8")).toBe("1\n1\n");
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fans shared tool discovery progress out to every downstream caller", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-shared-tool-discovery-progress-"));
+    const startedPath = join(directory, "tools-started");
+    const countPath = join(directory, "tools-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_COUNT_PATH: countPath,
+            TEST_LIST_TOOLS_DELAY_MS: "200",
+            TEST_LIST_TOOLS_PROGRESS: "true"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "shared-tool-discovery-progress-test-client", version: "1.0.0" });
+    const firstProgress: unknown[] = [];
+    const secondProgress: unknown[] = [];
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const first = client.listTools(undefined, { onprogress: (progress) => firstProgress.push(progress) });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      const second = client.listTools(undefined, { onprogress: (progress) => secondProgress.push(progress) });
+
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      await expect.poll(() => firstProgress).toEqual([{ progress: 1, total: 2 }]);
+      await expect.poll(() => secondProgress).toEqual([{ progress: 1, total: 2 }]);
+      expect(await readFile(countPath, "utf8")).toBe("1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates cancellation through resource discovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-resource-discovery-"));
+    const startedPath = join(directory, "resources-started");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_RESOURCES_STARTED_PATH: startedPath,
+            TEST_LIST_RESOURCES_DELAY_MS: "500",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-discovery-cancellation-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.listResources(undefined, { signal: controller.signal });
+      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await delay(100);
+      const health = parseJsonToolResult(await client.callTool({ name: "miftah_health", arguments: {} }));
+      expect(health.upstreams).not.toMatchObject([
+        { capabilities: { resources: { state: "failed" } } }
+      ]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards upstream tool progress through the downstream request context", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_CALL_TOOL_PROGRESS: "true",
+            TEST_CALL_TOOL_PROGRESS_MESSAGE: "Fetching account"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "progress-test-client", version: "1.0.0" });
+    const progressUpdates: unknown[] = [];
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        await client.callTool(
+          { name: "whoami", arguments: {} },
+          undefined,
+          { onprogress: (progress) => progressUpdates.push(progress) }
+        )
+      ).toMatchObject({ content: [{ type: "text", text: "work" }] });
+      await expect.poll(() => progressUpdates).toEqual([{ progress: 1, total: 2, message: "Fetching account" }]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("forwards progress from every proxied discovery endpoint", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_PROGRESS: "true",
+            TEST_LIST_RESOURCES_PROGRESS: "true",
+            TEST_LIST_RESOURCE_TEMPLATES_PROGRESS: "true",
+            TEST_LIST_PROMPTS_PROGRESS: "true"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "discovery-progress-test-client", version: "1.0.0" });
+    const toolsProgress: unknown[] = [];
+    const resourcesProgress: unknown[] = [];
+    const templatesProgress: unknown[] = [];
+    const promptsProgress: unknown[] = [];
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools(undefined, { onprogress: (progress) => toolsProgress.push(progress) });
+      await client.listResources(undefined, { onprogress: (progress) => resourcesProgress.push(progress) });
+      await client.listResourceTemplates(undefined, { onprogress: (progress) => templatesProgress.push(progress) });
+      await client.listPrompts(undefined, { onprogress: (progress) => promptsProgress.push(progress) });
+
+      await expect.poll(() => toolsProgress).toEqual([{ progress: 1, total: 2 }]);
+      await expect.poll(() => resourcesProgress).toEqual([{ progress: 1, total: 2 }]);
+      await expect.poll(() => templatesProgress).toEqual([{ progress: 1, total: 2 }]);
+      await expect.poll(() => promptsProgress).toEqual([{ progress: 1, total: 2 }]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("aggregates concurrent upstream tool-discovery progress on one downstream token", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github",
+                TEST_LIST_TOOLS_PROGRESS: "true",
+                TEST_LIST_TOOLS_DELAY_MS: "100"
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry", TEST_LIST_TOOLS_PROGRESS: "true" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "aggregate-discovery-progress-test-client", version: "1.0.0" });
+    const progressUpdates: unknown[] = [];
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools(undefined, { onprogress: (progress) => progressUpdates.push(progress) });
+
+      await expect.poll(() => progressUpdates).toEqual([{ progress: 0.5 }, { progress: 1 }]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("namespaces aggregated resource templates and routes instantiated reads to their origin upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github",
+                TEST_RESOURCE_TEMPLATE_NAME: "issue",
+                TEST_RESOURCE_TEMPLATE_URI: "account://github/{id}"
+              }
+            },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry",
+                TEST_RESOURCE_TEMPLATE_NAME: "issue",
+                TEST_RESOURCE_TEMPLATE_URI: "account://sentry/{id}"
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-template-test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const listed = await client.listResourceTemplates();
+      expect(listed.resourceTemplates.map((template) => template.name)).toEqual(
+        expect.arrayContaining(["github__issue", "sentry__issue"])
+      );
+      const githubTemplate = listed.resourceTemplates.find((template) => template.name === "github__issue");
+      if (!githubTemplate) throw new Error("Expected the GitHub resource template.");
+      const uri = new UriTemplate(githubTemplate.uriTemplate).expand({ id: "42" });
+
+      expect(await client.readResource({ uri })).toMatchObject({
+        contents: [{ uri, text: "github" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("reports a stable unavailable error when a direct upstream does not implement resource templates", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work", TEST_RESOURCE_TEMPLATES_UNSUPPORTED: "true" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-templates-unavailable-test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listResourceTemplates()).rejects.toThrow(/^MCP error -32603: RESOURCE_TEMPLATES_UNAVAILABLE:/);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("reports a stable unavailable error when no aggregated upstream implements resource templates", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: { env: { TEST_ACCOUNT_NAME: "github", TEST_RESOURCE_TEMPLATES_UNSUPPORTED: "true" } },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry", TEST_RESOURCE_TEMPLATES_UNSUPPORTED: "true" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "aggregated-resource-templates-unavailable-test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.listResourceTemplates()).rejects.toThrow(/^MCP error -32603: RESOURCE_TEMPLATES_UNAVAILABLE:/);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("proxies resource subscriptions to the selected upstream and namespaces update notifications", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscriptions-"));
+    const githubSubscribePath = join(directory, "github-subscribe");
+    const githubUnsubscribePath = join(directory, "github-unsubscribe");
+    const sentrySubscribePath = join(directory, "sentry-subscribe");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github",
+                TEST_RESOURCE_SUBSCRIPTIONS: "true",
+                TEST_RESOURCE_UPDATE_URI: "account://current",
+                TEST_SUBSCRIBE_COUNT_PATH: githubSubscribePath,
+                TEST_UNSUBSCRIBE_COUNT_PATH: githubUnsubscribePath
+              }
+            },
+            sentry: {
+              env: {
+                TEST_ACCOUNT_NAME: "sentry",
+                TEST_RESOURCE_SUBSCRIPTIONS: "true",
+                TEST_SUBSCRIBE_COUNT_PATH: sentrySubscribePath
+              }
+            }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-test-client", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(client.getServerCapabilities()).toMatchObject({ resources: { listChanged: true, subscribe: true } });
+      const listed = await client.listResources();
+      const githubResource = listed.resources.find((resource) => resource.name === "github__Current account");
+      if (!githubResource) throw new Error("Expected the GitHub resource.");
+
+      await client.subscribeResource({ uri: githubResource.uri });
+      await expectExactlyOneNotification(() => updates.length);
+      expect(updates).toEqual([githubResource.uri]);
+      expect(await readFile(githubSubscribePath, "utf8")).toBe("1\n");
+      await expect(access(sentrySubscribePath)).rejects.toThrow();
+
+      await client.unsubscribeResource({ uri: githubResource.uri });
+      expect(await readFile(githubUnsubscribePath, "utf8")).toBe("1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards only updates for the subscribed resource", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://other"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-filter-test", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      await delay(75);
+      expect(updates).toEqual([]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("does not forward an update from a subscription that fails before activation", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current",
+            TEST_FAIL_SUBSCRIBE: "true"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "failed-resource-subscription-test-client", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.subscribeResource({ uri: "account://current" })).rejects.toThrow();
+      await delay(75);
+      expect(updates).toEqual([]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("cleans up an upstream subscription that finishes after downstream cancellation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-resource-subscription-"));
+    const subscribeStartedPath = join(directory, "subscribe-started");
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current",
+            TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            TEST_SUBSCRIBE_DELAY_MS: "100",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cancelled-resource-subscription-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.subscribeResource({ uri: "account://current" }, { signal: controller.signal });
+      await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(async () => readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      await delay(125);
+      expect(updates).toEqual([]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a subscription after its unsubscribe request is cancelled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-resource-unsubscribe-"));
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_UNSUBSCRIBE_DELAY_MS: "100",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      },
+      process: { shutdownTimeoutMs: 500 }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      idleTimeoutMs: 25,
+      shutdownTimeoutMs: 500
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cancelled-resource-unsubscribe-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.subscribeResource({ uri: "account://current" });
+
+      const pending = client.unsubscribeResource({ uri: "account://current" }, { signal: controller.signal });
+      await expect.poll(async () => readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => manager.listHealth()[0]?.processState).toBe("stopped");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds a pending subscription before switching profiles at capacity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-pending-subscription-profile-switch-"));
+    const subscribeStartedPath = join(directory, "subscribe-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            TEST_SUBSCRIBE_DELAY_MS: "1000"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      },
+      process: { maxConcurrentProfiles: 1, shutdownTimeoutMs: 25, idleTimeoutMs: 25 }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      shutdownTimeoutMs: 25,
+      idleTimeoutMs: 25,
+      maxConcurrentProfiles: 1
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "pending-resource-subscription-profile-switch-test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const pending = client.subscribeResource({ uri: "account://current" });
+      await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
+
+      await expect(client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).resolves.toMatchObject({
+        content: [{ type: "text", text: "Active profile changed from work to personal." }]
+      });
+      await expect(pending).rejects.toThrow();
+      await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
+      await expect(client.callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes cancelled subscription cleanup before a retry", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-resource-subscription-retry-"));
+    const subscribeStartedPath = join(directory, "subscribe-started");
+    const subscribeCountPath = join(directory, "subscribe-count");
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_SUBSCRIPTION_STATEFUL_UPDATES: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current",
+            TEST_RESOURCE_UPDATE_DELAY_MS: "225",
+            TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            TEST_SUBSCRIBE_COUNT_PATH: subscribeCountPath,
+            TEST_SUBSCRIBE_DELAY_MS: "50",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_UNSUBSCRIBE_DELAY_MS: "150",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cancelled-resource-subscription-retry-test-client", version: "1.0.0" });
+    const controller = new AbortController();
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const cancelled = client.subscribeResource({ uri: "account://current" }, { signal: controller.signal });
+      await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("test cancellation");
+
+      await expect(cancelled).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await client.subscribeResource({ uri: "account://current" });
+
+      await expect.poll(async () => readFile(subscribeCountPath, "utf8")).toBe("1\n1\n");
+      await expect.poll(async () => readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      await expectExactlyOneNotification(() => updates.length);
+      expect(updates).toEqual(["account://current"]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fans one upstream resource update out to every matching static and template subscription", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstreams: {
+        github: { transport: "stdio", command: process.execPath, args: [fixture] },
+        sentry: { transport: "stdio", command: process.execPath, args: [fixture] }
+      },
+      profiles: {
+        work: {
+          upstreams: {
+            github: {
+              env: {
+                TEST_ACCOUNT_NAME: "github",
+                TEST_RESOURCE_SUBSCRIPTIONS: "true",
+                TEST_RESOURCE_UPDATE_URI: "account://current",
+                TEST_RESOURCE_UPDATE_DELAY_MS: "25",
+                TEST_RESOURCE_TEMPLATE_NAME: "account",
+                TEST_RESOURCE_TEMPLATE_URI: "account://{id}"
+              }
+            },
+            sentry: { env: { TEST_ACCOUNT_NAME: "sentry", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+          }
+        }
+      }
+    });
+    const manager = new MultiUpstreamProcessManager(config, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-fanout-test-client", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      const resources = await client.listResources();
+      const templates = await client.listResourceTemplates();
+      const githubResource = resources.resources.find((resource) => resource.name === "github__Current account");
+      const githubTemplate = templates.resourceTemplates.find((template) => template.name === "github__account");
+      if (!githubResource || !githubTemplate) throw new Error("Expected GitHub resource and template routes.");
+      const templateUri = new UriTemplate(githubTemplate.uriTemplate).expand({ id: "current" });
+
+      await client.subscribeResource({ uri: githubResource.uri });
+      await expectExactlyOneNotification(() => updates.length);
+      updates.length = 0;
+
+      await client.subscribeResource({ uri: templateUri });
+      await expect.poll(() => updates.length).toBe(2);
+      await delay(50);
+      expect(updates).toEqual(expect.arrayContaining([githubResource.uri, templateUri]));
+      expect(updates).toHaveLength(2);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("re-establishes a resource subscription after its upstream restarts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-restart-"));
+    const subscribeCountPath = join(directory, "subscribe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_SUBSCRIBE_COUNT_PATH: subscribeCountPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-restart-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } });
+      await client.subscribeResource({ uri: "account://current" });
+
+      expect(await readFile(subscribeCountPath, "utf8")).toBe("1\n1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a direct resource subscription when its upstream lifecycle ends", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-direct-lifecycle-"));
+    const subscribeCountPath = join(directory, "subscribe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_SUBSCRIBE_COUNT_PATH: subscribeCountPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-direct-lifecycle-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      await manager.closeProfile("work");
+      await client.subscribeResource({ uri: "account://current" });
+
+      expect(await readFile(subscribeCountPath, "utf8")).toBe("1\n1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes overlapping resource subscription transitions before releasing idle capacity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-race-"));
+    const subscribeStartedPath = join(directory, "subscribe-started");
+    const subscribeCountPath = join(directory, "subscribe-count");
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            TEST_SUBSCRIBE_DELAY_MS: "100",
+            TEST_SUBSCRIBE_COUNT_PATH: subscribeCountPath,
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      idleTimeoutMs: 25,
+      shutdownTimeoutMs: 25
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-race-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const subscribe = client.subscribeResource({ uri: "account://current" });
+      await expect
+        .poll(async () => {
+          try {
+            await access(subscribeStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      const unsubscribe = client.unsubscribeResource({ uri: "account://current" });
+      await Promise.all([subscribe, unsubscribe]);
+
+      expect(await readFile(subscribeCountPath, "utf8")).toBe("1\n");
+      expect(await readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      await expect.poll(() => manager.listHealth()[0]?.processState).toBe("stopped");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("joins an in-flight unsubscribe before profile cleanup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-cleanup-race-"));
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_UNSUBSCRIBE_DELAY_MS: "100"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-cleanup-race-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.subscribeResource({ uri: "account://current" });
+
+      const unsubscribe = client.unsubscribeResource({ uri: "account://current" });
+      await expect.poll(async () => readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      const switched = client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+
+      await Promise.all([unsubscribe, switched]);
+      expect(await readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retain a subscription invalidated during its upstream handshake", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-handshake-race-"));
+    const subscribeStartedPath = join(directory, "subscribe-started");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            TEST_SUBSCRIBE_DELAY_MS: "100"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      idleTimeoutMs: 25,
+      shutdownTimeoutMs: 25
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-handshake-race-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const subscribe = client.subscribeResource({ uri: "account://current" });
+      await expect
+        .poll(async () => {
+          try {
+            await access(subscribeStartedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+
+      await expect(subscribe).rejects.toThrow("RESOURCE_SUBSCRIPTION_NOT_FOUND");
+      await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not establish a captured-profile subscription after a profile switch", async () => {
+    let resolveSnapshotStarted: () => void = () => undefined;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      resolveSnapshotStarted = resolve;
+    });
+    let releaseSnapshot: () => void = () => undefined;
+    const snapshotGate = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
+    const snapshot: RoutingContextSnapshot = {
+      context: {},
+      evidence: { cwd: process.cwd(), fileRoots: [] },
+      profileHints: []
+    };
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      idleTimeoutMs: 25,
+      shutdownTimeoutMs: 25
+    });
+    let collectSnapshot = true;
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager, async () => {
+      if (collectSnapshot) {
+        collectSnapshot = false;
+        resolveSnapshotStarted();
+        await snapshotGate;
+      }
+      return snapshot;
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-pre-candidate-switch-test", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const subscribe = client.subscribeResource({ uri: "account://current" });
+      await snapshotStarted;
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      releaseSnapshot();
+
+      await expect(subscribe).rejects.toThrow("RESOURCE_SUBSCRIPTION_NOT_FOUND");
+      await delay(100);
+      expect(updates).toEqual([]);
+      await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
+    } finally {
+      releaseSnapshot();
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("keeps a resource subscription alive beyond the upstream idle timeout", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current",
+            TEST_RESOURCE_UPDATE_DELAY_MS: "75"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      idleTimeoutMs: 25,
+      shutdownTimeoutMs: 25
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-idle-test", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      await expect.poll(() => updates).toEqual(["account://current"]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("drops an old-profile resource subscription before a delayed update can be forwarded", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_RESOURCE_UPDATE_URI: "account://current",
+            TEST_RESOURCE_UPDATE_DELAY_MS: "75"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-switch-test", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await delay(125);
+
+      expect(updates).toEqual([]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("clears a routed third-profile subscription when the active profile changes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-third-profile-"));
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_RESOURCE_SUBSCRIPTIONS: "true" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } },
+        third: {
+          env: {
+            TEST_ACCOUNT_NAME: "third",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_RESOURCE_UPDATE_URI: "account://third",
+            TEST_RESOURCE_UPDATE_DELAY_MS: "75"
+          }
+        }
+      },
+      routing: {
+        rules: [{ name: "third-resource", when: { "args.uri": "account://third" }, profile: "third" }]
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-third-profile-test", version: "1.0.0" });
+    const updates: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+      updates.push(notification.params.uri);
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "resources/read", args: { uri: "account://third" } }
+          })
+        )
+      ).toMatchObject({ profile: "third", reason: "rule:third-resource" });
+      await client.subscribeResource({ uri: "account://third" });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      await delay(125);
+
+      expect(await readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      expect(updates).toEqual([]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds resource subscription cleanup while switching profiles", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-cleanup-"));
+    const unsubscribeCountPath = join(directory, "unsubscribe-count");
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_RESOURCE_SUBSCRIPTIONS: "true",
+            TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
+            TEST_UNSUBSCRIBE_DELAY_MS: "1000",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      },
+      process: { shutdownTimeoutMs: 25 }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      ...config.process
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-cleanup-test", version: "1.0.0" });
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.subscribeResource({ uri: "account://current" });
+      const switchedAt = Date.now();
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        content: [{ type: "text", text: "Active profile changed from work to personal." }]
+      });
+
+      expect(Date.now() - switchedAt).toBeLessThan(500);
+      expect(await readFile(unsubscribeCountPath, "utf8")).toBe("1\n");
+      await expect.poll(async () => readFile(cancelledPath, "utf8")).toMatch(/^\d+\n$/);
+      expect(emitWarning).toHaveBeenCalledWith(expect.stringContaining("UPSTREAM_CALL_FAILED"), {
+        code: "MIFTAH_RESOURCE_SUBSCRIPTION_CLEANUP_FAILED"
+      });
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "personal" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+      emitWarning.mockRestore();
+    }
+  });
+
+  it("does not advertise resource subscriptions unless every selectable profile supports them", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_RESOURCE_SUBSCRIPTIONS: "true" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-capability-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()?.resources?.subscribe).not.toBe(true);
+      await expect(client.subscribeResource({ uri: "account://current" })).rejects.toThrow(
+        "RESOURCE_SUBSCRIPTION_UNSUPPORTED"
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("releases subscription-capability probes before serving the active profile at capacity", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_RESOURCE_SUBSCRIPTIONS: "true" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal", TEST_RESOURCE_SUBSCRIPTIONS: "true" } }
+      },
+      process: { maxConcurrentProfiles: 1 }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, {
+      startupTimeoutMs: 5_000,
+      maxConcurrentProfiles: 1
+    });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-capacity-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(client.getServerCapabilities()?.resources?.subscribe).toBe(true);
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+      expect(manager.listHealth()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ profile: "work", processState: "running" }),
+          expect.objectContaining({ profile: "personal", processState: "stopped" })
+        ])
+      );
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("forwards upstream tools, resources, and prompts list-change notifications", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_NOTIFY_LIST_CHANGES_ON_CALL_TOOL: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "list-change-test-client", version: "1.0.0" });
+    let toolsChanged = 0;
+    let resourcesChanged = 0;
+    let promptsChanged = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      toolsChanged += 1;
+    });
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      resourcesChanged += 1;
+    });
+    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+      promptsChanged += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(client.getServerCapabilities()).toMatchObject({
+        tools: { listChanged: true },
+        resources: { listChanged: true },
+        prompts: { listChanged: true }
+      });
+
+      expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+      await Promise.all([
+        expectExactlyOneNotification(() => toolsChanged),
+        expectExactlyOneNotification(() => resourcesChanged),
+        expectExactlyOneNotification(() => promptsChanged)
+      ]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("forwards a tool list change from a session first used for discovery", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_NOTIFY_TOOL_LIST_CHANGE_ON_LIST_TOOLS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "tool-discovery-list-change-test", version: "1.0.0" });
+    let changes = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      changes += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await client.listTools();
+      await expectExactlyOneNotification(() => changes);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("refreshes the initial tool snapshot after a concurrent upstream list change", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-initial-tool-list-change-"));
+    const countPath = join(directory, "tools-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_LIST_TOOLS_COUNT_PATH: countPath,
+            TEST_NOTIFY_TOOL_LIST_CHANGE_ON_FIRST_LIST_TOOLS: "true",
+            TEST_TOOL_LIST_CHANGES_AFTER_FIRST_REQUEST: "true"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "initial-tool-list-change-refresh-test", version: "1.0.0" });
+    let changes = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      changes += 1;
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const initial = await client.listTools();
+      expect(initial.tools.map((tool) => tool.name)).toContain("whoami");
+      await expectExactlyOneNotification(() => changes);
+
+      const refreshed = await client.listTools();
+      const names = refreshed.tools.map((tool) => tool.name);
+      expect(names).toContain("whoami_reloaded");
+      expect(names).not.toContain("whoami");
+      expect(await readFile(countPath, "utf8")).toBe("1\n1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reject a cold tool call when an idle upstream emits a list change", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_NOTIFY_TOOL_LIST_CHANGE_ON_LIST_TOOLS: "true" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "idle-tool-list-change-call-test", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      await expect(client.callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("clears a deferred tool invalidation when its list request is cancelled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-tool-list-change-"));
+    const cancelledPath = join(directory, "cancelled");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_NOTIFY_TOOL_LIST_CHANGE_ON_FIRST_LIST_TOOLS: "true",
+            TEST_LIST_TOOLS_DELAY_AFTER_NOTIFICATION_MS: "100",
+            TEST_CANCELLED_PATH: cancelledPath
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cancelled-tool-list-change-test", version: "1.0.0" });
+    const controller = new AbortController();
+    let notifyToolListChanged: (() => void) | undefined;
+    const toolListChanged = new Promise<void>((resolve) => {
+      notifyToolListChanged = resolve;
+    });
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notifyToolListChanged?.();
+    });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.listTools(undefined, { signal: controller.signal });
+      await toolListChanged;
+      // Let the notification handler return before sending cancellation back to
+      // the server; the fixture keeps its upstream response pending meanwhile.
+      await delay(0);
+      controller.abort("cancel after list change");
+      await expect(pending).rejects.toThrow();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await expect(client.callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: "work" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

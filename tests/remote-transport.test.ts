@@ -83,6 +83,70 @@ describe("remote upstream transports", () => {
     }
   });
 
+  it("forwards cancellation to a streamable HTTP upstream", async () => {
+    const upstream = await startFakeRemoteUpstream({ callToolDelayMs: 500 });
+    upstreams.push(upstream);
+    const config = validateConfig({
+      version: "1",
+      name: "remote-cancellation",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: upstream.streamableHttpUrl },
+      profiles: { work: { headers: { "X-Profile": "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles);
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-cancellation-test", version: "1.0.0" });
+    const controller = new AbortController();
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const pending = client.callTool({ name: "whoami", arguments: {} }, undefined, { signal: controller.signal });
+      await expect.poll(() => upstream.toolCallRequests()).toBe(1);
+      controller.abort("test cancellation");
+
+      await expect(pending).rejects.toThrow();
+      await expect.poll(() => upstream.cancelledNotifications()).toBe(1);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("forwards progress from a streamable HTTP upstream", async () => {
+    const upstream = await startFakeRemoteUpstream({ emitCallToolProgress: true });
+    upstreams.push(upstream);
+    const config = validateConfig({
+      version: "1",
+      name: "remote-progress",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: upstream.streamableHttpUrl },
+      profiles: { work: { headers: { "X-Profile": "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles);
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-progress-test", version: "1.0.0" });
+    const progressUpdates: unknown[] = [];
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        await client.callTool(
+          { name: "whoami", arguments: {} },
+          undefined,
+          { onprogress: (progress) => progressUpdates.push(progress) }
+        )
+      ).toMatchObject({ content: [{ type: "text", text: "work" }] });
+      expect(progressUpdates).toEqual([{ progress: 1, total: 2 }]);
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("terminates streamable HTTP sessions during managed restarts and shutdown", async () => {
     const upstream = await startFakeRemoteUpstream();
     upstreams.push(upstream);
