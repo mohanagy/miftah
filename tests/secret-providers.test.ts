@@ -819,7 +819,7 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "keeps standard input available to the encoded PowerShell bootstrap",
+    "does not expose parent standard input to the encoded PowerShell bootstrap",
     async () => {
       const input = Buffer.concat([
         Buffer.from("bootstrap-input", "utf8"),
@@ -839,7 +839,7 @@ exit 0`,
         input
       );
 
-      expect(result).toMatchObject({ code: 0, stdout: input.toString("base64") });
+      expect(result).toMatchObject({ code: 0, stdout: "" });
     },
     20_000
   );
@@ -963,7 +963,7 @@ exit 0`);
           executable: process.execPath,
           args: [
             "-e",
-            'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => process.stdout.write(Buffer.concat(chunks).toString("base64")));'
+            'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ input: Buffer.concat(chunks).toString("base64"), inheritedInput: process.env.MIFTAH_SECRET_RUNNER_STDIN ?? null })));'
           ],
           environment: { PATH: process.env.PATH },
           stdin: input
@@ -971,7 +971,10 @@ exit 0`);
         { timeoutMs: 10_000 }
       );
 
-      expect(result.stdout.toString("utf8")).toBe(input.toString("base64"));
+      expect(JSON.parse(result.stdout.toString("utf8"))).toEqual({
+        input: input.toString("base64"),
+        inheritedInput: null
+      });
     },
     20_000
   );

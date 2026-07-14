@@ -83,8 +83,9 @@ function runPreparedSecretCommand(
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve, reject) => {
     const standardInput = command.stdin === undefined ? "ignore" : "pipe";
-    const child = isWindowsSecretCommand(command)
-      ? spawnWindowsSecretCommand(command, standardInput)
+    const usesWindowsHelper = isWindowsSecretCommand(command);
+    const child = usesWindowsHelper
+      ? spawnWindowsSecretCommand(command)
       : spawn(command.executable, command.args, {
           env: command.environment,
           shell: false,
@@ -95,7 +96,11 @@ function runPreparedSecretCommand(
     const stdin = child.stdin;
     const stdout = child.stdout;
     const stderr = child.stderr;
-    if (stdout === null || stderr === null || (command.stdin !== undefined && stdin === null)) {
+    if (
+      stdout === null ||
+      stderr === null ||
+      (!usesWindowsHelper && command.stdin !== undefined && stdin === null)
+    ) {
       child.once("error", () => undefined);
       child.kill();
       reject(new SecretProcessError("unavailable"));
@@ -182,7 +187,7 @@ function runPreparedSecretCommand(
     options.signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(terminate, timeoutMs, "timeout");
 
-    if (command.stdin !== undefined) {
+    if (command.stdin !== undefined && !usesWindowsHelper) {
       stdin!.once("error", () => terminate("unavailable"));
       stdin!.end(command.stdin);
     }
