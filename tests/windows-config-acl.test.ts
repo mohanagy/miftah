@@ -82,4 +82,20 @@ describe("Windows migration ACL boundary", () => {
     expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
     expect(options?.env).not.toHaveProperty("MIFTAH_UNRELATED_SECRET");
   });
+
+  it("does not let caller-supplied Windows-root overrides choose the ACL helper launcher", async () => {
+    vi.stubEnv("SystemRoot", "C:\\attacker");
+    vi.stubEnv("windir", "C:\\attacker");
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateMigrationDirectory("C:\\config\\.miftah-migrate-transaction")).resolves.toBe(true);
+
+    const [launcher, , options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(launcher).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(options?.env).toMatchObject({ SystemRoot: "C:\\Windows", windir: "C:\\Windows" });
+  });
 });

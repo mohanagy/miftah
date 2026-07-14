@@ -5,6 +5,10 @@ import { win32 } from "node:path";
 const requestEnvironmentName = "MIFTAH_CONFIG_ACL_REQUEST";
 const maximumRequestBytes = 12 * 1024;
 const aclCommandTimeoutMs = 5_000;
+// Node exposes no trusted Windows system-directory API. Use the protected default
+// system root rather than a caller-controlled environment override; unsupported
+// non-default layouts fail closed instead of launching an arbitrary executable.
+const trustedWindowsRoot = "C:\\Windows";
 
 interface CopyFileSecurityRequest {
   readonly operation: "copy-file-security";
@@ -53,10 +57,8 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
 }
 
 function trustedPowerShellExecutable(): string | undefined {
-  const systemRoot = environmentValue(process.env, "SystemRoot") ?? environmentValue(process.env, "windir") ?? "C:\\Windows";
-  if (!win32.isAbsolute(systemRoot)) return undefined;
   const executable = win32.join(
-    win32.resolve(systemRoot),
+    trustedWindowsRoot,
     "System32",
     "WindowsPowerShell",
     "v1.0",
@@ -66,8 +68,8 @@ function trustedPowerShellExecutable(): string | undefined {
 }
 
 function aclEnvironment(request: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const name of ["SystemRoot", "windir", "ComSpec", "TEMP", "TMP", "PSModulePath", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
+  const environment: NodeJS.ProcessEnv = { SystemRoot: trustedWindowsRoot, windir: trustedWindowsRoot };
+  for (const name of ["ComSpec", "TEMP", "TMP", "PSModulePath", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
     const value = environmentValue(process.env, name);
     if (value !== undefined) environment[name] = value;
   }
