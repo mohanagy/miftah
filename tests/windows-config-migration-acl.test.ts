@@ -182,7 +182,7 @@ try {
     [Console]::Out.Write("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:field-count-" + $fields.Count)
     exit 1
   }
-  if ($fields[0] -ne 'copy-file-security') {
+  if ($fields[0] -ne 'copy-file-security' -and $fields[0] -ne 'copy-file-security-fresh') {
     [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:operation')
     exit 1
   }
@@ -195,8 +195,13 @@ try {
   $sourceRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new($sourceDescriptor, 0)
   if ($null -eq $sourceRaw.DiscretionaryAcl) { exit 1 }
   $stage = 'target'
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-get')
-  $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
+  if ($fields[0] -eq 'copy-file-security-fresh') {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-fresh')
+    $targetAcl = [System.Security.AccessControl.FileSecurity]::new()
+  } else {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-get')
+    $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
+  }
   $stage = 'apply'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-set-binary')
   $targetAcl.SetSecurityDescriptorBinaryForm($sourceDescriptor, $sections)
@@ -265,7 +270,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
-    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-set-binary|target-apply|verify-get)/g);
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-fresh|target-set-binary|target-apply|verify-get)/g);
     const boundary = boundaries?.[boundaries.length - 1];
     if (boundary !== undefined) return boundary;
   }
@@ -343,8 +348,13 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
   });
 }
 
-async function windowsCopyFileSecurityProbe(source: string, target: string): Promise<void> {
-  const request = Buffer.from(["copy-file-security", source, target].join("\u0000"), "utf8").toString("base64");
+async function windowsCopyFileSecurityProbe(
+  source: string,
+  target: string,
+  mode: "existing-target" | "fresh-security" = "existing-target"
+): Promise<void> {
+  const operation = mode === "fresh-security" ? "copy-file-security-fresh" : "copy-file-security";
+  const request = Buffer.from([operation, source, target].join("\u0000"), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
     const child = spawn(
       trustedPowerShellExecutable(),
@@ -472,6 +482,28 @@ describe("Windows migration ACL contract", () => {
       await targetHandle.close();
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "diagnoses inherited-control preservation with a fresh target security object",
+    async () => {
+      const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-inherited-fresh-acl-"));
+      temporaryDirectories.push(parentDirectory);
+      const originalSourcePath = join(parentDirectory, "miftah.json");
+      const privateDirectory = join(parentDirectory, ".miftah-migrate-transaction");
+      const sourcePath = join(privateDirectory, "source.miftah-migrate-hold");
+      const targetPath = join(privateDirectory, "backup.miftah-migrate.tmp");
+      await writeFile(originalSourcePath, "source", "utf8");
+      await expect(windowsPrivateDirectoryProbe(privateDirectory)).resolves.toBeUndefined();
+      await rename(originalSourcePath, sourcePath);
+      const expectedSddl = await windowsAclSddl(sourcePath, "read");
+      const targetHandle = await open(targetPath, "wx", 0o600);
+      await targetHandle.close();
+
+      await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "fresh-security")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
     10_000
