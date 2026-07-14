@@ -154,6 +154,45 @@ try {
 
 const encodedPrivateDirectoryProbe = Buffer.from(privateDirectoryProbe, "utf16le").toString("base64");
 
+const copyFileSecurityProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOOTSTRAP')
+$ErrorActionPreference = 'Stop'
+$requestName = '${privateDirectoryRequestEnvironmentName}'
+$sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
+[Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_SECTIONS')
+$stage = 'bootstrap'
+try {
+  $stage = 'request'
+  $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
+  if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
+  $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
+  [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST')
+  if ($fields.Count -ne 3 -or $fields[0] -ne 'copy-file-security') { exit 1 }
+  $stage = 'source'
+  $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $sections)
+  $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($sections)
+  $stage = 'target'
+  $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
+  $stage = 'apply'
+  $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $sections)
+  [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
+  $stage = 'verify'
+  $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
+  if ($sourceSddl -ne $verifiedAcl.GetSecurityDescriptorSddlForm($sections)) { exit 1 }
+  exit 0
+} catch {
+  $suffix = switch ($_.CategoryInfo.Category.ToString()) {
+    'PermissionDenied' { ':permission' }
+    'ObjectNotFound' { ':missing' }
+    'InvalidOperation' { ':invalid' }
+    default { ':other' }
+  }
+  [Console]::Out.Write("MIFTAH_ACL_COPY_FILE_PROBE_STAGE:" + $stage + $suffix)
+  exit 1
+}`;
+
+const encodedCopyFileSecurityProbe = Buffer.from(copyFileSecurityProbe, "utf16le").toString("base64");
+
 function safeAclProbeStage(output: readonly Buffer[]): string {
   const bytes = Buffer.concat(output);
   for (const encoding of ["utf8", "utf16le"] as const) {
@@ -185,6 +224,27 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:bootstrap";
   }
   return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:unavailable";
+}
+
+function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
+  const bytes = Buffer.concat(output);
+  for (const encoding of ["utf8", "utf16le"] as const) {
+    const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
+    const stage = diagnostic.match(
+      /MIFTAH_ACL_COPY_FILE_PROBE_STAGE:(bootstrap|request|source|target|apply|verify)(?::(permission|missing|invalid|other))?/
+    )?.[0];
+    if (stage !== undefined) return stage;
+  }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST")) {
+    return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:request";
+  }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_SECTIONS")) {
+    return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:sections";
+  }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_BOOTSTRAP")) {
+    return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:bootstrap";
+  }
+  return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:unavailable";
 }
 
 async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
@@ -249,6 +309,41 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
   });
 }
 
+async function windowsCopyFileSecurityProbe(source: string, target: string): Promise<void> {
+  const request = Buffer.from(["copy-file-security", source, target].join("\u0000"), "utf8").toString("base64");
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      trustedPowerShellExecutable(),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCopyFileSecurityProbe],
+      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    const output: Buffer[] = [];
+    const errorOutput: Buffer[] = [];
+    const timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // The probe has no verified result after its bounded execution time.
+      }
+      reject(new Error(`Windows copy-file ACL probe timed out: ${safeCopyFileSecurityProbeStage([...output, ...errorOutput])}`));
+    }, 5_000);
+    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
+    child.once("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Windows copy-file ACL probe could not start"));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Windows copy-file ACL probe failed: ${safeCopyFileSecurityProbeStage([...output, ...errorOutput])}`));
+    });
+  });
+}
+
 describe("Windows migration ACL contract", () => {
   it.runIf(process.platform === "win32")(
     "creates a private migration directory under the production ACL environment",
@@ -257,6 +352,23 @@ describe("Windows migration ACL contract", () => {
       temporaryDirectories.push(parentDirectory);
 
       await expect(windowsPrivateDirectoryProbe(join(parentDirectory, ".miftah-migrate-transaction"))).resolves.toBeUndefined();
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "copies a restrictive file descriptor under the production ACL environment",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-file-acl-"));
+      temporaryDirectories.push(directory);
+      const sourcePath = join(directory, "source.json");
+      const targetPath = join(directory, "target.json");
+      await writeFile(sourcePath, "source", "utf8");
+      await writeFile(targetPath, "target", "utf8");
+      const expectedSddl = await windowsAclSddl(sourcePath, "restrict");
+
+      await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
     10_000
   );
