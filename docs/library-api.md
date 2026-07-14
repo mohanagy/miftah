@@ -26,11 +26,13 @@ await runtime.connect(new StdioServerTransport());
 
 ## Type exports
 
-The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `HttpServerConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `ServerConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
 
 `AuditRotationConfig` requires `retainFiles` (maximum `2000`) plus at least one positive trigger (`maxBytes` or `maxAgeMs`). `AuditIntegrityConfig` currently exposes the explicit local `"sha256-chain"` option only. Both configure the runtime journal; journal writers, readers, and CLI export/verification implementations remain internal.
 
 `StateConfig` makes active-profile persistence explicit. Its durable `workspace` and `global` scopes require `persistActiveProfile: true`; custom state-file paths are intentionally not part of the public API.
+
+`ServerConfig` and `HttpServerConfig` configure the CLI-owned literal-loopback-first Streamable HTTP host. Authentication values are supported secret references, not command-line token values; non-loopback binds require explicit opt-in, a bearer token, and exact allowed hosts.
 
 `UpstreamConfig.trustToolAnnotations` is opt-in and defaults to false. `ToolingConfig.unknownToolRisk` uses the exported `UnknownToolRisk` union (`"write" | "destructive"`) and defaults to `"destructive"`; callers can use exact `toolRiskOverrides` for known read tools.
 

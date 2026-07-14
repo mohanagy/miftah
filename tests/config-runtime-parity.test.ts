@@ -96,6 +96,84 @@ describe("config runtime parity", () => {
     expect(malformedPersistence.message).toContain("state.persistActiveProfile");
   });
 
+  it("requires explicit, secret-backed protection before a non-loopback HTTP bind", () => {
+    const config = validateConfig(
+      baseConfig({
+        server: {
+          http: {
+            host: "0.0.0.0",
+            port: 8443,
+            allowNonLoopback: true,
+            authToken: "${MIFTAH_HTTP_TOKEN}",
+            allowedHosts: ["mcp.example.test"],
+            allowedOrigins: ["https://client.example.test"],
+            maxSessions: 8,
+            sessionIdleTimeoutMs: 15_000,
+            maxRequestBytes: 8_192
+          }
+        }
+      })
+    );
+
+    expect(config.server?.http).toEqual({
+      host: "0.0.0.0",
+      port: 8443,
+      allowNonLoopback: true,
+      authToken: "${MIFTAH_HTTP_TOKEN}",
+      allowedHosts: ["mcp.example.test"],
+      allowedOrigins: ["https://client.example.test"],
+      maxSessions: 8,
+      sessionIdleTimeoutMs: 15_000,
+      maxRequestBytes: 8_192
+    });
+
+    const missingOptIn = validationError(
+      baseConfig({
+        server: {
+          http: {
+            host: "0.0.0.0",
+            authToken: "${MIFTAH_HTTP_TOKEN}",
+            allowedHosts: ["mcp.example.test"]
+          }
+        }
+      })
+    );
+    const rawToken = "must-not-appear-in-diagnostics";
+    const rawTokenError = validationError(
+      baseConfig({
+        server: {
+          http: {
+            host: "0.0.0.0",
+            allowNonLoopback: true,
+            authToken: rawToken,
+            allowedHosts: ["mcp.example.test"]
+          }
+        }
+      })
+    );
+
+    expect(missingOptIn.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(missingOptIn.message).toContain("server.http.allowNonLoopback");
+    expect(rawTokenError.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(rawTokenError.message).toContain("server.http.authToken");
+    expect(rawTokenError.message).not.toContain(rawToken);
+
+    const malformedIpv6 = validationError(
+      baseConfig({
+        server: {
+          http: {
+            host: ":::",
+            allowNonLoopback: true,
+            authToken: "${MIFTAH_HTTP_TOKEN}",
+            allowedHosts: ["mcp.example.test"]
+          }
+        }
+      })
+    );
+    expect(malformedIpv6.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(malformedIpv6.message).toContain("server.http.host");
+  });
+
   it("requires explicit annotation trust and validates the unknown-tool risk default", () => {
     const config = validateConfig(
       baseConfig({

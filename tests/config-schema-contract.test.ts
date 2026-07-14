@@ -177,6 +177,8 @@ describe("published config schema", () => {
     const tooling = root?.tooling?.properties;
     const secrets = root?.secrets?.properties;
     const state = root?.state?.properties;
+    const server = root?.server?.properties;
+    const httpServer = server?.http?.properties;
 
     expect(schema).toMatchObject({
       $schema: "https://json-schema.org/draft/2019-09/schema#",
@@ -321,6 +323,17 @@ describe("published config schema", () => {
       persistActiveProfile: { type: "boolean" },
       scope: { enum: ["process", "session", "workspace", "global"] }
     });
+    expect(httpServer).toMatchObject({
+      host: { type: "string" },
+      port: { type: "integer", minimum: 0, maximum: 65_535 },
+      allowNonLoopback: { const: true },
+      authToken: { type: "string" },
+      maxSessions: { type: "integer", minimum: 1, maximum: 256 },
+      sessionIdleTimeoutMs: { type: "integer", minimum: 1_000, maximum: 86_400_000 },
+      maxRequestBytes: { type: "integer", minimum: 1_024, maximum: 10_485_760 }
+    });
+    expect(root?.server?.additionalProperties).toBe(false);
+    expect(server?.http?.additionalProperties).toBe(false);
     expect(state).not.toHaveProperty("path");
     expect(root?.state?.additionalProperties).toBe(false);
     expect(root?.routing?.additionalProperties).toBe(false);

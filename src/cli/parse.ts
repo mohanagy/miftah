@@ -10,7 +10,8 @@ type ValueOptionName =
   | "dockerImage"
   | "url"
   | "headerName"
-  | "headerPrefix";
+  | "headerPrefix"
+  | "transport";
 type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
@@ -27,6 +28,7 @@ export interface CliOptions {
   readonly url?: string;
   readonly headerName?: string;
   readonly headerPrefix?: string;
+  readonly transport?: "stdio" | "http";
   readonly follow?: true;
   readonly json?: true;
   readonly interactive?: true;
@@ -42,7 +44,7 @@ interface CliCommandMetadata {
 export const CLI_COMMANDS = {
   serve: {
     description: "Start the MCP wrapper server.",
-    options: ["config"]
+    options: ["config", "transport"]
   },
   validate: {
     description: "Validate a Miftah configuration.",
@@ -195,6 +197,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--header-prefix <prefix>",
     description: "Credential header prefix for the streamable-http preset."
   },
+  transport: {
+    name: "transport",
+    takesValue: true,
+    usage: "--transport <stdio|http>",
+    description: "MCP transport for serve."
+  },
   follow: {
     name: "follow",
     takesValue: false,
@@ -234,6 +242,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--url": OPTION_DEFINITIONS.url,
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
+  "--transport": OPTION_DEFINITIONS.transport,
   "--follow": OPTION_DEFINITIONS.follow,
   "--include-arguments": OPTION_DEFINITIONS.includeArguments,
   "--json": OPTION_DEFINITIONS.json,
@@ -321,6 +330,14 @@ function validateCommandOptions(command: CliCommand, options: CliOptions): void 
     if (!allowed.has(name)) {
       usageError(`Option '--${name}' is not valid for command '${command}'.`);
     }
+  }
+  if (
+    command === "serve" &&
+    options.transport !== undefined &&
+    options.transport !== "stdio" &&
+    options.transport !== "http"
+  ) {
+    usageError("Option '--transport' must be either 'stdio' or 'http'.");
   }
 }
 

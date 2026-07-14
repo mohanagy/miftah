@@ -1,6 +1,6 @@
 # CLI reference
 
-`miftah` is a local STDIO MCP wrapper. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
+`miftah` is an MCP wrapper with STDIO as its default transport and an opt-in local Streamable HTTP server. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
 
 ## Help
 
@@ -16,7 +16,7 @@ The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-
 
 | Command | Required input | Options | Output and behavior |
 | --- | --- | --- | --- |
-| `miftah serve --config <file>` | `--config` | `--config <file>` | Runs the STDIO MCP wrapper until it is stopped. `miftah --config <file>` is the equivalent default-command form. |
+| `miftah serve --config <file>` | `--config` | `--config <file>`, `--transport <stdio\|http>` | Runs the STDIO MCP wrapper by default, or the configured local Streamable HTTP endpoint with `--transport http`. `miftah --config <file>` is the equivalent default-command STDIO form. |
 | `miftah validate --config <file>` | `--config` | `--config <file>` | Validates the JSON configuration without starting an upstream. Writes a JSON object with `ok`, `name`, and `profiles`. |
 | `miftah doctor --config <file>` | `--config` | `--config <file>`, `--json` | Validates configuration and checks upstream readiness. Default output is a human-readable report; `--json` writes only the JSON report. A healthy or degraded report exits `0`; a failed report exits `1`. |
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
@@ -29,6 +29,12 @@ The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-
 | `miftah version` | none | `--json` | Writes the package version as a bare SemVer line. `--json` is retained for automation compatibility and intentionally writes the same bare SemVer line. |
 
 Every command also accepts `--help` and `-h`; those generated per-command help screens show only the options valid for that command.
+
+### `serve` transports
+
+`miftah serve --config <file>` and `miftah serve --transport stdio --config <file>` accept one STDIO client transport. `miftah serve --transport http --config <file>` starts the `/mcp` Streamable HTTP endpoint from `server.http`; it defaults to `http://127.0.0.1:3000/mcp` when that configuration is absent. The listener URL is written to stderr so STDIO's MCP protocol stream remains untouched. Signals stop new HTTP admissions and close the per-session runtimes and upstream transports.
+
+HTTP bearer authentication is configured only through `server.http.authToken` as a secret reference. The CLI never accepts a bearer token option and never writes one to its listener or error output. See [HTTP server transport](config.md#http-server-transport) for loopback, non-loopback, Host, Origin, session, and request-limit requirements.
 
 ### `init` presets and paths
 

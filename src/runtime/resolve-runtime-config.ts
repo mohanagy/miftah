@@ -17,10 +17,16 @@ export interface RuntimeResolutionScope {
   readonly upstreamName?: string;
 }
 
+/** Opt-in resolution for credentials owned by a host rather than a profile/upstream runtime. */
+export interface RuntimeResolutionOptions {
+  readonly resolveServerHttpAuthToken?: boolean;
+}
+
 /** Loads a configuration and resolves every supported secret-bearing configuration map. */
 export async function resolveRuntimeConfig(
   configPath: string,
-  scope?: RuntimeResolutionScope
+  scope?: RuntimeResolutionScope,
+  options: RuntimeResolutionOptions = {}
 ): Promise<ResolvedRuntimeConfig> {
   const config = await loadConfig(configPath);
   validateResolutionScope(config, scope);
@@ -40,6 +46,12 @@ export async function resolveRuntimeConfig(
     const resolved = await resolver.resolveMapWithSecretValues(values);
     for (const value of resolved.secretValues) secretValues.add(value);
     return resolved.values;
+  };
+  const resolveValue = async (value: string | undefined): Promise<string | undefined> => {
+    if (value === undefined) return undefined;
+    const resolved = await resolver.resolveValueWithSecretValues(value);
+    for (const secretValue of resolved.secretValues) secretValues.add(secretValue);
+    return resolved.value;
   };
   const profiles = Object.fromEntries(
     await Promise.all(
@@ -100,7 +112,21 @@ export async function resolveRuntimeConfig(
         }
       : config.upstream
     : undefined;
-  const resolvedConfig = { ...config, profiles, upstreams, upstream };
+  const server = config.server
+    ? {
+        ...config.server,
+        http: config.server.http
+          ? {
+              ...config.server.http,
+              authToken:
+                scope === undefined && options.resolveServerHttpAuthToken === true
+                  ? await resolveValue(config.server.http.authToken)
+                  : config.server.http.authToken
+            }
+          : undefined
+      }
+    : undefined;
+  const resolvedConfig = { ...config, profiles, upstreams, upstream, server };
   const values = [...secretValues];
   return {
     config: resolvedConfig,

@@ -14,6 +14,7 @@ import type {
   AuditRotationConfig,
   ConfigDiagnostic,
   GitHubProfileRoutingMatch,
+  HttpServerConfig,
   IdentityConfig,
   IdentityFingerprint,
   IdentityProbeConfig,
@@ -38,6 +39,7 @@ import type {
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
+  ServerConfig,
   SentryProfileRoutingMatch,
   StateConfig,
   ToolDiscoveryMode,
@@ -80,6 +82,7 @@ const supportedTypeExports = [
   "AuditRotationConfig",
   "ConfigDiagnostic",
   "GitHubProfileRoutingMatch",
+  "HttpServerConfig",
   "IdentityConfig",
   "IdentityFingerprint",
   "IdentityProbeConfig",
@@ -104,6 +107,7 @@ const supportedTypeExports = [
   "RoutingConfig",
   "RoutingRule",
   "SecurityConfig",
+  "ServerConfig",
   "SentryProfileRoutingMatch",
   "StateConfig",
   "ToolDiscoveryMode",
@@ -121,6 +125,7 @@ type PublicTypeImportCoverage = [
   AuditRotationConfig,
   ConfigDiagnostic,
   GitHubProfileRoutingMatch,
+  HttpServerConfig,
   IdentityConfig,
   IdentityFingerprint,
   IdentityProbeConfig,
@@ -145,6 +150,7 @@ type PublicTypeImportCoverage = [
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
+  ServerConfig,
   SentryProfileRoutingMatch,
   StateConfig,
   ToolDiscoveryMode,
@@ -189,7 +195,21 @@ const validAuditIntegrityConfig: AuditIntegrityConfig = {
   algorithm: "sha256-chain"
 };
 
-void [validAuditRotationConfig, validAuditIntegrityConfig];
+const validHttpServerConfig: HttpServerConfig = {
+  host: "127.0.0.1",
+  port: 3000,
+  authToken: "${MIFTAH_HTTP_TOKEN}",
+  maxSessions: 32,
+  sessionIdleTimeoutMs: 60_000,
+  maxRequestBytes: 1_048_576
+};
+const validServerConfig: ServerConfig = { http: validHttpServerConfig };
+const invalidHttpServerConfig: HttpServerConfig = {
+  // @ts-expect-error Non-loopback serving only accepts an explicit true opt-in.
+  allowNonLoopback: false
+};
+
+void [validAuditRotationConfig, validAuditIntegrityConfig, validServerConfig, invalidHttpServerConfig];
 
 const validTextIdentityConfig: IdentityConfig = {
   expected: { provider: "github", login: "mona" },
