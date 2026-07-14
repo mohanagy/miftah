@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-14
+
 ### Added
 
 - [#32](https://github.com/mohanagy/miftah/issues/32) Delivered MCP protocol conformance for resource templates, subscriptions, upstream list/update notifications, aggregate pagination, explicit capability/unsupported behavior, and request cancellation/progress forwarding across STDIO and Streamable HTTP upstreams.
@@ -22,6 +24,9 @@ All notable changes to this project will be documented in this file. The format 
 - [#31](https://github.com/mohanagy/miftah/issues/31) Delivered configurable audit-journal size/age rotation and safe retention, cross-process JSONL coordination, optional SHA-256-chain tamper evidence with first-break verification, and explicit redacted support export that omits stored arguments by default.
 - [#34](https://github.com/mohanagy/miftah/issues/34) Delivered the versioned local plugin API for explicit secret providers and routing matchers: strict allowlisted configuration, preflight manifest/path validation, scrubbed bounded child hosts, canonical secret references and routing signals, redaction registration, request-level cancellation/timeout containment, package contracts, and reference documentation.
 - [#38](https://github.com/mohanagy/miftah/issues/38) Added configuration format v2 with an explicit dry-run-first `migrate-config` command, exact exclusive backups for opted-in writes, historical v1 compatibility fixtures, documented compatibility/removal windows, and versioned public extension, CLI, management-tool, and audit contracts.
+- Package metadata and a verified npm pack-content contract.
+- Least-privilege CI and OIDC trusted-publishing workflows.
+- Dependency update, contribution, vulnerability-reporting, and repository templates.
 
 ### Changed
 
@@ -33,17 +38,6 @@ All notable changes to this project will be documented in this file. The format 
 
 - Audit-journal local lock probing now treats interrupted lock-holder handoffs as unknown and retries the canonical candidate, preserving cross-process rotation exclusion instead of bypassing it.
 - The package verifier now accepts both the list and keyed-object JSON formats emitted by supported npm `pack --json` versions while retaining the single-artifact and path allowlist checks.
-
-## [0.1.1] - 2026-07-11
-
-### Added
-
-- Package metadata and a verified npm pack-content contract.
-- Least-privilege CI and OIDC trusted-publishing workflows.
-- Dependency update, contribution, vulnerability-reporting, and repository templates.
-
-### Fixed
-
 - [#1](https://github.com/mohanagy/miftah/issues/1) Policy lookup now fails closed and configuration rejects unknown profile policy references instead of allowing a policy fail-open.
 - [#2](https://github.com/mohanagy/miftah/issues/2) Secret redaction preserves ordinary identifiers while still removing configured credentials from logs, errors, and discovery results.
 - [#3](https://github.com/mohanagy/miftah/issues/3) The GitHub Docker preset injects profile credentials correctly and pins the upstream image tag.

@@ -17,11 +17,17 @@ function section(content: string, heading: RegExp): string {
   return nextSection === -1 ? afterHeading : afterHeading.slice(0, nextSection);
 }
 
-function unreleasedSection(changelog: string): string {
+/** Returns pending changes, or the latest release notes once a release empties Unreleased. */
+function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(unreleasedHeading)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
   const nextRelease = afterHeading.search(releaseHeading);
-  return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
+
+  const currentRelease = afterHeading.slice(nextRelease);
+  const end = currentRelease.indexOf("\n## ", 1);
+  return end === -1 ? currentRelease : currentRelease.slice(0, end);
 }
 
 describe("active profile state documentation contract", () => {
@@ -66,6 +72,6 @@ describe("active profile state documentation contract", () => {
     }
     expect(security).toContain("other MCP request data");
     expect(cli).toContain("`selectionSource`, `selectedAt`, and `scope`");
-    expect(unreleasedSection(changelog)).toMatch(/\[#23\][\s\S]*active-profile persistence/iu);
+    expect(documentedChangesSection(changelog)).toMatch(/\[#23\][\s\S]*active-profile persistence/iu);
   });
 });

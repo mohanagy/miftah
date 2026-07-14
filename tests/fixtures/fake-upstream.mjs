@@ -70,6 +70,7 @@ const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
 const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
 const crashAfterInitializedPath = process.env.TEST_CRASH_AFTER_INITIALIZED_PATH;
 const startCountPath = process.env.TEST_START_COUNT_PATH;
+const initializedPath = process.env.TEST_INITIALIZED_PATH;
 const createItemCountPath = process.env.TEST_CREATE_ITEM_COUNT_PATH;
 const callToolStartedPath = process.env.TEST_CALL_TOOL_STARTED_PATH;
 const cancelledPath = process.env.TEST_CANCELLED_PATH;
@@ -215,6 +216,9 @@ const server = new Server(
   { capabilities: { tools: {}, resources: resourceSubscriptions ? { subscribe: true } : {}, prompts: {} } }
 );
 server.oninitialized = () => {
+  if (initializedPath) {
+    writeFileSync(initializedPath, "initialized");
+  }
   if (crashAfterInitializedPath && existsSync(crashAfterInitializedPath)) {
     void delay(0).then(() => process.exit(1));
   }

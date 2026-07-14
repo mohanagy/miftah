@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.1.1";
+const releaseVersion = "0.2.0";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,13 +21,13 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.1.1 release artifacts", () => {
+describe("v0.2.0 release artifacts", () => {
   it.each([
-    "## [0.1.1] - 2026-7-11\n\n### Fixed\n",
-    "Release candidate: ## [0.1.1] - 2026-07-11\n\n### Fixed\n"
+    "## [0.2.0] - 2026-7-14\n\n### Fixed\n",
+    "Release candidate: ## [0.2.0] - 2026-07-14\n\n### Fixed\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
-      "Unable to find the 0.1.1 changelog entry."
+      "Unable to find the 0.2.0 changelog entry."
     );
   });
 
@@ -59,10 +59,34 @@ describe("v0.1.1 release artifacts", () => {
     }
   });
 
-  it("documents every hotfix while retaining the experimental package status", () => {
-    const notes = releaseNotes(readRepositoryFile("CHANGELOG.md"), releaseVersion);
+  it("documents the full release while retaining the experimental package status", () => {
+    const changelog = readRepositoryFile("CHANGELOG.md");
+    const notes = releaseNotes(changelog, releaseVersion);
 
-    for (const issue of ["#1", "#2", "#3", "#4", "#5"]) {
+    expect(changelog).not.toMatch(/^## \[0\.1\.1\] - /mu);
+    for (const issue of [
+      "#1",
+      "#2",
+      "#3",
+      "#4",
+      "#5",
+      "#16",
+      "#18",
+      "#19",
+      "#20",
+      "#21",
+      "#22",
+      "#23",
+      "#26",
+      "#27",
+      "#28",
+      "#29",
+      "#30",
+      "#31",
+      "#32",
+      "#34",
+      "#38"
+    ]) {
       expect(notes).toContain(issue);
     }
     expect(notes).toMatch(/policy.*fails?\s+closed|fails?\s+closed.*policy/iu);
