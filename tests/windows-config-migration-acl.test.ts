@@ -62,12 +62,12 @@ try {
     )
     $security.SetAccessRule($rule)
     $stage = 'apply'
-    Set-Acl -LiteralPath $request.path -AclObject $security
+    [System.IO.File]::SetAccessControl($request.path, $security)
   } elseif ($request.operation -ne 'read') {
     exit 1
   }
   $stage = 'verify'
-  $acl = Get-Acl -LiteralPath $request.path
+  $acl = [System.IO.File]::GetAccessControl($request.path, $sections)
   $sddl = $acl.GetSecurityDescriptorSddlForm($sections)
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sddl)))
   exit 0
