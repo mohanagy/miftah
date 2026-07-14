@@ -98,7 +98,8 @@ try {
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 
-const privateDirectoryProbe = String.raw`$ErrorActionPreference = 'Stop'
+const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP')
+$ErrorActionPreference = 'Stop'
 $requestName = '${privateDirectoryRequestEnvironmentName}'
 $directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 $stage = 'bootstrap'
@@ -173,6 +174,9 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
     )?.[0];
     if (stage !== undefined) return stage;
   }
+  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP")) {
+    return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:bootstrap";
+  }
   return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:unavailable";
 }
 
@@ -219,7 +223,7 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
       } catch {
         // The probe has no verified result after its bounded execution time.
       }
-      reject(new Error("Windows private-directory ACL probe timed out"));
+      reject(new Error(`Windows private-directory ACL probe timed out: ${safePrivateDirectoryProbeStage([...output, ...errorOutput])}`));
     }, 5_000);
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
