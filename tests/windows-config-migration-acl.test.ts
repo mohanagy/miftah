@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -368,6 +368,28 @@ describe("Windows migration ACL contract", () => {
       const expectedSddl = await windowsAclSddl(sourcePath, "restrict");
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "copies a restrictive file descriptor while the migration writer holds its new target open",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-held-file-acl-"));
+      temporaryDirectories.push(directory);
+      const sourcePath = join(directory, "source.json");
+      const targetPath = join(directory, "target.json");
+      await writeFile(sourcePath, "source", "utf8");
+      const expectedSddl = await windowsAclSddl(sourcePath, "restrict");
+      const targetHandle = await open(targetPath, "wx", 0o600);
+
+      try {
+        await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      } finally {
+        await targetHandle.close();
+      }
+
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
     10_000
