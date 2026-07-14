@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -382,6 +382,32 @@ describe("Windows migration ACL contract", () => {
       const targetPath = join(directory, "target.json");
       await writeFile(sourcePath, "source", "utf8");
       const expectedSddl = await windowsAclSddl(sourcePath, "restrict");
+      const targetHandle = await open(targetPath, "wx", 0o600);
+
+      try {
+        await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      } finally {
+        await targetHandle.close();
+      }
+
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "copies an inherited source descriptor after it moves into a private migration directory",
+    async () => {
+      const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-inherited-acl-"));
+      temporaryDirectories.push(parentDirectory);
+      const originalSourcePath = join(parentDirectory, "miftah.json");
+      const privateDirectory = join(parentDirectory, ".miftah-migrate-transaction");
+      const sourcePath = join(privateDirectory, "source.miftah-migrate-hold");
+      const targetPath = join(privateDirectory, "backup.miftah-migrate.tmp");
+      await writeFile(originalSourcePath, "source", "utf8");
+      await expect(windowsPrivateDirectoryProbe(privateDirectory)).resolves.toBeUndefined();
+      await rename(originalSourcePath, sourcePath);
+      const expectedSddl = await windowsAclSddl(sourcePath, "read");
       const targetHandle = await open(targetPath, "wx", 0o600);
 
       try {
