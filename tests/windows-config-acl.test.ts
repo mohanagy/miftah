@@ -54,7 +54,7 @@ describe("Windows migration ACL boundary", () => {
     await expect(copyWindowsConfigSecurityDescriptor("C:\\config\\source.json", "C:\\config\\target.json")).resolves.toBe(false);
   });
 
-  it("copies a non-null binary descriptor and rereads the persisted target", async () => {
+  it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();
       queueMicrotask(() => child.emit("close", 0));
@@ -69,6 +69,9 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("$null -eq $sourceRaw.DiscretionaryAcl");
     expect(command).toContain("GetSecurityDescriptorBinaryForm");
     expect(command).toContain("$targetAcl.SetSecurityDescriptorBinaryForm");
+    expect(command).toContain("$sourceAcl.GetAccessRules");
+    expect(command).toContain("$verifiedAcl.GetAccessRules");
+    expect(command).toContain("$sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value");
     expect(command).not.toContain("$verifiedAcl.GetSecurityDescriptorBinaryForm");
   });
 

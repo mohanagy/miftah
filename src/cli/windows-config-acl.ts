@@ -24,8 +24,8 @@ interface CreatePrivateDirectoryRequest {
 type WindowsConfigAclRequest = CopyFileSecurityRequest | CreatePrivateDirectoryRequest;
 
 /**
- * Copies the source file's non-null owner, group, and DACL, then requires a
- * selected-section reread after persistence. Audit/SACL data is not claimed.
+ * Copies the source file's non-null owner, group, and DACL, then verifies its
+ * persisted access rules after a selected-section reread. Audit/SACL data is not claimed.
  */
 export async function copyWindowsConfigSecurityDescriptor(source: string, target: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "copy-file-security", source, target });
@@ -146,6 +146,21 @@ try {
     [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
     $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
     if ($null -eq $verifiedAcl) { exit 1 }
+    $sourceRules = @($sourceAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($sourceRules.Count -ne $verifiedRules.Count) { exit 1 }
+    for ($index = 0; $index -lt $sourceRules.Count; $index++) {
+      $sourceRule = $sourceRules[$index]
+      $verifiedRule = $verifiedRules[$index]
+      if (
+        $sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value -or
+        ([int]$sourceRule.FileSystemRights) -ne ([int]$verifiedRule.FileSystemRights) -or
+        ([int]$sourceRule.AccessControlType) -ne ([int]$verifiedRule.AccessControlType) -or
+        $sourceRule.IsInherited -ne $verifiedRule.IsInherited -or
+        ([int]$sourceRule.InheritanceFlags) -ne ([int]$verifiedRule.InheritanceFlags) -or
+        ([int]$sourceRule.PropagationFlags) -ne ([int]$verifiedRule.PropagationFlags)
+      ) { exit 1 }
+    }
     exit 0
   }
 
