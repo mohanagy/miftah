@@ -4,15 +4,19 @@ Miftah is an MCP-aware proxy, not a byte-level reverse proxy:
 
 ```text
 MCP client
-  -> Miftah STDIO server
-     -> config and secret resolver
-     -> profile state
-     -> routing and policy
-     -> cached upstream MCP client
-        -> upstream STDIO server
+  -> Miftah transport
+     -> STDIO server (one process runtime)
+     -> HTTP `/mcp` host (one isolated runtime per client session)
+        -> config and secret resolver
+        -> profile state
+        -> routing and policy
+        -> cached upstream MCP client
+           -> upstream STDIO server
 ```
 
-The public server is built with the official `@modelcontextprotocol/sdk` `Server` and `StdioServerTransport`. Each profile/upstream pair gets an SDK `Client` and its configured transport on first use: local processes use `StdioClientTransport`; remote upstreams use Streamable HTTP by default (`"http"` is its compatibility alias) or the deprecated legacy SSE client. Resolved profile headers override upstream headers case-insensitively before either remote transport is constructed. Streamable HTTP session shutdown sends DELETE while its session ID is still available, then closes the local client transport; legacy SSE has no corresponding server-session teardown request. Request cancellation and requested progress notifications retain their MCP request context across both STDIO and Streamable HTTP upstreams. Startup HTTP failures and operation HTTP/MCP protocol failures are normalized before crossing the proxy boundary, retaining only stable category/code metadata rather than server response text.
+The STDIO public server is built with the official `@modelcontextprotocol/sdk` `Server` and `StdioServerTransport`. Each profile/upstream pair gets an SDK `Client` and its configured transport on first use: local processes use `StdioClientTransport`; remote upstreams use Streamable HTTP by default (`"http"` is its compatibility alias) or the deprecated legacy SSE client. Resolved profile headers override upstream headers case-insensitively before either remote transport is constructed. Streamable HTTP session shutdown sends DELETE while its session ID is still available, then closes the local client transport; legacy SSE has no corresponding server-session teardown request. Request cancellation and requested progress notifications retain their MCP request context across both STDIO and Streamable HTTP upstreams. Startup HTTP failures and operation HTTP/MCP protocol failures are normalized before crossing the proxy boundary, retaining only stable category/code metadata rather than server response text.
+
+The optional HTTP host owns the listener and no shared Miftah session state. It validates the exact `/mcp` target, Host, Origin, bearer authentication, a bounded JSON initialize request, and capacity before creating a `StreamableHTTPServerTransport`. That transport and a new `MiftahServer`, `ProfileManager`, and upstream manager belong to one HTTP session only. The host forces the session runtime to in-memory `session` profile state, even if normal STDIO configuration uses workspace/global persistence. Its session registry owns only opaque MCP session IDs, idle timers, and cleanup tasks; DELETE, expiry, connection shutdown, and wrapper shutdown detach the record before asynchronous runtime cleanup so no client can reuse a closing runtime, while retaining that capacity reservation until cleanup succeeds. A rejected cleanup is recorded, retains capacity, and makes graceful shutdown fail rather than silently admitting unlimited replacement runtimes. A reconnect is routed to the existing transport by its session ID, while the SDK permits only one active standalone SSE stream for that session.
 
 Per-profile start and restart single-flight state, attempt tokens, and lifecycle generations prevent concurrent calls or stale transport close events from creating duplicate children or replacing a newer session. Operations report begin/end activity so idle shutdown cannot close an in-flight request; a resource subscription retains that activity until it is unsubscribed or invalidated. Unexpected close is health `failed`; idle, explicit restart, wrapper shutdown, and timeout-enforced shutdown are intentional `stopped` states with a reason. Optional crash recovery uses bounded exponential backoff with jitter and a terminal retry budget; it retains its capacity reservation across the backoff window. Streamable HTTP additionally uses the SDK's bounded SSE reconnection behavior before a terminal transport closure reaches manager-level recovery. A shared no-eviction limiter counts distinct profile bundles across named upstreams, so capacity pressure returns a typed refusal instead of terminating a live credential session. Tool discovery is held in immutable, per-profile capability snapshots; concurrent callers share one discovery operation. Complete snapshots are cached, while a permissive partial snapshot remains callable but is retried by the next tool list or call request. A call captures its active profile before discovery, so a later profile switch cannot change that call's active-profile fallback.
 
@@ -39,6 +43,7 @@ The server advertises `resources.listChanged` and `prompts.listChanged` with `to
 Configuration and runtime concerns are intentionally separate:
 
 - `config/` parses and validates JSON, expands paths, and provides schema output.
+- `http/` owns the loopback-first Streamable HTTP listener, ingress validation, bounded per-client session registry, and isolated runtime cleanup.
 - `secrets/` owns a typed provider contract for environment, dotenv, opt-in plaintext, OS keychain, and 1Password resolution; it canonicalizes external references, bounds child processes, and registers each resolved value with shared redaction before returning it.
 - `isolation/` owns POSIX profile runtime trees, copy-only credential materialization, container bind-mount argument generation, and the isolation stderr boundary.
 - `profiles/` owns active profile state, scope-aware persistence, and switching restrictions.

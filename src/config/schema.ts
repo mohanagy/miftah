@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 
 const recordSchema = z.record(z.string(), z.unknown());
@@ -645,6 +646,134 @@ const stateSchema = z
   })
   .strict();
 
+const httpHostPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/u;
+const secretReferencePattern = /^(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|secretref:[a-z][a-z0-9+.-]*:.*)$/u;
+
+export function isCanonicalHttpHost(value: string): boolean {
+  if (value.length === 0 || value.length > 253 || value !== value.toLowerCase()) return false;
+  return httpHostPattern.test(value) || isIP(value) === 6;
+}
+
+function isCanonicalHttpOrigin(value: string): boolean {
+  try {
+    const origin = new URL(value);
+    return (
+      (origin.protocol === "http:" || origin.protocol === "https:") &&
+      origin.username.length === 0 &&
+      origin.password.length === 0 &&
+      origin.pathname === "/" &&
+      origin.search.length === 0 &&
+      origin.hash.length === 0 &&
+      origin.origin === value
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isLiteralLoopbackBindHost(value: string): boolean {
+  return value === "127.0.0.1" || value === "::1";
+}
+
+function hasDuplicateEntries(values: readonly string[] | undefined): boolean {
+  return values !== undefined && new Set(values).size !== values.length;
+}
+
+const httpHostSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .refine(isCanonicalHttpHost, "HTTP hosts must be canonical lowercase host names or IP literals.");
+const httpOriginSchema = z
+  .string()
+  .min(1)
+  .max(2_048)
+  .refine(isCanonicalHttpOrigin, "HTTP origins must be canonical http or https origins without a path.");
+const secretReferenceSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => secretReferencePattern.test(value), "Authentication must use a supported secret reference.");
+
+function validateHttpServerConfig(
+  value: {
+    readonly host?: string;
+    readonly allowNonLoopback?: true;
+    readonly authToken?: string;
+    readonly allowedHosts?: readonly string[];
+    readonly allowedOrigins?: readonly string[];
+  },
+  context: z.RefinementCtx
+): void {
+  if (hasDuplicateEntries(value.allowedHosts)) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["allowedHosts"],
+      "HTTP allowedHosts entries must be unique",
+      "Remove duplicate HTTP host entries."
+    );
+  }
+  if (hasDuplicateEntries(value.allowedOrigins)) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["allowedOrigins"],
+      "HTTP allowedOrigins entries must be unique",
+      "Remove duplicate HTTP origin entries."
+    );
+  }
+
+  const bindHost = value.host ?? "127.0.0.1";
+  if (isLiteralLoopbackBindHost(bindHost)) return;
+
+  if (value.allowNonLoopback !== true) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["allowNonLoopback"],
+      "non-loopback HTTP serving requires explicit opt-in",
+      "Set server.http.allowNonLoopback to true only with deliberate network exposure."
+    );
+  }
+  if (value.authToken === undefined) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["authToken"],
+      "non-loopback HTTP serving requires a secret-backed bearer token",
+      "Configure server.http.authToken with a supported secret reference."
+    );
+  }
+  if (value.allowedHosts === undefined || value.allowedHosts.length === 0) {
+    addConfigIssue(
+      context,
+      "CONFIG_SCHEMA_INVALID",
+      ["allowedHosts"],
+      "non-loopback HTTP serving requires explicit allowed hosts",
+      "Configure the exact Host names clients may send."
+    );
+  }
+}
+
+const httpServerSchema = z
+  .object({
+    host: httpHostSchema.optional(),
+    port: z.number().int().min(0).max(65_535).optional(),
+    allowNonLoopback: z.literal(true).optional(),
+    authToken: secretReferenceSchema.optional(),
+    allowedHosts: z.array(httpHostSchema).min(1).max(64).optional(),
+    allowedOrigins: z.array(httpOriginSchema).max(64).optional(),
+    maxSessions: z.number().int().min(1).max(256).optional(),
+    sessionIdleTimeoutMs: z.number().int().min(1_000).max(86_400_000).optional(),
+    maxRequestBytes: z.number().int().min(1_024).max(10_485_760).optional()
+  })
+  .strict()
+  .superRefine(validateHttpServerConfig);
+
+const serverSchema = z.object({ http: httpServerSchema.optional() }).strict();
+const publicServerSchema = z.object({ http: httpServerSchema.optional() }).strict();
+
 type IsolationDestinationInput = {
   destination: string;
   environment?: string;
@@ -999,7 +1128,8 @@ export const miftahPublicConfigSchema = z
     audit: publicAuditSchema.optional(),
     tooling: publicToolingSchema.optional(),
     secrets: secretsSchema.optional(),
-    state: publicStateSchema.optional()
+    state: publicStateSchema.optional(),
+    server: publicServerSchema.optional()
   })
   .strict()
   .superRefine(validateConfigReferences);
@@ -1022,6 +1152,7 @@ export const miftahConfigSchema = z
     tooling: toolingSchema.optional(),
     secrets: secretsSchema.optional(),
     state: stateSchema.optional(),
+    server: serverSchema.optional(),
     ui: unsupportedOptionSchema
   })
   .strict()

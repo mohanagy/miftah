@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { redactSecrets } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
 import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
+import { startMiftahHttpServer } from "../http/miftah-http-server.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { runDoctor } from "./doctor.js";
 import { formatDoctorReport } from "./doctor-report.js";
@@ -15,7 +16,20 @@ import { runInitCommand } from "./init.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 
-async function serve(configPath: string): Promise<void> {
+async function serve(configPath: string, transportKind = "stdio"): Promise<void> {
+  if (transportKind === "http") {
+    const server = await startMiftahHttpServer(configPath);
+    process.stdout.write(`Miftah HTTP server listening on ${server.url.toString()}\n`);
+    const shutdown = (): void => {
+      void server.close().catch(() => {
+        process.stderr.write("Miftah HTTP server shutdown failed.\n");
+        process.exitCode = 1;
+      });
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    return;
+  }
   const runtime = await createMiftahRuntime(configPath);
   const transport = new StdioServerTransport();
   const shutdown = async () => {
@@ -59,7 +73,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     );
   }
   if (command === "serve") {
-    await serve(args.config);
+    await serve(args.config, args.transport);
     return;
   }
   if (command === "validate") {

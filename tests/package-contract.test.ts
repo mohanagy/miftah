@@ -315,6 +315,88 @@ function runInstalledBinaryThroughShell(binary: string, args: readonly string[],
     : runInstalledBinaryThroughPosixShell(binary, args, cwd);
 }
 
+interface StartedInstalledCli {
+  readonly stdout: string;
+  readonly stderr: string;
+  stop(): Promise<void>;
+}
+
+async function startInstalledCli(entry: string, args: readonly string[], cwd: string): Promise<StartedInstalledCli> {
+  const child = spawn(process.execPath, [entry, ...args], {
+    cwd,
+    shell: false,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  let closePromise: Promise<void> | undefined;
+
+  const waitForStartup = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Installed CLI did not report HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+    }, npmCommandTimeoutMs);
+    const settle = (outcome: () => void): void => {
+      clearTimeout(timeout);
+      outcome();
+    };
+    const reportStartup = (): void => {
+      if (!stdout.includes("Miftah HTTP server listening on ") && !stderr.includes("Miftah HTTP server listening on ")) return;
+      settle(resolve);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      reportStartup();
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+      reportStartup();
+    });
+    child.once("error", (error) => {
+      settle(() => reject(new Error(`Installed CLI could not start: ${error.message}.${npmDiagnostics(stdout, stderr)}`)));
+    });
+    child.once("close", (status, signal) => {
+      settle(() => {
+        const outcome = status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`;
+        reject(new Error(`Installed CLI ${outcome} before HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+      });
+    });
+  });
+
+  const stop = async (): Promise<void> => {
+    if (closePromise !== undefined) return closePromise;
+    closePromise = new Promise<void>((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const timeout = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error(`Installed CLI did not stop after SIGTERM.${npmDiagnostics(stdout, stderr)}`));
+      }, npmCommandTimeoutMs);
+      child.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      child.kill("SIGTERM");
+    });
+    return closePromise;
+  };
+
+  await waitForStartup;
+  return {
+    get stdout() {
+      return stdout;
+    },
+    get stderr() {
+      return stderr;
+    },
+    stop
+  };
+}
+
 async function loadPackVerifier(): Promise<PackVerifier> {
   // @ts-expect-error The production verifier is intentionally plain Node ESM.
   return import("../scripts/pack-verifier.mjs") as Promise<PackVerifier>;
@@ -780,6 +862,25 @@ describe("packed artifact contract", () => {
           process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
           ...extras
         });
+
+        const httpServeConfigPath = await writeCliConfig(
+          "http serve config.json",
+          cliConfig("packed-cli-http-serve", { work: {} }, [fakeStdioUpstreamFixture], {
+            server: { http: { port: 0 } }
+          })
+        );
+        const installedCliEntry = join(directory, "node_modules", "@lubab", "miftah", "dist", "cli", "main.js");
+        const httpServe = await startInstalledCli(
+          installedCliEntry,
+          ["serve", "--transport", "http", "--config", httpServeConfigPath],
+          cliContractDirectory
+        );
+        try {
+          expect(httpServe.stdout).toMatch(/^Miftah HTTP server listening on http:\/\/127\.0\.0\.1:\d+\/mcp\n$/u);
+          expect(httpServe.stderr).toBe("");
+        } finally {
+          await httpServe.stop();
+        }
 
         const rootHelp = runInstalledBinary(binary, ["--help"], cliContractDirectory);
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);

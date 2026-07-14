@@ -55,7 +55,17 @@ describe("public configuration contract", () => {
       rotation: { maxBytes: 1_024, retainFiles: 7 },
       integrity: { algorithm: "sha256-chain" }
     },
-    state: { persistActiveProfile: true, scope: "workspace" }
+    state: { persistActiveProfile: true, scope: "workspace" },
+    server: {
+      http: {
+        host: "127.0.0.1",
+        port: 3000,
+        authToken: "${MIFTAH_HTTP_TOKEN}",
+        maxSessions: 32,
+        sessionIdleTimeoutMs: 60_000,
+        maxRequestBytes: 1_048_576
+      }
+    }
   };
 
   it("shares supported structural acceptance between public and runtime schemas", () => {
@@ -131,6 +141,7 @@ describe("public configuration contract", () => {
     });
     expect(schema.properties).not.toHaveProperty("ui");
     expect(schema.properties?.state).toMatchObject({ additionalProperties: false });
+    expect(schema.properties?.server).toMatchObject({ additionalProperties: false });
     expect(schema.properties?.security).toMatchObject({ additionalProperties: false });
     const profileSchema = schema.properties?.profiles?.additionalProperties;
     if (profileSchema === undefined || typeof profileSchema === "boolean") {

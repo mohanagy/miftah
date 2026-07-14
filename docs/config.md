@@ -62,6 +62,49 @@ On macOS Miftah runs the fixed `/usr/bin/security find-generic-password -s <serv
 
 For `secretref:op`, noninteractive launches require an inherited `OP_SERVICE_ACCOUNT_TOKEN`; Miftah fails closed before invoking `op` when it is absent. Interactive 1Password desktop/CLI authentication is allowed only when both standard input and output are TTYs, and remains subject to `providerTimeoutMs`. Miftah registers a successful provider value and the inherited service-account token with the shared redactor before either can cross an error, audit, health, or response boundary.
 
+## HTTP server transport
+
+`miftah serve --transport http --config <file>` exposes Miftah's Streamable HTTP endpoint at `/mcp`. This is a local Miftah server transport, distinct from an `upstream.transport: "streamable-http"` remote upstream. The default listener is the literal loopback endpoint `http://127.0.0.1:3000/mcp`.
+
+Configure the listener under `server.http`:
+
+```json
+{
+  "server": {
+    "http": {
+      "host": "127.0.0.1",
+      "port": 3000,
+      "maxSessions": 32,
+      "sessionIdleTimeoutMs": 900000,
+      "maxRequestBytes": 1048576
+    }
+  }
+}
+```
+
+`port` accepts `0` through `65535` (`0` chooses an OS-assigned port); `maxSessions` is `1` through `256`; `sessionIdleTimeoutMs` is `1,000` through `86,400,000`; and `maxRequestBytes` is `1,024` through `10,485,760`. Miftah validates and bounds a POST body before it allocates a session. A session is removed on MCP DELETE, idle expiry, or shutdown; removal closes that session's runtime and retained upstream transports. A closing session is no longer addressable, but retains its capacity reservation until cleanup succeeds; a cleanup failure is reported and conservatively retains the reservation.
+
+Only literal `127.0.0.1` and `::1` are loopback bind values. A hostname, `localhost`, `0.0.0.0`, or any other address is a deliberate non-loopback exposure and must include all of the following:
+
+```json
+{
+  "server": {
+    "http": {
+      "host": "0.0.0.0",
+      "port": 8443,
+      "allowNonLoopback": true,
+      "authToken": "${MIFTAH_HTTP_TOKEN}",
+      "allowedHosts": ["mcp.example.test"],
+      "allowedOrigins": ["https://client.example.test"]
+    }
+  }
+}
+```
+
+`authToken` is an exact environment or `secretref:` reference, never a plaintext token. `allowedHosts` is an exact canonical host allowlist (the request port is ignored); it defaults to the bind host only for literal-loopback configuration. An absent `Origin` is permitted for non-browser MCP clients. A present `Origin` is rejected unless it exactly matches `allowedOrigins`; no permissive CORS response is emitted. Do not put a bearer token in CLI arguments, URLs, or configuration literals.
+
+Each accepted HTTP session owns a fresh Miftah runtime, profile manager, routing/approval/lock/lease state, and upstream manager. HTTP sessions always use in-memory `session` profile state, even when the base configuration opts into durable state, so one client's selection cannot persist into or alter another client's session.
+
 ## Profile credential isolation
 
 `profiles.<profile>.isolation` is an opt-in, POSIX-only filesystem boundary for a local STDIO target. Miftah derives a deterministic runtime tree from the canonical configuration file, profile, and upstream name; it never accepts an operator-selected runtime root. The tree contains `home`, `appdata`, `localappdata`, and `xdg/config`, `xdg/cache`, `xdg/data`, `xdg/state`, and `xdg/runtime`. On macOS and Linux, Miftah verifies owner control, uses restrictive `0700` directories and `0600` copied files where the platform supports those modes, and refuses a reused target without its matching Miftah marker.

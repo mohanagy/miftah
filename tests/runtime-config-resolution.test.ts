@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createRuntime } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
 
 const temporaryDirectories: string[] = [];
@@ -47,7 +48,46 @@ async function writeScopedConfig(): Promise<string> {
           }
         }
       },
+      server: { http: { authToken: "${MISSING_HTTP_SERVER_SECRET}" } },
       secrets: { envFiles: [".env"] }
+    })
+  );
+  return configPath;
+}
+
+async function writeHttpServerConfig(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-http-auth-resolution-"));
+  temporaryDirectories.push(directory);
+  const configPath = join(directory, "miftah.json");
+  await writeFile(join(directory, ".env"), "MIFTAH_HTTP_TOKEN=resolved-http-token\n");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: "1",
+      name: "http-auth-resolution",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node" },
+      profiles: { default: {} },
+      server: { http: { authToken: "${MIFTAH_HTTP_TOKEN}" } },
+      secrets: { envFiles: [".env"] }
+    })
+  );
+  return configPath;
+}
+
+async function writeMissingHttpServerAuthConfig(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-http-auth-opt-in-"));
+  temporaryDirectories.push(directory);
+  const configPath = join(directory, "miftah.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: "1",
+      name: "http-auth-opt-in",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node" },
+      profiles: { default: {} },
+      server: { http: { authToken: "${MISSING_HTTP_SERVER_SECRET}" } }
     })
   );
   return configPath;
@@ -86,5 +126,30 @@ describe("runtime secret resolution scope", () => {
       Authorization: "${MISSING_SECRET}"
     });
     expect(resolved.config.upstreams?.broken?.env).toEqual({ UPSTREAM_TOKEN: "${MISSING_SECRET}" });
+    expect(resolved.config.server?.http?.authToken).toBe("${MISSING_HTTP_SERVER_SECRET}");
+  });
+
+  it("resolves a secret-backed HTTP bearer token and registers it for redaction", async () => {
+    const configPath = await writeHttpServerConfig();
+
+    const unresolved = await resolveRuntimeConfig(configPath);
+    expect(unresolved.config.server?.http?.authToken).toBe("${MIFTAH_HTTP_TOKEN}");
+    expect(unresolved.secretValues).not.toContain("resolved-http-token");
+
+    const resolved = await resolveRuntimeConfig(configPath, undefined, { resolveServerHttpAuthToken: true });
+
+    expect(resolved.config.server?.http?.authToken).toBe("resolved-http-token");
+    expect(resolved.secretValues).toContain("resolved-http-token");
+    expect(resolved.redactor.redact("Bearer resolved-http-token")).not.toContain("resolved-http-token");
+  });
+
+  it("does not resolve an HTTP-only bearer secret while creating a standard runtime", async () => {
+    const runtime = await createRuntime(await writeMissingHttpServerAuthConfig());
+
+    try {
+      expect(runtime.config.server?.http?.authToken).toBe("${MISSING_HTTP_SERVER_SECRET}");
+    } finally {
+      await runtime.manager.close();
+    }
   });
 });

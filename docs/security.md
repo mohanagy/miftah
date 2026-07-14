@@ -13,6 +13,7 @@ Miftah is a credential broker, so safe defaults are part of the product contract
 - audit rotation retains only managed, single-link regular archive files with stable identities and does not follow symlinks or externally linked paths outside its configured directory;
 - audit export is explicit and local-only; it applies redaction again and omits stored arguments unless an operator opts in;
 - durable active-profile state is opt-in, uses derived owner-restricted paths, and stores no credentials;
+- the optional Streamable HTTP server binds literal loopback by default and bounds sessions and request bodies before runtime allocation;
 - MCP tool annotations are ignored for risk downgrades unless the operator explicitly trusts the configured upstream that supplied them;
 - provider tokens should be separate, least-privilege tokens per account and risk level.
 
@@ -23,6 +24,14 @@ Profile credential isolation is a separate, opt-in boundary. On macOS and Linux 
 Docker/Podman can provide a stronger file boundary only when the container receives the intended generated bind mounts and **no other host directories** that expose profile data. Read-only mounts are the default; an explicit writable mount weakens that boundary. Miftah rejects conflicting user mount/environment flags rather than attempting to merge them, rejects explicit remote engine endpoints, contexts, and config-location overrides, and fails closed for Podman isolation on macOS. The default local daemon remains trusted operator infrastructure. Miftah rechecks managed paths before it returns argv, but a hostile same-user process can still race a path before Docker/Podman resolves it; argument arrays cannot provide an atomic path-to-daemon handoff. It treats stderr from an isolated child as sensitive and emits only a fixed redaction marker.
 
 Windows profile credential isolation fails closed before it creates or copies a runtime file. Node's POSIX-style mode API does not establish or verify a restrictive Windows DACL, so pretending that `0600`/`0700` protects a Windows credential would be unsafe. This limitation does not affect Windows secret-provider process containment.
+
+## Local HTTP serving
+
+`miftah serve --transport http` is loopback-first: it binds only literal `127.0.0.1` by default. `::1` is also a literal-loopback option. Every other bind value, including `localhost`, a hostname, or `0.0.0.0`, requires an explicit `allowNonLoopback: true`, a secret-backed bearer `authToken`, and an exact `allowedHosts` list. Miftah emits one fixed nonloopback warning without the token or resolved provider output.
+
+The server rejects duplicate or malformed `Host`, `Origin`, authorization, and MCP-session headers. It compares one `Authorization: Bearer` value to the resolved token in constant time, never places the token in a response or diagnostic, and does not use cookies. Browser requests are denied by default: an absent `Origin` is valid for MCP clients, but a supplied origin must exactly match an explicit `allowedOrigins` entry. Miftah does not emit permissive CORS headers.
+
+Before it allocates a session, the host validates the exact `/mcp` endpoint, method, Host, Origin, authentication, JSON content type, body size, and one initialize request. Session capacity includes in-progress initializations and closing runtimes. Each session receives a distinct Miftah runtime, profile/session state, approval/lock/lease/routing state, and upstream manager. Idle expiry, DELETE, and graceful shutdown detach the session immediately and close its runtime, which closes retained upstream transports and their ordinary descendants; detached cleanup retains capacity until it succeeds, and a failure remains capacity-consuming and is reported. An HTTP reconnect reuses only its existing session ID; it cannot create or access another client's runtime.
 
 Audit writes default to fail-closed: Miftah verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared. A terminal write can fail after an upstream side effect has completed, so a post-dispatch `AUDIT_WRITE_FAILED` has an indeterminate outcome and must not prompt a blind retry of a non-idempotent operation. An operator can set `audit.failureMode` to `"fail-open"` for availability-sensitive deployments; Miftah then preserves the request outcome but exposes a redacted `AUDIT_WRITE_FAILED` health entry. This mode trades complete auditability for availability.
 
@@ -46,7 +55,7 @@ Miftah cannot reduce privileges granted by a provider token. A read-only Miftah 
 
 The STDIO transport is the default because it avoids a network listener. Remote upstream connections carry profile-bound credentials, so Miftah requires HTTPS outside loopback development URLs (`localhost`, `127.0.0.0/8`, or `::1`). It uses Node's normal certificate validation and does not disable TLS verification; self-signed endpoints fail closed unless an operator explicitly provides a trusted local CA through Node's normal trust configuration. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0`, and do not send credentials to a cleartext non-loopback endpoint.
 
-For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. Any future HTTP server exposed by Miftah itself must bind localhost by default and require explicit authentication before non-local binding.
+For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. The local HTTP server follows the same lifecycle rule for each isolated session and adds loopback-first binding, explicit nonloopback authentication, Host validation, Origin denial by default, and bounded cleanup.
 
 ## Identity verification boundary
 

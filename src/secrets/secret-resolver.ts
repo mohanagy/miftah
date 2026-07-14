@@ -28,6 +28,12 @@ export interface ResolvedSecretMap {
   secretValues: string[];
 }
 
+/** Contains one resolved configuration value and every secret value it sourced. */
+export interface ResolvedSecretValue {
+  value: string;
+  secretValues: string[];
+}
+
 /** Resolves configured secret references without retaining provider-specific configuration in runtime objects. */
 export class SecretResolver {
   private readonly environment: NodeJS.ProcessEnv;
@@ -86,9 +92,8 @@ export class SecretResolver {
     return (await this.resolveValueWithSecretValues(value)).value;
   }
 
-  private async resolveValueWithSecretValues(
-    value: string
-  ): Promise<{ value: string; secretValues: string[] }> {
+  /** Resolves one value while retaining sourced secrets for downstream redaction. */
+  async resolveValueWithSecretValues(value: string): Promise<ResolvedSecretValue> {
     const secretValues = new Set<string>();
     const environmentReference = this.providers.environment.parse(value);
     if (environmentReference) {

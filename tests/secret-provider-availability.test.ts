@@ -25,12 +25,13 @@ describe("secret provider availability", () => {
       },
       profiles: {
         default: {
-          headers: { Authorization: "secretref:op://vault/item/field" },
+          headers: { Authorization: "${LOCAL_TOKEN}" },
           upstreams: {
             ignored: { env: { TOKEN: "secretref:plain://not-an-external-provider" } }
           }
         }
-      }
+      },
+      server: { http: { authToken: "secretref:op://vault/item/field" } }
     });
 
     expect(configured).toEqual(["keychain", "op"]);

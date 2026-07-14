@@ -40,6 +40,14 @@ Run a wrapped server directly when testing local STDIO:
 miftah --config ~/.config/miftah/github.json
 ```
 
+To serve a local Streamable HTTP endpoint instead, configure `server.http` and run:
+
+```bash
+miftah serve --transport http --config ~/.config/miftah/github.json
+```
+
+The default endpoint is `http://127.0.0.1:3000/mcp`; see [HTTP server transport](docs/config.md#http-server-transport) before exposing any non-loopback address.
+
 ## Profiles
 
 Profiles are named credential environments. Keep secret values outside JSON and use the exact generated references in the checked-in [GitHub](examples/github.miftah.json), [Sentry](examples/sentry.miftah.json), or [generic reference](examples/generic.miftah.json) example. The strict catalog pins GitHub to `ghcr.io/github/github-mcp-server:v1.5.0` with its documented read-only tool configuration; it does not claim a digest. The [compatibility matrix](docs/presets-and-clients.md) describes safe promotion and deployment recording for that tag.
@@ -155,7 +163,7 @@ Use `miftah --help` for the generated command list and `miftah <command> --help`
 
 | Command | Purpose |
 | --- | --- |
-| `miftah --config <file>` / `miftah serve --config <file>` | Run the STDIO MCP wrapper. |
+| `miftah --config <file>` / `miftah serve --config <file>` | Run the STDIO MCP wrapper. Add `--transport http` to serve the configured local Streamable HTTP endpoint. |
 | `miftah validate --config <file>` | Parse and validate JSON config; writes JSON. |
 | `miftah doctor --config <file> [--json]` | Report redacted configuration and upstream readiness. |
 | `miftah init [name] [--name <name>] [--preset <name>] [--output <file>] [--interactive] [--client <client>] [--credential-env <name>] [--npm-package <package>] [--docker-image <image>] [--url <url>] [--header-name <name>] [--header-prefix <prefix>]` | Generate a strict catalog template and optionally print client JSON. |
@@ -186,7 +194,7 @@ Structured success output is written to stdout with stderr empty. Stable nonzero
 
 ## Current boundaries
 
-The current experimental code implements local STDIO and remote HTTP/SSE upstream clients, profile switching with opt-in scoped persistence, hybrid routing rules plus provider routing matchers, policies, optional upstream identity verification, namespaced tools/resources/prompts for account bundles, resilient healthy-upstream discovery, configurable local process lifecycle controls, in-memory process/session caching, rotated redacted JSONL audit journals with optional local tamper evidence, and a packageable CLI. Local process controls cover startup and shutdown deadlines, optional idle cleanup, opt-in crash recovery with a bounded retry budget, and no-eviction profile-session capacity limits. UI, routing plugins, `process.startMode`, `process.cache`, custom state paths, and configurable tool namespaces are rejected with `UNSUPPORTED_CONFIG_OPTION` rather than silently ignored.
+The current experimental code implements local STDIO plus loopback-first Streamable HTTP serving, remote HTTP/SSE upstream clients, profile switching with opt-in scoped persistence, hybrid routing rules plus provider routing matchers, policies, optional upstream identity verification, namespaced tools/resources/prompts for account bundles, resilient healthy-upstream discovery, configurable local process lifecycle controls, in-memory process/session caching, rotated redacted JSONL audit journals with optional local tamper evidence, and a packageable CLI. HTTP sessions are bounded, isolated, and cleaned up on expiry, DELETE, or shutdown; local process controls cover startup and shutdown deadlines, optional idle cleanup, opt-in crash recovery with a bounded retry budget, and no-eviction profile-session capacity limits. UI, routing plugins, `process.startMode`, `process.cache`, custom state paths, and configurable tool namespaces are rejected with `UNSUPPORTED_CONFIG_OPTION` rather than silently ignored.
 
 ## License
 

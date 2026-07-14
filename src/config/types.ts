@@ -285,6 +285,28 @@ export interface SecretsConfig {
   providerTimeoutMs?: number;
 }
 
+/** Configures localhost-first Streamable HTTP serving. Authentication values must be secret references. */
+export interface HttpServerConfig {
+  host?: string;
+  port?: number;
+  /** Explicitly permits binding any host other than the literal loopback defaults. */
+  allowNonLoopback?: true;
+  /** A supported secret reference resolved before the HTTP listener starts. */
+  authToken?: string;
+  /** Exact request Host names accepted by the HTTP listener. */
+  allowedHosts?: string[];
+  /** Explicit browser origins permitted to access the HTTP endpoint. */
+  allowedOrigins?: string[];
+  maxSessions?: number;
+  sessionIdleTimeoutMs?: number;
+  maxRequestBytes?: number;
+}
+
+/** Configures server transports hosted by Miftah. */
+export interface ServerConfig {
+  http?: HttpServerConfig;
+}
+
 /** Selects the isolation boundary for the active-profile selection. */
 export type ActiveProfileStateScope = "process" | "session" | "workspace" | "global";
 
@@ -315,4 +337,5 @@ export interface MiftahConfig {
   tooling?: ToolingConfig;
   secrets?: SecretsConfig;
   state?: StateConfig;
+  server?: ServerConfig;
 }

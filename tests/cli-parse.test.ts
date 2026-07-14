@@ -20,6 +20,20 @@ describe("CLI parser", () => {
     });
   });
 
+  it("accepts the explicit HTTP transport for serve", () => {
+    expect(parseCli(["serve", "--transport", "http", "--config=wrapper.json"])).toEqual({
+      kind: "run",
+      command: "serve",
+      options: { transport: "http", config: "wrapper.json" }
+    });
+    expect(parseCli(["--transport=stdio"])).toEqual({
+      kind: "run",
+      command: "serve",
+      options: { transport: "stdio" }
+    });
+    expectUsageError(["serve", "--transport", "websocket"]);
+  });
+
   it("accepts command options before and after commands, including equals values", () => {
     expect(parseCli(["--config=wrapper.json", "doctor", "--json"])).toEqual({
       kind: "run",

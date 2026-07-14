@@ -39,6 +39,7 @@ export function scanConfiguredExternalSecretProviders(config: MiftahConfig): Ext
   if (config.upstream) scanUpstream(config.upstream);
   for (const upstream of Object.values(config.upstreams ?? {})) scanUpstream(upstream);
   for (const profile of Object.values(config.profiles)) scanProfile(profile);
+  if (config.server?.http?.authToken !== undefined) scanMap({ authToken: config.server.http.authToken });
   return externalSecretProviderNames.filter((provider) => providers.has(provider));
 }
 
