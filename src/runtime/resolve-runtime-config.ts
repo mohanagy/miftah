@@ -1,7 +1,11 @@
+import { realpath } from "node:fs/promises";
+import { dirname } from "node:path";
 import { loadConfig } from "../config/load-config.js";
+import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, UpstreamConfig } from "../config/types.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { SecretResolver } from "../secrets/secret-resolver.js";
+import { loadPluginRegistry, type PluginRegistry } from "../plugins/plugin-registry.js";
 import { MiftahError } from "../utils/errors.js";
 
 export interface ResolvedRuntimeConfig {
@@ -9,6 +13,8 @@ export interface ResolvedRuntimeConfig {
   readonly upstream: UpstreamConfig | undefined;
   readonly secretValues: readonly string[];
   readonly redactor: SecretRedactor;
+  /** Runtime-owned allowlisted plugins, preflighted before any MCP server is constructed. */
+  readonly plugins: PluginRegistry;
 }
 
 /** Limits secret resolution to one doctor-owned profile/upstream target. */
@@ -28,14 +34,18 @@ export async function resolveRuntimeConfig(
   scope?: RuntimeResolutionScope,
   options: RuntimeResolutionOptions = {}
 ): Promise<ResolvedRuntimeConfig> {
-  const config = await loadConfig(configPath);
+  const requestedConfigPath = resolvePath(configPath);
+  const canonicalConfigPath = await realpath(requestedConfigPath).catch(() => requestedConfigPath);
+  const config = await loadConfig(canonicalConfigPath);
   validateResolutionScope(config, scope);
+  const plugins = await loadPluginRegistry(config.plugins, { rootDirectory: dirname(canonicalConfigPath) });
   const redactor = new SecretRedactor();
   const resolver = new SecretResolver({
     envFiles: config.secrets?.envFiles,
     allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets,
     providerTimeoutMs: config.secrets?.providerTimeoutMs,
-    redactor
+    redactor,
+    plugins
   });
   await resolver.load();
   const secretValues = new Set<string>();
@@ -132,7 +142,8 @@ export async function resolveRuntimeConfig(
     config: resolvedConfig,
     upstream,
     secretValues: values,
-    redactor
+    redactor,
+    plugins
   };
 }
 

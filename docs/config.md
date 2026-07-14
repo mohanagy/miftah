@@ -62,6 +62,10 @@ On macOS Miftah runs the fixed `/usr/bin/security find-generic-password -s <serv
 
 For `secretref:op`, noninteractive launches require an inherited `OP_SERVICE_ACCOUNT_TOKEN`; Miftah fails closed before invoking `op` when it is absent. Interactive 1Password desktop/CLI authentication is allowed only when both standard input and output are TTYs, and remains subject to `providerTimeoutMs`. Miftah registers a successful provider value and the inherited service-account token with the shared redactor before either can cross an error, audit, health, or response boundary.
 
+### Local secret-provider plugins
+
+`plugins.allowlist` can opt in to a local secret-provider scheme such as `secretref:company-vault://account`. Each plugin has a stable id, a local configuration-relative `.mjs` path, and `kind: "secret-provider"`; the manifest must exactly match before Miftah starts its MCP server. The plugin receives only the requested canonical reference, and its resolved value is added to the shared redactor before use. See the [local plugin API](plugins.md) for the configuration, timeout, containment, and operator-trust contract.
+
 ## HTTP server transport
 
 `miftah serve --transport http --config <file>` exposes Miftah's Streamable HTTP endpoint at `/mcp`. This is a local Miftah server transport, distinct from an `upstream.transport: "streamable-http"` remote upstream. The default listener is the literal loopback endpoint `http://127.0.0.1:3000/mcp`.
@@ -196,11 +200,11 @@ The metadata-only collector can provide rules with `context.*` values from:
 
 `MIFTAH_PROFILE` must name a configured profile or routing fails closed. `MIFTAH_PROJECT` is contextual metadata only: Miftah does not interpret it as a path or probe the filesystem from it. URI-like project and repository values, Git origins, and roots are structurally sanitized before evidence crosses an MCP or audit boundary.
 
-Selection order is environment hint, project-marker hint, configured rule, static matcher, then fallback. The marker stage is the one nearest valid marker above; matching rules that select different profiles return `ROUTING_AMBIGUOUS`, and Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
+Selection order is environment hint, project-marker hint, configured rule, the matcher band (fixed static matchers plus allowlisted plugin matchers), then fallback. The marker stage is the one nearest valid marker above; matching rules that select different profiles return `ROUTING_AMBIGUOUS`, and Miftah does not guess. Context and profile hints do not replace the explicit-rule requirement for a destructive operation when `security.requireExplicitProfileForDestructive` is enabled.
 
 MCP roots are optional client metadata. After initialization, Miftah calls `roots/list` only when the client advertises `roots` capability, stores a URI-only snapshot for that connection, and refreshes it only on an advertised `notifications/roots/list_changed`. An unsupported or failed roots request yields an empty-root snapshot; Miftah does not poll roots or request them for every operation.
 
-`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision (including `riskSource` and `riskConfidence`), sanitized `evidence`, and `matcherEvidence` when a static matcher selected a profile. It never starts an upstream to inspect a tool: it uses only an already-cached compatible tool snapshot and otherwise reports the conservative heuristic or unknown classification. Proxied operation audit records carry the same snapshot as additive `routingEvidence` and carry canonical `routingMatcherEvidence` for a successful or ambiguous static match. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
+`miftah_route_preview` resolves against one collector snapshot using the same context inputs as a proxied operation. Its response contains the selected profile, reason, policy decision (including `riskSource` and `riskConfidence`), sanitized `evidence`, and `matcherEvidence` when a fixed or plugin matcher selected a profile. It never starts an upstream to inspect a tool: it uses only an already-cached compatible tool snapshot and otherwise reports the conservative heuristic or unknown classification. Proxied operation audit records carry the same snapshot as additive `routingEvidence` and carry canonical `routingMatcherEvidence` for a successful or ambiguous match. Evidence contains only allowlisted metadata and redacted URI components; it never contains arbitrary project file content or the raw `MIFTAH_PROJECT` value.
 
 ### Provider routing matchers
 
@@ -232,7 +236,7 @@ The supported fixed providers are GitHub (`repositories`, `organizations`), Sent
 
 Argument-only signals require an exact provider token in the client-visible tool name, such as `github__search_issues`; a generic tool with `{ "repo": "acme/miftah" }` cannot select a GitHub profile. Canonical HTTPS provider URLs in allowlisted `url` and `uri` fields are stronger signals, so a standard resource read can match its requested provider URI; userinfo, query strings, fragments, and non-HTTPS URIs are ignored. GitHub repository context may come from a canonical package/workspace repository or a local `remote.origin.url` in HTTPS, SSH, or scp syntax. The matcher receives only those bounded canonical signals: it never reads arbitrary nested arguments, arbitrary routing context, or `MIFTAH_PROJECT`.
 
-If one profile has several matching signals, it remains one selection. If static bindings select different profiles, Miftah returns `ROUTING_AMBIGUOUS` before resolving an upstream. A matcher reason is `matcher:<provider>` and does not satisfy `security.requireExplicitProfileForDestructive`; destructive operations still require an explicit `routing.rules` match. `routing.plugins` remains unsupported because configured dynamic code is outside this trust boundary; a public extension API is deferred to Issue #34.
+If one profile has several matching signals, it remains one selection. If fixed and/or plugin bindings select different profiles, Miftah returns `ROUTING_AMBIGUOUS` before resolving an upstream. A matcher reason is `matcher:<provider>` or `matcher:plugin:<id>` and does not satisfy `security.requireExplicitProfileForDestructive`; destructive operations still require an explicit `routing.rules` match. `routing.plugins` remains unsupported; use the root [`plugins.allowlist`](plugins.md) API for explicitly reviewed local modules.
 
 ## Identity verification
 
@@ -341,7 +345,7 @@ This is local tamper evidence, not signing, nonrepudiation, or remote immutable 
 
 ## Runtime-supported controls
 
-Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules`, profile-local static matchers, and `routing.fallback` to control its behavior. Routing plugins, profile metadata, UI settings, and configurable management-tool namespaces are not available yet.
+Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFIG_OPTION` and the exact config path. The only supported routing mode is `"hybrid"`; use `routing.rules`, profile-local static matchers, explicitly allowlisted root `plugins`, and `routing.fallback` to control its behavior. Legacy `routing.plugins`, profile metadata, UI settings, and configurable management-tool namespaces are not available.
 
 ### Active profile state
 

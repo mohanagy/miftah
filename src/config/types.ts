@@ -285,6 +285,35 @@ export interface SecretsConfig {
   providerTimeoutMs?: number;
 }
 
+/** Kinds of locally allowlisted extensions supported by the stable plugin API. */
+export type PluginKind = "secret-provider" | "routing-matcher";
+
+interface PluginConfigBase {
+  /** Stable plugin manifest identifier. */
+  id: string;
+  /** Local ESM module path, resolved relative to the configuration file. */
+  path: string;
+}
+
+/** An allowlisted provider for a `secretref:<id>://...` reference. */
+export interface SecretProviderPluginConfig extends PluginConfigBase {
+  kind: "secret-provider";
+}
+
+/** An allowlisted matcher whose returned binding tokens map only to configured profiles. */
+export interface RoutingMatcherPluginConfig extends PluginConfigBase {
+  kind: "routing-matcher";
+  bindings: Record<string, string>;
+}
+
+export type PluginConfig = SecretProviderPluginConfig | RoutingMatcherPluginConfig;
+
+/** Explicit local extension allowlist. Remote installation and package-name lookup are unsupported. */
+export interface PluginsConfig {
+  allowlist: PluginConfig[];
+  timeoutMs?: number;
+}
+
 /** Configures localhost-first Streamable HTTP serving. Authentication values must be secret references. */
 export interface HttpServerConfig {
   host?: string;
@@ -336,6 +365,7 @@ export interface MiftahConfig {
   audit?: AuditConfig;
   tooling?: ToolingConfig;
   secrets?: SecretsConfig;
+  plugins?: PluginsConfig;
   state?: StateConfig;
   server?: ServerConfig;
 }

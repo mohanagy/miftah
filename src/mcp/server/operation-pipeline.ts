@@ -92,7 +92,7 @@ export class OperationPipeline {
     try {
       const snapshot = await this.options.routingContext();
       audit.update({ routingEvidence: this.options.redactor.redactForAudit(snapshot.evidence) });
-      const route = this.options.routing.resolve(
+      const route = await this.options.routing.resolveWithPlugins(
         {
           toolName: operation.routingName,
           matcherToolName: operation.matcherToolName ?? operation.routingName,
@@ -101,7 +101,8 @@ export class OperationPipeline {
           matcherContext: snapshot.matcherContext,
           profileHints: snapshot.profileHints
         },
-        operation.source.activeProfile
+        operation.source.activeProfile,
+        operation.upstreamRequestOptions?.signal ?? operation.approvalContext?.signal
       );
       const profile = route.profile;
       const profileConfig = this.options.profiles.get(profile);

@@ -169,7 +169,8 @@ function activePipeCount(): number {
 
 async function runWindowsCompressedBootstrap(
   source: string,
-  environment: NodeJS.ProcessEnv = {}
+  environment: NodeJS.ProcessEnv = {},
+  standardInput?: Buffer
 ): Promise<{
   code: number | null;
   stdout: string;
@@ -200,6 +201,7 @@ try {
   const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
 
   return new Promise((resolve, reject) => {
+    const stdin = standardInput === undefined ? "ignore" : "pipe";
     const child = spawn(
       launcher,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
@@ -211,7 +213,7 @@ try {
         },
         shell: false,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: [stdin, "pipe", "pipe"]
       }
     );
     const stdout: Buffer[] = [];
@@ -219,6 +221,7 @@ try {
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.once("error", reject);
+    if (standardInput !== undefined) child.stdin?.end(standardInput);
     child.once("close", (code) => {
       resolve({
         code,
@@ -388,6 +391,17 @@ describe("secret command runner", () => {
           expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
           expect((await readFakeRecord(directory)).argv).toEqual([]);
         });
+  });
+
+  it("rejects input that exceeds the contained command input bound before starting a child", async () => {
+    await expect(
+      runSecretCommand({
+        executable: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        environment: {},
+        stdin: Buffer.alloc(16 * 1024 + 1)
+      })
+    ).rejects.toEqual(expect.objectContaining({ kind: "input_limit" }));
   });
 });
 
@@ -805,6 +819,32 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
+    "does not expose parent standard input to the encoded PowerShell bootstrap",
+    async () => {
+      const input = Buffer.concat([
+        Buffer.from("bootstrap-input", "utf8"),
+        Buffer.from([0]),
+        Buffer.from("with-newline\\n", "utf8")
+      ]);
+      const result = await runWindowsCompressedBootstrap(
+        `$stream = [Console]::OpenStandardInput()
+$output = [IO.MemoryStream]::new()
+$buffer = [byte[]]::new(4096)
+while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+  $output.Write($buffer, 0, $count)
+}
+[Console]::Out.Write([Convert]::ToBase64String($output.ToArray()))
+exit 0`,
+        {},
+        input
+      );
+
+      expect(result).toMatchObject({ code: 0, stdout: "" });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "compiles the embedded Job Object type before starting providers",
     async () => {
       const csharp = await embeddedWindowsJobCSharp();
@@ -905,6 +945,35 @@ exit 0`);
 
         expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
         expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
+      });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "forwards exact standard input through the Job Object helper to a Node provider",
+    async () => {
+      const input = Buffer.concat([
+        Buffer.from("plugin-host-input", "utf8"),
+        Buffer.from([0]),
+        Buffer.from("with-newline\\n", "utf8")
+      ]);
+      const result = await runSecretCommand(
+        {
+          executable: process.execPath,
+          args: [
+            "-e",
+            'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ input: Buffer.concat(chunks).toString("base64"), inheritedInput: process.env.MIFTAH_SECRET_RUNNER_STDIN ?? null })));'
+          ],
+          environment: { PATH: process.env.PATH },
+          stdin: input
+        },
+        { timeoutMs: 10_000 }
+      );
+
+      expect(JSON.parse(result.stdout.toString("utf8"))).toEqual({
+        input: input.toString("base64"),
+        inheritedInput: null
       });
     },
     20_000

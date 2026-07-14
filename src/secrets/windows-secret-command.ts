@@ -5,14 +5,17 @@ import { gzipSync } from "node:zlib";
 import { resolveExecutablePath } from "./executable-resolver.js";
 
 const maximumRequestBytes = 16 * 1024;
+const maximumEncodedInputLength = 21_848;
 const maximumArgumentCount = 128;
 const requestEnvironmentName = "MIFTAH_SECRET_RUNNER_REQUEST";
+const standardInputEnvironmentName = "MIFTAH_SECRET_RUNNER_STDIN";
 const helperSourceEnvironmentName = "MIFTAH_SECRET_RUNNER_HELPER";
 
 export interface WindowsSecretCommand {
   readonly executable: string;
   readonly args: readonly string[];
   readonly environment: NodeJS.ProcessEnv;
+  readonly stdin?: Buffer;
 }
 
 export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
@@ -40,15 +43,20 @@ export async function resolveWindowsSecretCommand(
  */
 export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand): ChildProcess {
   const request = encodeRequest(command);
-  if (request === undefined) throw new Error("Invalid Windows secret command request");
+  const standardInput = encodeStandardInput(command.stdin);
+  if (request === undefined || (command.stdin !== undefined && standardInput === undefined)) {
+    throw new Error("Invalid Windows secret command request");
+  }
 
   const child = spawn(
     command.launcher,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedWindowsJobBootstrap],
     {
-      env: helperEnvironment(command.environment, request),
+      env: helperEnvironment(command.environment, request, standardInput),
       shell: false,
       windowsHide: true,
+      // Windows PowerShell consumes the inherited stdin pipe before an encoded
+      // command runs, so the helper creates a dedicated child pipe instead.
       stdio: ["ignore", "pipe", "pipe"] as const
     }
   );
@@ -104,11 +112,21 @@ function encodeRequest(command: ResolvedWindowsSecretCommand): string | undefine
   return request.toString("base64");
 }
 
+function encodeStandardInput(standardInput: Buffer | undefined): string | undefined {
+  if (standardInput === undefined) return undefined;
+  if (standardInput.byteLength > maximumRequestBytes) return undefined;
+  return standardInput.toString("base64");
+}
+
 function containsNul(value: string): boolean {
   return value.includes("\u0000");
 }
 
-function helperEnvironment(environment: NodeJS.ProcessEnv, request: string): NodeJS.ProcessEnv {
+function helperEnvironment(
+  environment: NodeJS.ProcessEnv,
+  request: string,
+  standardInput: string | undefined
+): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...environment };
   // Windows PowerShell can hang before its encoded bootstrap runs without this module-path setting.
   for (const name of ["SystemRoot", "windir", "ComSpec", "TEMP", "TMP", "PSModulePath"]) {
@@ -118,6 +136,8 @@ function helperEnvironment(environment: NodeJS.ProcessEnv, request: string): Nod
     }
   }
   setEnvironmentValue(result, requestEnvironmentName, request);
+  deleteEnvironmentValue(result, standardInputEnvironmentName);
+  if (standardInput !== undefined) setEnvironmentValue(result, standardInputEnvironmentName, standardInput);
   setEnvironmentValue(result, helperSourceEnvironmentName, encodedWindowsJobHelper);
   return result;
 }
@@ -131,20 +151,33 @@ function environmentValue(environment: NodeJS.ProcessEnv, name: string): string 
 }
 
 function setEnvironmentValue(environment: NodeJS.ProcessEnv, name: string, value: string): void {
+  deleteEnvironmentValue(environment, name);
+  environment[name] = value;
+}
+
+function deleteEnvironmentValue(environment: NodeJS.ProcessEnv, name: string): void {
   const normalizedName = name.toLocaleLowerCase("en-US");
   for (const candidateName of Object.keys(environment)) {
     if (candidateName.toLocaleLowerCase("en-US") === normalizedName) delete environment[candidateName];
   }
-  environment[name] = value;
 }
 
 const windowsJobHelper = String.raw`$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
+$standardInputName = '${standardInputEnvironmentName}'
 try {
   $encodedRequest = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   if ([string]::IsNullOrEmpty($encodedRequest) -or $encodedRequest.Length -gt 21848) { exit 1 }
   $requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
+  $encodedStandardInput = [Environment]::GetEnvironmentVariable($standardInputName, [EnvironmentVariableTarget]::Process)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+  [Environment]::SetEnvironmentVariable($standardInputName, $null, [EnvironmentVariableTarget]::Process)
+  $standardInput = $null
+  if ($null -ne $encodedStandardInput) {
+    if ($encodedStandardInput.Length -gt ${maximumEncodedInputLength}) { exit 1 }
+    $standardInput = [Convert]::FromBase64String($encodedStandardInput)
+    if ($standardInput.Length -gt ${maximumRequestBytes}) { exit 1 }
+  }
   $request = $requestJson | ConvertFrom-Json
   if ($null -eq $request -or $null -eq $request.executable -or $null -eq $request.arguments) { exit 1 }
   $source = @'
@@ -283,6 +316,23 @@ public static class MiftahSecretJob
     private static extern IntPtr GetStdHandle(int standardHandle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CreatePipe(
+        out IntPtr readPipe,
+        out IntPtr writePipe,
+        IntPtr pipeAttributes,
+        uint size
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteFile(
+        IntPtr handle,
+        byte[] buffer,
+        uint bytesToWrite,
+        out uint bytesWritten,
+        IntPtr overlapped
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -335,6 +385,11 @@ public static class MiftahSecretJob
 
     public static int Run(string executable, string[] arguments)
     {
+        return Run(executable, arguments, null);
+    }
+
+    public static int Run(string executable, string[] arguments, byte[] standardInput)
+    {
         if (String.IsNullOrEmpty(executable) || executable.IndexOf('\0') >= 0 || !Path.IsPathRooted(executable)) return 1;
         string extension = Path.GetExtension(executable);
         if (String.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase) ||
@@ -347,17 +402,29 @@ public static class MiftahSecretJob
 
         IntPtr attributeList = IntPtr.Zero;
         IntPtr inheritedHandles = IntPtr.Zero;
+        IntPtr providerInput = IntPtr.Zero;
+        IntPtr providerInputWriter = IntPtr.Zero;
         bool initializedAttributeList = false;
         ProcessInformation processInformation = new ProcessInformation();
         try
         {
-            IntPtr standardInput = GetStdHandle(-10);
             IntPtr standardOutput = GetStdHandle(-11);
             IntPtr standardError = GetStdHandle(-12);
-            if (!IsValidHandle(standardInput) || !IsValidHandle(standardOutput) || !IsValidHandle(standardError)) return 1;
-            if (!SetHandleInformation(standardInput, HandleFlagInherit, HandleFlagInherit) ||
-                !SetHandleInformation(standardOutput, HandleFlagInherit, HandleFlagInherit) ||
+            if (!IsValidHandle(standardOutput) || !IsValidHandle(standardError)) return 1;
+            if (!SetHandleInformation(standardOutput, HandleFlagInherit, HandleFlagInherit) ||
                 !SetHandleInformation(standardError, HandleFlagInherit, HandleFlagInherit)) return 1;
+            if (standardInput == null)
+            {
+                providerInput = GetStdHandle(-10);
+                if (!IsValidHandle(providerInput) ||
+                    !SetHandleInformation(providerInput, HandleFlagInherit, HandleFlagInherit)) return 1;
+            }
+            else
+            {
+                if (!CreatePipe(out providerInput, out providerInputWriter, IntPtr.Zero, 0)) return 1;
+                if (!SetHandleInformation(providerInput, HandleFlagInherit, HandleFlagInherit) ||
+                    !SetHandleInformation(providerInputWriter, HandleFlagInherit, 0)) return 1;
+            }
 
             IntPtr attributeListSize = IntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
@@ -367,7 +434,7 @@ public static class MiftahSecretJob
             initializedAttributeList = true;
 
             inheritedHandles = Marshal.AllocHGlobal(IntPtr.Size * 3);
-            Marshal.WriteIntPtr(inheritedHandles, 0, standardInput);
+            Marshal.WriteIntPtr(inheritedHandles, 0, providerInput);
             Marshal.WriteIntPtr(inheritedHandles, IntPtr.Size, standardOutput);
             Marshal.WriteIntPtr(inheritedHandles, IntPtr.Size * 2, standardError);
             if (!UpdateProcThreadAttribute(
@@ -383,7 +450,7 @@ public static class MiftahSecretJob
             StartupInfoEx startupInfo = new StartupInfoEx();
             startupInfo.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(StartupInfoEx));
             startupInfo.StartupInfo.dwFlags = StartfUseStdHandles;
-            startupInfo.StartupInfo.hStdInput = standardInput;
+            startupInfo.StartupInfo.hStdInput = providerInput;
             startupInfo.StartupInfo.hStdOutput = standardOutput;
             startupInfo.StartupInfo.hStdError = standardError;
             startupInfo.lpAttributeList = attributeList;
@@ -402,6 +469,23 @@ public static class MiftahSecretJob
                 out processInformation
             )) return 1;
 
+            if (standardInput != null)
+            {
+                CloseHandle(providerInput);
+                providerInput = IntPtr.Zero;
+                uint written = 0;
+                if (standardInput.Length > 0 &&
+                    (!WriteFile(
+                        providerInputWriter,
+                        standardInput,
+                        (uint)standardInput.Length,
+                        out written,
+                        IntPtr.Zero
+                    ) || written != (uint)standardInput.Length)) return 1;
+                CloseHandle(providerInputWriter);
+                providerInputWriter = IntPtr.Zero;
+            }
+
             WaitForSingleObject(processInformation.hProcess, 0xFFFFFFFF);
             uint exitCode;
             if (!GetExitCodeProcess(processInformation.hProcess, out exitCode) || exitCode > 255) return 1;
@@ -417,6 +501,8 @@ public static class MiftahSecretJob
                 Marshal.FreeHGlobal(attributeList);
             }
             if (inheritedHandles != IntPtr.Zero) Marshal.FreeHGlobal(inheritedHandles);
+            if (providerInput != IntPtr.Zero) CloseHandle(providerInput);
+            if (providerInputWriter != IntPtr.Zero) CloseHandle(providerInputWriter);
         }
     }
 
@@ -477,7 +563,7 @@ public static class MiftahSecretJob
     if ($null -eq $_) { throw 'Invalid argument' }
     [string]$_
   })
-  $exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$arguments)
+  $exitCode = [MiftahSecretJob]::Run([string]$request.executable, [string[]]$arguments, [byte[]]$standardInput)
   exit $exitCode
 } catch {
   exit 1

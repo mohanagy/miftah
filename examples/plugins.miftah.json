@@ -1,0 +1,40 @@
+{
+  "version": "1",
+  "name": "local-plugin-reference",
+  "defaultProfile": "personal",
+  "upstream": {
+    "transport": "stdio",
+    "command": "node",
+    "args": ["./server.mjs"]
+  },
+  "profiles": {
+    "personal": {
+      "env": {
+        "API_TOKEN": "secretref:file-local://personal-token.txt"
+      }
+    },
+    "work": {
+      "env": {
+        "API_TOKEN": "secretref:file-local://work-token.txt"
+      }
+    }
+  },
+  "plugins": {
+    "timeoutMs": 5000,
+    "allowlist": [
+      {
+        "id": "file-local",
+        "kind": "secret-provider",
+        "path": "./plugins/file-secret-provider.mjs"
+      },
+      {
+        "id": "github-owner",
+        "kind": "routing-matcher",
+        "path": "./plugins/github-owner-routing-matcher.mjs",
+        "bindings": {
+          "acme-work": "work"
+        }
+      }
+    ]
+  }
+}

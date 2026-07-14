@@ -15,13 +15,20 @@ export interface RoutingInput {
   profileHints?: readonly RoutingContextProfileHint[];
 }
 
-/** Bounded, canonical static-matcher evidence safe for routing decisions and audit records. */
-export interface RoutingMatcherEvidence {
-  readonly profile: string;
-  readonly provider: ProviderMatcherProvider;
-  readonly kind: ProviderMatcherKind;
-  readonly value: string;
-}
+/** Bounded matcher evidence safe for routing decisions and audit records. */
+export type RoutingMatcherEvidence =
+  | {
+      readonly profile: string;
+      readonly provider: ProviderMatcherProvider;
+      readonly kind: ProviderMatcherKind;
+      readonly value: string;
+    }
+  | {
+      readonly profile: string;
+      readonly provider: `plugin:${string}`;
+      readonly kind: "binding";
+      readonly value: string;
+    };
 
 export interface RoutingDecision {
   profile: string;

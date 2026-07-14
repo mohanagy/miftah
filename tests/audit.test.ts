@@ -375,9 +375,10 @@ describe("audit logger", () => {
     const second = new AuditLogger(secondPath, {
       rotation: { maxBytes: 1, retainFiles: 128 }
     });
+    const operationCount = 128;
 
     await Promise.all(
-      Array.from({ length: 32 }, (_, index) =>
+      Array.from({ length: operationCount }, (_, index) =>
         (index % 2 === 0 ? first : second).log({
           wrapper: "github",
           profile: "work",
@@ -400,7 +401,7 @@ describe("audit logger", () => {
       .map((record) => record.name)
       .sort();
 
-    expect(names).toEqual(Array.from({ length: 32 }, (_, index) => `concurrent-rotation-${index}`).sort());
+    expect(names).toEqual(Array.from({ length: operationCount }, (_, index) => `concurrent-rotation-${index}`).sort());
   });
 
   it("does not let an abandoned legacy filesystem lock permanently block a local audit journal", async () => {

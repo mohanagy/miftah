@@ -1,6 +1,8 @@
 import { parse } from "dotenv";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { MiftahError } from "../utils/errors.js";
+import { parsePluginSecretReference, type PluginSecretReference } from "../plugins/plugin-secret-reference.js";
+import type { PluginRegistry } from "../plugins/plugin-registry.js";
 import { createBuiltinSecretProviders } from "./builtin-secret-providers.js";
 import { SecretRedactor } from "./redact.js";
 import type {
@@ -18,6 +20,8 @@ export interface SecretResolverOptions {
   allowPlaintextSecrets?: boolean;
   providerTimeoutMs?: number;
   redactor?: SecretRedactor;
+  /** Internal runtime-owned allowlisted plugin registry. */
+  plugins?: PluginRegistry;
   /** Internal injection point for provider integration tests and runtime composition. */
   providers?: Partial<BuiltinSecretProviders>;
 }
@@ -41,6 +45,7 @@ export class SecretResolver {
   private readonly options: SecretResolverOptions;
   private readonly redactor: SecretRedactor;
   private readonly providers: BuiltinSecretProviders;
+  private readonly plugins: PluginRegistry | undefined;
   private readonly resolutionCache = new Map<string, Promise<string>>();
 
   constructor(options: SecretResolverOptions = {}) {
@@ -54,6 +59,7 @@ export class SecretResolver {
       ...createBuiltinSecretProviders({ providerTimeoutMs: options.providerTimeoutMs }),
       ...options.providers
     };
+    this.plugins = options.plugins;
   }
 
   async load(): Promise<void> {
@@ -120,6 +126,11 @@ export class SecretResolver {
       const resolved = await this.resolveReference(this.providers.op, onePasswordReference, secretValues);
       return { value: resolved, secretValues: [...secretValues] };
     }
+    const pluginReference = parsePluginSecretReference(value);
+    if (pluginReference !== undefined && this.plugins?.hasSecretProvider(pluginReference.providerId) === true) {
+      const resolved = await this.resolvePluginReference(pluginReference, secretValues);
+      return { value: resolved, secretValues: [...secretValues] };
+    }
     if (value.startsWith("secretref:")) {
       throw new MiftahError(
         "SECRET_PROVIDER_FAILED",
@@ -179,6 +190,33 @@ export class SecretResolver {
       secretValues.add(result.value);
     };
     registerResolvedSecret({ value: resolved });
+    return resolved;
+  }
+
+  private async resolvePluginReference(
+    reference: PluginSecretReference,
+    secretValues: Set<string>
+  ): Promise<string> {
+    const cacheKey = `plugin:${reference.canonicalReference}`;
+    let resolution = this.resolutionCache.get(cacheKey);
+    if (resolution === undefined) {
+      resolution = this.plugins!
+        .resolveSecret(reference)
+        .then((value) => {
+          if (value === undefined) {
+            throw new MiftahError("SECRET_PROVIDER_FAILED", "SECRET_PROVIDER_FAILED: configured plugin secret provider is unavailable");
+          }
+          this.redactor.add(value);
+          return value;
+        });
+      this.resolutionCache.set(cacheKey, resolution);
+      void resolution.catch(() => {
+        if (this.resolutionCache.get(cacheKey) === resolution) this.resolutionCache.delete(cacheKey);
+      });
+    }
+    const resolved = await resolution;
+    this.redactor.add(resolved);
+    secretValues.add(resolved);
     return resolved;
   }
 }

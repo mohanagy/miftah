@@ -4,9 +4,16 @@ const REQUIRED_PATHS = [
   "dist/cli/main.js",
   "dist/index.d.ts",
   "dist/index.js",
+  "dist/plugin-api.d.ts",
+  "dist/plugin-api.js",
+  "dist/plugin-host.js",
   "docs/cli.md",
   "docs/library-api.md",
+  "docs/plugins.md",
   "examples/generic.miftah.json",
+  "examples/plugins.miftah.json",
+  "examples/plugins/file-secret-provider.mjs",
+  "examples/plugins/github-owner-routing-matcher.mjs",
   "package.json"
 ];
 
@@ -14,7 +21,7 @@ const ALLOWED_ROOT_PATHS = new Set(["LICENSE", "README.md", "package.json"]);
 const ALLOWED_PATH_PATTERNS = [
   /^dist\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:d\.ts|d\.ts\.map|js|js\.map)$/u,
   /^docs\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md$/u,
-  /^examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.miftah\.json$/u
+  /^examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:miftah\.json|mjs)$/u
 ];
 
 /**
@@ -76,28 +83,46 @@ export function verifyPackPaths(paths) {
 }
 
 /**
- * Parses one `npm pack --dry-run --json` result and extracts its package-relative paths.
+ * Parses one `npm pack --json` result from either the list format used by npm 10/11 or npm 12's keyed-object format.
+ *
+ * @param {string} output JSON emitted by npm pack
+ * @returns {{ files: unknown[] } & Record<string, unknown>} the single normalized packed-artifact result
+ * @throws {Error} when npm emits invalid JSON or an unexpected result shape
+ */
+export function parsePackResult(output) {
+  let results;
+  try {
+    const parsed = JSON.parse(output);
+    results = Array.isArray(parsed) ? parsed : isRecord(parsed) ? Object.values(parsed) : undefined;
+  } catch (error) {
+    throw new Error("npm pack returned invalid JSON.", { cause: error });
+  }
+
+  if (!Array.isArray(results) || results.length !== 1 || !isRecord(results[0]) || !Array.isArray(results[0].files)) {
+    throw new Error("npm pack must return exactly one package with a files array.");
+  }
+
+  return results[0];
+}
+
+/**
+ * Parses one normalized `npm pack --dry-run --json` result and extracts its package-relative paths.
  *
  * @param {string} output JSON emitted by npm pack
  * @returns {string[]} package-relative paths from the single packed artifact
  * @throws {Error} when npm emits invalid JSON or an unexpected result shape
  */
 export function parsePackOutput(output) {
-  let results;
-  try {
-    results = JSON.parse(output);
-  } catch (error) {
-    throw new Error("npm pack returned invalid JSON.", { cause: error });
-  }
+  const result = parsePackResult(output);
 
-  if (!Array.isArray(results) || results.length !== 1 || !Array.isArray(results[0]?.files)) {
-    throw new Error("npm pack must return exactly one package with a files array.");
-  }
-
-  return results[0].files.map((file) => {
+  return result.files.map((file) => {
     if (typeof file?.path !== "string") {
       throw new Error("npm pack returned a file entry without a string path.");
     }
     return file.path;
   });
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

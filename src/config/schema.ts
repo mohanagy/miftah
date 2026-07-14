@@ -628,6 +628,67 @@ const secretsSchema = z
   })
   .strict();
 
+const pluginIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/u);
+const localPluginPathSchema = z
+  .string()
+  .regex(
+    /^\.\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.mjs$/u,
+    "Plugin paths must be explicit local .mjs paths below the configuration directory."
+  );
+const pluginBindingSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u);
+const pluginProfileSchema = z.string().min(1).max(256);
+const secretProviderPluginSchema = z
+  .object({
+    id: pluginIdSchema,
+    kind: z.literal("secret-provider"),
+    path: localPluginPathSchema
+  })
+  .strict();
+const routingMatcherPluginSchema = z
+  .object({
+    id: pluginIdSchema,
+    kind: z.literal("routing-matcher"),
+    path: localPluginPathSchema,
+    bindings: z.record(pluginBindingSchema, pluginProfileSchema).refine(
+      (bindings) => Object.keys(bindings).length > 0 && Object.keys(bindings).length <= 64,
+      "Routing matcher plugins require between one and 64 configured bindings."
+    )
+  })
+  .strict();
+const pluginConfigSchema = z.discriminatedUnion("kind", [secretProviderPluginSchema, routingMatcherPluginSchema]);
+const reservedPluginIds = new Set(["env", "dotenv", "plain", "keychain", "op"]);
+const pluginsSchema = z
+  .object({
+    allowlist: z.array(pluginConfigSchema).min(1).max(32),
+    timeoutMs: z.number().int().min(100).max(60_000).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const ids = new Set<string>();
+    for (const [index, plugin] of value.allowlist.entries()) {
+      if (reservedPluginIds.has(plugin.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["allowlist", index, "id"],
+          params: {
+            miftahCode: "CONFIG_SCHEMA_INVALID",
+            remediation: "Choose a plugin id other than a built-in secret provider id."
+          },
+          message: "CONFIG_SCHEMA_INVALID: plugin ids cannot replace built-in secret providers"
+        });
+      }
+      if (ids.has(plugin.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["allowlist", index, "id"],
+          params: { miftahCode: "CONFIG_SCHEMA_INVALID", remediation: "Use a unique plugin id for each allowlist entry." },
+          message: "CONFIG_SCHEMA_INVALID: plugin allowlist ids must be unique"
+        });
+      }
+      ids.add(plugin.id);
+    }
+  });
+
 const activeProfileStateScopeSchema = z.enum(["process", "session", "workspace", "global"]);
 
 const publicStateSchema = z
@@ -805,6 +866,9 @@ type ConfigReferenceInput = {
     }
   >;
   routing?: { rules?: { profile: string }[] };
+  plugins?: {
+    allowlist?: readonly { kind: "secret-provider" | "routing-matcher"; bindings?: Record<string, string> }[];
+  };
   policies?: Record<string, unknown>;
   security?: { lockToProfile?: string | null };
 };
@@ -929,6 +993,20 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
         "ROUTING_PROFILE_NOT_FOUND",
         ["routing", "rules", ruleIndex, "profile"],
         `profile '${rule.profile}' does not exist`,
+        "Choose a profile name defined under `profiles`."
+      );
+    }
+  }
+
+  for (const [pluginIndex, plugin] of (value.plugins?.allowlist ?? []).entries()) {
+    if (plugin.kind !== "routing-matcher") continue;
+    for (const [binding, profile] of Object.entries(plugin.bindings ?? {})) {
+      if (profileNames.has(profile)) continue;
+      addConfigIssue(
+        context,
+        "ROUTING_PROFILE_NOT_FOUND",
+        ["plugins", "allowlist", pluginIndex, "bindings", binding],
+        `routing plugin binding '${binding}' targets profile '${profile}', which does not exist`,
         "Choose a profile name defined under `profiles`."
       );
     }
@@ -1128,6 +1206,7 @@ export const miftahPublicConfigSchema = z
     audit: publicAuditSchema.optional(),
     tooling: publicToolingSchema.optional(),
     secrets: secretsSchema.optional(),
+    plugins: pluginsSchema.optional(),
     state: publicStateSchema.optional(),
     server: publicServerSchema.optional()
   })
@@ -1151,6 +1230,7 @@ export const miftahConfigSchema = z
     audit: auditSchema.optional(),
     tooling: toolingSchema.optional(),
     secrets: secretsSchema.optional(),
+    plugins: pluginsSchema.optional(),
     state: stateSchema.optional(),
     server: serverSchema.optional(),
     ui: unsupportedOptionSchema

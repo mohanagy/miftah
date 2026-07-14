@@ -685,9 +685,10 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
       socket.destroy();
       resolve(state);
     };
-    // A timeout may be a slow holder for this journal rather than an unrelated
-    // listener. Treat it as unknown so a contender retries this candidate
-    // instead of selecting a different port and bypassing the same lock.
+    // An interrupted or incomplete probe may be a holder that is releasing or
+    // acquiring this journal rather than an unrelated listener. Treat it as
+    // unknown so a contender retries this candidate instead of selecting a
+    // different port and bypassing the same lock.
     const timeout = setTimeout(() => settle("unknown"), localLockProbeMilliseconds);
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
@@ -698,9 +699,15 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
       }
       if (response.includes("\n")) settle(response === localLockGreeting(key) ? "held" : "occupied");
     });
-    socket.once("end", () => settle(response === localLockGreeting(key) ? "held" : "occupied"));
+    socket.once("end", () => {
+      if (response === localLockGreeting(key)) {
+        settle("held");
+        return;
+      }
+      settle(response.includes("\n") ? "occupied" : "unknown");
+    });
     socket.once("error", (error: NodeJS.ErrnoException) => {
-      settle(error.code === "ECONNREFUSED" ? "available" : "occupied");
+      settle(error.code === "ECONNREFUSED" ? "available" : "unknown");
     });
   });
 }

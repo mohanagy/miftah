@@ -21,6 +21,7 @@ interface PackageManifest {
 }
 
 interface PackVerifier {
+  parsePackResult(output: string): PackResult;
   verifyPackPaths(paths: readonly string[]): readonly string[];
 }
 
@@ -65,9 +66,16 @@ const requiredPackPaths = [
   "dist/cli/main.js",
   "dist/index.d.ts",
   "dist/index.js",
+  "dist/plugin-api.d.ts",
+  "dist/plugin-api.js",
+  "dist/plugin-host.js",
   "docs/cli.md",
   "docs/library-api.md",
+  "docs/plugins.md",
   "examples/generic.miftah.json",
+  "examples/plugins.miftah.json",
+  "examples/plugins/file-secret-provider.mjs",
+  "examples/plugins/github-owner-routing-matcher.mjs",
   "package.json"
 ] as const;
 
@@ -512,17 +520,24 @@ describe("packed artifact contract", () => {
 
     expect(verifierSource).not.toMatch(/^#!/u);
     await expect(loadPackVerifier()).resolves.toEqual(
-      expect.objectContaining({ verifyPackPaths: expect.any(Function) })
+      expect.objectContaining({ parsePackResult: expect.any(Function), verifyPackPaths: expect.any(Function) })
     );
+  });
+
+  it("normalizes the list and keyed-object JSON formats emitted by supported npm pack versions", async () => {
+    const { parsePackResult } = await loadPackVerifier();
+    const result = { filename: "miftah.tgz", files: [{ path: "package.json" }] };
+
+    expect(parsePackResult(JSON.stringify([result]))).toEqual(result);
+    expect(parsePackResult(JSON.stringify({ "@lubab/miftah": result }))).toEqual(result);
   });
 
   it("contains required runtime, documentation, and example files from a real dry run", async () => {
     const packed = await runNpm(["pack", "--dry-run", "--json"]);
 
     expect(packed.status, packed.stderr).toBe(0);
-    const results = JSON.parse(packed.stdout) as PackResult[];
-    expect(results).toHaveLength(1);
-    const paths = results[0]!.files.map(({ path }) => path);
+    const result = (await loadPackVerifier()).parsePackResult(packed.stdout);
+    const paths = result.files.map(({ path }) => path);
     expect(paths).toEqual(expect.arrayContaining([...requiredPackPaths]));
     expect(
       paths.filter(
@@ -578,8 +593,7 @@ describe("packed artifact contract", () => {
       try {
         const packed = await runNpm(["pack", "--json", "--pack-destination", directory]);
         expect(packed.status, packed.stderr).toBe(0);
-        const [result] = JSON.parse(packed.stdout) as PackResult[];
-        if (!result) throw new Error("npm pack did not report an artifact.");
+        const result = (await loadPackVerifier()).parsePackResult(packed.stdout);
 
         await prepareLockedConsumer(directory, join(directory, result.filename));
         const consumerInstall = consumerInstallCommand();
@@ -610,6 +624,7 @@ describe("packed artifact contract", () => {
           consumerPath,
           [
             'import * as api from "@lubab/miftah";',
+            'import * as pluginApi from "@lubab/miftah/plugin-api";',
             'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
             'import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";',
             "",
@@ -621,6 +636,7 @@ describe("packed artifact contract", () => {
             "  process.stdout.write(JSON.stringify({",
             "    exports: Object.keys(api).sort(),",
             "    version: api.MIFTAH_VERSION,",
+            "    pluginApiVersion: pluginApi.MIFTAH_PLUGIN_API_VERSION,",
             "    server: client.getServerVersion()",
             "  }));",
             "} finally {",
@@ -638,6 +654,7 @@ describe("packed artifact contract", () => {
         expect(JSON.parse(entryPoint.stdout)).toEqual({
           exports: [...publicRuntimeExports].sort(),
           version: readPackageManifest().version,
+          pluginApiVersion: "1",
           server: {
             name: "miftah-packed-public-api",
             version: readPackageManifest().version
@@ -648,18 +665,33 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { MIFTAH_PLUGIN_API_VERSION, type MiftahPlugin, type RoutingMatcherPlugin, type RoutingMatcherPluginRequest, type RoutingMatcherPluginResult, type RoutingMatcherPluginSignal, type SecretProviderPlugin, type SecretProviderPluginRequest, type SecretProviderPluginResult } from "@lubab/miftah/plugin-api";',
             "",
             "type SupportedTypes = [",
             "  ActiveProfileStateScope, AuditConfig, AuditIntegrityConfig, AuditRotationConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
-            "  PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig,",
-            "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
-            "  ValidatedRoutingConfig",
+            "  PluginConfig, PluginKind, PluginsConfig, PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig, RoutingMatcherPluginConfig,",
+            "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, SecretProviderPluginConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
+            "  ValidatedRoutingConfig, MiftahPlugin, RoutingMatcherPlugin, RoutingMatcherPluginRequest, RoutingMatcherPluginResult, RoutingMatcherPluginSignal, SecretProviderPlugin, SecretProviderPluginRequest, SecretProviderPluginResult",
             "];",
             "declare const types: SupportedTypes;",
             "const version: string = MIFTAH_VERSION;",
+            'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
+            'const secretPluginRequest: SecretProviderPluginRequest = { reference: "secretref:consumer-secret://account" };',
+            'const secretPluginResult: SecretProviderPluginResult = { value: "consumer-secret" };',
+            'const secretPlugin: SecretProviderPlugin = { apiVersion: MIFTAH_PLUGIN_API_VERSION, id: "consumer-secret", kind: "secret-provider", resolve: () => secretPluginResult };',
+            'const routingSignal: RoutingMatcherPluginSignal = { provider: "github", kind: "repository", value: "lubab/miftah", source: "argument" };',
+            'const routingPluginRequest: RoutingMatcherPluginRequest = { toolName: "github_issue_get", signals: [routingSignal] };',
+            'const routingPluginResult: RoutingMatcherPluginResult = { bindings: ["consumer-work"] };',
+            'const routingPlugin: RoutingMatcherPlugin = { apiVersion: MIFTAH_PLUGIN_API_VERSION, id: "consumer-routing", kind: "routing-matcher", match: () => routingPluginResult };',
+            "const plugin: MiftahPlugin = secretPlugin;",
+            'const pluginKind: PluginKind = "routing-matcher";',
+            'const secretPluginConfig: SecretProviderPluginConfig = { id: "consumer-secret", kind: "secret-provider", path: "./plugins/secret.mjs" };',
+            'const routingPluginConfig: RoutingMatcherPluginConfig = { id: "consumer-routing", kind: "routing-matcher", path: "./plugins/routing.mjs", bindings: { "consumer-work": "work" } };',
+            "const pluginConfig: PluginConfig = routingPluginConfig;",
+            "const pluginsConfig: PluginsConfig = { allowlist: [secretPluginConfig, routingPluginConfig] };",
             'const globalScope: ActiveProfileStateScope = "global";',
             'const validState: StateConfig = { persistActiveProfile: true, scope: "workspace" };',
             'const auditRotation: AuditRotationConfig = { maxBytes: 1_024, retainFiles: 7 };',
@@ -730,7 +762,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, runtime, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, pluginApiVersion, runtime, secretPluginRequest, secretPluginResult, secretPlugin, routingSignal, routingPluginRequest, routingPluginResult, routingPlugin, plugin, pluginKind, secretPluginConfig, routingPluginConfig, pluginConfig, pluginsConfig, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(

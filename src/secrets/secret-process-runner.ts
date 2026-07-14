@@ -6,6 +6,7 @@ import {
 } from "./windows-secret-command.js";
 
 const defaultTimeoutMs = 10_000;
+const maximumStdinBytes = 16 * 1024;
 const maximumStdoutBytes = 64 * 1024;
 const maximumStderrBytes = 8 * 1024;
 const forceKillDelayMs = 250;
@@ -13,13 +14,21 @@ const lockedStderrPattern = /(locked|authentication|authorization|not signed in|
 const noninteractiveStderrPattern = /(interaction.*not allowed|non-interactive|cannot prompt|no tty)/iu;
 const missingStderrPattern = /(not found|not exist|no matching|could not be found)/iu;
 
-export type SecretProcessFailureKind = "unavailable" | "timeout" | "cancelled" | "output_limit" | "exit";
+export type SecretProcessFailureKind =
+  | "unavailable"
+  | "timeout"
+  | "cancelled"
+  | "input_limit"
+  | "output_limit"
+  | "exit";
 export type SecretProcessExitClassification = "locked" | "noninteractive" | "missing" | "other";
 
 export interface SecretCommand {
   readonly executable: string;
   readonly args: readonly string[];
   readonly environment: NodeJS.ProcessEnv;
+  /** Optional input of at most 16 KiB delivered directly to the contained child process. */
+  readonly stdin?: Buffer;
 }
 
 export interface SecretCommandOptions {
@@ -50,6 +59,9 @@ export function runSecretCommand(
   if (options.signal?.aborted) {
     return Promise.reject(new SecretProcessError("cancelled"));
   }
+  if (command.stdin !== undefined && command.stdin.byteLength > maximumStdinBytes) {
+    return Promise.reject(new SecretProcessError("input_limit"));
+  }
   if (process.platform !== "win32") return runPreparedSecretCommand(command, options);
 
   return resolveWindowsSecretCommand(command).then(
@@ -70,18 +82,25 @@ function runPreparedSecretCommand(
   }
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve, reject) => {
-    const child = isWindowsSecretCommand(command)
+    const standardInput = command.stdin === undefined ? "ignore" : "pipe";
+    const usesWindowsHelper = isWindowsSecretCommand(command);
+    const child = usesWindowsHelper
       ? spawnWindowsSecretCommand(command)
       : spawn(command.executable, command.args, {
           env: command.environment,
           shell: false,
           windowsHide: true,
           detached: true,
-          stdio: ["ignore", "pipe", "pipe"]
+          stdio: [standardInput, "pipe", "pipe"]
         });
+    const stdin = child.stdin;
     const stdout = child.stdout;
     const stderr = child.stderr;
-    if (stdout === null || stderr === null) {
+    if (
+      stdout === null ||
+      stderr === null ||
+      (!usesWindowsHelper && command.stdin !== undefined && stdin === null)
+    ) {
       child.once("error", () => undefined);
       child.kill();
       reject(new SecretProcessError("unavailable"));
@@ -167,6 +186,11 @@ function runPreparedSecretCommand(
     const onAbort = () => terminate("cancelled");
     options.signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(terminate, timeoutMs, "timeout");
+
+    if (command.stdin !== undefined && !usesWindowsHelper) {
+      stdin!.once("error", () => terminate("unavailable"));
+      stdin!.end(command.stdin);
+    }
 
     stdout.on("data", (value: Buffer) => {
       if (terminalKind !== undefined) return;

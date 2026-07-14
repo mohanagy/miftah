@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { matcherEvidenceFromError, RoutingEngine } from "../src/routing/routing-engine.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
+import type { PluginRegistry } from "../src/plugins/plugin-registry.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 describe("routing and policy", () => {
@@ -356,6 +357,38 @@ describe("routing and policy", () => {
         })
       )
     ).toBeUndefined();
+  });
+
+  it("sorts plugin and static matcher evidence before applying the bounded audit limit", async () => {
+    const profiles = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `static-${index.toString().padStart(2, "0")}`,
+        { routing: { match: { sentry: { organizations: ["acme"] } } } }
+      ])
+    );
+    const plugins = {
+      hasRoutingMatchers: () => true,
+      matchRouting: async () => [{ profile: "plugin-work", pluginId: "plugin-bound", binding: "work" }]
+    } as unknown as PluginRegistry;
+    const engine = new RoutingEngine({ fallback: "block" }, "personal", "personal", profiles, plugins);
+    const failure = await engine
+      .resolveWithPlugins({ toolName: "sentry_get_issue", args: { organization: "acme" } })
+      .then(
+        () => {
+          throw new Error("Expected conflicting matcher candidates to fail");
+        },
+        (error: unknown) => error
+      );
+
+    expect(failure).toMatchObject({ code: "ROUTING_AMBIGUOUS" });
+    const evidence = matcherEvidenceFromError(failure);
+    expect(evidence).toHaveLength(64);
+    expect(evidence?.[0]).toEqual({
+      profile: "plugin-work",
+      provider: "plugin:plugin-bound",
+      kind: "binding",
+      value: "work"
+    });
   });
 
   it("treats conflicting canonical provider aliases as ambiguity instead of silently preferring one", () => {
