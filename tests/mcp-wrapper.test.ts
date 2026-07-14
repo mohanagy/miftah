@@ -2299,7 +2299,9 @@ describe("Miftah MCP wrapper", () => {
             TEST_RESOURCE_UPDATE_DELAY_MS: "225",
             TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
             TEST_SUBSCRIBE_COUNT_PATH: subscribeCountPath,
-            TEST_SUBSCRIBE_DELAY_MS: "50",
+            // Keep the upstream request pending beyond the poll cadence so the
+            // test aborts an in-flight subscription rather than a completed one.
+            TEST_SUBSCRIBE_DELAY_MS: "500",
             TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribeCountPath,
             TEST_UNSUBSCRIBE_DELAY_MS: "150",
             TEST_CANCELLED_PATH: cancelledPath
