@@ -54,6 +54,32 @@ describe("Windows migration ACL boundary", () => {
     await expect(copyWindowsConfigSecurityDescriptor("C:\\config\\source.json", "C:\\config\\target.json")).resolves.toBe(false);
   });
 
+  it("verifies copied ACLs without reserializing the target descriptor as SDDL", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(copyWindowsConfigSecurityDescriptor("C:\\config\\source.json", "C:\\config\\target.json")).resolves.toBe(true);
+
+    const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("GetSecurityDescriptorBinaryForm");
+    expect(command).not.toContain("$verifiedAcl.GetSecurityDescriptorSddlForm");
+  });
+
+  it("fails closed rather than replacing malformed Unicode in a private directory path", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateMigrationDirectory("C:\\config\\\uD800")).resolves.toBe(false);
+    expect(windowsAclMocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("kills an unverified ACL helper that exceeds its bounded execution time", async () => {
     vi.useFakeTimers();
     const child = createChild();

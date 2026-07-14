@@ -55,8 +55,11 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
   const fields = request.operation === "copy-file-security"
     ? [request.operation, request.source, request.target]
     : [request.operation, request.directory];
-  const bytes = Buffer.from(fields.join("\u0000"), "utf8");
-  return bytes.byteLength <= maximumRequestBytes ? bytes.toString("base64") : undefined;
+  const payload = fields.join("\u0000");
+  const bytes = Buffer.from(payload, "utf8");
+  return bytes.byteLength <= maximumRequestBytes && bytes.toString("utf8") === payload
+    ? bytes.toString("base64")
+    : undefined;
 }
 
 function trustedPowerShellExecutable(): string | undefined {
@@ -136,11 +139,13 @@ try {
   if ($fields.Count -eq 3 -and $fields[0] -eq 'copy-file-security') {
     $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $accessSections)
     $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($accessSections)
+    $sourceDescriptor = [Convert]::ToBase64String($sourceAcl.GetSecurityDescriptorBinaryForm())
     $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
     $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $accessSections)
     [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
     $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
-    if ($sourceSddl -ne $verifiedAcl.GetSecurityDescriptorSddlForm($accessSections)) { exit 1 }
+    $verifiedDescriptor = [Convert]::ToBase64String($verifiedAcl.GetSecurityDescriptorBinaryForm())
+    if ($sourceDescriptor -ne $verifiedDescriptor) { exit 1 }
     exit 0
   }
 
