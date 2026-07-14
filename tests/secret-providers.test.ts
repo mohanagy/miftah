@@ -169,7 +169,8 @@ function activePipeCount(): number {
 
 async function runWindowsCompressedBootstrap(
   source: string,
-  environment: NodeJS.ProcessEnv = {}
+  environment: NodeJS.ProcessEnv = {},
+  standardInput?: Buffer
 ): Promise<{
   code: number | null;
   stdout: string;
@@ -200,6 +201,7 @@ try {
   const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
 
   return new Promise((resolve, reject) => {
+    const stdin = standardInput === undefined ? "ignore" : "pipe";
     const child = spawn(
       launcher,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
@@ -211,7 +213,7 @@ try {
         },
         shell: false,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: [stdin, "pipe", "pipe"]
       }
     );
     const stdout: Buffer[] = [];
@@ -219,6 +221,7 @@ try {
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.once("error", reject);
+    if (standardInput !== undefined) child.stdin?.end(standardInput);
     child.once("close", (code) => {
       resolve({
         code,
@@ -811,6 +814,32 @@ describe("secret command runner", () => {
         stdout: "bootstrap-ready\r\n",
         stderr: expect.any(String)
       });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "keeps standard input available to the encoded PowerShell bootstrap",
+    async () => {
+      const input = Buffer.concat([
+        Buffer.from("bootstrap-input", "utf8"),
+        Buffer.from([0]),
+        Buffer.from("with-newline\\n", "utf8")
+      ]);
+      const result = await runWindowsCompressedBootstrap(
+        `$stream = [Console]::OpenStandardInput()
+$output = [IO.MemoryStream]::new()
+$buffer = [byte[]]::new(4096)
+while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+  $output.Write($buffer, 0, $count)
+}
+[Console]::Out.Write([Convert]::ToBase64String($output.ToArray()))
+exit 0`,
+        {},
+        input
+      );
+
+      expect(result).toMatchObject({ code: 0, stdout: input.toString("base64") });
     },
     20_000
   );
