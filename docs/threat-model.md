@@ -60,7 +60,7 @@ secret references, audit destination, and explicitly allowlisted plugins.
 
 | Flow | Boundary | Controls at the boundary |
 | --- | --- | --- |
-| MCP client to local ingress | Untrusted request becomes a local operation. | Exact protocol/host/origin checks for HTTP, optional bearer authentication for non-loopback binding, bounded request bodies, isolated HTTP session runtimes, and stable error categories. |
+| MCP client to local ingress | Untrusted request becomes a local operation. | Exact protocol/host/origin checks for HTTP, required secret-backed bearer authentication for explicitly enabled non-loopback binding, bounded request bodies, isolated HTTP session runtimes, and stable error categories. |
 | Request to routing and policy | User-controlled names and arguments affect target selection. | Immutable routing context, explicit rules and locks, conservative risk classification, policy checks, confirmation/approval lifecycle, and fail-closed ambiguity. |
 | Resolver to secret provider or child environment | A secret is materialized for a configured consumer. | Typed provider grammar, fixed provider programs with argument arrays, bounded capture, timeouts/cancellation, child-environment scoping, and redaction registration before return. Windows resolution avoids current-directory lookup. |
 | Miftah to upstream | A selected profile's credentials and operation cross to an external/local service. | Exact target resolution, profile-bound credentials, HTTPS outside loopback development addresses, normal certificate validation, and redacted diagnostics. |

@@ -39,6 +39,9 @@ describe("threat model documentation contract", () => {
     expect(threatModel).toContain(
       "| Threat and attacker goal | Implemented controls | Residual risk and operator decision |"
     );
+    expect(threatModel).toContain(
+      "required secret-backed bearer authentication for explicitly enabled non-loopback binding"
+    );
 
     for (const boundary of [
       "trusted and untrusted MCP clients and upstreams",
@@ -69,9 +72,11 @@ describe("threat model documentation contract", () => {
       "**Secret disclosure**",
       "**Prompt-driven profile or tool confusion**",
       "**Provider or plugin subprocess abuse**",
+      "**Credential-runtime or container handoff exposure**",
       "**Remote transport or local HTTP session confusion**",
       "**Routing ambiguity, deceptive metadata, or policy fail-open**",
       "**Audit loss, disclosure, or undetected replacement**",
+      "**Misleading upstream identity or response data**",
       "**Plugin, dependency, or source supply-chain compromise**",
       "**Denial of service and concurrency exhaustion**"
     ]) {
