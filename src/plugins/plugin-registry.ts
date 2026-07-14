@@ -6,6 +6,7 @@ import type { PluginConfig, PluginsConfig, RoutingMatcherPluginConfig } from "..
 import type { ProviderMatcherInput } from "../routing/provider-matcher-types.js";
 import { SecretProcessError, runSecretCommand } from "../secrets/secret-process-runner.js";
 import { MiftahError } from "../utils/errors.js";
+import { MIFTAH_PLUGIN_API_VERSION, type MiftahPluginApiVersion } from "./plugin-api.js";
 import { isPluginIdentifier, type PluginSecretReference } from "./plugin-secret-reference.js";
 
 const defaultPluginTimeoutMs = 5_000;
@@ -24,7 +25,7 @@ interface LoadedPlugin {
 }
 
 interface PluginManifest {
-  readonly apiVersion: "1";
+  readonly apiVersion: MiftahPluginApiVersion;
   readonly id: string;
   readonly kind: PluginConfig["kind"];
 }
@@ -238,7 +239,7 @@ async function loadPlugin(
     throw incompatiblePluginError();
   }
   const manifest = await inspectPluginManifest(path, timeoutMs, signal);
-  if (manifest.id !== entry.id || manifest.kind !== entry.kind || manifest.apiVersion !== "1") {
+  if (manifest.id !== entry.id || manifest.kind !== entry.kind || manifest.apiVersion !== MIFTAH_PLUGIN_API_VERSION) {
     throw incompatiblePluginError();
   }
   return entry.kind === "routing-matcher"
@@ -343,7 +344,7 @@ function pluginManifest(value: unknown): PluginManifest | undefined {
   const manifest = value.manifest;
   const { apiVersion, id, kind } = manifest;
   if (
-    apiVersion !== "1" ||
+    apiVersion !== MIFTAH_PLUGIN_API_VERSION ||
     !isPluginIdentifier(id) ||
     (kind !== "secret-provider" && kind !== "routing-matcher")
   ) {

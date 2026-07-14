@@ -24,7 +24,11 @@ import { validateConfig } from "../src/config/validate-config.js";
 import type { MiftahConfig } from "../src/config/types.js";
 import type { AuditScope } from "../src/audit/audit-trail.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
-import { hasCompatibleCachedToolTarget, MiftahServer } from "../src/mcp/server/miftah-server.js";
+import {
+  hasCompatibleCachedToolTarget,
+  MiftahServer,
+  resolveClientVisibleToolName
+} from "../src/mcp/server/miftah-server.js";
 import type { RegisteredTool } from "../src/mcp/server/tool-registry.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
@@ -33,6 +37,24 @@ import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
+const managementToolNames = [
+  "miftah_list_profiles",
+  "miftah_current_profile",
+  "miftah_use_profile",
+  "miftah_reset_profile",
+  "miftah_lock_profile",
+  "miftah_unlock_profile",
+  "miftah_profile_info",
+  "miftah_health",
+  "miftah_validate_config",
+  "miftah_list_upstream_tools",
+  "miftah_restart_profile",
+  "miftah_verify_identity",
+  "miftah_route_preview",
+  "miftah_list_approvals",
+  "miftah_approve",
+  "miftah_deny"
+] as const;
 
 function registeredTool(originalName: string): RegisteredTool {
   return {
@@ -50,6 +72,17 @@ describe("cached routed-tool compatibility", () => {
 
     expect(hasCompatibleCachedToolTarget(source, registeredTool("source_tool"))).toBe(true);
     expect(hasCompatibleCachedToolTarget(source, registeredTool("different_tool"))).toBe(false);
+  });
+});
+
+describe("client-visible tool compatibility", () => {
+  it("keeps management reservation and upstream namespace rules stable", () => {
+    expect(resolveClientVisibleToolName("search", "github", "prefix-upstream")).toBe("github__search");
+    expect(resolveClientVisibleToolName("miftah_health", undefined, "prefix-upstream")).toBe(
+      "upstream_miftah_health"
+    );
+    expect(() => resolveClientVisibleToolName("miftah_health", undefined, "fail")).toThrow(/TOOL_COLLISION/u);
+    expect(resolveClientVisibleToolName("miftah_custom", undefined, "fail")).toBe("miftah_custom");
   });
 });
 
@@ -798,9 +831,9 @@ describe("Miftah MCP wrapper", () => {
     await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
     const tools = await client.listTools();
-    expect(tools.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["miftah_list_profiles", "miftah_use_profile", "whoami", "create_item"])
-    );
+    const toolNames = tools.tools.map((tool) => tool.name);
+    expect(toolNames.filter((name) => name.startsWith("miftah_")).sort()).toEqual([...managementToolNames].sort());
+    expect(toolNames).toEqual(expect.arrayContaining(["whoami", "create_item"]));
     expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
       content: [{ type: "text", text: "work" }]
     });

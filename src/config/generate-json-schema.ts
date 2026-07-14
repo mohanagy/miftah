@@ -1,5 +1,6 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { CANONICAL_HTTPS_ORIGIN_PATTERN, miftahPublicConfigSchema } from "./schema.js";
+import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 type SchemaObject = Record<string, unknown>;
 
@@ -90,6 +91,47 @@ function addAuditRotationConstraints(schema: SchemaObject): void {
   rotation.anyOf = [{ required: ["maxBytes"] }, { required: ["maxAgeMs"] }];
 }
 
+/** Mirrors v2's runtime-only alias rejection for editor JSON Schema consumers. */
+function versionTwoCompatibilityConstraint(): SchemaObject {
+  const forbiddenProperty = (section: string, property: string): SchemaObject => ({
+    not: {
+      required: [section],
+      properties: { [section]: { required: [property] } }
+    }
+  });
+  const httpTransport = {
+    required: ["transport"],
+    properties: { transport: { const: "http" } }
+  };
+  return {
+    if: {
+      required: ["version"],
+      properties: { version: { const: CURRENT_CONFIG_VERSION } }
+    },
+    then: {
+      allOf: [
+        forbiddenProperty("security", "allowPlaintextSecrets"),
+        forbiddenProperty("security", "redactSecrets"),
+        forbiddenProperty("audit", "redact"),
+        {
+          not: {
+            required: ["upstream"],
+            properties: { upstream: httpTransport }
+          }
+        },
+        {
+          // `additionalProperties` validates every named upstream, which is the object-map equivalent of forbidding a match.
+          properties: {
+            upstreams: {
+              additionalProperties: { not: httpTransport }
+            }
+          }
+        }
+      ]
+    }
+  };
+}
+
 /** Generates the editor-facing JSON Schema from the same strict Zod contract used after validation. */
 export function generateConfigSchema(): Record<string, unknown> {
   const schema = zodToJsonSchema(miftahPublicConfigSchema, { target: "jsonSchema2019-09" }) as SchemaObject;
@@ -161,7 +203,8 @@ export function generateConfigSchema(): Record<string, unknown> {
             }
           }
         }
-      }
+      },
+      versionTwoCompatibilityConstraint()
     ],
     title: "Miftah configuration"
   };

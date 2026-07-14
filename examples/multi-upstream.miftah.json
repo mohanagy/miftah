@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2",
   "name": "dev-tools",
   "description": "Multiple MCPs behind one Miftah instance",
   "defaultProfile": "work",
@@ -48,16 +48,16 @@
     }
   },
   "security": {
-    "allowPlaintextSecrets": false,
-    "redactSecrets": true,
     "allowProfileSwitchingFromMcp": true
+  },
+  "secrets": {
+    "allowPlaintextSecrets": false
   },
   "audit": {
     "enabled": true,
     "path": "~/.local/state/miftah/dev-tools.audit.jsonl",
     "format": "jsonl",
     "includeArguments": false,
-    "redact": true,
     "failureMode": "fail-closed"
   },
   "tooling": {

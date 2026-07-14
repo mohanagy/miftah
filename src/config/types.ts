@@ -12,6 +12,11 @@ export interface UpstreamConfig {
   trustToolAnnotations?: boolean;
 }
 
+type CurrentUpstreamConfig = Omit<UpstreamConfig, "transport"> & {
+  /** Version 2 replaces the legacy HTTP transport alias with the canonical name. */
+  transport: Exclude<TransportType, "http">;
+};
+
 /** Non-secret account attributes used to validate an upstream identity. */
 export interface IdentityFingerprint {
   provider?: string;
@@ -217,6 +222,13 @@ export interface SecurityConfig {
   lockToProfile?: string | null;
 }
 
+type CurrentSecurityConfig = Omit<SecurityConfig, "allowPlaintextSecrets" | "redactSecrets"> & {
+  /** Version 2 moves this opt-in to secrets.allowPlaintextSecrets. */
+  allowPlaintextSecrets?: never;
+  /** Secret redaction is always enabled in version 2. */
+  redactSecrets?: never;
+};
+
 /** Configures lifecycle behavior for profile-bound upstream processes. */
 export interface ProcessConfig {
   startupTimeoutMs?: number;
@@ -270,6 +282,12 @@ type ManagedAuditConfig = Omit<AuditConfigBase, "enabled" | "path"> & {
 
 /** Configures local audit output and optional managed journal controls. */
 export type AuditConfig = UnmanagedAuditConfig | ManagedAuditConfig;
+
+type WithoutLegacyOption<Type, Key extends PropertyKey> = Type extends unknown
+  ? Omit<Type, Key> & { [Option in Key]?: never }
+  : never;
+
+type CurrentAuditConfig = WithoutLegacyOption<AuditConfig, "redact">;
 
 export interface ToolingConfig {
   collisionStrategy?: "prefix-upstream" | "fail";
@@ -350,8 +368,7 @@ export type StateConfig =
       scope: "workspace" | "global";
     };
 
-export interface MiftahConfig {
-  version: "1";
+interface MiftahConfigBase {
   name: string;
   description?: string;
   defaultProfile: string;
@@ -369,3 +386,25 @@ export interface MiftahConfig {
   state?: StateConfig;
   server?: ServerConfig;
 }
+
+/** Version 1 retains the documented compatibility aliases accepted by the runtime. */
+interface LegacyMiftahConfig extends MiftahConfigBase {
+  version: "1";
+}
+
+/** Version 2 accepts only the canonical configuration surface. */
+interface CurrentMiftahConfig extends Omit<MiftahConfigBase, "upstream" | "upstreams" | "security" | "audit"> {
+  version: "2";
+  upstream?: CurrentUpstreamConfig;
+  upstreams?: Record<string, CurrentUpstreamConfig>;
+  security?: CurrentSecurityConfig;
+  audit?: CurrentAuditConfig;
+}
+
+/**
+ * Supported configuration formats, discriminated by their declared version.
+ *
+ * Version 1 preserves documented compatibility aliases; version 2 exposes the
+ * strict canonical surface that the runtime and generated JSON Schema enforce.
+ */
+export type MiftahConfig = LegacyMiftahConfig | CurrentMiftahConfig;

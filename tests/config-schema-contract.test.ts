@@ -139,6 +139,9 @@ interface SchemaNode {
   oneOf?: SchemaNode[];
   anyOf?: SchemaNode[];
   allOf?: SchemaNode[];
+  if?: SchemaNode;
+  then?: SchemaNode;
+  not?: SchemaNode;
 }
 
 interface ConfigSchema extends SchemaNode {
@@ -351,6 +354,55 @@ describe("published config schema", () => {
     expect(profile.additionalProperties).toBe(false);
     expect(profileUpstreamOverride.additionalProperties).toBe(false);
     expect(root?.routing?.properties?.rules?.items?.properties?.when?.additionalProperties).toEqual({});
+  });
+
+  it("rejects v1-only aliases when an editor selects the canonical v2 format", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+    const versionTwoConstraint = schema.allOf?.find(
+      (constraint) => constraint.if?.properties?.version?.const === "2"
+    );
+
+    expect(versionTwoConstraint).toMatchObject({
+      then: {
+        allOf: [
+          {
+            not: {
+              required: ["security"],
+              properties: { security: { required: ["allowPlaintextSecrets"] } }
+            }
+          },
+          {
+            not: {
+              required: ["security"],
+              properties: { security: { required: ["redactSecrets"] } }
+            }
+          },
+          {
+            not: {
+              required: ["audit"],
+              properties: { audit: { required: ["redact"] } }
+            }
+          },
+          {
+            not: {
+              required: ["upstream"],
+              properties: {
+                upstream: { required: ["transport"], properties: { transport: { const: "http" } } }
+              }
+            }
+          },
+          {
+            properties: {
+              upstreams: {
+                additionalProperties: {
+                  not: { required: ["transport"], properties: { transport: { const: "http" } } }
+                }
+              }
+            }
+          }
+        ]
+      }
+    });
   });
 
   it("encodes isolation path safety in the generated editor schema", () => {

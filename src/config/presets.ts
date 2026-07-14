@@ -1,4 +1,5 @@
-import type { MiftahConfig, ProfileConfig, UpstreamConfig } from "./types.js";
+import type { MiftahConfig, ProfileConfig } from "./types.js";
+import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 /** Pinned GitHub MCP server image used by the GitHub preset. */
 export const GITHUB_MCP_IMAGE = "ghcr.io/github/github-mcp-server:v1.5.0";
@@ -14,7 +15,9 @@ const exactSemver =
 const canonicalDigestImage =
   /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?\/)?(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)*[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@sha256:[A-Fa-f0-9]{64}$/u;
 
-type SharedDefaults = Pick<MiftahConfig, "routing" | "security" | "process" | "audit" | "tooling">;
+type CurrentMiftahConfig = Extract<MiftahConfig, { version: "2" }>;
+type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
+type SharedDefaults = Pick<CurrentMiftahConfig, "routing" | "security" | "secrets" | "process" | "audit" | "tooling">;
 
 export interface PresetBuildOptions {
   credentialEnv?: string;
@@ -62,25 +65,23 @@ function buildSharedDefaults(): SharedDefaults {
   return {
     routing: { mode: "hybrid", fallback: "activeProfile", rules: [] },
     security: {
-      allowPlaintextSecrets: false,
-      redactSecrets: true,
       allowProfileSwitchingFromMcp: true,
       requireExplicitProfileForDestructive: true
     },
+    secrets: { allowPlaintextSecrets: false },
     process: { startupTimeoutMs: 30_000 },
     audit: {
       enabled: true,
       path: "~/.local/state/miftah/audit.jsonl",
       format: "jsonl",
       includeArguments: false,
-      redact: true,
       failureMode: "fail-closed"
     },
     tooling: { collisionStrategy: "prefix-upstream" }
   };
 }
 
-function buildReadonlyPolicies(): NonNullable<MiftahConfig["policies"]> {
+function buildReadonlyPolicies(): NonNullable<CurrentMiftahConfig["policies"]> {
   return {
     readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] }
   };
@@ -94,9 +95,13 @@ function buildCredentialProfile(credentialEnv?: string): ProfileConfig {
 }
 
 /** Builds the common single-profile shape used by generic presets. */
-function buildStandardPreset(name: string, upstream: UpstreamConfig, credentialEnv?: string): MiftahConfig {
+function buildStandardPreset(
+  name: string,
+  upstream: CurrentUpstreamConfig,
+  credentialEnv?: string
+): CurrentMiftahConfig {
   return {
-    version: "1",
+    version: CURRENT_CONFIG_VERSION,
     name,
     description: `${name} wrapped by Miftah`,
     defaultProfile: "default",
@@ -141,7 +146,7 @@ function buildSentryPreset(name: string): MiftahConfig {
 /** Builds the multi-profile GitHub preset and its referenced policies. */
 function buildGithubPreset(name: string): MiftahConfig {
   return {
-    version: "1",
+    version: CURRENT_CONFIG_VERSION,
     name,
     description: "GitHub MCP wrapped by Miftah",
     defaultProfile: "work",

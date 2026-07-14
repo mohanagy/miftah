@@ -52,6 +52,7 @@ const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
 const publicRuntimeExports = [
+  "CURRENT_CONFIG_VERSION",
   "MIFTAH_VERSION",
   "MiftahError",
   "createMiftahRuntime",
@@ -665,17 +666,18 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { createMiftahRuntime, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
+            'import { createMiftahRuntime, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig } from "@lubab/miftah";',
             'import { MIFTAH_PLUGIN_API_VERSION, type MiftahPlugin, type RoutingMatcherPlugin, type RoutingMatcherPluginRequest, type RoutingMatcherPluginResult, type RoutingMatcherPluginSignal, type SecretProviderPlugin, type SecretProviderPluginRequest, type SecretProviderPluginResult } from "@lubab/miftah/plugin-api";',
             "",
             "type SupportedTypes = [",
-            "  ActiveProfileStateScope, AuditConfig, AuditIntegrityConfig, AuditRotationConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig,",
+            "  ActiveProfileStateScope, AuditConfig, AuditIntegrityConfig, AuditRotationConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig, MiftahConfigVersion,",
             "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
             "  PluginConfig, PluginKind, PluginsConfig, PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig, RoutingMatcherPluginConfig,",
             "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, SecretProviderPluginConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
             "  ValidatedRoutingConfig, MiftahPlugin, RoutingMatcherPlugin, RoutingMatcherPluginRequest, RoutingMatcherPluginResult, RoutingMatcherPluginSignal, SecretProviderPlugin, SecretProviderPluginRequest, SecretProviderPluginResult",
             "];",
             "declare const types: SupportedTypes;",
+            'const currentConfigVersion: "2" = CURRENT_CONFIG_VERSION;',
             "const version: string = MIFTAH_VERSION;",
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
@@ -929,6 +931,7 @@ describe("packed artifact contract", () => {
           logs: ["--config <file>", "--follow"],
           "audit-export": ["--config <file>", "--output <file>", "--include-arguments"],
           "audit-verify": ["--config <file>", "--json"],
+          "migrate-config": ["--config <file>", "--write"],
           version: ["--json"]
         } as const;
         for (const [command, options] of Object.entries(commandOptions)) {
@@ -946,6 +949,39 @@ describe("packed artifact contract", () => {
           expect(command.stderr).toBe("");
           expect(command.stdout.trim()).toBe(readPackageManifest().version);
         }
+
+        const migrationConfigPath = await writeCliConfig(
+          "migration config with spaces.json",
+          cliConfig("packed-cli-migration", { work: {} })
+        );
+        const migrationOriginal = await readFile(migrationConfigPath, "utf8");
+        const migrationDryRun = runInstalledBinary(
+          binary,
+          ["migrate-config", "--config", migrationConfigPath],
+          cliContractDirectory
+        );
+        expect(migrationDryRun.status, migrationDryRun.stderr || migrationDryRun.stdout).toBe(0);
+        expect(migrationDryRun.stderr).toBe("");
+        expect(JSON.parse(migrationDryRun.stdout)).toMatchObject({
+          fromVersion: "1",
+          toVersion: "2",
+          changed: true,
+          write: false,
+          backupCreated: false
+        });
+        expect(await readFile(migrationConfigPath, "utf8")).toBe(migrationOriginal);
+        await expect(readFile(`${migrationConfigPath}.bak`, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const migrationWrite = runInstalledBinary(
+          binary,
+          ["migrate-config", "--config", migrationConfigPath, "--write"],
+          cliContractDirectory
+        );
+        expect(migrationWrite.status, migrationWrite.stderr || migrationWrite.stdout).toBe(0);
+        expect(migrationWrite.stderr).toBe("");
+        expect(JSON.parse(migrationWrite.stdout)).toMatchObject({ changed: true, write: true, backupCreated: true });
+        expect(await readFile(`${migrationConfigPath}.bak`, "utf8")).toBe(migrationOriginal);
+        expect(JSON.parse(await readFile(migrationConfigPath, "utf8"))).toMatchObject({ version: "2" });
 
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
         const initialized = runInstalledBinaryThroughShell(

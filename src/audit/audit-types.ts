@@ -10,6 +10,9 @@ import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "..
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
+/** Immutable version marker for JSONL records written by the current audit journal. */
+export const AUDIT_RECORD_SCHEMA_VERSION = 1 as const;
+
 /** Opt-in local JSONL journal rotation and archive retention settings. */
 export interface AuditRotationOptions {
   /** Rotate before a complete write would make the active segment larger than this many bytes. */
