@@ -72,6 +72,15 @@ try {
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 
+function safeAclProbeDiagnostic(output: readonly Buffer[]): string {
+  const bytes = Buffer.concat(output);
+  for (const encoding of ["utf8", "utf16le"] as const) {
+    const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
+    if (/^MIFTAH_ACL_PROBE_EXCEPTION:[A-Za-z0-9_.]+$/.test(diagnostic)) return diagnostic;
+  }
+  return "MIFTAH_ACL_PROBE_EXCEPTION:unavailable";
+}
+
 async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
   const request = Buffer.from(JSON.stringify({ path, operation }), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
@@ -87,11 +96,7 @@ async function windowsAclSddl(path: string, operation: "read" | "restrict"): Pro
     child.once("error", () => reject(new Error("Windows ACL probe could not start")));
     child.once("close", (code) => {
       if (code !== 0) {
-        const diagnostic = Buffer.concat(errorOutput).toString("utf8").trim();
-        const safeDiagnostic = /^MIFTAH_ACL_PROBE_EXCEPTION:[A-Za-z0-9_.]+$/.test(diagnostic)
-          ? diagnostic
-          : "MIFTAH_ACL_PROBE_EXCEPTION:unavailable";
-        reject(new Error(`Windows ACL probe failed: ${safeDiagnostic}`));
+        reject(new Error(`Windows ACL probe failed: ${safeAclProbeDiagnostic(errorOutput)}`));
         return;
       }
       try {
