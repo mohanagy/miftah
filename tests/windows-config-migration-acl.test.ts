@@ -183,7 +183,11 @@ try {
     [Console]::Out.Write("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:field-count-" + $fields.Count)
     exit 1
   }
-  if ($fields[0] -ne 'copy-file-security' -and $fields[0] -ne 'copy-file-security-fresh') {
+  if (
+    $fields[0] -ne 'copy-file-security' -and
+    $fields[0] -ne 'copy-file-security-fresh' -and
+    $fields[0] -ne 'copy-file-security-verify-rules'
+  ) {
     [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:operation')
     exit 1
   }
@@ -212,6 +216,24 @@ try {
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-get')
   $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
   if ($null -eq $verifiedAcl) { exit 1 }
+  if ($fields[0] -eq 'copy-file-security-verify-rules') {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-rules')
+    $sourceRules = @($sourceAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($sourceRules.Count -ne $verifiedRules.Count) { exit 1 }
+    for ($index = 0; $index -lt $sourceRules.Count; $index++) {
+      $sourceRule = $sourceRules[$index]
+      $verifiedRule = $verifiedRules[$index]
+      if (
+        $sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value -or
+        ([int]$sourceRule.FileSystemRights) -ne ([int]$verifiedRule.FileSystemRights) -or
+        ([int]$sourceRule.AccessControlType) -ne ([int]$verifiedRule.AccessControlType) -or
+        $sourceRule.IsInherited -ne $verifiedRule.IsInherited -or
+        ([int]$sourceRule.InheritanceFlags) -ne ([int]$verifiedRule.InheritanceFlags) -or
+        ([int]$sourceRule.PropagationFlags) -ne ([int]$verifiedRule.PropagationFlags)
+      ) { exit 1 }
+    }
+  }
   exit 0
 } catch {
   $suffix = switch ($_.CategoryInfo.Category.ToString()) {
@@ -271,7 +293,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
-    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-fresh|target-set-binary|target-apply|verify-get)/g);
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-fresh|target-set-binary|target-apply|verify-get|verify-rules)/g);
     const boundary = boundaries?.[boundaries.length - 1];
     if (boundary !== undefined) return boundary;
   }
@@ -378,9 +400,13 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
 async function windowsCopyFileSecurityProbe(
   source: string,
   target: string,
-  mode: "existing-target" | "fresh-security" = "existing-target"
+  mode: "existing-target" | "fresh-security" | "verify-access-rules" = "existing-target"
 ): Promise<void> {
-  const operation = mode === "fresh-security" ? "copy-file-security-fresh" : "copy-file-security";
+  const operation = mode === "fresh-security"
+    ? "copy-file-security-fresh"
+    : mode === "verify-access-rules"
+      ? "copy-file-security-verify-rules"
+      : "copy-file-security";
   const request = Buffer.from([operation, source, target].join("\u0000"), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -524,6 +550,28 @@ describe("Windows migration ACL contract", () => {
       await targetHandle.close();
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
+      expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "diagnoses access-rule comparison after an inherited descriptor persists",
+    async () => {
+      const parentDirectory = await mkdtemp(join(tmpdir(), "miftah-windows-copy-inherited-rules-acl-"));
+      temporaryDirectories.push(parentDirectory);
+      const originalSourcePath = join(parentDirectory, "miftah.json");
+      const privateDirectory = join(parentDirectory, ".miftah-migrate-transaction");
+      const sourcePath = join(privateDirectory, "source.miftah-migrate-hold");
+      const targetPath = join(privateDirectory, "backup.miftah-migrate.tmp");
+      await writeFile(originalSourcePath, "source", "utf8");
+      await expect(windowsPrivateDirectoryProbe(privateDirectory)).resolves.toBeUndefined();
+      await rename(originalSourcePath, sourcePath);
+      const expectedSddl = await windowsAclSddl(sourcePath, "read");
+      const targetHandle = await open(targetPath, "wx", 0o600);
+      await targetHandle.close();
+
+      await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "verify-access-rules")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
     10_000
