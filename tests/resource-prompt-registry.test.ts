@@ -203,7 +203,7 @@ describe("resource and prompt registry", () => {
     expect(first.resources.map((resource) => resource.name)).toEqual(["alpha__first", "beta__first"]);
     expect(second.resources.map((resource) => resource.name)).toEqual(["beta__second"]);
     expect([...first.resources, ...second.resources].map((resource) => resource.uri)).toHaveLength(3);
-    expect(new Set([...first.resources, ...second.resources].map((resource) => resource.uri))).toHaveLength(3);
+    expect(new Set([...first.resources, ...second.resources].map((resource) => resource.uri)).size).toBe(3);
     expect(requestedPages).toEqual([
       { upstream: "alpha", cursor: undefined },
       { upstream: "beta", cursor: undefined },

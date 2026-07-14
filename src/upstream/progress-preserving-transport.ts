@@ -15,6 +15,7 @@ export class ProgressPreservingTransport implements Transport {
   onmessage?: <T extends JSONRPCMessage>(message: T, extra?: MessageExtraInfo) => void;
   private readonly pendingMessages: Array<{ message: JSONRPCMessage; extra?: MessageExtraInfo }> = [];
   private flushing = false;
+  private flushScheduled = false;
   private responseDeferred = false;
   private closeRequested = false;
   private closed = false;
@@ -71,21 +72,43 @@ export class ProgressPreservingTransport implements Transport {
           queueMicrotask(() => {
             try {
               this.onmessage?.(next.message, next.extra);
+            } catch (error) {
+              this.onerror?.(asError(error));
             } finally {
               this.responseDeferred = false;
               this.flushing = false;
-              this.flushMessages();
+              this.flushAfterAsyncCallback();
             }
           });
           return;
         }
         this.onmessage?.(next.message, next.extra);
       }
+    } catch (error) {
+      if (this.pendingMessages.length > 0) this.scheduleFlush();
+      throw error;
     } finally {
       if (!this.responseDeferred) {
         this.flushing = false;
         this.forwardCloseWhenDrained();
       }
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushScheduled || this.closed) return;
+    this.flushScheduled = true;
+    queueMicrotask(() => {
+      this.flushScheduled = false;
+      this.flushAfterAsyncCallback();
+    });
+  }
+
+  private flushAfterAsyncCallback(): void {
+    try {
+      this.flushMessages();
+    } catch (error) {
+      this.onerror?.(asError(error));
     }
   }
 
@@ -102,4 +125,8 @@ export function unwrapProgressPreservingTransport(transport: Transport): Transpo
 
 function isResponse(message: JSONRPCMessage): boolean {
   return "id" in message && ("result" in message || "error" in message);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error("Progress transport message handler failed");
 }
