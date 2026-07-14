@@ -97,6 +97,7 @@ try {
 }`;
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
+const encodedHangingAclProbe = Buffer.from("Start-Sleep -Seconds 10", "utf16le").toString("base64");
 
 const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP')
 $ErrorActionPreference = 'Stop'
@@ -296,12 +297,16 @@ function expectedPersistedInheritedDaclSddl(sourceSddl: string): string {
   return `${sourceSddl.slice(0, daclIndex)}D:AI${dacl}`;
 }
 
-async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
+async function windowsAclSddl(
+  path: string,
+  operation: "read" | "restrict",
+  encodedCommand: string = encodedAclProbe
+): Promise<string> {
   const request = Buffer.from(JSON.stringify({ path, operation }), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
     const child = spawn(
       trustedPowerShellExecutable(),
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedAclProbe],
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
       { env: aclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
     );
     const output: Buffer[] = [];
@@ -406,6 +411,21 @@ describe("Windows migration ACL contract", () => {
       temporaryDirectories.push(parentDirectory);
 
       await expect(windowsPrivateDirectoryProbe(join(parentDirectory, ".miftah-migrate-transaction"))).resolves.toBeUndefined();
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "terminates a hanging ACL descriptor probe",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-windows-hanging-acl-probe-"));
+      temporaryDirectories.push(directory);
+      const path = join(directory, "miftah.json");
+      await writeFile(path, "source", "utf8");
+
+      await expect(windowsAclSddl(path, "read", encodedHangingAclProbe)).rejects.toThrow(
+        "Windows ACL probe timed out: MIFTAH_ACL_PROBE_STAGE:unavailable"
+      );
     },
     10_000
   );
