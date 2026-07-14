@@ -311,10 +311,22 @@ async function windowsAclSddl(
     );
     const output: Buffer[] = [];
     const errorOutput: Buffer[] = [];
+    const timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // The probe has no verified result after its bounded execution time.
+      }
+      reject(new Error(`Windows ACL probe timed out: ${safeAclProbeStage([...output, ...errorOutput])}`));
+    }, 5_000);
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
-    child.once("error", () => reject(new Error("Windows ACL probe could not start")));
+    child.once("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Windows ACL probe could not start"));
+    });
     child.once("close", (code) => {
+      clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(`Windows ACL probe failed: ${safeAclProbeStage([...output, ...errorOutput])}`));
         return;
