@@ -69,7 +69,7 @@ function trustedPowerShellExecutable(): string | undefined {
 
 function aclEnvironment(request: string): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { SystemRoot: trustedWindowsRoot, windir: trustedWindowsRoot };
-  for (const name of ["ComSpec", "TEMP", "TMP", "PSModulePath", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
+  for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
     const value = environmentValue(process.env, name);
     if (value !== undefined) environment[name] = value;
   }
@@ -134,10 +134,13 @@ try {
 
   if ($request.operation -eq 'copy-file-security') {
     if ($request.source -isnot [string] -or $request.target -isnot [string]) { exit 1 }
-    $sourceAcl = Get-Acl -LiteralPath $request.source
-    Set-Acl -LiteralPath $request.target -AclObject $sourceAcl
-    $targetAcl = Get-Acl -LiteralPath $request.target
-    if ($sourceAcl.GetSecurityDescriptorSddlForm($accessSections) -ne $targetAcl.GetSecurityDescriptorSddlForm($accessSections)) { exit 1 }
+    $sourceAcl = [System.IO.File]::GetAccessControl($request.source, $accessSections)
+    $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($accessSections)
+    $targetAcl = [System.IO.File]::GetAccessControl($request.target, $accessSections)
+    $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $accessSections)
+    [System.IO.File]::SetAccessControl($request.target, $targetAcl)
+    $verifiedAcl = [System.IO.File]::GetAccessControl($request.target, $accessSections)
+    if ($sourceSddl -ne $verifiedAcl.GetSecurityDescriptorSddlForm($accessSections)) { exit 1 }
     exit 0
   }
 
