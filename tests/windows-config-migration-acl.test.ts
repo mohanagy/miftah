@@ -66,6 +66,7 @@ try {
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sddl)))
   exit 0
 } catch {
+  [Console]::Error.Write("MIFTAH_ACL_PROBE_EXCEPTION:" + $_.Exception.GetType().FullName)
   exit 1
 }`;
 
@@ -77,14 +78,20 @@ async function windowsAclSddl(path: string, operation: "read" | "restrict"): Pro
     const child = spawn(
       trustedPowerShellExecutable(),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedAclProbe],
-      { env: aclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }
+      { env: aclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
     );
     const output: Buffer[] = [];
+    const errorOutput: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
     child.once("error", () => reject(new Error("Windows ACL probe could not start")));
     child.once("close", (code) => {
       if (code !== 0) {
-        reject(new Error("Windows ACL probe failed"));
+        const diagnostic = Buffer.concat(errorOutput).toString("utf8").trim();
+        const safeDiagnostic = /^MIFTAH_ACL_PROBE_EXCEPTION:[A-Za-z0-9_.]+$/.test(diagnostic)
+          ? diagnostic
+          : "MIFTAH_ACL_PROBE_EXCEPTION:unavailable";
+        reject(new Error(`Windows ACL probe failed: ${safeDiagnostic}`));
         return;
       }
       try {
