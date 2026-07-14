@@ -64,7 +64,7 @@ jobs:
           PACKAGE_VERSION="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
           test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
           git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 
       - name: Install dependencies
         run: npm ci

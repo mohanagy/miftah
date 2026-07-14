@@ -1,3 +1,5 @@
+# Miftah agent instructions
+
 ## madar
 
 ### Codex CLI profile
@@ -33,10 +35,11 @@ Do not run ToolSearch before calling a Madar command or graph tool — pick the 
    - `implementation_checklist` for edit order and validation checkpoints
    - `impact` for blast radius
    - `graph_summary` for repo overview
-8. **Do not open `out/GRAPH_REPORT.md` unless the context pack or graph tools are unavailable, stale, or insufficient. Treat it as a fallback before broader raw file exploration, not a default first read.**
-9. **Do not dispatch `spawn_agent` workers first** for codebase discovery. Let the context pack define likely entry files, risks, and missing context before parallel work.
-10. **Codex activation boundary:** `madar codex install` writes this Madar-owned AGENTS.md section, `.codex/hooks.json`, `.codex/madar-user-prompt-submit.cjs`, and a marker-owned `[mcp_servers.madar]` block in `.codex/config.toml`. The `UserPromptSubmit` hook supplies model-visible context-pack-first guidance only for local code tasks; it is guidance, not enforcement. Enable it only in a repository you trust, then restart Codex, use `/hooks` to review and trust the project hook, and use `/mcp` or `codex mcp list` to verify the MCP server. `madar doctor` and `madar status` validate on-disk files only; they do not prove Codex has trusted or activated them.
-11. **Uninstall behavior:** run `madar codex uninstall` to remove only this AGENTS.md section, the Madar hook, the Madar hook script, and the marker-owned MCP block while preserving unrelated content.
+
+1. **Do not open `out/GRAPH_REPORT.md` unless the context pack or graph tools are unavailable, stale, or insufficient. Treat it as a fallback before broader raw file exploration, not a default first read.**
+2. **Do not dispatch `spawn_agent` workers first** for codebase discovery. Let the context pack define likely entry files, risks, and missing context before parallel work.
+3. **Codex activation boundary:** `madar codex install` writes this Madar-owned AGENTS.md section, `.codex/hooks.json`, `.codex/madar-user-prompt-submit.cjs`, and a marker-owned `[mcp_servers.madar]` block in `.codex/config.toml`. The `UserPromptSubmit` hook supplies model-visible context-pack-first guidance only for local code tasks; it is guidance, not enforcement. Enable it only in a repository you trust, then restart Codex, use `/hooks` to review and trust the project hook, and use `/mcp` or `codex mcp list` to verify the MCP server. `madar doctor` and `madar status` validate on-disk files only; they do not prove Codex has trusted or activated them.
+4. **Uninstall behavior:** run `madar codex uninstall` to remove only this AGENTS.md section, the Madar hook, the Madar hook script, and the marker-owned MCP block while preserving unrelated content.
 
 Manual verification:
 
@@ -57,8 +60,8 @@ These release rules apply to every agent and maintainer.
 
 1. Determine the next version from the version actually published to npm and every user-visible change since that version. Patch releases contain compatible fixes only. Before `1.0.0`, any intentional public API incompatibility requires a minor release.
 2. All implementation and maintenance pull requests target `development`. A release promotion pull request is the only exception and must be `development` → `main`.
-3. Never publish from a feature branch or from `development`. Do not run a workstation `npm publish`. A release tag and GitHub Release must point to the reviewed, merged `main` commit.
+3. Never publish from a feature branch or from `development`. Do not run a workstation `npm publish`. A release tag and GitHub Release must point to the exact current `main` commit.
 4. Finalize the version, lockfile, and changelog before the release-promotion pull request. Run the documented release checks and require current-head CI and review approval before merging it.
-5. npm trusted publishing still performs `npm publish`; GitHub Actions runs it with a short-lived OIDC identity from the protected `npm` environment, rather than an `NPM_TOKEN`. Never add a registry token to the repository, workflow, or CI secrets for this path.
-6. Publish only by creating the GitHub Release for `v<package-version>` after the tag is on `main`. The publish workflow must verify the tag, `main` ancestry, tests, package contents, and provenance before it can publish.
+5. npm trusted publishing still performs `npm publish`; GitHub Actions runs it with a short-lived OIDC identity from the protected `npm` environment, rather than an `NPM_TOKEN`. Do not set or rely on an `NPM_TOKEN`; never add a registry token to the repository, workflow, or CI secrets for this path.
+6. Publish only by creating the GitHub Release for `v<package-version>` after the tag is on `main`. The publish workflow must verify that the tag is the exact current `main` commit, then verify tests, package contents, and provenance before it can publish.
 7. After publication, verify the registry version and provenance, verify the GitHub Release and workflow result, then deprecate every superseded unsafe published version. Record the evidence before closing the release issue.

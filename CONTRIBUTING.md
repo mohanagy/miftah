@@ -45,9 +45,9 @@ Only maintainers release. Select the next SemVer version from the version actual
 
 All implementation and maintenance pull requests target `development`. Finalize the package version, `package-lock.json`, and dated changelog entry there, run the release checks, and obtain current-head CI and review approval. The only permitted `main` pull request is a reviewed release promotion from `development` to `main`. Never run `npm publish` from a workstation or a feature branch. Never publish from `development`.
 
-After the reviewed promotion is merged, create a GitHub Release for `v<package-version>` at that `main` commit. That triggers `.github/workflows/publish.yml`, which verifies the tag is reachable from `main`, reruns the release checks, and invokes `npm publish --access public --provenance`.
+After the reviewed promotion is merged, create a GitHub Release for `v<package-version>` at the exact current `main` commit. That triggers `.github/workflows/publish.yml`, which verifies that the tag equals the exact current `main` commit, reruns the release checks, and invokes `npm publish --access public --provenance`.
 
-**npm trusted publishing still runs `npm publish`.** It gives that GitHub Actions command a short-lived OIDC identity from the protected `npm` environment instead of a long-lived `NPM_TOKEN`. Never commit, add, or depend on an `NPM_TOKEN` for this release path.
+**npm trusted publishing still runs `npm publish`.** It gives that GitHub Actions command a short-lived OIDC identity from the protected `npm` environment instead of a long-lived `NPM_TOKEN`. Never commit, set, add, or depend on an `NPM_TOKEN` for this release path.
 
 After the workflow succeeds, complete all post-publish steps: Verify the registry version and provenance after publication, verify the GitHub Release and workflow evidence, and deprecate every superseded unsafe published version before closing the release issue.
 
