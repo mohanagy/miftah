@@ -187,15 +187,22 @@ try {
     exit 1
   }
   $stage = 'source'
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-get')
   $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $sections)
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:source-sddl')
   $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($sections)
   $stage = 'target'
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-get')
   $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
   $stage = 'apply'
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-set')
   $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $sections)
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:target-apply')
   [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
   $stage = 'verify'
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-get')
   $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
+  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-sddl')
   if ($sourceSddl -ne $verifiedAcl.GetSecurityDescriptorSddlForm($sections)) { exit 1 }
   exit 0
 } catch {
@@ -256,6 +263,9 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-sddl|target-get|target-set|target-apply|verify-get|verify-sddl)/g);
+    const boundary = boundaries?.[boundaries.length - 1];
+    if (boundary !== undefined) return boundary;
   }
   if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST")) {
     return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:request";
