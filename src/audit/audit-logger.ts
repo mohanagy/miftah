@@ -1,6 +1,13 @@
 import { chmod, mkdir, open, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AuditEvent, AuditFailureMode, AuditHealth, AuditIntegrityOptions, AuditRotationOptions } from "./audit-types.js";
+import {
+  AUDIT_RECORD_SCHEMA_VERSION,
+  type AuditEvent,
+  type AuditFailureMode,
+  type AuditHealth,
+  type AuditIntegrityOptions,
+  type AuditRotationOptions
+} from "./audit-types.js";
 import { appendAuditJournal, prepareAuditJournal } from "./audit-journal.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
@@ -53,7 +60,13 @@ export class AuditLogger {
   private async logWithMode(events: readonly AuditEvent[], required: boolean): Promise<void> {
     if (events.length === 0) return;
     const lines = events
-      .map((event) => JSON.stringify({ timestamp: new Date().toISOString(), ...this.safeEvent(event) }))
+      .map((event) =>
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          ...this.safeEvent(event),
+          schemaVersion: AUDIT_RECORD_SCHEMA_VERSION
+        })
+      )
       .join("\n");
     try {
       await this.enqueue(() => this.writeLine(`${lines}\n`));

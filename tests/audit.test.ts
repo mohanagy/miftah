@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AuditLogger } from "../src/audit/audit-logger.js";
+import type { AuditEvent } from "../src/audit/audit-types.js";
 
 type BufferWrite = (
   this: FileHandle,
@@ -67,6 +68,26 @@ describe("audit logger", () => {
       operation: "tools/call",
       status: "success"
     });
+  });
+
+  it("writes an immutable schema version owned by the audit serializer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-schema-version-"));
+    const path = join(directory, "audit.jsonl");
+    const logger = new AuditLogger(path);
+
+    const event = {
+      wrapper: "github",
+      profile: "work",
+      operation: "tools/call",
+      name: "schema-versioned-event",
+      status: "success",
+      durationMs: 4,
+      schemaVersion: 99
+    } as unknown as AuditEvent;
+
+    await logger.log(event);
+
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ schemaVersion: 1 });
   });
 
   it("timestamps an event when logging begins rather than when its queued write runs", async () => {

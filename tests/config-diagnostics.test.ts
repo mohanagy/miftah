@@ -58,6 +58,30 @@ describe("configuration diagnostics", () => {
   });
 
   it.each([
+    ["plaintext secret alias", baseConfig({ version: "2", security: { allowPlaintextSecrets: false } }), "security.allowPlaintextSecrets"],
+    ["secret redaction alias", baseConfig({ version: "2", security: { redactSecrets: true } }), "security.redactSecrets"],
+    ["audit redaction alias", baseConfig({ version: "2", audit: { redact: true } }), "audit.redact"],
+    [
+      "HTTP transport alias",
+      baseConfig({ version: "2", upstream: { transport: "http", url: "https://mcp.example.test" } }),
+      "upstream.transport"
+    ]
+  ])("rejects the v2 %s with an explicit migration remediation", (_name, input, path) => {
+    const error = validationError(input);
+
+    expect(error.code).toBe("UNSUPPORTED_CONFIG_OPTION");
+    expect(error.details?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNSUPPORTED_CONFIG_OPTION",
+          path,
+          remediation: expect.stringContaining("miftah migrate-config --config <file> --write")
+        })
+      ])
+    );
+  });
+
+  it.each([
     ["root", baseConfig({ misspelledRootSetting: true }), "misspelledRootSetting"],
     [
       "upstream",
@@ -191,8 +215,8 @@ describe("configuration diagnostics", () => {
     });
   });
 
-  it("rejects unsupported config versions without automatic migration", () => {
-    const error = validationError(baseConfig({ version: "2" }));
+  it("rejects unknown config versions without automatic migration", () => {
+    const error = validationError(baseConfig({ version: "3" }));
 
     expect(error.code).toBe("UNSUPPORTED_CONFIG_VERSION");
     expect(error.details).toEqual({
@@ -201,7 +225,7 @@ describe("configuration diagnostics", () => {
           code: "UNSUPPORTED_CONFIG_VERSION",
           path: "version",
           severity: "error",
-          remediation: 'Set version to "1"; automatic config migrations are not supported.'
+          remediation: "Use a supported Miftah release, or run `miftah migrate-config --config <file>` for a supported legacy configuration."
         })
       ]
     });

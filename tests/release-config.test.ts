@@ -78,6 +78,10 @@ describe("continuous integration workflow contract", () => {
     expect(scripts["test:core"]).toContain("tests/executable-resolver.test.ts");
     expect(scripts["test:core"]).toContain("tests/secret-provider-availability.test.ts");
     expect(scripts["test:core"]).toContain("tests/secret-providers.test.ts");
+    expect(scripts["test:core"]).toContain("tests/config-migration.test.ts");
+    expect(scripts["test:core"]).toContain("tests/windows-config-acl.test.ts");
+    expect(scripts["test:core"]).toContain("tests/windows-config-migration-acl-failure.test.ts");
+    expect(scripts["test:core"]).toContain("tests/windows-config-migration-acl.test.ts");
     expect(scripts["test:package"]).toBe("vitest run tests/package-contract.test.ts");
     expect(scripts["smoke:cli"]).toBe("node dist/cli/main.js schema");
     expect(scripts["test:cli"]).toContain("npm run test:package");

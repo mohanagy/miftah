@@ -1,18 +1,19 @@
 import { isIP } from "node:net";
 import { z } from "zod";
+import { CURRENT_CONFIG_VERSION, SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
 
 const recordSchema = z.record(z.string(), z.unknown());
 const unsupportedOptionSchema = z.unknown().optional();
 
 const configVersionSchema = z.string().superRefine((value, context) => {
-  if (value !== "1") {
+  if (!SUPPORTED_CONFIG_VERSIONS.includes(value as (typeof SUPPORTED_CONFIG_VERSIONS)[number])) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       params: {
         miftahCode: "UNSUPPORTED_CONFIG_VERSION",
-        remediation: 'Set version to "1"; automatic config migrations are not supported.'
+        remediation: "Use a supported Miftah release, or run `miftah migrate-config --config <file>` for a supported legacy configuration."
       },
-      message: "UNSUPPORTED_CONFIG_VERSION: only config version '1' is supported"
+      message: "UNSUPPORTED_CONFIG_VERSION: this Miftah release supports config versions '1' and '2'"
     });
   }
 });
@@ -1189,10 +1190,62 @@ function validateProfileState(
   }
 }
 
+type ConfigVersionSurface = {
+  readonly version: string;
+  readonly security?: { readonly allowPlaintextSecrets?: unknown; readonly redactSecrets?: unknown };
+  readonly audit?: { readonly redact?: unknown };
+  readonly upstream?: { readonly transport?: unknown };
+  readonly upstreams?: Record<string, { readonly transport?: unknown }>;
+};
+
+/** Version 2 removes aliases that the explicit v1-to-v2 migrator can preserve without changing behavior. */
+function validateConfigVersionSurface(value: ConfigVersionSurface, context: z.RefinementCtx): void {
+  if (value.version !== CURRENT_CONFIG_VERSION) return;
+
+  const rejectLegacyAlias = (path: (string | number)[], explanation: string, remediation: string): void => {
+    addConfigIssue(context, "UNSUPPORTED_CONFIG_OPTION", path, explanation, remediation);
+  };
+
+  if (value.security?.allowPlaintextSecrets !== undefined) {
+    rejectLegacyAlias(
+      ["security", "allowPlaintextSecrets"],
+      "security.allowPlaintextSecrets is a version 1 compatibility alias",
+      "Use secrets.allowPlaintextSecrets, or run `miftah migrate-config --config <file> --write`."
+    );
+  }
+  if (value.security?.redactSecrets !== undefined) {
+    rejectLegacyAlias(
+      ["security", "redactSecrets"],
+      "security.redactSecrets is redundant because secret redaction is always enabled",
+      "Remove this option, or run `miftah migrate-config --config <file> --write`."
+    );
+  }
+  if (value.audit?.redact !== undefined) {
+    rejectLegacyAlias(
+      ["audit", "redact"],
+      "audit.redact is redundant because audit redaction is always enabled",
+      "Remove this option, or run `miftah migrate-config --config <file> --write`."
+    );
+  }
+
+  const validateTransport = (transport: unknown, path: (string | number)[]): void => {
+    if (transport !== "http") return;
+    rejectLegacyAlias(
+      path,
+      "the http upstream transport is a version 1 compatibility alias for Streamable HTTP",
+      "Use streamable-http, or run `miftah migrate-config --config <file> --write`."
+    );
+  };
+  validateTransport(value.upstream?.transport, ["upstream", "transport"]);
+  for (const name of Object.keys(value.upstreams ?? {}).sort()) {
+    validateTransport(value.upstreams?.[name]?.transport, ["upstreams", name, "transport"]);
+  }
+}
+
 /** The strict, supported configuration surface used for runtime output and JSON Schema generation. */
 export const miftahPublicConfigSchema = z
   .object({
-    version: z.literal("1"),
+    version: z.enum(SUPPORTED_CONFIG_VERSIONS),
     name: z.string().min(1),
     description: z.string().optional(),
     defaultProfile: z.string().min(1),
@@ -1211,7 +1264,10 @@ export const miftahPublicConfigSchema = z
     server: publicServerSchema.optional()
   })
   .strict()
-  .superRefine(validateConfigReferences);
+  .superRefine((value, context) => {
+    validateConfigReferences(value, context);
+    validateConfigVersionSurface(value, context);
+  });
 
 /** Zod schema for validating accepted compatibility declarations before normalizing to the public contract. */
 export const miftahConfigSchema = z
@@ -1238,6 +1294,7 @@ export const miftahConfigSchema = z
   .strict()
   .superRefine((value, context) => {
     validateConfigReferences(value, context);
+    validateConfigVersionSurface(value, context);
 
     const rejectUnsupportedOption = (path: (string | number)[], explanation: string): void => {
       addConfigIssue(

@@ -8,7 +8,9 @@
 Usage: miftah [command] [options]
 ```
 
-The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
+The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
+
+Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires the pre-1.0 deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
 
 `--help` and `-h` print help and exit successfully. They can appear before or after a command. Help never reads configuration, resolves secrets, or starts an upstream.
 
@@ -21,6 +23,7 @@ The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `list-
 | `miftah doctor --config <file>` | `--config` | `--config <file>`, `--json` | Validates configuration and checks upstream readiness. Default output is a human-readable report; `--json` writes only the JSON report. A healthy or degraded report exits `0`; a failed report exits `1`. |
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
 | `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>`, `--interactive`, `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>`, `--credential-env <name>`, `--npm-package <package>`, `--docker-image <image>`, `--url <url>`, `--header-name <name>`, `--header-prefix <prefix>` | Writes a strict catalog configuration with exclusive creation and can print client JSON snippets. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
+| `miftah migrate-config --config <file>` | `--config` | `--config <file>`, `--write` | Plans a supported configuration-format migration and writes a safe JSON report. It is dry-run by default. `--write` validates the candidate, makes an exact exclusive `<file>.bak`, then uses a same-directory non-overwriting publication for a changed regular non-symlink source; it never resolves secrets or starts an upstream. |
 | `miftah list-tools --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts the selected profile, discovers its upstream tools, writes a JSON array, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah test-profile --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts and initializes one profile, writes `{"ok":true,"profile":"…"}`, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah logs --config <file>` | `--config` | `--config <file>`, `--follow` | Reads the configured audit JSONL as normalized, redacted JSONL. `--follow` continues watching it. This command does not construct an upstream manager. |
@@ -48,6 +51,12 @@ miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 `generic-npx` requires `--npm-package` with exact package SemVer; `generic-docker` requires a canonical digest in `--docker-image`; and `streamable-http` requires `--url` plus optional credential environment/header metadata. `--credential-env` is optional where supported. See [preset and client compatibility](presets-and-clients.md) for exact inputs, pins, provenance, and client snippets.
 
 `--interactive` uses a wizard only when both input and output are TTYs. EOF or Ctrl-C cancels without writing a config. It asks for variable names and safe metadata, never secret values. In noninteractive use, `init` creates only the config unless `--client` is supplied. `--client` prints JSON with absolute Node and compiled Miftah paths; it does not write a host config. Regenerate the snippet after moving or upgrading Miftah or changing the config path.
+
+### `migrate-config`
+
+`miftah migrate-config --config <file>` accepts only the documented supported formats and writes a JSON report containing source/target versions, safe structural actions, and whether a write occurred. It reads and validates the candidate before it changes anything. It does not emit a raw config, a diff, resolved secret values, or provider output.
+
+`--write` is intentionally required for mutation. For a changed valid-UTF-8 configuration, Miftah refuses symlinks and non-regular sources, captures a source snapshot, moves it into a dedicated same-directory transaction directory, and privately prepares the exact backup and synced candidate. It publishes each only to an absent destination path, so it never overwrites a concurrent file. On Windows, the transaction directory is created with a current-user-only DACL and the source owner/group/DACL is copied and verified before either private file receives source-derived bytes. If publication cannot complete, Miftah restores the verified original when it can do so without overwriting anything; otherwise it exits nonzero and reports the retained recovery transaction directory. A current configuration reports `changed: false`; with `--write` it remains untouched and creates no backup. See [configuration version compatibility](config.md#configuration-version-compatibility-and-migration) for version windows and exactly which aliases can be migrated.
 
 ### `doctor`
 

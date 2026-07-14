@@ -8,6 +8,7 @@ import { createRuntime } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
 import { RoutingEngine } from "../src/routing/routing-engine.js";
+import { MIFTAH_PLUGIN_API_VERSION } from "../src/plugins/plugin-api.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -57,6 +58,32 @@ describe("plugin API", () => {
         signals: [{ provider: "github", kind: "repository", value: "acme/miftah", source: "argument" }]
       })
     ).resolves.toEqual([{ pluginId: "github-owner", binding: "acme-work", profile: "work" }]);
+  });
+
+  it("accepts the public plugin API version through the registry and isolated host", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-plugin-public-abi-"));
+    temporaryDirectories.push(directory);
+    const pluginPath = join(directory, "public-abi-plugin.mjs");
+    await writeFile(
+      pluginPath,
+      `export default {
+  apiVersion: ${JSON.stringify(MIFTAH_PLUGIN_API_VERSION)},
+  id: "public-abi",
+  kind: "secret-provider",
+  async resolve({ reference }) { return { value: reference }; }
+};\n`,
+      "utf8"
+    );
+
+    const plugins = await loadPluginRegistry({
+      allowlist: [{ id: "public-abi", kind: "secret-provider", path: pluginPath }]
+    });
+    const resolver = new SecretResolver({ plugins });
+
+    expect(plugins.hasSecretProvider("public-abi")).toBe(true);
+    await expect(resolver.resolveValue("secretref:public-abi://account")).resolves.toBe(
+      "secretref:public-abi://account"
+    );
   });
 
   it("runs an allowlisted secret provider in a clean child with only its canonical reference", async () => {

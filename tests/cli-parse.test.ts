@@ -60,6 +60,11 @@ describe("CLI parser", () => {
       command: "audit-verify",
       options: { config: "wrapper.json", json: true }
     });
+    expect(parseCli(["migrate-config", "--config", "wrapper.json", "--write"])).toEqual({
+      kind: "run",
+      command: "migrate-config",
+      options: { config: "wrapper.json", write: true }
+    });
   });
 
   it("accepts a leading dash in an explicitly assigned option value", () => {
@@ -185,6 +190,7 @@ describe("CLI parser", () => {
     expectUsageError(["logs", "--npm-package", "@scope/server@1.2.3"]);
     expectUsageError(["audit-export", "--follow"]);
     expectUsageError(["audit-verify", "--output", "review.jsonl"]);
+    expectUsageError(["migrate-config", "--output", "replacement.json"]);
     expectUsageError(["schema", "--docker-image", "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]);
     expectUsageError(["version", "--url", "https://mcp.example.com"]);
     expectUsageError(["validate", "--header-name", "Authorization"]);

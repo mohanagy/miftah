@@ -6,9 +6,19 @@ Miftah uses JSON. Generate the machine-readable schema with:
 miftah schema > miftah.schema.json
 ```
 
-`miftah schema` is generated from the same strict Zod contract that normalizes successful runtime configuration. Required fields are `version: "1"`, `name`, `defaultProfile`, `profiles`, and either `upstream` or `upstreams`. Closed configuration objects reject unknown or misspelled keys; intentionally open maps are limited to named profiles, policies, upstreams, environment/header values, tool-risk overrides, and `routing.rules[].when`.
+`miftah schema` is generated from the same strict Zod contract that normalizes successful runtime configuration. Required fields are `version`, `name`, `defaultProfile`, `profiles`, and either `upstream` or `upstreams`. Version `"2"` is the canonical format written by current presets and examples. Closed configuration objects reject unknown or misspelled keys; intentionally open maps are limited to named profiles, policies, upstreams, environment/header values, tool-risk overrides, and `routing.rules[].when`.
 
-Miftah accepts config version `"1"` only and does not silently migrate config files. A future migration must be explicit and documented; an unsupported version returns `UNSUPPORTED_CONFIG_VERSION` with remediation.
+Miftah accepts versions `"1"` and `"2"` during the documented compatibility window. It never rewrites a file while loading or serving it. An unsupported version returns `UNSUPPORTED_CONFIG_VERSION` with remediation.
+
+## Configuration version compatibility and migration
+
+Version `"1"` remains supported for existing configurations. It allows the historical `upstream.transport: "http"` alias, `security.allowPlaintextSecrets`, and redundant true-only `security.redactSecrets` / `audit.redact` declarations. Version `"2"` rejects those aliases with `UNSUPPORTED_CONFIG_OPTION`: use `upstream.transport: "streamable-http"`, `secrets.allowPlaintextSecrets`, and omit force-on redaction declarations.
+
+Run `miftah migrate-config --config <file>` to inspect a version-1 upgrade. The default is a JSON migration plan only; it does not alter the source file, resolve secrets, or start an upstream. Add `--write` only after reviewing that plan. Before it changes a file, Miftah requires valid UTF-8 JSON, validates the version-2 candidate, captures a regular non-symlink source snapshot, and moves the verified source into a dedicated same-directory transaction directory. It creates the exact-byte backup and synced candidate privately, then publishes each only to an absent destination path; it never uses an overwrite rename. A concurrent file is preserved, while uncertain original state is retained in the transaction directory whose path is reported in the error. Miftah restores the verified original when it can do so without overwriting anything. It preserves POSIX source mode where supported. On Windows, the transaction directory receives a current-user-only DACL at creation, and Miftah copies and verifies the source owner, group, and DACL before either private file receives source-derived bytes; inability to establish that boundary fails closed. It refuses to overwrite an existing backup and never prints a raw configuration or a configuration diff.
+
+The migrator changes only aliases with proven equivalent behavior: `"http"` becomes `"streamable-http"`, the plaintext opt-in moves to `secrets.allowPlaintextSecrets`, and redundant force-on redaction declarations are removed. It fails closed for conflicting plaintext options or unrelated unsupported fields rather than discarding them. A version-2 input is validated and reported as unchanged; `--write` then creates no backup and performs no write.
+
+Version `"1"` will remain accepted through at least the first published pre-1.0 minor release after version `"2"` ships. Removing it requires a later minor release, an **Unreleased** changelog entry, and a documented explicit migration path. Keep a byte-for-byte historical fixture for every supported released format in release CI.
 
 For strict starter configurations, use the versioned `init` catalog rather than treating generic command examples as trusted upstream recommendations. The [preset and client compatibility matrix](presets-and-clients.md) records exact pins, required inputs, upstream provenance, and the validation boundary for every catalog entry.
 
@@ -157,7 +167,7 @@ Windows profile credential isolation is currently rejected before any runtime fi
 
 ## Remote upstream transports
 
-Use `transport: "streamable-http"` for new remote MCP servers. The historical `transport: "http"` value remains a Streamable HTTP compatibility alias. `transport: "sse"` supports legacy SSE servers but is deprecated and should be used only while an upstream has not migrated. `transport: "stdio"` remains the local-process default.
+Use `transport: "streamable-http"` for new remote MCP servers. The historical `transport: "http"` value remains a Streamable HTTP compatibility alias only in configuration version 1; version 2 requires `"streamable-http"`. `transport: "sse"` supports legacy SSE servers but is deprecated and should be used only while an upstream has not migrated. `transport: "stdio"` remains the local-process default.
 
 Remote URLs must use `https`. Miftah accepts `http` only for loopback development URLs on `localhost`, `127.0.0.0/8`, or `::1`; other cleartext URLs and non-HTTP URL schemes fail config validation at the exact `upstream.url` or `upstreams.<name>.url` path. Profile headers override upstream headers case-insensitively, so `Authorization` and `authorization` are one credential slot rather than two combined values.
 
@@ -317,6 +327,8 @@ Approval lifecycle events record request, approval, denial, expiry, and consumpt
 
 Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available and canonical `routingMatcherEvidence` for a static matcher result or ambiguity. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 
+Every newly written record carries writer-controlled `schemaVersion: 1`; an event cannot select or override that marker. Miftah continues to read existing unversioned local JSONL records as legacy input. Additive fields may be introduced to schema version 1, but an incompatible audit-record interpretation requires a later minor release, an **Unreleased** changelog entry, and a documented reader or export migration path. When integrity is enabled, the schema marker is inside the chained payload and is therefore tamper-evident.
+
 `audit.failureMode` accepts `"fail-closed"` (the default) or `"fail-open"`. Fail-closed verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared; a terminal write error also surfaces as `AUDIT_WRITE_FAILED`. Because terminal writes occur after an upstream operation, that error can leave a non-idempotent operation's outcome indeterminate; do not blindly retry it. Fail-open preserves the request result and exposes a redacted `AUDIT_WRITE_FAILED` entry through `miftah_health`; it should be used only when availability is more important than complete auditability.
 
 ### Audit journal rotation and integrity
@@ -420,4 +432,4 @@ A profile `lease` is optional and has `ttlMs` from 1,000 through 3,600,000 milli
 
 `startMode` and `cache` remain unsupported because Miftah currently always lazily creates cached sessions. They are rejected rather than silently ignored.
 
-Secret and audit redaction are force-on protections. `security.redactSecrets` and `audit.redact` may be declared as `true`, but setting either to `false` is rejected. Audit output is always JSONL; `audit.format` therefore accepts only `"jsonl"`.
+Secret and audit redaction are force-on protections. Version `"1"` accepts `security.redactSecrets` and `audit.redact` only when they are `true` for compatibility; version `"2"` rejects both redundant declarations. Setting either to `false` is rejected in every supported version. Audit output is always JSONL; `audit.format` therefore accepts only `"jsonl"`.

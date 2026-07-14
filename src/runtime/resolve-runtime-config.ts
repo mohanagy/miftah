@@ -113,15 +113,16 @@ export async function resolveRuntimeConfig(
         )
       )
     : config.upstreams;
-  const upstream = config.upstream
-    ? scope?.upstreamName === undefined
-      ? {
-          ...config.upstream,
-          env: await resolveMap(config.upstream.env),
-          headers: await resolveMap(config.upstream.headers)
-        }
-      : config.upstream
-    : undefined;
+  const resolveRootUpstream = async <Upstream extends UpstreamConfig>(
+    candidate: Upstream | undefined
+  ): Promise<Upstream | undefined> => {
+    if (candidate === undefined || scope?.upstreamName !== undefined) return candidate;
+    return {
+      ...candidate,
+      env: await resolveMap(candidate.env),
+      headers: await resolveMap(candidate.headers)
+    };
+  };
   const server = config.server
     ? {
         ...config.server,
@@ -136,7 +137,17 @@ export async function resolveRuntimeConfig(
           : undefined
       }
     : undefined;
-  const resolvedConfig = { ...config, profiles, upstreams, upstream, server };
+  let upstream: UpstreamConfig | undefined;
+  let resolvedConfig: MiftahConfig;
+  if (config.version === "1") {
+    const resolvedUpstream = await resolveRootUpstream(config.upstream);
+    upstream = resolvedUpstream;
+    resolvedConfig = { ...config, profiles, upstreams, upstream: resolvedUpstream, server };
+  } else {
+    const resolvedUpstream = await resolveRootUpstream(config.upstream);
+    upstream = resolvedUpstream;
+    resolvedConfig = { ...config, profiles, upstreams, upstream: resolvedUpstream, server };
+  }
   const values = [...secretValues];
   return {
     config: resolvedConfig,

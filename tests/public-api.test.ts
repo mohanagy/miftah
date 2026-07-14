@@ -21,6 +21,7 @@ import type {
   JiraProfileRoutingMatch,
   LinearProfileRoutingMatch,
   MiftahConfig,
+  MiftahConfigVersion,
   MiftahErrorCode,
   MiftahErrorDetails,
   MiftahRuntime,
@@ -53,6 +54,7 @@ import type {
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
 const supportedRuntimeExports = [
+  "CURRENT_CONFIG_VERSION",
   "MIFTAH_VERSION",
   "MiftahError",
   "createMiftahRuntime",
@@ -89,6 +91,7 @@ const supportedTypeExports = [
   "JiraProfileRoutingMatch",
   "LinearProfileRoutingMatch",
   "MiftahConfig",
+  "MiftahConfigVersion",
   "MiftahErrorCode",
   "MiftahErrorDetails",
   "MiftahRuntime",
@@ -132,6 +135,7 @@ type PublicTypeImportCoverage = [
   JiraProfileRoutingMatch,
   LinearProfileRoutingMatch,
   MiftahConfig,
+  MiftahConfigVersion,
   MiftahErrorCode,
   MiftahErrorDetails,
   MiftahRuntime,
@@ -362,12 +366,83 @@ void [
   invalidJsonIdentityProbe
 ];
 
+const versionOneConfigWithLegacyAliases: MiftahConfig = {
+  version: "1",
+  name: "legacy-config",
+  defaultProfile: "default",
+  upstream: { transport: "http", url: "https://example.test/mcp" },
+  profiles: { default: {} },
+  security: { allowPlaintextSecrets: true, redactSecrets: true },
+  audit: { redact: true }
+};
+
+const versionTwoConfigBase = {
+  version: "2" as const,
+  name: "current-config",
+  defaultProfile: "default",
+  profiles: { default: {} }
+};
+
+// @ts-expect-error Version 2 replaces the v1 http alias with streamable-http.
+const invalidVersionTwoHttpTransport: MiftahConfig = {
+  ...versionTwoConfigBase,
+  upstream: {
+    transport: "http",
+    url: "https://example.test/mcp"
+  }
+};
+
+// @ts-expect-error Version 2 named upstreams also reject the v1 http alias.
+const invalidVersionTwoNamedHttpTransport: MiftahConfig = {
+  ...versionTwoConfigBase,
+  upstreams: {
+    remote: {
+      transport: "http",
+      url: "https://example.test/mcp"
+    }
+  }
+};
+
+// @ts-expect-error Version 2 moves plaintext-secret opt-in under secrets.
+const invalidVersionTwoPlaintextAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  security: {
+    allowPlaintextSecrets: true
+  }
+};
+
+// @ts-expect-error Version 2 removes the redundant secret-redaction alias.
+const invalidVersionTwoRedactSecretsAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  security: {
+    redactSecrets: true
+  }
+};
+
+// @ts-expect-error Version 2 removes the redundant audit-redaction alias.
+const invalidVersionTwoAuditRedactAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  audit: {
+    redact: true
+  }
+};
+
+void [
+  versionOneConfigWithLegacyAliases,
+  invalidVersionTwoHttpTransport,
+  invalidVersionTwoNamedHttpTransport,
+  invalidVersionTwoPlaintextAlias,
+  invalidVersionTwoRedactSecretsAlias,
+  invalidVersionTwoAuditRedactAlias
+];
+
 describe("public library API", () => {
   it("exposes only the intentionally supported runtime API", () => {
     expect(Object.keys(api).sort()).toEqual([...supportedRuntimeExports].sort());
     for (const name of supportedRuntimeExports) {
       expect(api).toHaveProperty(name);
     }
+    expect(api.CURRENT_CONFIG_VERSION).toBe("2");
   });
 
   it("keeps internal runtime wiring out of the package root", () => {

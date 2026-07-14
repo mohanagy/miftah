@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2",
   "name": "sentry",
   "description": "sentry wrapped by Miftah",
   "defaultProfile": "default",
@@ -38,10 +38,11 @@
     "rules": []
   },
   "security": {
-    "allowPlaintextSecrets": false,
-    "redactSecrets": true,
     "allowProfileSwitchingFromMcp": true,
     "requireExplicitProfileForDestructive": true
+  },
+  "secrets": {
+    "allowPlaintextSecrets": false
   },
   "process": {
     "startupTimeoutMs": 30000
@@ -51,7 +52,6 @@
     "path": "~/.local/state/miftah/audit.jsonl",
     "format": "jsonl",
     "includeArguments": false,
-    "redact": true,
     "failureMode": "fail-closed"
   },
   "tooling": {

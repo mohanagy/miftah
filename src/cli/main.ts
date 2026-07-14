@@ -15,6 +15,7 @@ import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
+import { runMigrateConfigCommand } from "./migrate-config.js";
 
 async function serve(configPath: string, transportKind = "stdio"): Promise<void> {
   if (transportKind === "http") {
@@ -71,6 +72,11 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     throw new CliUsageError(
       `Command '${command}' requires '--config <file>'. Use 'miftah ${command} --help' for usage.`
     );
+  }
+  if (command === "migrate-config") {
+    const report = await runMigrateConfigCommand({ configPath: args.config, write: args.write === true });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
   }
   if (command === "serve") {
     await serve(args.config, args.transport);

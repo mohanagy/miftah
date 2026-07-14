@@ -44,6 +44,47 @@ export async function loadConfig(path: string): Promise<MiftahConfig> {
       }
     ])
   );
+  if (config.version === "1") {
+    return {
+      ...config,
+      profiles,
+      secrets: config.secrets?.envFiles
+        ? {
+            ...config.secrets,
+            envFiles: config.secrets.envFiles.map((envFile) => resolvePath(envFile, dirname(resolvedPath)))
+          }
+        : config.secrets,
+      plugins: config.plugins
+        ? {
+            ...config.plugins,
+            allowlist: config.plugins.allowlist.map((plugin) => ({
+              ...plugin,
+              path: resolvePath(plugin.path, dirname(resolvedPath))
+            }))
+          }
+        : config.plugins,
+      upstream: config.upstream
+        ? {
+            ...config.upstream,
+            ...(config.upstream.cwd ? { cwd: resolvePath(config.upstream.cwd, dirname(resolvedPath)) } : {})
+          }
+        : undefined,
+      upstreams: config.upstreams
+        ? Object.fromEntries(
+            Object.entries(config.upstreams).map(([name, upstream]) => [
+              name,
+              {
+                ...upstream,
+                ...(upstream.cwd ? { cwd: resolvePath(upstream.cwd, dirname(resolvedPath)) } : {})
+              }
+            ])
+          )
+        : config.upstreams,
+      audit: config.audit?.path
+        ? { ...config.audit, path: resolvePath(config.audit.path, dirname(resolvedPath)) }
+        : config.audit
+    };
+  }
   return {
     ...config,
     profiles,

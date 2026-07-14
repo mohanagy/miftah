@@ -12,7 +12,7 @@ type ValueOptionName =
   | "headerName"
   | "headerPrefix"
   | "transport";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments";
+type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -33,6 +33,7 @@ export interface CliOptions {
   readonly json?: true;
   readonly interactive?: true;
   readonly includeArguments?: true;
+  readonly write?: true;
 }
 
 interface CliCommandMetadata {
@@ -94,6 +95,10 @@ export const CLI_COMMANDS = {
   "audit-verify": {
     description: "Verify retained audit journal integrity chains.",
     options: ["config", "json"]
+  },
+  "migrate-config": {
+    description: "Plan or explicitly apply a safe configuration migration.",
+    options: ["config", "write"]
   },
   version: {
     description: "Print the Miftah version.",
@@ -226,6 +231,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--interactive",
     description: "Collect init settings through a TTY wizard."
+  },
+  write: {
+    name: "write",
+    takesValue: false,
+    usage: "--write",
+    description: "Apply the migration after creating a non-overwriteable backup."
   }
 };
 
@@ -247,6 +258,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--include-arguments": OPTION_DEFINITIONS.includeArguments,
   "--json": OPTION_DEFINITIONS.json,
   "--interactive": OPTION_DEFINITIONS.interactive,
+  "--write": OPTION_DEFINITIONS.write,
   "--help": "help",
   "-h": "help",
   "--version": "version",

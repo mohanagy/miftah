@@ -1,9 +1,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
+import { SecretResolver } from "../src/secrets/secret-resolver.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -69,6 +70,30 @@ async function writeHttpServerConfig(): Promise<string> {
       upstream: { transport: "stdio", command: "node" },
       profiles: { default: {} },
       server: { http: { authToken: "${MIFTAH_HTTP_TOKEN}" } },
+      secrets: { envFiles: [".env"] }
+    })
+  );
+  return configPath;
+}
+
+async function writeVersionTwoRootUpstreamConfig(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-v2-root-upstream-resolution-"));
+  temporaryDirectories.push(directory);
+  const configPath = join(directory, "miftah.json");
+  await writeFile(join(directory, ".env"), "ROOT_UPSTREAM_SECRET=resolved-root-upstream-secret\n");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: "2",
+      name: "v2-root-upstream-resolution",
+      defaultProfile: "default",
+      upstream: {
+        transport: "stdio",
+        command: "node",
+        env: { UPSTREAM_TOKEN: "${ROOT_UPSTREAM_SECRET}" },
+        headers: { Authorization: "Bearer ${ROOT_UPSTREAM_SECRET}" }
+      },
+      profiles: { default: {} },
       secrets: { envFiles: [".env"] }
     })
   );
@@ -150,6 +175,19 @@ describe("runtime secret resolution scope", () => {
       expect(runtime.config.server?.http?.authToken).toBe("${MISSING_HTTP_SERVER_SECRET}");
     } finally {
       await runtime.manager.close();
+    }
+  });
+
+  it("resolves a version 2 root upstream exactly once", async () => {
+    const resolveMapWithSecretValues = vi.spyOn(SecretResolver.prototype, "resolveMapWithSecretValues");
+    try {
+      const resolved = await resolveRuntimeConfig(await writeVersionTwoRootUpstreamConfig());
+
+      expect(resolved.config.upstream?.env).toEqual({ UPSTREAM_TOKEN: "resolved-root-upstream-secret" });
+      expect(resolved.config.upstream?.headers).toEqual({ Authorization: "Bearer resolved-root-upstream-secret" });
+      expect(resolveMapWithSecretValues).toHaveBeenCalledTimes(2);
+    } finally {
+      resolveMapWithSecretValues.mockRestore();
     }
   });
 });

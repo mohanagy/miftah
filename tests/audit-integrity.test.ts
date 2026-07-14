@@ -84,7 +84,8 @@ describe("audit journal integrity", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
-    records[1] = { ...records[1], name: "tampered-integrity-event" };
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ schemaVersion: 1 })]));
+    records[1] = { ...records[1], schemaVersion: 2 };
     await writeFile(path, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 
     expect(await verifyAuditJournal(path)).toEqual({
