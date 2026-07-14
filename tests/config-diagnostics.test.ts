@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConfigDiagnostic } from "../src/config/diagnostics.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahError } from "../src/utils/errors.js";
@@ -79,6 +79,33 @@ describe("configuration diagnostics", () => {
         })
       ])
     );
+  });
+
+  it.each([
+    [
+      "security redaction",
+      baseConfig({ version: "2", security: { redactSecrets: false } }),
+      "security.redactSecrets",
+      "secret redaction is always enabled and cannot be disabled"
+    ],
+    [
+      "audit redaction",
+      baseConfig({ version: "2", audit: { redact: false } }),
+      "audit.redact",
+      "audit redaction is always enabled and cannot be disabled"
+    ]
+  ])("reports one v2 %s diagnostic when redaction is explicitly disabled", (_name, input, path, message) => {
+    const error = validationError(input);
+
+    expect(error.details?.diagnostics).toEqual([
+      {
+        code: "UNSUPPORTED_CONFIG_OPTION",
+        path,
+        severity: "error",
+        message: `UNSUPPORTED_CONFIG_OPTION: ${message}`,
+        remediation: "Remove this option or use a supported alternative from `miftah schema`."
+      }
+    ]);
   });
 
   it.each([
@@ -229,5 +256,31 @@ describe("configuration diagnostics", () => {
         })
       ]
     });
+  });
+
+  it("derives the unsupported-version diagnostic from the supported versions contract", async () => {
+    vi.resetModules();
+    vi.doMock("../src/config/versions.js", () => ({
+      CURRENT_CONFIG_VERSION: "3",
+      SUPPORTED_CONFIG_VERSIONS: ["1", "2", "3"]
+    }));
+
+    try {
+      const { miftahConfigSchema } = await import("../src/config/schema.js");
+      const result = miftahConfigSchema.safeParse(baseConfig({ version: "4" }));
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "UNSUPPORTED_CONFIG_VERSION: this Miftah release supports config versions '1' and '2' and '3'"
+          })
+        ])
+      );
+    } finally {
+      vi.doUnmock("../src/config/versions.js");
+      vi.resetModules();
+    }
   });
 });

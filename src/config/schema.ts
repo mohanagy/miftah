@@ -4,6 +4,7 @@ import { CURRENT_CONFIG_VERSION, SUPPORTED_CONFIG_VERSIONS } from "./versions.js
 
 const recordSchema = z.record(z.string(), z.unknown());
 const unsupportedOptionSchema = z.unknown().optional();
+const supportedConfigVersionList = SUPPORTED_CONFIG_VERSIONS.map((version) => `'${version}'`).join(" and ");
 
 const configVersionSchema = z.string().superRefine((value, context) => {
   if (!SUPPORTED_CONFIG_VERSIONS.includes(value as (typeof SUPPORTED_CONFIG_VERSIONS)[number])) {
@@ -13,7 +14,7 @@ const configVersionSchema = z.string().superRefine((value, context) => {
         miftahCode: "UNSUPPORTED_CONFIG_VERSION",
         remediation: "Use a supported Miftah release, or run `miftah migrate-config --config <file>` for a supported legacy configuration."
       },
-      message: "UNSUPPORTED_CONFIG_VERSION: this Miftah release supports config versions '1' and '2'"
+      message: `UNSUPPORTED_CONFIG_VERSION: this Miftah release supports config versions ${supportedConfigVersionList}`
     });
   }
 });
@@ -1213,14 +1214,14 @@ function validateConfigVersionSurface(value: ConfigVersionSurface, context: z.Re
       "Use secrets.allowPlaintextSecrets, or run `miftah migrate-config --config <file> --write`."
     );
   }
-  if (value.security?.redactSecrets !== undefined) {
+  if (value.security?.redactSecrets !== undefined && value.security.redactSecrets !== false) {
     rejectLegacyAlias(
       ["security", "redactSecrets"],
       "security.redactSecrets is redundant because secret redaction is always enabled",
       "Remove this option, or run `miftah migrate-config --config <file> --write`."
     );
   }
-  if (value.audit?.redact !== undefined) {
+  if (value.audit?.redact !== undefined && value.audit.redact !== false) {
     rejectLegacyAlias(
       ["audit", "redact"],
       "audit.redact is redundant because audit redaction is always enabled",
