@@ -11,13 +11,18 @@ function parseRepositoryJson(path: string): unknown {
   return JSON.parse(readRepositoryFile(path)) as unknown;
 }
 
-function unreleasedSection(changelog: string): string {
+function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
   if (afterHeading === undefined) {
     throw new Error("CHANGELOG.md must contain an Unreleased section.");
   }
   const nextRelease = afterHeading.search(/^## \[/mu);
-  return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
+
+  const currentRelease = afterHeading.slice(nextRelease);
+  const end = currentRelease.indexOf("\n## ", 1);
+  return end === -1 ? currentRelease : currentRelease.slice(0, end);
 }
 
 describe("preset documentation contract", () => {
@@ -98,8 +103,8 @@ describe("preset documentation contract", () => {
     }
     expect(compatibility).not.toContain("runtime construction");
 
-    const unreleased = unreleasedSection(changelog);
-    expect(unreleased).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);
-    expect(unreleased).not.toContain("runtime construction");
+    const documentedChanges = documentedChangesSection(changelog);
+    expect(documentedChanges).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);
+    expect(documentedChanges).not.toContain("runtime construction");
   });
 });

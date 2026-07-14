@@ -5,11 +5,16 @@ function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-function unreleasedSection(changelog: string): string {
+function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
   const nextRelease = afterHeading.search(/^## \[/mu);
-  return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
+
+  const currentRelease = afterHeading.slice(nextRelease);
+  const end = currentRelease.indexOf("\n## ", 1);
+  return end === -1 ? currentRelease : currentRelease.slice(0, end);
 }
 
 function routingContextSection(config: string): string {
@@ -50,6 +55,6 @@ describe("routing context documentation contract", () => {
     expect(security).toContain("Project markers cannot");
     expect(security).toContain("cannot add credentials");
     expect(security).toContain("never contains the raw `MIFTAH_PROJECT` value");
-    expect(unreleasedSection(changelog)).toMatch(/\[#20\][\s\S]*routing context[\s\S]*audit/iu);
+    expect(documentedChangesSection(changelog)).toMatch(/\[#20\][\s\S]*routing context[\s\S]*audit/iu);
   });
 });

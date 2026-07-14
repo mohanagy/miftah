@@ -14,17 +14,22 @@ const digitGroupPattern = /\B(?=(\d{3})+(?!\d))/gu;
 const beforeParsingPattern = /before parsing or normalization/iu;
 const identityStatusPattern = /^\s*\|\s+"([^"]+)"/gmu;
 const identityStatusFieldPattern = /^\s+(\w+)\??:/gmu;
-const unreleasedIdentityPattern = /\[#21\][\s\S]*identity/iu;
+const documentedIdentityPattern = /\[#21\][\s\S]*identity/iu;
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-function unreleasedSection(changelog: string): string {
+function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(unreleasedHeadingPattern)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
   const nextRelease = afterHeading.search(releaseHeadingPattern);
-  return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
+
+  const currentRelease = afterHeading.slice(nextRelease);
+  const end = currentRelease.indexOf("\n## ", 1);
+  return end === -1 ? currentRelease : currentRelease.slice(0, end);
 }
 
 function identityVerificationSection(config: string): string {
@@ -152,6 +157,6 @@ describe("identity verification documentation contract", () => {
     ]) {
       expect(security).toContain(claim);
     }
-    expect(unreleasedSection(changelog)).toMatch(unreleasedIdentityPattern);
+    expect(documentedChangesSection(changelog)).toMatch(documentedIdentityPattern);
   });
 });

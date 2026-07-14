@@ -5,11 +5,16 @@ function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-function unreleasedSection(changelog: string): string {
+function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
   const nextRelease = afterHeading.search(/^## \[/mu);
-  return nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
+  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
+
+  const currentRelease = afterHeading.slice(nextRelease);
+  const end = currentRelease.indexOf("\n## ", 1);
+  return end === -1 ? currentRelease : currentRelease.slice(0, end);
 }
 
 describe("profile credential isolation documentation contract", () => {
@@ -39,7 +44,7 @@ describe("profile credential isolation documentation contract", () => {
     expect(architecture).toContain("ProfileRuntimeIsolation");
     expect(architecture).toContain("--mount");
     expect(architecture).toContain("macOS Podman isolation fail closed");
-    expect(unreleasedSection(changelog)).toMatch(/\[#29\][\s\S]*credential/iu);
+    expect(documentedChangesSection(changelog)).toMatch(/\[#29\][\s\S]*credential/iu);
   });
 
   it("states the native same-user and container boundaries without overclaiming containment", () => {
