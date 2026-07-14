@@ -141,14 +141,14 @@ describe("trusted publishing workflow contract", () => {
     expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./u);
   });
 
-  it("pins actions, checks out the tag, and verifies the release ancestry and version", () => {
+  it("pins actions, checks out the tag, and verifies the exact main commit and version", () => {
     const workflow = readRepositoryFile(".github/workflows/publish.yml");
 
     expect(actionReferences(workflow)).toEqual([checkoutPin, setupNodePin]);
     expect(actionReferences(workflow).every((action) => /@[0-9a-f]{40}$/u.test(action))).toBe(true);
     expect(workflow).toContain("ref: ${{ github.event.release.tag_name }}");
     expect(workflow).toContain('test "$RELEASE_TAG" = "v$PACKAGE_VERSION"');
-    expect(workflow).toContain("git merge-base --is-ancestor HEAD origin/main");
+    expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"');
   });
 
   it("checks the trusted-publishing toolchain and verifies before publishing with provenance", () => {
