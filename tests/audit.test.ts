@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -485,6 +486,80 @@ describe("audit logger", () => {
         holder.kill("SIGKILL");
         await once(holder, "exit");
       }
+    }
+  });
+
+  it("fails closed rather than bypassing a slow valid local audit lock holder", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-slow-lock-holder-"));
+    const path = join(directory, "audit.jsonl");
+    const canonicalPath = join(await realpath(directory), "audit.jsonl");
+    const key = localLockKey(canonicalPath);
+    const greeting = `${localLockProtocol} ${key}\n`;
+    let connectionCount = 0;
+    let secondProbeObserved = false;
+    let holder: ReturnType<typeof createServer> | undefined;
+
+    for (const port of localLockPorts(canonicalPath)) {
+      const candidate = createServer((socket) => {
+        connectionCount += 1;
+        if (connectionCount > 1) {
+          secondProbeObserved = true;
+          socket.end(greeting);
+          return;
+        }
+        setTimeout(() => socket.end(greeting), 200);
+      });
+      const listening = await new Promise<boolean>((resolve, reject) => {
+        const fail = (error: NodeJS.ErrnoException): void => {
+          candidate.off("error", fail);
+          if (error.code === "EADDRINUSE") {
+            resolve(false);
+            return;
+          }
+          reject(error);
+        };
+        candidate.once("error", fail);
+        candidate.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+          candidate.off("error", fail);
+          resolve(true);
+        });
+      });
+      if (listening) {
+        holder = candidate;
+        break;
+      }
+    }
+    if (holder === undefined) throw new Error("Could not reserve a local audit lock port for the test.");
+
+    try {
+      const logger = new AuditLogger(path, { rotation: { maxBytes: 1_000_000, retainFiles: 2 } });
+      const now = vi.spyOn(Date, "now").mockImplementation(() => (secondProbeObserved ? 5_000 : 0));
+      try {
+        await expect(
+          logger.log({
+            wrapper: "github",
+            profile: "work",
+            operation: "tools/call",
+            name: "must-not-bypass-slow-valid-local-lock-owner",
+            status: "success",
+            durationMs: 1
+          })
+        ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+      } finally {
+        now.mockRestore();
+      }
+      expect(secondProbeObserved).toBe(true);
+      await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        holder.close((error) => {
+          if (error === undefined) {
+            resolve();
+            return;
+          }
+          reject(error);
+        });
+      });
     }
   });
 
