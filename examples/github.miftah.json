@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2",
   "name": "github",
   "description": "GitHub MCP wrapped by Miftah",
   "defaultProfile": "work",
@@ -10,7 +10,12 @@
       "run",
       "-i",
       "--rm",
-      "ghcr.io/github/github-mcp-server"
+      "-e",
+      "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "ghcr.io/github/github-mcp-server:v1.5.0",
+      "stdio",
+      "--read-only",
+      "--toolsets=repos,issues,pull_requests"
     ]
   },
   "profiles": {
@@ -19,7 +24,7 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_WORK_TOKEN}"
       },
-      "policy": "safe-write"
+      "policy": "readonly"
     },
     "personal": {
       "description": "Personal GitHub account",
@@ -28,19 +33,6 @@
       },
       "policy": "readonly"
     }
-  },
-  "routing": {
-    "mode": "hybrid",
-    "fallback": "activeProfile",
-    "rules": [
-      {
-        "name": "work-repository",
-        "when": {
-          "args.repo": "my-org/work"
-        },
-        "profile": "work"
-      }
-    ]
   },
   "policies": {
     "readonly": {
@@ -51,42 +43,31 @@
         "write",
         "destructive"
       ]
-    },
-    "safe-write": {
-      "allowRisk": [
-        "read",
-        "write"
-      ],
-      "denyRisk": [
-        "destructive"
-      ],
-      "requireConfirmation": [
-        "write"
-      ]
     }
   },
+  "routing": {
+    "mode": "hybrid",
+    "fallback": "activeProfile",
+    "rules": []
+  },
   "security": {
-    "allowPlaintextSecrets": false,
-    "redactSecrets": true,
     "allowProfileSwitchingFromMcp": true,
     "requireExplicitProfileForDestructive": true
   },
+  "secrets": {
+    "allowPlaintextSecrets": false
+  },
   "process": {
-    "startMode": "lazy",
-    "cache": true,
-    "restartOnCrash": true,
     "startupTimeoutMs": 30000
   },
   "audit": {
     "enabled": true,
-    "path": "~/.local/state/miftah/github.audit.jsonl",
+    "path": "~/.local/state/miftah/audit.jsonl",
     "format": "jsonl",
     "includeArguments": false,
-    "redact": true
+    "failureMode": "fail-closed"
   },
   "tooling": {
-    "managementToolPrefix": "miftah_",
-    "collisionStrategy": "prefix-upstream",
-    "toolDiscoveryMode": "defaultProfile"
+    "collisionStrategy": "prefix-upstream"
   }
 }

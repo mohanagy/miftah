@@ -1,0 +1,23 @@
+{
+  "version": "1",
+  "name": "generic",
+  "description": "Generic MCP wrapped by Miftah",
+  "defaultProfile": "default",
+  "upstream": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "your-mcp-server"
+    ]
+  },
+  "profiles": {
+    "default": {
+      "env": {}
+    }
+  },
+  "security": {
+    "allowPlaintextSecrets": false,
+    "redactSecrets": true
+  }
+}

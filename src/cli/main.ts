@@ -1,136 +1,85 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "../config/load-config.js";
-import { presetConfig } from "../config/presets.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
-import { SecretResolver } from "../secrets/secret-resolver.js";
-import { ProfileManager } from "../profiles/profile-manager.js";
-import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
-import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
-import { MiftahServer } from "../mcp/server/miftah-server.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { redactSecrets } from "../secrets/redact.js";
+import { createRuntime } from "./create-runtime.js";
+import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
+import { startMiftahHttpServer } from "../http/miftah-http-server.js";
+import { MIFTAH_VERSION } from "../version.js";
+import { runDoctor } from "./doctor.js";
+import { formatDoctorReport } from "./doctor-report.js";
+import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./parse.js";
+import { exitCodeForError } from "./exit-codes.js";
+import { runLogsCommand } from "./logs.js";
+import { runInitCommand } from "./init.js";
+import { runAuditExportCommand } from "./audit-export.js";
+import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
+import { runMigrateConfigCommand } from "./migrate-config.js";
 
-interface CliArgs {
-  command?: string;
-  config?: string;
-  profile?: string;
-  output?: string;
-  preset?: string;
-  follow?: boolean;
-  name?: string;
-}
-
-function parseArgs(argv: string[]): CliArgs {
-  const [first, ...rest] = argv;
-  const result: CliArgs = {};
-  if (first && !first.startsWith("-")) result.command = first;
-  if (first === "init" && rest[0] && !rest[0].startsWith("-")) result.name = rest[0];
-  const values = first?.startsWith("-") ? argv : rest;
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (value === "--follow") {
-      result.follow = true;
-    } else if (value === "--config") {
-      result.config = values[++index];
-    } else if (value === "--profile") {
-      result.profile = values[++index];
-    } else if (value === "--output") {
-      result.output = values[++index];
-    } else if (value === "--preset") {
-      result.preset = values[++index];
-    } else if (value === "--name") {
-      result.name = values[++index];
-    }
-  }
-  return result;
-}
-
-async function createRuntime(configPath: string) {
-  const config = await loadConfig(configPath);
-  const resolver = new SecretResolver({
-    envFiles: config.secrets?.envFiles,
-    allowPlaintextSecrets: config.secrets?.allowPlaintextSecrets ?? config.security?.allowPlaintextSecrets
-  });
-  await resolver.load();
-  const profiles = Object.fromEntries(
-    Object.entries(config.profiles).map(([name, profile]) => [
-      name,
-      {
-        ...profile,
-        env: profile.env ? resolver.resolveMap(profile.env) : profile.env,
-        headers: profile.headers ? resolver.resolveMap(profile.headers) : profile.headers,
-        upstreams: profile.upstreams
-          ? Object.fromEntries(
-              Object.entries(profile.upstreams).map(([upstreamName, override]) => [
-                upstreamName,
-                {
-                  ...override,
-                  env: override.env ? resolver.resolveMap(override.env) : override.env,
-                  headers: override.headers ? resolver.resolveMap(override.headers) : override.headers
-                }
-              ])
-            )
-          : profile.upstreams
-      }
-    ])
-  );
-  const resolvedConfig = { ...config, profiles };
-  const upstream = resolvedConfig.upstream
-    ? {
-        ...resolvedConfig.upstream,
-        env: resolvedConfig.upstream.env ? resolver.resolveMap(resolvedConfig.upstream.env) : undefined,
-        headers: resolvedConfig.upstream.headers ? resolver.resolveMap(resolvedConfig.upstream.headers) : undefined
-      }
-    : undefined;
-  const manager = resolvedConfig.upstreams
-    ? new MultiUpstreamProcessManager(resolvedConfig, {
-        startupTimeoutMs: config.process?.startupTimeoutMs,
-        restartOnCrash: config.process?.restartOnCrash,
-        maxRestarts: config.process?.maxRestarts
-      })
-    : new UpstreamProcessManager(upstream!, profiles, {
-    startupTimeoutMs: config.process?.startupTimeoutMs,
-    restartOnCrash: config.process?.restartOnCrash,
-    maxRestarts: config.process?.maxRestarts
+async function serve(configPath: string, transportKind = "stdio"): Promise<void> {
+  if (transportKind === "http") {
+    const server = await startMiftahHttpServer(configPath);
+    process.stdout.write(`Miftah HTTP server listening on ${server.url.toString()}\n`);
+    const shutdown = (): void => {
+      void server.close().catch(() => {
+        process.stderr.write("Miftah HTTP server shutdown failed.\n");
+        process.exitCode = 1;
       });
-  const profileManager = new ProfileManager(resolvedConfig, resolvedConfig.security);
-  return { config: resolvedConfig, manager, profileManager };
-}
-
-async function serve(configPath: string): Promise<void> {
-  const runtime = await createRuntime(configPath);
-  const server = new MiftahServer(runtime.config, runtime.profileManager, runtime.manager);
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    return;
+  }
+  const runtime = await createMiftahRuntime(configPath);
   const transport = new StdioServerTransport();
   const shutdown = async () => {
-    await server.close();
+    await runtime.close();
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
-  await server.connect(transport);
+  await runtime.connect(transport);
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
-  const args = parseArgs(argv);
-  const command = args.command ?? "serve";
+  const invocation = parseCli(argv);
+  if (invocation.kind === "help") {
+    process.stdout.write(`${invocation.command ? renderCommandHelp(invocation.command) : renderRootHelp()}\n`);
+    return;
+  }
+  if (invocation.kind === "version") {
+    process.stdout.write(`${MIFTAH_VERSION}\n`);
+    return;
+  }
+  const { command, options: args } = invocation;
   if (command === "schema") {
     process.stdout.write(`${JSON.stringify(generateConfigSchema(), null, 2)}\n`);
     return;
   }
   if (command === "init") {
-    const name = args.name ?? args.config?.split("/").pop()?.replace(/\.json$/, "") ?? "miftah-wrapper";
-    const output = resolve(args.output ?? `${name}.miftah.json`);
-    const config = presetConfig(name, args.preset ?? "generic");
-    await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx" });
-    process.stdout.write(`Created ${output}\n`);
+    await runInitCommand(args, {
+      input: process.stdin,
+      output: process.stdout,
+      cwd: process.cwd(),
+      launcher: {
+        command: process.execPath,
+        args: [fileURLToPath(import.meta.url), "serve"]
+      }
+    });
     return;
   }
   if (!args.config) {
-    throw new Error("Usage: miftah --config <file> | miftah <validate|doctor|list-tools|test-profile|logs> --config <file>");
+    throw new CliUsageError(
+      `Command '${command}' requires '--config <file>'. Use 'miftah ${command} --help' for usage.`
+    );
+  }
+  if (command === "migrate-config") {
+    const report = await runMigrateConfigCommand({ configPath: args.config, write: args.write === true });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
   }
   if (command === "serve") {
-    await serve(args.config);
+    await serve(args.config, args.transport);
     return;
   }
   if (command === "validate") {
@@ -139,22 +88,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const runtime = await createRuntime(args.config);
-    const commandName = runtime.config.upstream?.command;
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          ok: true,
-          config: runtime.config.name,
-          defaultProfile: runtime.config.defaultProfile,
-          upstreamCommand: commandName ?? null,
-          profiles: runtime.profileManager.list().map((profile) => profile.name)
-        },
-        null,
-        2
-      )}\n`
-    );
-    await runtime.manager.close();
+    const report = await runDoctor(args.config);
+    process.stdout.write(`${args.json ? JSON.stringify(report, null, 2) : formatDoctorReport(report)}\n`);
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
   if (command === "list-tools" || command === "test-profile") {
@@ -171,10 +107,27 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "logs") {
-    const config = await loadConfig(args.config);
-    const path = config.audit?.path;
-    if (!path) throw new Error("Audit logging is not configured.");
-    process.stdout.write(await readFile(path, "utf8").catch((error) => redactSecrets(String(error))));
+    await runLogsCommand({ configPath: args.config, follow: args.follow === true });
+    return;
+  }
+  if (command === "audit-export") {
+    if (!args.output) {
+      throw new CliUsageError(
+        "Command 'audit-export' requires '--output <file>'. Use 'miftah audit-export --help' for usage."
+      );
+    }
+    await runAuditExportCommand({
+      configPath: args.config,
+      outputPath: args.output,
+      includeArguments: args.includeArguments === true
+    });
+    process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+    return;
+  }
+  if (command === "audit-verify") {
+    const report = await runAuditVerifyCommand({ configPath: args.config });
+    process.stdout.write(`${args.json ? JSON.stringify(report, null, 2) : formatAuditVerifyReport(report)}\n`);
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
   throw new Error(`Unknown command '${command}'`);
@@ -182,7 +135,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
 main().catch((error: unknown) => {
   process.stderr.write(`${redactSecrets(error instanceof Error ? error.message : String(error))}\n`);
-  process.exitCode = 1;
+  process.exitCode = exitCodeForError(error);
 });
 
-export { main, parseArgs };
+export { main };

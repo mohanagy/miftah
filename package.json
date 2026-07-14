@@ -1,7 +1,23 @@
 {
   "name": "@lubab/miftah",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Wrap any MCP. Use the right account without reconnecting.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "credential-broker",
+    "multi-account",
+    "security",
+    "cli"
+  ],
+  "homepage": "https://github.com/mohanagy/miftah#readme",
+  "bugs": {
+    "url": "https://github.com/mohanagy/miftah/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohanagy/miftah.git"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,6 +25,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./plugin-api": {
+      "types": "./dist/plugin-api.d.ts",
+      "import": "./dist/plugin-api.js"
     }
   },
   "bin": {
@@ -25,9 +45,15 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:core": "vitest run tests/config.test.ts tests/config-loader.test.ts tests/config-diagnostics.test.ts tests/config-migration.test.ts tests/config-public-contract.test.ts tests/config-runtime-parity.test.ts tests/config-schema-contract.test.ts tests/executable-resolver.test.ts tests/http-server.test.ts tests/presets.test.ts tests/profile-manager.test.ts tests/provider-routing-matchers.test.ts tests/provider-routing-matchers-docs-contract.test.ts tests/routing-context.test.ts tests/routing-policy.test.ts tests/secret-provider-availability.test.ts tests/secret-providers.test.ts tests/secrets.test.ts tests/tooling-config.test.ts tests/windows-config-acl.test.ts tests/windows-config-migration-acl-failure.test.ts tests/windows-config-migration-acl.test.ts",
+    "test:package": "vitest run tests/package-contract.test.ts",
+    "test:coverage": "vitest run --coverage",
+    "smoke:cli": "node dist/cli/main.js schema",
+    "test:cli": "npm run test:package && npm run smoke:cli",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -35,16 +61,22 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^16.6.1",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.15.30",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^10.6.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.63.0",
     "vitest": "^3.2.4"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

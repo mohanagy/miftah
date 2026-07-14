@@ -8,11 +8,12 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist"
   },
-  "include": ["src", "tests", "vitest.config.ts"],
+  "include": ["build", "src", "tests", "tsup.config.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -1,27 +1,22 @@
 {
-  "version": "1",
+  "version": "2",
   "name": "sentry",
-  "description": "Sentry MCP wrapped by Miftah",
-  "defaultProfile": "work",
+  "description": "sentry wrapped by Miftah",
+  "defaultProfile": "default",
   "upstream": {
     "transport": "stdio",
     "command": "npx",
     "args": [
-      "-y",
-      "@sentry/mcp-server"
+      "--yes",
+      "@sentry/mcp-server@0.36.0",
+      "--skills=inspect"
     ]
   },
   "profiles": {
-    "work": {
+    "default": {
+      "description": "Default account",
       "env": {
-        "SENTRY_AUTH_TOKEN": "${SENTRY_WORK_TOKEN}",
-        "SENTRY_ORG": "work-org"
-      }
-    },
-    "client-a": {
-      "env": {
-        "SENTRY_AUTH_TOKEN": "${SENTRY_CLIENT_A_TOKEN}",
-        "SENTRY_ORG": "client-a"
+        "SENTRY_ACCESS_TOKEN": "${SENTRY_ACCESS_TOKEN}"
       },
       "policy": "readonly"
     }
@@ -37,9 +32,29 @@
       ]
     }
   },
+  "routing": {
+    "mode": "hybrid",
+    "fallback": "activeProfile",
+    "rules": []
+  },
   "security": {
-    "allowPlaintextSecrets": false,
-    "redactSecrets": true,
-    "allowProfileSwitchingFromMcp": true
+    "allowProfileSwitchingFromMcp": true,
+    "requireExplicitProfileForDestructive": true
+  },
+  "secrets": {
+    "allowPlaintextSecrets": false
+  },
+  "process": {
+    "startupTimeoutMs": 30000
+  },
+  "audit": {
+    "enabled": true,
+    "path": "~/.local/state/miftah/audit.jsonl",
+    "format": "jsonl",
+    "includeArguments": false,
+    "failureMode": "fail-closed"
+  },
+  "tooling": {
+    "collisionStrategy": "prefix-upstream"
   }
 }

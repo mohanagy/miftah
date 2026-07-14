@@ -1,0 +1,511 @@
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import * as api from "../src/index.js";
+import type {
+  ActiveProfileStateScope,
+  AuditConfig,
+  AuditIntegrityConfig,
+  AuditRotationConfig,
+  ConfigDiagnostic,
+  GitHubProfileRoutingMatch,
+  HttpServerConfig,
+  IdentityConfig,
+  IdentityFingerprint,
+  IdentityProbeConfig,
+  JiraProfileRoutingMatch,
+  LinearProfileRoutingMatch,
+  MiftahConfig,
+  MiftahConfigVersion,
+  MiftahErrorCode,
+  MiftahErrorDetails,
+  MiftahRuntime,
+  PolicyConfig,
+  ProcessConfig,
+  ProfileConfig,
+  ProfileIsolationConfig,
+  ProfileIsolationContainerVolume,
+  ProfileIsolationFile,
+  ProfileLeaseConfig,
+  ProfileRoutingConfig,
+  ProfileRoutingMatchConfig,
+  ProfileUpstreamOverride,
+  PostHogProfileRoutingMatch,
+  RiskLevel,
+  RoutingConfig,
+  RoutingRule,
+  SecurityConfig,
+  ServerConfig,
+  SentryProfileRoutingMatch,
+  StateConfig,
+  ToolDiscoveryMode,
+  ToolingConfig,
+  TransportType,
+  UnknownToolRisk,
+  UpstreamConfig,
+  ValidatedRoutingConfig
+} from "../src/index.js";
+
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+
+const supportedRuntimeExports = [
+  "CURRENT_CONFIG_VERSION",
+  "MIFTAH_VERSION",
+  "MiftahError",
+  "createMiftahRuntime",
+  "generateConfigSchema",
+  "loadConfig",
+  "presetConfig",
+  "validateConfig"
+] as const;
+
+const internalRuntimeExports = [
+  "AuditLogger",
+  "MiftahServer",
+  "PolicyEngine",
+  "ProfileManager",
+  "RoutingEngine",
+  "SecretResolver",
+  "UpstreamProcessManager",
+  "UpstreamSession",
+  "createRedactor",
+  "redactSecrets"
+] as const;
+
+const supportedTypeExports = [
+  "ActiveProfileStateScope",
+  "AuditConfig",
+  "AuditIntegrityConfig",
+  "AuditRotationConfig",
+  "ConfigDiagnostic",
+  "GitHubProfileRoutingMatch",
+  "HttpServerConfig",
+  "IdentityConfig",
+  "IdentityFingerprint",
+  "IdentityProbeConfig",
+  "JiraProfileRoutingMatch",
+  "LinearProfileRoutingMatch",
+  "MiftahConfig",
+  "MiftahConfigVersion",
+  "MiftahErrorCode",
+  "MiftahErrorDetails",
+  "MiftahRuntime",
+  "PolicyConfig",
+  "ProcessConfig",
+  "ProfileConfig",
+  "ProfileIsolationConfig",
+  "ProfileIsolationContainerVolume",
+  "ProfileIsolationFile",
+  "ProfileLeaseConfig",
+  "ProfileRoutingConfig",
+  "ProfileRoutingMatchConfig",
+  "ProfileUpstreamOverride",
+  "PostHogProfileRoutingMatch",
+  "RiskLevel",
+  "RoutingConfig",
+  "RoutingRule",
+  "SecurityConfig",
+  "ServerConfig",
+  "SentryProfileRoutingMatch",
+  "StateConfig",
+  "ToolDiscoveryMode",
+  "ToolingConfig",
+  "TransportType",
+  "UnknownToolRisk",
+  "UpstreamConfig",
+  "ValidatedRoutingConfig"
+] as const;
+
+type PublicTypeImportCoverage = [
+  ActiveProfileStateScope,
+  AuditConfig,
+  AuditIntegrityConfig,
+  AuditRotationConfig,
+  ConfigDiagnostic,
+  GitHubProfileRoutingMatch,
+  HttpServerConfig,
+  IdentityConfig,
+  IdentityFingerprint,
+  IdentityProbeConfig,
+  JiraProfileRoutingMatch,
+  LinearProfileRoutingMatch,
+  MiftahConfig,
+  MiftahConfigVersion,
+  MiftahErrorCode,
+  MiftahErrorDetails,
+  MiftahRuntime,
+  PolicyConfig,
+  ProcessConfig,
+  ProfileConfig,
+  ProfileIsolationConfig,
+  ProfileIsolationContainerVolume,
+  ProfileIsolationFile,
+  ProfileLeaseConfig,
+  ProfileRoutingConfig,
+  ProfileRoutingMatchConfig,
+  ProfileUpstreamOverride,
+  PostHogProfileRoutingMatch,
+  RiskLevel,
+  RoutingConfig,
+  RoutingRule,
+  SecurityConfig,
+  ServerConfig,
+  SentryProfileRoutingMatch,
+  StateConfig,
+  ToolDiscoveryMode,
+  ToolingConfig,
+  TransportType,
+  UnknownToolRisk,
+  UpstreamConfig,
+  ValidatedRoutingConfig
+];
+
+void (undefined as unknown as PublicTypeImportCoverage);
+
+type PublicProtocolErrorCode = Extract<
+  MiftahErrorCode,
+  | "RESOURCE_TEMPLATE_COLLISION"
+  | "RESOURCE_TEMPLATE_CURSOR_INVALID"
+  | "RESOURCE_TEMPLATE_DISCOVERY_INVALIDATED"
+  | "RESOURCE_TEMPLATE_UNSUPPORTED"
+  | "RESOURCE_TEMPLATES_UNAVAILABLE"
+  | "RESOURCE_SUBSCRIPTION_NOT_FOUND"
+  | "RESOURCE_SUBSCRIPTION_UNSUPPORTED"
+>;
+
+const publicProtocolErrorCodes = {
+  RESOURCE_TEMPLATE_COLLISION: true,
+  RESOURCE_TEMPLATE_CURSOR_INVALID: true,
+  RESOURCE_TEMPLATE_DISCOVERY_INVALIDATED: true,
+  RESOURCE_TEMPLATE_UNSUPPORTED: true,
+  RESOURCE_TEMPLATES_UNAVAILABLE: true,
+  RESOURCE_SUBSCRIPTION_NOT_FOUND: true,
+  RESOURCE_SUBSCRIPTION_UNSUPPORTED: true
+} satisfies Record<PublicProtocolErrorCode, true>;
+
+void publicProtocolErrorCodes;
+
+const validAuditRotationConfig: AuditRotationConfig = {
+  maxBytes: 1_024,
+  retainFiles: 7
+};
+
+const validAuditIntegrityConfig: AuditIntegrityConfig = {
+  algorithm: "sha256-chain"
+};
+
+const validHttpServerConfig: HttpServerConfig = {
+  host: "127.0.0.1",
+  port: 3000,
+  authToken: "${MIFTAH_HTTP_TOKEN}",
+  maxSessions: 32,
+  sessionIdleTimeoutMs: 60_000,
+  maxRequestBytes: 1_048_576
+};
+const validServerConfig: ServerConfig = { http: validHttpServerConfig };
+const invalidHttpServerConfig: HttpServerConfig = {
+  // @ts-expect-error Non-loopback serving only accepts an explicit true opt-in.
+  allowNonLoopback: false
+};
+
+void [validAuditRotationConfig, validAuditIntegrityConfig, validServerConfig, invalidHttpServerConfig];
+
+const validTextIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["write"]
+};
+
+const validDestructiveIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["destructive"]
+};
+
+const validWriteThenDestructiveIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["write", "destructive"]
+};
+
+const validDestructiveThenWriteIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  requiredForRisk: ["destructive", "write"]
+};
+
+const invalidDuplicateRiskIdentityConfig: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000,
+  // @ts-expect-error Identity risk requirements must be unique.
+  requiredForRisk: ["write", "write"]
+};
+
+const validProfileLeaseConfig: ProfileLeaseConfig = {
+  ttlMs: 60_000,
+  requiredForRisk: ["write", "destructive"]
+};
+void validProfileLeaseConfig;
+
+const invalidDuplicateProfileLeaseConfig: ProfileLeaseConfig = {
+  ttlMs: 60_000,
+  // @ts-expect-error Profile lease risk requirements must be unique.
+  requiredForRisk: ["write", "write"]
+};
+void invalidDuplicateProfileLeaseConfig;
+
+const validProfileIsolationFile: ProfileIsolationFile = {
+  source: "credentials/work-oauth.json",
+  destination: "credentials/oauth.json",
+  environment: "OAUTH_CREDENTIAL_PATH"
+};
+
+const validProfileIsolationVolume: ProfileIsolationContainerVolume = {
+  source: "credentials/oauth.json",
+  destination: "/run/miftah/oauth.json",
+  readOnly: true,
+  environment: "OAUTH_CREDENTIAL_PATH"
+};
+
+const validProfileIsolationConfig: ProfileIsolationConfig = {
+  files: [validProfileIsolationFile],
+  containerVolumes: [validProfileIsolationVolume]
+};
+void validProfileIsolationConfig;
+
+const invalidProfileIsolationFile: ProfileIsolationFile = {
+  source: "credentials/work-oauth.json",
+  // @ts-expect-error Every copied isolation file needs a generated runtime destination.
+  destination: undefined
+};
+void invalidProfileIsolationFile;
+
+const validJsonIdentityConfig: IdentityConfig = {
+  expected: { organization: "lubab" },
+  probe: { tool: "identity", resultFormat: "json" },
+  maxAgeMs: 60_000
+};
+
+const validTextIdentityProbe: IdentityProbeConfig = {
+  tool: "whoami",
+  resultFormat: "text",
+  provider: "github"
+};
+
+const validJsonIdentityProbe: IdentityProbeConfig = {
+  tool: "identity",
+  resultFormat: "json"
+};
+
+// @ts-expect-error Text probes require an expected login.
+const invalidTextIdentityWithoutLogin: IdentityConfig = {
+  expected: { provider: "github" },
+  probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error Text probes cannot verify an organization.
+const invalidTextIdentityOrganization: IdentityConfig = {
+  expected: { login: "mona", organization: "lubab" },
+  probe: { tool: "whoami", resultFormat: "text" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error Expected text providers require a static probe provider.
+const invalidTextIdentityProviderWithoutProbeProvider: IdentityConfig = {
+  expected: { provider: "github", login: "mona" },
+  probe: { tool: "whoami", resultFormat: "text" },
+  maxAgeMs: 60_000
+};
+
+const invalidJsonIdentityStaticProvider: IdentityConfig = {
+  expected: { login: "mona" },
+  // @ts-expect-error JSON probes derive their provider from the response.
+  probe: { tool: "identity", resultFormat: "json", provider: "github" },
+  maxAgeMs: 60_000
+};
+
+const invalidJsonIdentityEmptyExpected: IdentityConfig = {
+  // @ts-expect-error JSON probes require at least one expected fingerprint field.
+  expected: {},
+  probe: { tool: "identity", resultFormat: "json" },
+  maxAgeMs: 60_000
+};
+
+// @ts-expect-error JSON probes do not support a static provider.
+const invalidJsonIdentityProbe: IdentityProbeConfig = {
+  tool: "identity",
+  resultFormat: "json",
+  provider: "github"
+};
+
+void [
+  validTextIdentityConfig,
+  validDestructiveIdentityConfig,
+  validWriteThenDestructiveIdentityConfig,
+  validDestructiveThenWriteIdentityConfig,
+  invalidDuplicateRiskIdentityConfig,
+  validJsonIdentityConfig,
+  validTextIdentityProbe,
+  validJsonIdentityProbe,
+  invalidTextIdentityWithoutLogin,
+  invalidTextIdentityOrganization,
+  invalidTextIdentityProviderWithoutProbeProvider,
+  invalidJsonIdentityStaticProvider,
+  invalidJsonIdentityEmptyExpected,
+  invalidJsonIdentityProbe
+];
+
+const versionOneConfigWithLegacyAliases: MiftahConfig = {
+  version: "1",
+  name: "legacy-config",
+  defaultProfile: "default",
+  upstream: { transport: "http", url: "https://example.test/mcp" },
+  profiles: { default: {} },
+  security: { allowPlaintextSecrets: true, redactSecrets: true },
+  audit: { redact: true }
+};
+
+const versionTwoConfigBase = {
+  version: "2" as const,
+  name: "current-config",
+  defaultProfile: "default",
+  profiles: { default: {} }
+};
+
+// @ts-expect-error Version 2 replaces the v1 http alias with streamable-http.
+const invalidVersionTwoHttpTransport: MiftahConfig = {
+  ...versionTwoConfigBase,
+  upstream: {
+    transport: "http",
+    url: "https://example.test/mcp"
+  }
+};
+
+// @ts-expect-error Version 2 named upstreams also reject the v1 http alias.
+const invalidVersionTwoNamedHttpTransport: MiftahConfig = {
+  ...versionTwoConfigBase,
+  upstreams: {
+    remote: {
+      transport: "http",
+      url: "https://example.test/mcp"
+    }
+  }
+};
+
+// @ts-expect-error Version 2 moves plaintext-secret opt-in under secrets.
+const invalidVersionTwoPlaintextAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  security: {
+    allowPlaintextSecrets: true
+  }
+};
+
+// @ts-expect-error Version 2 removes the redundant secret-redaction alias.
+const invalidVersionTwoRedactSecretsAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  security: {
+    redactSecrets: true
+  }
+};
+
+// @ts-expect-error Version 2 removes the redundant audit-redaction alias.
+const invalidVersionTwoAuditRedactAlias: MiftahConfig = {
+  ...versionTwoConfigBase,
+  audit: {
+    redact: true
+  }
+};
+
+void [
+  versionOneConfigWithLegacyAliases,
+  invalidVersionTwoHttpTransport,
+  invalidVersionTwoNamedHttpTransport,
+  invalidVersionTwoPlaintextAlias,
+  invalidVersionTwoRedactSecretsAlias,
+  invalidVersionTwoAuditRedactAlias
+];
+
+describe("public library API", () => {
+  it("exposes only the intentionally supported runtime API", () => {
+    expect(Object.keys(api).sort()).toEqual([...supportedRuntimeExports].sort());
+    for (const name of supportedRuntimeExports) {
+      expect(api).toHaveProperty(name);
+    }
+    expect(api.CURRENT_CONFIG_VERSION).toBe("2");
+  });
+
+  it("keeps internal runtime wiring out of the package root", () => {
+    for (const name of internalRuntimeExports) {
+      expect(api).not.toHaveProperty(name);
+    }
+  });
+
+  it("documents every supported runtime and type export", () => {
+    const documentation = readFileSync(new URL("../docs/library-api.md", import.meta.url), "utf8");
+
+    for (const name of [...supportedRuntimeExports, ...supportedTypeExports]) {
+      expect(documentation).toContain(`\`${name}\``);
+    }
+    expect(documentation).toContain(
+      "For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider."
+    );
+  });
+
+  it("uses the package version for wrapper and upstream MCP metadata", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-public-api-"));
+    const configPath = join(directory, "miftah.json");
+    const clientInfoPath = join(directory, "upstream-client-info.json");
+    const config = {
+      version: "1",
+      name: "public-api",
+      defaultProfile: "work",
+      upstream: {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture]
+      },
+      profiles: {
+        work: {
+          env: {
+            TEST_CLIENT_INFO_PATH: clientInfoPath
+          }
+        }
+      }
+    };
+    await writeFile(configPath, JSON.stringify(config));
+
+    const runtime = await api.createMiftahRuntime(configPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "public-api-test", version: "1.0.0" });
+    try {
+      expect(runtime).not.toHaveProperty("manager");
+      expect(runtime).not.toHaveProperty("server");
+      await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);
+      expect(client.getServerVersion()).toMatchObject({
+        name: "miftah-public-api",
+        version: api.MIFTAH_VERSION
+      });
+
+      await client.listTools();
+      expect(JSON.parse(await readFile(clientInfoPath, "utf8"))).toMatchObject({
+        name: "miftah",
+        version: api.MIFTAH_VERSION
+      });
+    } finally {
+      await client.close();
+      await runtime.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

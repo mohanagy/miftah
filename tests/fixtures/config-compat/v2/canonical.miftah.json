@@ -1,0 +1,22 @@
+{
+  "version": "2",
+  "name": "canonical-v2",
+  "defaultProfile": "default",
+  "upstream": {
+    "transport": "streamable-http",
+    "url": "https://mcp.example.test"
+  },
+  "profiles": {
+    "default": {}
+  },
+  "secrets": {
+    "allowPlaintextSecrets": false
+  },
+  "audit": {
+    "enabled": true,
+    "path": "./audit/events.jsonl",
+    "format": "jsonl",
+    "includeArguments": false,
+    "failureMode": "fail-closed"
+  }
+}
