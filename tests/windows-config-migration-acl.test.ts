@@ -167,7 +167,14 @@ try {
   $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST')
-  if ($fields.Count -ne 3 -or $fields[0] -ne 'copy-file-security') { exit 1 }
+  if ($fields.Count -ne 3) {
+    [Console]::Out.Write("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:field-count-" + $fields.Count)
+    exit 1
+  }
+  if ($fields[0] -ne 'copy-file-security') {
+    [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:operation')
+    exit 1
+  }
   $stage = 'source'
   $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $sections)
   $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($sections)
@@ -234,6 +241,10 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_STAGE:(bootstrap|request|source|target|apply|verify)(?::(permission|missing|invalid|other))?/
     )?.[0];
     if (stage !== undefined) return stage;
+    const requestFailure = diagnostic.match(
+      /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(field-count-[1-9][0-9]*|operation)/
+    )?.[0];
+    if (requestFailure !== undefined) return requestFailure;
   }
   if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_REQUEST")) {
     return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:request";
