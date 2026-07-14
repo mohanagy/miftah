@@ -323,6 +323,29 @@ async function removeCandidateAndTransaction(transaction: MigrationTransaction):
   return backupRemoved && candidateRemoved && (await removeTransactionDirectory(transaction.directory));
 }
 
+async function restoreSourceChangedOrEscalate(transaction: MigrationTransaction, path: string): Promise<never> {
+  const restored = await restoreCurrentHeldSource(transaction, path);
+  if (restored && (await removeCandidateAndTransaction(transaction))) {
+    throw new MigrationSourceChangedError();
+  }
+  await unlinkTransactionFile(transaction.candidatePath);
+  throw new MigrationSourceChangedError(transaction.directory);
+}
+
+async function restoreAndEscalate(
+  transaction: MigrationTransaction,
+  restore: () => Promise<boolean>,
+  restoredError: Error,
+  discardCandidateOnFailure = false
+): Promise<never> {
+  const restored = await restore();
+  if (restored && (await removeCandidateAndTransaction(transaction))) {
+    throw restoredError;
+  }
+  if (discardCandidateOnFailure) await unlinkTransactionFile(transaction.candidatePath);
+  throw new MigrationTransactionError(transaction.directory);
+}
+
 /** Publishes a synced candidate only into an absent path, retaining all uncertain state in its private transaction directory. */
 async function installWithoutOverwriting(
   path: string,
@@ -352,12 +375,7 @@ async function installWithoutOverwriting(
     matchesFingerprintAfterMove(held, source.fingerprint) &&
     (await matchesHeldSourceSnapshot(transaction.holdingPath, source.originalBytes, heldFingerprint));
   if (!heldMatchesSnapshot) {
-    const restored = await restoreCurrentHeldSource(transaction, path);
-    if (restored && (await removeCandidateAndTransaction(transaction))) {
-      throw new MigrationSourceChangedError();
-    }
-    await unlinkTransactionFile(transaction.candidatePath);
-    throw new MigrationSourceChangedError(transaction.directory);
+    await restoreSourceChangedOrEscalate(transaction, path);
   }
 
   try {
@@ -368,47 +386,38 @@ async function installWithoutOverwriting(
       throw new Error("migration backup publication did not retain the private backup file");
     }
   } catch (error) {
-    const restored = await restoreHeldSource(transaction, path, heldFingerprint);
-    if (restored && (await removeCandidateAndTransaction(transaction))) {
-      if (errorCode(error) === "EEXIST") {
-        throw new MiftahError(
-          "CONFIG_MIGRATION_BACKUP_EXISTS",
-          "CONFIG_MIGRATION_BACKUP_EXISTS: refusing to overwrite the existing migration backup"
-        );
-      }
-      throw migrationWriteError("could not create the configuration backup; the original configuration was restored");
-    }
-    throw new MigrationTransactionError(transaction.directory);
+    const restoredError = errorCode(error) === "EEXIST"
+      ? new MiftahError(
+        "CONFIG_MIGRATION_BACKUP_EXISTS",
+        "CONFIG_MIGRATION_BACKUP_EXISTS: refusing to overwrite the existing migration backup"
+      )
+      : migrationWriteError("could not create the configuration backup; the original configuration was restored");
+    await restoreAndEscalate(transaction, () => restoreHeldSource(transaction, path, heldFingerprint), restoredError);
   }
 
   try {
     await writeMigrationFile(transaction.candidatePath, candidateContent, source.fingerprint.mode, transaction.holdingPath);
   } catch {
-    const restored = await restoreHeldSource(transaction, path, heldFingerprint);
-    if (restored && (await removeCandidateAndTransaction(transaction))) {
-      throw migrationWriteError("could not create the synced migration candidate; the original configuration was restored");
-    }
-    throw new MigrationTransactionError(transaction.directory);
+    await restoreAndEscalate(
+      transaction,
+      () => restoreHeldSource(transaction, path, heldFingerprint),
+      migrationWriteError("could not create the synced migration candidate; the original configuration was restored")
+    );
   }
 
   if (!(await matchesHeldSourceSnapshot(transaction.holdingPath, source.originalBytes, heldFingerprint))) {
-    const restored = await restoreCurrentHeldSource(transaction, path);
-    if (restored && (await removeCandidateAndTransaction(transaction))) {
-      throw new MigrationSourceChangedError();
-    }
-    await unlinkTransactionFile(transaction.candidatePath);
-    throw new MigrationSourceChangedError(transaction.directory);
+    await restoreSourceChangedOrEscalate(transaction, path);
   }
 
   try {
     await link(transaction.candidatePath, path);
   } catch {
-    const restored = await restoreHeldSource(transaction, path, heldFingerprint);
-    if (restored && (await removeCandidateAndTransaction(transaction))) {
-      throw migrationWriteError("could not publish the migrated configuration; the original configuration was restored");
-    }
-    await unlinkTransactionFile(transaction.candidatePath);
-    throw new MigrationTransactionError(transaction.directory);
+    await restoreAndEscalate(
+      transaction,
+      () => restoreHeldSource(transaction, path, heldFingerprint),
+      migrationWriteError("could not publish the migrated configuration; the original configuration was restored"),
+      true
+    );
   }
 
   let privateCandidate: Stats;
