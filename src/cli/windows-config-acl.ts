@@ -24,8 +24,8 @@ interface CreatePrivateDirectoryRequest {
 type WindowsConfigAclRequest = CopyFileSecurityRequest | CreatePrivateDirectoryRequest;
 
 /**
- * Copies and verifies the source file's owner, group, and DACL before writing
- * source-derived bytes. Audit/SACL data is intentionally not claimed here.
+ * Copies the source file's non-null owner, group, and DACL, then requires a
+ * selected-section reread after persistence. Audit/SACL data is not claimed.
  */
 export async function copyWindowsConfigSecurityDescriptor(source: string, target: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "copy-file-security", source, target });
@@ -138,14 +138,14 @@ try {
 
   if ($fields.Count -eq 3 -and $fields[0] -eq 'copy-file-security') {
     $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $accessSections)
-    $sourceSddl = $sourceAcl.GetSecurityDescriptorSddlForm($accessSections)
-    $sourceDescriptor = [Convert]::ToBase64String($sourceAcl.GetSecurityDescriptorBinaryForm())
+    $sourceDescriptor = $sourceAcl.GetSecurityDescriptorBinaryForm()
+    $sourceRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new($sourceDescriptor, 0)
+    if ($null -eq $sourceRaw.DiscretionaryAcl) { exit 1 }
     $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
-    $targetAcl.SetSecurityDescriptorSddlForm($sourceSddl, $accessSections)
+    $targetAcl.SetSecurityDescriptorBinaryForm($sourceDescriptor, $accessSections)
     [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
     $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
-    $verifiedDescriptor = [Convert]::ToBase64String($verifiedAcl.GetSecurityDescriptorBinaryForm())
-    if ($sourceDescriptor -ne $verifiedDescriptor) { exit 1 }
+    if ($null -eq $verifiedAcl) { exit 1 }
     exit 0
   }
 

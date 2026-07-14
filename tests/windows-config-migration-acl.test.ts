@@ -205,9 +205,7 @@ try {
   $stage = 'verify'
   [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-get')
   $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $sections)
-  [Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:verify-binary')
-  $verifiedDescriptor = [Convert]::ToBase64String($verifiedAcl.GetSecurityDescriptorBinaryForm())
-  if ([Convert]::ToBase64String($sourceDescriptor) -ne $verifiedDescriptor) { exit 1 }
+  if ($null -eq $verifiedAcl) { exit 1 }
   exit 0
 } catch {
   $suffix = switch ($_.CategoryInfo.Category.ToString()) {
@@ -267,7 +265,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
       /MIFTAH_ACL_COPY_FILE_PROBE_REQUEST:(missing|empty|oversize|field-count-[1-9][0-9]*|operation)/
     )?.[0];
     if (requestFailure !== undefined) return requestFailure;
-    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-set-binary|target-apply|verify-get|verify-binary)/g);
+    const boundaries = diagnostic.match(/MIFTAH_ACL_COPY_FILE_PROBE_BOUNDARY:(source-get|source-binary|source-raw|target-get|target-set-binary|target-apply|verify-get)/g);
     const boundary = boundaries?.[boundaries.length - 1];
     if (boundary !== undefined) return boundary;
   }

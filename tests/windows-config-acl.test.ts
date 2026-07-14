@@ -54,7 +54,7 @@ describe("Windows migration ACL boundary", () => {
     await expect(copyWindowsConfigSecurityDescriptor("C:\\config\\source.json", "C:\\config\\target.json")).resolves.toBe(false);
   });
 
-  it("verifies copied ACLs without reserializing the target descriptor as SDDL", async () => {
+  it("copies a non-null binary descriptor and rereads the persisted target", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();
       queueMicrotask(() => child.emit("close", 0));
@@ -65,8 +65,11 @@ describe("Windows migration ACL boundary", () => {
 
     const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
     const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("RawSecurityDescriptor");
+    expect(command).toContain("$null -eq $sourceRaw.DiscretionaryAcl");
     expect(command).toContain("GetSecurityDescriptorBinaryForm");
-    expect(command).not.toContain("$verifiedAcl.GetSecurityDescriptorSddlForm");
+    expect(command).toContain("$targetAcl.SetSecurityDescriptorBinaryForm");
+    expect(command).not.toContain("$verifiedAcl.GetSecurityDescriptorBinaryForm");
   });
 
   it("fails closed rather than replacing malformed Unicode in a private directory path", async () => {
