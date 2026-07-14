@@ -41,13 +41,17 @@ function aclEnvironment(request: string): NodeJS.ProcessEnv {
 const aclProbe = String.raw`$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
+$stage = 'bootstrap'
 try {
+  $stage = 'request'
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)) | ConvertFrom-Json
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
   if ($null -eq $request -or $request.path -isnot [string] -or $request.operation -isnot [string]) { exit 1 }
   if ($request.operation -eq 'restrict') {
+    $stage = 'identity'
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $stage = 'descriptor'
     $security = New-Object System.Security.AccessControl.FileSecurity
     $security.SetAccessRuleProtection($true, $false)
     $security.SetOwner($identity)
@@ -57,28 +61,31 @@ try {
       [System.Security.AccessControl.AccessControlType]::Allow
     )
     $security.SetAccessRule($rule)
+    $stage = 'apply'
     Set-Acl -LiteralPath $request.path -AclObject $security
   } elseif ($request.operation -ne 'read') {
     exit 1
   }
+  $stage = 'verify'
   $acl = Get-Acl -LiteralPath $request.path
   $sddl = $acl.GetSecurityDescriptorSddlForm($sections)
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sddl)))
   exit 0
 } catch {
-  [Console]::Error.Write("MIFTAH_ACL_PROBE_EXCEPTION:" + $_.Exception.GetType().FullName)
+  [Console]::Out.Write("MIFTAH_ACL_PROBE_STAGE:" + $stage)
   exit 1
 }`;
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 
-function safeAclProbeDiagnostic(output: readonly Buffer[]): string {
+function safeAclProbeStage(output: readonly Buffer[]): string {
   const bytes = Buffer.concat(output);
   for (const encoding of ["utf8", "utf16le"] as const) {
     const diagnostic = bytes.toString(encoding).trim().replace(/^\uFEFF/, "");
-    if (/^MIFTAH_ACL_PROBE_EXCEPTION:[A-Za-z0-9_.]+$/.test(diagnostic)) return diagnostic;
+    const stage = diagnostic.match(/MIFTAH_ACL_PROBE_STAGE:(bootstrap|request|identity|descriptor|apply|verify)/)?.[0];
+    if (stage !== undefined) return stage;
   }
-  return "MIFTAH_ACL_PROBE_EXCEPTION:unavailable";
+  return "MIFTAH_ACL_PROBE_STAGE:unavailable";
 }
 
 async function windowsAclSddl(path: string, operation: "read" | "restrict"): Promise<string> {
@@ -96,7 +103,7 @@ async function windowsAclSddl(path: string, operation: "read" | "restrict"): Pro
     child.once("error", () => reject(new Error("Windows ACL probe could not start")));
     child.once("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`Windows ACL probe failed: ${safeAclProbeDiagnostic(errorOutput)}`));
+        reject(new Error(`Windows ACL probe failed: ${safeAclProbeStage([...output, ...errorOutput])}`));
         return;
       }
       try {
