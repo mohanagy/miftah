@@ -1,14 +1,39 @@
 import type { ProfileConfig, RoutingConfig, RoutingRule } from "../config/types.js";
+import type { PluginRegistry, PluginRoutingCandidate } from "../plugins/plugin-registry.js";
 import { MiftahError } from "../utils/errors.js";
 import {
   isCanonicalProviderMatcherEvidence,
   matchProviderBindings,
   projectProviderMatcherInput
 } from "./provider-matchers.js";
-import type { ProviderMatcherCandidate } from "./provider-matcher-types.js";
+import type {
+  ProviderMatcherCandidate,
+  ProviderMatcherKind,
+  ProviderMatcherProvider
+} from "./provider-matcher-types.js";
 import type { RoutingDecision, RoutingInput, RoutingMatcherEvidence } from "./routing-types.js";
 
 const MAX_ROUTING_MATCHER_EVIDENCE = 64;
+const pluginIdentifierPattern = /^[a-z][a-z0-9-]{0,63}$/u;
+const pluginBindingPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
+
+type MatcherCandidate =
+  | {
+      readonly profile: string;
+      readonly evidence: {
+        readonly provider: ProviderMatcherProvider;
+        readonly kind: ProviderMatcherKind;
+        readonly value: string;
+      };
+    }
+  | {
+      readonly profile: string;
+      readonly evidence: {
+        readonly provider: `plugin:${string}`;
+        readonly kind: "binding";
+        readonly value: string;
+      };
+    };
 
 function getPath(input: RoutingInput, path: string): unknown {
   const [root, ...parts] = path.split(".");
@@ -52,7 +77,8 @@ export class RoutingEngine {
     private readonly config: RoutingConfig = {},
     private activeProfile: string,
     private readonly defaultProfile = activeProfile,
-    private readonly profiles: Readonly<Record<string, ProfileConfig>> = {}
+    private readonly profiles: Readonly<Record<string, ProfileConfig>> = {},
+    private readonly plugins?: PluginRegistry
   ) {}
 
   setActiveProfile(profile: string): void {
@@ -60,6 +86,27 @@ export class RoutingEngine {
   }
 
   resolve(input: RoutingInput, activeProfile = this.activeProfile): RoutingDecision {
+    const preliminary = this.resolvePreMatcher(input);
+    if (preliminary !== undefined) return preliminary;
+    return this.resolveMatcherBand(input, activeProfile);
+  }
+
+  /** Runs local routing plugins only after higher-precedence hints and explicit rules do not decide the request. */
+  async resolveWithPlugins(
+    input: RoutingInput,
+    activeProfile = this.activeProfile,
+    signal?: AbortSignal
+  ): Promise<RoutingDecision> {
+    const preliminary = this.resolvePreMatcher(input);
+    if (preliminary !== undefined || this.plugins?.hasRoutingMatchers() !== true) {
+      return preliminary ?? this.resolveMatcherBand(input, activeProfile);
+    }
+    const matcherInput = this.projectMatcherInput(input);
+    const pluginCandidates = await this.plugins.matchRouting(input.matcherToolName ?? input.toolName, matcherInput, signal);
+    return this.resolveMatcherBand(input, activeProfile, pluginCandidates, matcherInput);
+  }
+
+  private resolvePreMatcher(input: RoutingInput): RoutingDecision | undefined {
     const environmentHint = input.profileHints?.find((hint) => hint.source === "environment");
     if (environmentHint) {
       return { profile: environmentHint.profile, reason: "profile-hint:environment" };
@@ -95,16 +142,25 @@ export class RoutingEngine {
       return { profile: profiles[0]!, reason: `rule:${rule?.name ?? "unnamed"}` };
     }
 
-    const matcherCandidates = matchProviderBindings(
-      this.profiles,
-      projectProviderMatcherInput(input.matcherToolName ?? input.toolName, input.args, input.matcherContext)
-    );
+    return undefined;
+  }
+
+  private resolveMatcherBand(
+    input: RoutingInput,
+    activeProfile: string,
+    pluginCandidates: readonly PluginRoutingCandidate[] = [],
+    matcherInput = this.projectMatcherInput(input)
+  ): RoutingDecision {
+    const matcherCandidates = [
+      ...staticMatcherCandidates(this.profiles, matcherInput),
+      ...pluginCandidates.map(pluginMatcherCandidate)
+    ];
     const matcherProfiles = [...new Set(matcherCandidates.map((candidate) => candidate.profile))].sort();
     const matcherEvidence = routingMatcherEvidence(matcherCandidates);
     if (matcherProfiles.length > 1) {
       throw new MiftahError(
         "ROUTING_AMBIGUOUS",
-        `ROUTING_AMBIGUOUS: static matcher profiles are ${matcherProfiles.join(", ")}`,
+        `ROUTING_AMBIGUOUS: matcher profiles are ${matcherProfiles.join(", ")}`,
         { matcherEvidence }
       );
     }
@@ -127,15 +183,52 @@ export class RoutingEngine {
       "ROUTING_AMBIGUOUS: no routing rule matched this request"
     );
   }
+
+  private projectMatcherInput(input: RoutingInput) {
+    return projectProviderMatcherInput(input.matcherToolName ?? input.toolName, input.args, input.matcherContext);
+  }
 }
 
-function routingMatcherEvidence(candidates: readonly ProviderMatcherCandidate[]): readonly RoutingMatcherEvidence[] {
-  return candidates.slice(0, MAX_ROUTING_MATCHER_EVIDENCE).map((candidate) => ({
+function staticMatcherCandidates(
+  profiles: Readonly<Record<string, ProfileConfig>>,
+  input: ReturnType<typeof projectProviderMatcherInput>
+): readonly MatcherCandidate[] {
+  return matchProviderBindings(profiles, input).map(staticMatcherCandidate);
+}
+
+function staticMatcherCandidate(candidate: ProviderMatcherCandidate): MatcherCandidate {
+  return { profile: candidate.profile, evidence: candidate.evidence };
+}
+
+function pluginMatcherCandidate(candidate: PluginRoutingCandidate): MatcherCandidate {
+  return {
+    profile: candidate.profile,
+    evidence: { provider: `plugin:${candidate.pluginId}`, kind: "binding", value: candidate.binding }
+  };
+}
+
+function routingMatcherEvidence(candidates: readonly MatcherCandidate[]): readonly RoutingMatcherEvidence[] {
+  return candidates
+    .map(toRoutingMatcherEvidence)
+    .sort(compareMatcherEvidence)
+    .slice(0, MAX_ROUTING_MATCHER_EVIDENCE);
+}
+
+function toRoutingMatcherEvidence(candidate: MatcherCandidate): RoutingMatcherEvidence {
+  if (candidate.evidence.kind === "binding") {
+    return {
+      profile: candidate.profile,
+      provider: candidate.evidence.provider,
+      kind: "binding",
+      value: candidate.evidence.value
+    };
+  }
+  return {
     profile: candidate.profile,
     provider: candidate.evidence.provider,
     kind: candidate.evidence.kind,
     value: candidate.evidence.value
-  }));
+  };
 }
 
 /** Extracts only structurally safe static-matcher evidence from an ambiguity error. */
@@ -146,18 +239,24 @@ export function matcherEvidenceFromError(error: unknown): readonly RoutingMatche
   const evidence: RoutingMatcherEvidence[] = [];
   for (const item of source) {
     if (!isRoutingMatcherEvidence(item)) return undefined;
-    evidence.push({
-      profile: item.profile,
-      provider: item.provider,
-      kind: item.kind,
-      value: item.value
-    });
+    evidence.push(item);
   }
   return isSortedMatcherEvidence(evidence) ? evidence : undefined;
 }
 
 function isRoutingMatcherEvidence(value: unknown): value is RoutingMatcherEvidence {
   if (!isRecord(value) || !isBoundedPlainText(value.profile, 256) || !isBoundedPlainText(value.value, 256)) return false;
+  if (
+    typeof value.provider === "string" &&
+    typeof value.kind === "string" &&
+    value.provider.startsWith("plugin:")
+  ) {
+    return (
+      value.kind === "binding" &&
+      pluginIdentifierPattern.test(value.provider.slice("plugin:".length)) &&
+      pluginBindingPattern.test(value.value)
+    );
+  }
   return isCanonicalProviderMatcherEvidence(value.provider, value.kind, value.value);
 }
 

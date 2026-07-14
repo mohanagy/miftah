@@ -26,7 +26,7 @@ await runtime.connect(new StdioServerTransport());
 
 ## Type exports
 
-The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `HttpServerConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingRule`, `SecurityConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `ServerConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `HttpServerConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `PluginConfig`, `PluginKind`, `PluginsConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingMatcherPluginConfig`, `RoutingRule`, `SecurityConfig`, `SecretProviderPluginConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `ServerConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
 
 `AuditRotationConfig` requires `retainFiles` (maximum `2000`) plus at least one positive trigger (`maxBytes` or `maxAgeMs`). `AuditIntegrityConfig` currently exposes the explicit local `"sha256-chain"` option only. Both configure the runtime journal; journal writers, readers, and CLI export/verification implementations remain internal.
 
@@ -38,6 +38,10 @@ The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `Au
 
 `ProfileRoutingConfig` describes opt-in identifiers for Miftah's fixed in-tree provider matchers. It is declarative configuration only: it does not load third-party code, resolve secrets, or grant a matcher access to process or network APIs.
 
+## Plugin API subpath
+
+`@lubab/miftah/plugin-api` is the separate stable plugin-authoring surface. It exports `MIFTAH_PLUGIN_API_VERSION`, `MiftahPlugin`, `SecretProviderPlugin`, `SecretProviderPluginRequest`, `SecretProviderPluginResult`, `RoutingMatcherPlugin`, `RoutingMatcherPluginRequest`, `RoutingMatcherPluginResult`, and the canonical routing-signal types. It intentionally does not export Miftah's internal secret resolver, runner, redactor, routing engine, configuration, or process-management types. See [local plugins](plugins.md) for behavior and trust boundaries.
+
 For identity configurations, format-dependent structural constraints and unique `requiredForRisk` tuples are static. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 
 Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. `MiftahErrorCode` includes the stable resource-template and resource-subscription protocol error categories. The wrapper factory exposes `MiftahRuntime`.
@@ -46,4 +50,4 @@ Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `Mift
 
 Miftah is pre-1.0. Package-root exports documented on this page are supported within a patch release. A removal or incompatible change to one of these exports requires a minor release and an explicit entry under **Unreleased** in `CHANGELOG.md`.
 
-Managers, registries, redaction helpers, routing/policy engines, audit implementations, and MCP server classes are intentionally internal. They may change at any time and are available only to Miftah's own CLI and test code.
+Managers, registries, redaction helpers, routing/policy engines, audit implementations, plugin host machinery, and MCP server classes are intentionally internal. They may change at any time and are available only to Miftah's own CLI and test code.

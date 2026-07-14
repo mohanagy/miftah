@@ -389,6 +389,17 @@ describe("secret command runner", () => {
           expect((await readFakeRecord(directory)).argv).toEqual([]);
         });
   });
+
+  it("rejects input that exceeds the contained command input bound before starting a child", async () => {
+    await expect(
+      runSecretCommand({
+        executable: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        environment: {},
+        stdin: Buffer.alloc(16 * 1024 + 1)
+      })
+    ).rejects.toEqual(expect.objectContaining({ kind: "input_limit" }));
+  });
 });
 
 describe("external secret providers", () => {
@@ -906,6 +917,32 @@ exit 0`);
         expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
         expect((await readFakeRecord(directory)).argv).toEqual(["argument with spaces", "", "trailing\\"]);
       });
+    },
+    20_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "forwards exact standard input through the Job Object helper to a Node provider",
+    async () => {
+      const input = Buffer.concat([
+        Buffer.from("plugin-host-input", "utf8"),
+        Buffer.from([0]),
+        Buffer.from("with-newline\\n", "utf8")
+      ]);
+      const result = await runSecretCommand(
+        {
+          executable: process.execPath,
+          args: [
+            "-e",
+            'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => process.stdout.write(Buffer.concat(chunks).toString("base64")));'
+          ],
+          environment: { PATH: process.env.PATH },
+          stdin: input
+        },
+        { timeoutMs: 10_000 }
+      );
+
+      expect(result.stdout.toString("utf8")).toBe(input.toString("base64"));
     },
     20_000
   );

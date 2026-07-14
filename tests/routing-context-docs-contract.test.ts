@@ -37,7 +37,9 @@ describe("routing context documentation contract", () => {
     expect(routingContext).toContain("does not merge with runtime configuration");
     expect(routingContext).toContain("`MIFTAH_PROFILE`");
     expect(routingContext).toContain("`MIFTAH_PROJECT`");
-    expect(routingContext).toContain("environment hint, project-marker hint, configured rule, static matcher, then fallback");
+    expect(routingContext).toContain(
+      "environment hint, project-marker hint, configured rule, the matcher band (fixed static matchers plus allowlisted plugin matchers), then fallback"
+    );
     expect(routingContext).toContain("The nearest valid project marker wins");
     expect(routingContext).toContain("`notifications/roots/list_changed`");
     expect(routingContext).toContain("does not poll roots");

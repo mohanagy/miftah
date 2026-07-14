@@ -34,6 +34,7 @@ import {
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
+import type { PluginRegistry } from "../../plugins/plugin-registry.js";
 import { ApprovalStore, type ApprovalBinding, type ApprovalSummary } from "../../approvals/approval-store.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import {
@@ -328,7 +329,8 @@ export class MiftahServer {
     private readonly config: MiftahConfig,
     private readonly profiles: ProfileManager,
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager,
-    private readonly routingContextCollector?: RoutingContextCollector
+    private readonly routingContextCollector?: RoutingContextCollector,
+    private readonly plugins?: PluginRegistry
   ) {
     bindProfileTransitionConfirmationVerifier(profiles, (request) => {
       const binding = this.profileTransitionConfirmations.get(request.proof);
@@ -365,7 +367,13 @@ export class MiftahServer {
         ].join(" ")
       }
     );
-    this.routing = new RoutingEngine(config.routing, profiles.current().activeProfile, config.defaultProfile, config.profiles);
+    this.routing = new RoutingEngine(
+      config.routing,
+      profiles.current().activeProfile,
+      config.defaultProfile,
+      config.profiles,
+      plugins
+    );
     this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {}, {
       unknownRisk: config.tooling?.unknownToolRisk
     });
@@ -1384,14 +1392,18 @@ export class MiftahServer {
       audit.update({ routingEvidence: evidence });
       let route;
       try {
-        route = this.routing.resolve({
-          toolName,
-          matcherToolName: toolName,
-          args: isRecord(args.args) ? args.args : {},
-          context: snapshot.context,
-          matcherContext: snapshot.matcherContext,
-          profileHints: snapshot.profileHints
-        }, source.activeProfile);
+        route = await this.routing.resolveWithPlugins(
+          {
+            toolName,
+            matcherToolName: toolName,
+            args: isRecord(args.args) ? args.args : {},
+            context: snapshot.context,
+            matcherContext: snapshot.matcherContext,
+            profileHints: snapshot.profileHints
+          },
+          source.activeProfile,
+          upstreamRequest?.options.signal
+        );
       } catch (error) {
         const matcherEvidence = matcherEvidenceFromError(error);
         if (matcherEvidence !== undefined) {

@@ -175,6 +175,7 @@ describe("published config schema", () => {
     const auditRotation = audit?.rotation?.properties;
     const auditIntegrity = audit?.integrity?.properties;
     const tooling = root?.tooling?.properties;
+    const plugins = root?.plugins?.properties;
     const secrets = root?.secrets?.properties;
     const state = root?.state?.properties;
     const server = root?.server?.properties;
@@ -186,6 +187,16 @@ describe("published config schema", () => {
       additionalProperties: false
     });
     expect(root).not.toHaveProperty("ui");
+    expect(root?.plugins).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["allowlist"],
+      properties: {
+        allowlist: { type: "array", minItems: 1, maxItems: 32 },
+        timeoutMs: { type: "integer", minimum: 100, maximum: 60_000 }
+      }
+    });
+    expect(plugins?.allowlist?.items).toBeDefined();
     expect(upstream).toMatchObject({ trustToolAnnotations: { type: "boolean" } });
     expect(routing).toMatchObject({ mode: { const: "hybrid" } });
     expect(routing).not.toHaveProperty("plugins");

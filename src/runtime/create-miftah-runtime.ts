@@ -37,7 +37,8 @@ async function createConfiguredMiftahRuntime(
         environment: process.env,
         runtimeConfigPath,
         mcpRoots
-      })
+      }),
+    runtime.plugins
   );
 
   return {

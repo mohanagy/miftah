@@ -13,6 +13,7 @@ export interface WindowsSecretCommand {
   readonly executable: string;
   readonly args: readonly string[];
   readonly environment: NodeJS.ProcessEnv;
+  readonly stdin?: Buffer;
 }
 
 export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
@@ -38,7 +39,10 @@ export async function resolveWindowsSecretCommand(
  * Starts a fixed helper which joins a kill-on-close Job Object before it
  * creates the provider process. The helper source contains no command data.
  */
-export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand): ChildProcess {
+export function spawnWindowsSecretCommand(
+  command: ResolvedWindowsSecretCommand,
+  standardInput: "ignore" | "pipe" = "ignore"
+): ChildProcess {
   const request = encodeRequest(command);
   if (request === undefined) throw new Error("Invalid Windows secret command request");
 
@@ -49,7 +53,7 @@ export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand)
       env: helperEnvironment(command.environment, request),
       shell: false,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"] as const
+      stdio: [standardInput, "pipe", "pipe"] as const
     }
   );
   return child;

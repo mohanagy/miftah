@@ -53,6 +53,15 @@ export async function loadConfig(path: string): Promise<MiftahConfig> {
           envFiles: config.secrets.envFiles.map((envFile) => resolvePath(envFile, dirname(resolvedPath)))
         }
       : config.secrets,
+    plugins: config.plugins
+      ? {
+          ...config.plugins,
+          allowlist: config.plugins.allowlist.map((plugin) => ({
+            ...plugin,
+            path: resolvePath(plugin.path, dirname(resolvedPath))
+          }))
+        }
+      : config.plugins,
     upstream: config.upstream
       ? {
           ...config.upstream,

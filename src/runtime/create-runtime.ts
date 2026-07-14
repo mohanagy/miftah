@@ -26,7 +26,7 @@ export async function createRuntime(
 ) {
   const configuredPath = resolvePath(configPath);
   const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
-  const { config, upstream, secretValues, redactor } = await resolveRuntimeConfig(runtimeConfigPath, scope);
+  const { config, upstream, secretValues, redactor, plugins } = await resolveRuntimeConfig(runtimeConfigPath, scope);
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
   const managerOptions = { ...config.process, secretValues: [...secretValues], redactor, isolation };
   const manager = config.upstreams
@@ -39,5 +39,5 @@ export async function createRuntime(
     profileState === undefined ? undefined : { ...profileState, configPath: runtimeConfigPath }
   );
   await profileManager.initialize();
-  return { config, manager, profileManager, redactor };
+  return { config, manager, profileManager, redactor, plugins };
 }

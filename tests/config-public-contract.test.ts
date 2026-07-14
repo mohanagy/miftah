@@ -47,6 +47,18 @@ describe("public configuration contract", () => {
       mode: "hybrid",
       rules: [{ when: { "args.profile": "default" }, profile: "default" }]
     },
+    plugins: {
+      timeoutMs: 5_000,
+      allowlist: [
+        { id: "consumer-secret", kind: "secret-provider", path: "./plugins/consumer-secret.mjs" },
+        {
+          id: "consumer-routing",
+          kind: "routing-matcher",
+          path: "./plugins/consumer-routing.mjs",
+          bindings: { "consumer-work": "default" }
+        }
+      ]
+    },
     security: { redactSecrets: true },
     audit: {
       path: "audit/events.jsonl",

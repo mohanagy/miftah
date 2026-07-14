@@ -16,10 +16,12 @@ describe("provider routing matcher documentation", () => {
     expect(config).toContain("`profiles.<profile>.routing.match`");
     expect(config).toContain('"github"');
     expect(config).toContain('"repositories"');
-    expect(config).toContain("environment hint, project-marker hint, configured rule, static matcher, then fallback");
+    expect(config).toContain(
+      "environment hint, project-marker hint, configured rule, the matcher band (fixed static matchers plus allowlisted plugin matchers), then fallback"
+    );
     expect(config).toContain("allowlisted `url` and `uri` fields");
     expect(config).toContain("`routing.plugins` remains unsupported");
-    expect(config).toContain("Issue #34");
+    expect(config).toContain("root [`plugins.allowlist`](plugins.md) API");
     expect(architecture).toContain("`matcher:<provider>`");
     expect(architecture).toContain("fixed in-tree registry");
     expect(security).toContain("`routingMatcherEvidence`");
@@ -28,5 +30,6 @@ describe("provider routing matcher documentation", () => {
     expect(readme).toContain("provider routing matchers");
     expect(readme).not.toContain("Routing plugins, profile metadata and matchers");
     expect(changelog).toContain("[#30]");
+    expect(changelog).toContain("[#34]");
   });
 });

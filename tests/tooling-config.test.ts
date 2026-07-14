@@ -25,7 +25,7 @@ describe("repository tooling contracts", () => {
   it("documents every nontrivial pack verifier function", () => {
     const verifier = readRepositoryFile("scripts/pack-verifier.mjs");
 
-    for (const name of ["formatPaths", "isAllowedPath", "verifyPackPaths", "parsePackOutput"]) {
+    for (const name of ["formatPaths", "isAllowedPath", "verifyPackPaths", "parsePackResult", "parsePackOutput"]) {
       const exportedFunctionIndex = verifier.indexOf(`export function ${name}(`);
       const functionIndex =
         exportedFunctionIndex >= 0 ? exportedFunctionIndex : verifier.indexOf(`function ${name}(`);

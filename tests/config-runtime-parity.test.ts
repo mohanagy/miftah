@@ -309,6 +309,131 @@ describe("config runtime parity", () => {
     expect(config.secrets?.providerTimeoutMs).toBe(15_000);
   });
 
+  it("validates local plugin allowlists and routing bindings against configured profiles", () => {
+    const config = validateConfig(
+      baseConfig({
+        plugins: {
+          timeoutMs: 15_000,
+          allowlist: [
+            { id: "consumer-secret", kind: "secret-provider", path: "./plugins/consumer-secret.mjs" },
+            {
+              id: "consumer-routing",
+              kind: "routing-matcher",
+              path: "./plugins/consumer-routing.mjs",
+              bindings: { "consumer-default": "default" }
+            }
+          ]
+        }
+      })
+    );
+
+    expect(config.plugins).toEqual({
+      timeoutMs: 15_000,
+      allowlist: [
+        { id: "consumer-secret", kind: "secret-provider", path: "./plugins/consumer-secret.mjs" },
+        {
+          id: "consumer-routing",
+          kind: "routing-matcher",
+          path: "./plugins/consumer-routing.mjs",
+          bindings: { "consumer-default": "default" }
+        }
+      ]
+    });
+
+    const reservedProvider = validationError(
+      baseConfig({
+        plugins: { allowlist: [{ id: "env", kind: "secret-provider", path: "./plugins/env.mjs" }] }
+      })
+    );
+    const duplicatePlugin = validationError(
+      baseConfig({
+        plugins: {
+          allowlist: [
+            { id: "duplicate", kind: "secret-provider", path: "./plugins/one.mjs" },
+            {
+              id: "duplicate",
+              kind: "routing-matcher",
+              path: "./plugins/two.mjs",
+              bindings: { "duplicate-default": "default" }
+            }
+          ]
+        }
+      })
+    );
+    const missingBindingProfile = validationError(
+      baseConfig({
+        plugins: {
+          allowlist: [
+            {
+              id: "missing-profile",
+              kind: "routing-matcher",
+              path: "./plugins/missing-profile.mjs",
+              bindings: { "missing-profile-default": "absent" }
+            }
+          ]
+        }
+      })
+    );
+    const emptyBindings = validationError(
+      baseConfig({
+        plugins: {
+          allowlist: [{ id: "empty", kind: "routing-matcher", path: "./plugins/empty.mjs", bindings: {} }]
+        }
+      })
+    );
+    const nonLocalPath = validationError(
+      baseConfig({
+        plugins: { allowlist: [{ id: "non-local", kind: "secret-provider", path: "plugins/non-local.mjs" }] }
+      })
+    );
+
+    expect(reservedProvider.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(reservedProvider.message).toContain("plugins.allowlist.0.id");
+    expect(duplicatePlugin.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(duplicatePlugin.message).toContain("plugins.allowlist.1.id");
+    expect(missingBindingProfile.code).toBe("ROUTING_PROFILE_NOT_FOUND");
+    expect(missingBindingProfile.message).toContain("plugins.allowlist.0.bindings.missing-profile-default");
+    expect(emptyBindings.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(emptyBindings.message).toContain("plugins.allowlist.0.bindings");
+    expect(nonLocalPath.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(nonLocalPath.message).toContain("plugins.allowlist.0.path");
+  });
+
+  it("limits a routing plugin to 64 configured bindings", () => {
+    const bindings = Object.fromEntries(
+      Array.from({ length: 65 }, (_, index) => [`binding-${index}`, "default"])
+    );
+    const error = validationError(
+      baseConfig({
+        plugins: {
+          allowlist: [
+            { id: "too-many-bindings", kind: "routing-matcher", path: "./plugins/too-many.mjs", bindings }
+          ]
+        }
+      })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("plugins.allowlist.0.bindings");
+  });
+
+  it.each([100, 60_000])("accepts the plugin timeout boundary %s", (timeoutMs) => {
+    const config = validateConfig(
+      baseConfig({ plugins: { timeoutMs, allowlist: [{ id: "boundary", kind: "secret-provider", path: "./plugins/boundary.mjs" }] } })
+    );
+
+    expect(config.plugins?.timeoutMs).toBe(timeoutMs);
+  });
+
+  it.each([99, 60_001, 100.5])("rejects an out-of-range plugin timeout of %s", (timeoutMs) => {
+    const error = validationError(
+      baseConfig({ plugins: { timeoutMs, allowlist: [{ id: "timeout", kind: "secret-provider", path: "./plugins/timeout.mjs" }] } })
+    );
+
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("plugins.timeoutMs");
+  });
+
   it("accepts explicit bounded audit rotation and retention controls", () => {
     const config = validateConfig(
       baseConfig({
