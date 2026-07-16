@@ -6,6 +6,8 @@ Miftah is an MCP wrapper and credential-profile boundary. It can carry explicitl
 
 This page is the public compatibility contract for OAuth-shaped upstream authentication. It distinguishes what operators can use now from the deliberately unimplemented work proposed in the OAuth roadmap. It does not authorize the runtime to begin managing provider credentials.
 
+The [OAuth and local Console design delta](oauth-console-threat-model.md) defines the threat, protocol, token-handling, callback, and local-control-plane gates for that future work. It does not enable a browser flow or a Console.
+
 ## Support matrix
 
 | Support class | Transport and current ownership | Operator fallback |

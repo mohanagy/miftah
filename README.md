@@ -186,6 +186,7 @@ Structured success output is written to stdout with stderr empty. Stable nonzero
 - [Configuration](docs/config.md)
 - [Security](docs/security.md)
 - [Threat model](docs/threat-model.md)
+- [OAuth and Console security design](docs/oauth-console-threat-model.md)
 - [Security reporting](SECURITY.md)
 - [CLI](docs/cli.md)
 - [Library API](docs/library-api.md)
