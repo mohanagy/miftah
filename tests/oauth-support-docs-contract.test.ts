@@ -84,7 +84,7 @@ describe("OAuth support documentation contract", () => {
     expect(schema).toContain(".strict()");
     expect(schema).not.toContain("oauth:");
     expect(libraryIndex).not.toContain("OAuth");
-    expect(upstreamManager).toContain("requestInit: { headers }");
+    expect(upstreamManager).toMatch(/requestInit:\s*\{\s*headers\s*\}/u);
     expect(upstreamManager).not.toContain("authProvider");
 
     expect(oauthSupport).toContain("There is no `oauth` configuration object, OAuth public type/export, or adapter API in this release.");

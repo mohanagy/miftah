@@ -88,15 +88,16 @@ describe("standards-compatible remote OAuth probe", () => {
       await expect(firstClient.connect(firstTransport)).rejects.toBeInstanceOf(UnauthorizedError);
 
       const authorizationRedirect = provider.authorizationRedirect();
-      expect(authorizationRedirect?.pathname).toBe("/oauth/authorize");
-      expect(authorizationRedirect?.searchParams.get("response_type")).toBe("code");
-      expect(authorizationRedirect?.searchParams.get("client_id")).toBe("miftah-compatibility-client");
-      expect(authorizationRedirect?.searchParams.get("redirect_uri")).toBe(provider.redirectUrl);
-      expect(authorizationRedirect?.searchParams.get("resource")).toBe(upstream.streamableHttpUrl);
-      expect(authorizationRedirect?.searchParams.get("scope")).toBe("mcp:tools");
-      expect(authorizationRedirect?.searchParams.get("state")).toBe("miftah-compatibility-state");
-      expect(authorizationRedirect?.searchParams.get("code_challenge_method")).toBe("S256");
-      expect(authorizationRedirect?.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      if (!authorizationRedirect) throw new Error("The compatibility probe did not produce an authorization redirect.");
+      expect(authorizationRedirect.pathname).toBe("/oauth/authorize");
+      expect(authorizationRedirect.searchParams.get("response_type")).toBe("code");
+      expect(authorizationRedirect.searchParams.get("client_id")).toBe("miftah-compatibility-client");
+      expect(authorizationRedirect.searchParams.get("redirect_uri")).toBe(provider.redirectUrl);
+      expect(authorizationRedirect.searchParams.get("resource")).toBe(upstream.streamableHttpUrl);
+      expect(authorizationRedirect.searchParams.get("scope")).toBe("mcp:tools");
+      expect(authorizationRedirect.searchParams.get("state")).toBe("miftah-compatibility-state");
+      expect(authorizationRedirect.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(authorizationRedirect.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
       expect(upstream.discoveryRequests()).toEqual([
         "/.well-known/oauth-protected-resource",
         "/.well-known/oauth-authorization-server"
@@ -109,12 +110,22 @@ describe("standards-compatible remote OAuth probe", () => {
         }
       ]);
 
+      const authorizationResponse = await fetch(authorizationRedirect, { redirect: "manual" });
+      expect(authorizationResponse.status).toBe(302);
+      const callbackLocation = authorizationResponse.headers.get("location");
+      if (!callbackLocation) throw new Error("The compatibility probe did not produce an authorization callback.");
+      const callback = new URL(callbackLocation);
+      expect(callback.origin + callback.pathname).toBe(provider.redirectUrl);
+      expect(callback.searchParams.get("code")).toBe("fixture-authorization-code");
+      expect(callback.searchParams.get("state")).toBe("miftah-compatibility-state");
+
       await firstTransport.finishAuth("fixture-authorization-code");
       expect(upstream.tokenExchanges()).toEqual([
         {
           clientId: "miftah-compatibility-client",
           codeWasExpected: true,
           codeVerifierPresent: true,
+          pkceVerified: true,
           grantType: "authorization_code",
           redirectUri: provider.redirectUrl,
           resource: upstream.streamableHttpUrl
@@ -138,5 +149,47 @@ describe("standards-compatible remote OAuth probe", () => {
       await firstClient.close();
       await firstTransport.close();
     }
+  });
+
+  it("rejects a token request with a verifier that does not match the issued PKCE challenge", async () => {
+    const upstream = await startOAuthCompatibilityProbe();
+    upstreams.push(upstream);
+    const authorizationUrl = new URL("/oauth/authorize", upstream.streamableHttpUrl);
+    authorizationUrl.searchParams.set("client_id", "miftah-compatibility-client");
+    authorizationUrl.searchParams.set("redirect_uri", "http://127.0.0.1:43179/callback");
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("state", "miftah-compatibility-state");
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+    authorizationUrl.searchParams.set("code_challenge", "a".repeat(43));
+
+    const authorizationResponse = await fetch(authorizationUrl, { redirect: "manual" });
+    expect(authorizationResponse.status).toBe(302);
+
+    const tokenResponse = await fetch(new URL("/oauth/token", upstream.streamableHttpUrl), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: "miftah-compatibility-client",
+        code: "fixture-authorization-code",
+        code_verifier: "fixture-mismatched-verifier",
+        grant_type: "authorization_code",
+        redirect_uri: "http://127.0.0.1:43179/callback",
+        resource: upstream.streamableHttpUrl
+      })
+    });
+
+    expect(tokenResponse.status).toBe(400);
+    await expect(tokenResponse.json()).resolves.toEqual({ error: "invalid_grant" });
+    expect(upstream.tokenExchanges()).toEqual([
+      {
+        clientId: "miftah-compatibility-client",
+        codeWasExpected: true,
+        codeVerifierPresent: true,
+        pkceVerified: false,
+        grantType: "authorization_code",
+        redirectUri: "http://127.0.0.1:43179/callback",
+        resource: upstream.streamableHttpUrl
+      }
+    ]);
   });
 });

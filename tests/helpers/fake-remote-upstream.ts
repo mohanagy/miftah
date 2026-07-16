@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
@@ -59,6 +59,7 @@ export interface OAuthCompatibilityProbe {
     readonly clientId: string;
     readonly codeWasExpected: boolean;
     readonly codeVerifierPresent: boolean;
+    readonly pkceVerified: boolean;
     readonly grantType: string;
     readonly redirectUri: string;
     readonly resource: string;
@@ -260,10 +261,12 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
 export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibilityProbe> {
   const discoveryRequests: string[] = [];
   const registrationRequests: Array<{ clientName: string; redirectUri: string; scope: string }> = [];
+  const authorizationCodes = new Map<string, { codeChallenge: string; redirectUri: string }>();
   const tokenExchanges: Array<{
     clientId: string;
     codeWasExpected: boolean;
     codeVerifierPresent: boolean;
+    pkceVerified: boolean;
     grantType: string;
     redirectUri: string;
     resource: string;
@@ -319,16 +322,49 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
       return;
     }
 
+    if (requestUrl.pathname === "/oauth/authorize" && request.method === "GET") {
+      const codeChallenge = requestUrl.searchParams.get("code_challenge");
+      const redirectUri = requestUrl.searchParams.get("redirect_uri");
+      if (!codeChallenge || requestUrl.searchParams.get("code_challenge_method") !== "S256" || !redirectUri) {
+        sendJson(response, 400, { error: "invalid_request" });
+        return;
+      }
+
+      const authorizationCode = "fixture-authorization-code";
+      authorizationCodes.set(authorizationCode, { codeChallenge, redirectUri });
+      const callback = new URL(redirectUri);
+      callback.searchParams.set("code", authorizationCode);
+      const state = requestUrl.searchParams.get("state");
+      if (state) callback.searchParams.set("state", state);
+      response.writeHead(302, { location: callback.toString() });
+      response.end();
+      return;
+    }
+
     if (requestUrl.pathname === "/oauth/token" && request.method === "POST") {
       const parameters = new URLSearchParams(await readRequestBody(request));
+      const code = parameters.get("code") ?? "";
+      const codeVerifier = parameters.get("code_verifier") ?? "";
+      const authorization = authorizationCodes.get(code);
+      const derivedCodeChallenge = codeVerifier
+        ? createHash("sha256").update(codeVerifier).digest("base64url")
+        : "";
+      const pkceVerified = authorization !== undefined
+        && authorization.redirectUri === parameters.get("redirect_uri")
+        && derivedCodeChallenge === authorization.codeChallenge;
       tokenExchanges.push({
         clientId: parameters.get("client_id") ?? "",
-        codeWasExpected: parameters.get("code") === "fixture-authorization-code",
-        codeVerifierPresent: (parameters.get("code_verifier")?.length ?? 0) > 0,
+        codeWasExpected: code === "fixture-authorization-code",
+        codeVerifierPresent: codeVerifier.length > 0,
+        pkceVerified,
         grantType: parameters.get("grant_type") ?? "",
         redirectUri: parameters.get("redirect_uri") ?? "",
         resource: parameters.get("resource") ?? ""
       });
+      if (!pkceVerified) {
+        sendJson(response, 400, { error: "invalid_grant" });
+        return;
+      }
       sendJson(response, 200, {
         access_token: "fixture-access-token",
         token_type: "Bearer",
