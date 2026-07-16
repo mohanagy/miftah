@@ -41,6 +41,8 @@ The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `Au
 
 `UpstreamConfig.trustToolAnnotations` is opt-in and defaults to false. `ToolingConfig.unknownToolRisk` uses the exported `UnknownToolRisk` union (`"write" | "destructive"`) and defaults to `"destructive"`; callers can use exact `toolRiskOverrides` for known read tools.
 
+There is no public OAuth configuration, connection, adapter, client-provider, or token-lifecycle export in this release. `UpstreamConfig.headers` remains the explicit remote credential surface; configuration additions must not imply a supported OAuth workflow until their runtime, secure-store, CLI, and migration contracts exist. See [OAuth support](oauth-support.md).
+
 `ProfileRoutingConfig` describes opt-in identifiers for Miftah's fixed in-tree provider matchers. It is declarative configuration only: it does not load third-party code, resolve secrets, or grant a matcher access to process or network APIs.
 
 ## Plugin API subpath

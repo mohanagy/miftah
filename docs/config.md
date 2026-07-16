@@ -171,6 +171,8 @@ Use `transport: "streamable-http"` for new remote MCP servers. The historical `t
 
 Remote URLs must use `https`. Miftah accepts `http` only for loopback development URLs on `localhost`, `127.0.0.0/8`, or `::1`; other cleartext URLs and non-HTTP URL schemes fail config validation at the exact `upstream.url` or `upstreams.<name>.url` path. Profile headers override upstream headers case-insensitively, so `Authorization` and `authorization` are one credential slot rather than two combined values.
 
+Remote authentication is static: configure only explicit `headers`/secret references that the upstream documents. There is no OAuth configuration object, callback URL, client-registration setting, browser flow, token refresh, or token revoke command in the current strict schema. Unknown OAuth keys are rejected instead of being silently accepted. See [OAuth support](oauth-support.md) for the exact provider, local-stdio, and future remote-HTTP boundary.
+
 Miftah uses Node's normal TLS validation and does not disable certificate verification. A self-signed remote certificate therefore fails closed unless the operator establishes a trusted local CA through the normal Node trust configuration. Do not use cleartext remote HTTP to transport profile credentials.
 
 For Streamable HTTP, an intentional restart, idle close, or wrapper shutdown sends DELETE for a negotiated MCP session before closing the local client transport. A remote server can return HTTP 405 to decline session termination; Miftah then completes local cleanup and the server retains control of its own session lifetime. If DELETE hangs, Miftah aborts the local transport at `shutdownTimeoutMs` rather than retrying an unbounded remote cleanup. Legacy SSE has no equivalent remote-session DELETE.

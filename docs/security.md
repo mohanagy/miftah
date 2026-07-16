@@ -61,6 +61,8 @@ The STDIO transport is the default because it avoids a network listener. Remote 
 
 For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. The local HTTP server follows the same lifecycle rule for each isolated session and adds loopback-first binding, explicit nonloopback authentication, Host validation, Origin denial by default, and bounded cleanup.
 
+Miftah does not currently broker OAuth. It can pass explicit secret-backed headers or launch an upstream that manages its own authentication under the ordinary configuration contract, but it does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. OAuth authorization codes, callback parameters, and tokens must never enter configuration, audit records, or diagnostics. See [OAuth support](oauth-support.md) for the supported classes and the planned standards-compatible remote boundary.
+
 ## Identity verification boundary
 
 Identity verification is an optional, local account-fingerprint comparison. It is not credential validity, provider authentication, account authorization, or scope validation. Miftah does not ship provider SDKs or plugins for it.
