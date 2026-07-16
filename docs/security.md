@@ -1,6 +1,6 @@
 # Security model
 
-For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). This page is the detailed operating-security reference for those controls.
+For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records future-only security gates; this page is the detailed operating-security reference for implemented controls.
 
 Miftah is a credential broker, so safe defaults are part of the product contract:
 

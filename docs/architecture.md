@@ -1,6 +1,6 @@
 # Architecture
 
-The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks.
+The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks. The [OAuth and Console security design delta](oauth-console-threat-model.md) describes future-only control-plane and credential-lifecycle gates; it does not add a current runtime component.
 
 Miftah is an MCP-aware proxy, not a byte-level reverse proxy:
 
