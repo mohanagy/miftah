@@ -51,19 +51,29 @@ describe("OAuth and Console threat-model documentation contract", () => {
     }
 
     expect(delta).toContain("## Focused security test plan before implementation");
-    for (const testArea of [
-      "metadata discovery",
-      "PKCE verifier",
-      "state",
-      "redirect",
-      "replay",
-      "cross-profile",
-      "CSRF",
-      "Host and Origin",
-      "request and session limits",
-      "redaction"
+    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    const testPlanEnd = delta.indexOf("## Implementation gates");
+    expect(testPlanStart).toBeGreaterThanOrEqual(0);
+    expect(testPlanEnd).toBeGreaterThan(testPlanStart);
+    const testPlan = delta.slice(testPlanStart, testPlanEnd);
+
+    for (const row of [
+      "| metadata discovery |",
+      "| canonical resource comparison |",
+      "| PKCE verifier and state |",
+      "| redirect and callback |",
+      "| replay and lifecycle |",
+      "| cross-profile and resource isolation |",
+      "| CSRF, Host and Origin |",
+      "| request and session limits |",
+      "| client registration path |",
+      "| Console bootstrap |",
+      "| redaction |",
+      "| static bearer collision |",
+      "| unsupported provider fallback |",
+      "| broker boundary |"
     ]) {
-      expect(delta).toContain(testArea);
+      expect(testPlan).toContain(row);
     }
   });
 
@@ -79,12 +89,45 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("OAuth Authorization Server Metadata and OpenID Connect Discovery");
     expect(delta).toContain("`code_challenge_methods_supported` includes `S256`");
     expect(delta).toContain("`client_id_metadata_document_supported` is `true`");
-    expect(delta).toContain("`registration_endpoint` is advertised");
     expect(delta).toContain("Client registration must prefer a pre-registered client.");
     expect(delta).toContain("A verified Client ID Metadata Document is allowed only when `client_id_metadata_document_supported` is `true`");
+    expect(delta).toContain("A pre-registered client remains valid without Client ID Metadata or Dynamic Client Registration.");
+    expect(delta).toContain("The Client ID Metadata path requires `client_id_metadata_document_supported` to be `true`");
+    expect(delta).toContain("The Dynamic Client Registration path requires `registration_endpoint` to be advertised");
 
     expect(delta).toContain("Console implementation is NO-GO until its initial browser bootstrap has a separately approved security design");
-    expect(delta).toContain("A profile cannot enable native OAuth while the same upstream has a static `Authorization` header");
-    expect(delta).toContain("explicitly remove or migrate that header");
+    expect(delta).toContain("A profile cannot enable native OAuth while the effective headers for that exact upstream contain an `Authorization` header after profile and upstream headers are merged case-insensitively");
+    expect(delta).toContain("Any header whose normalized name is `authorization`, including a profile-level lowercase `authorization` entry or a duplicate case variant, blocks native OAuth until explicitly removed or migrated.");
+    expect(delta).toContain("Configuration validation must form that effective header set from profile and upstream headers using case-insensitive header names.");
+  });
+
+  it("defines a single canonical resource and secure-store tuple for every future OAuth flow", async () => {
+    const delta = await document("docs/oauth-console-threat-model.md");
+
+    expect(delta).toContain("## Canonical resource comparison");
+    expect(delta).toContain("Before discovery begins, a future native-OAuth connection must derive one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection.");
+    expect(delta).toContain("That value is the only resource identifier used for the initial unauthenticated MCP request, protected-resource metadata validation, the OAuth `resource` parameter in authorization and token requests, transaction state, the connection record, and the secure-store key.");
+    expect(delta).toContain("a canonical resource is an absolute `https` URI with an authority and no userinfo, fragment, or query component");
+    expect(delta).toContain("- lowercase the scheme and ASCII/IDNA A-label host;");
+    expect(delta).toContain("- omit the default HTTPS port `:443`, and retain another valid port only in unambiguous decimal form;");
+    expect(delta).toContain("- represent a root resource without a trailing `/`; preserve the case, octets, and meaningful trailing slash of every non-root path;");
+    expect(delta).toContain("- reject literal or percent-encoded dot-segments, invalid percent escapes, Unicode normalization, and ambiguous host forms;");
+    expect(delta).toContain("- uppercase percent-escape hex digits and decode only percent-encoded unreserved characters; it must never decode encoded reserved characters such as `%2F`, `%3F`, `%23`, or `%25`;");
+    expect(delta).toContain("must already have this exact serialization: after JSON unescaping, it must match `canonicalResource` by Unicode code-point equality.");
+    expect(delta).toContain("The `resource_metadata` URL is discovery input, not a replacement resource identifier.");
+    expect(delta).toContain("A token audience must never retarget a connection");
+    expect(delta).toContain("a key derived from a versioned, unambiguous encoding of the exact profile/upstream/issuer/canonical-resource tuple");
+  });
+
+  it("keeps selected client-registration requirements in the focused pre-implementation test plan", async () => {
+    const delta = await document("docs/oauth-console-threat-model.md");
+    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    const testPlanEnd = delta.indexOf("## Implementation gates", testPlanStart);
+    const testPlan = delta.slice(testPlanStart, testPlanEnd);
+
+    expect(testPlan).toContain("A pre-registered client remains valid without Client ID Metadata or Dynamic Client Registration.");
+    expect(testPlan).toContain("The Client ID Metadata path requires `client_id_metadata_document_supported` to be `true`");
+    expect(testPlan).toContain("The Dynamic Client Registration path requires `registration_endpoint` to be advertised and explicitly approved.");
+    expect(testPlan).toContain("Each selected path fails closed only when its required capability is absent or inconsistent.");
   });
 });
