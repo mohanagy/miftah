@@ -17,7 +17,7 @@ function section(content: string, heading: RegExp): string {
   return nextSection === -1 ? afterHeading : afterHeading.slice(0, nextSection);
 }
 
-/** Returns pending changes, or the latest release notes once a release empties Unreleased. */
+/** Returns pending changes, or all released changes once a release empties Unreleased. */
 function documentedChangesSection(changelog: string): string {
   const afterHeading = changelog.split(unreleasedHeading)[1];
   if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
@@ -25,9 +25,9 @@ function documentedChangesSection(changelog: string): string {
   const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
   if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
 
-  const currentRelease = afterHeading.slice(nextRelease);
-  const end = currentRelease.indexOf("\n## ", 1);
-  return end === -1 ? currentRelease : currentRelease.slice(0, end);
+  const releasedChanges = afterHeading.slice(nextRelease);
+  const end = releasedChanges.search(/\n## (?!\[)/u);
+  return end === -1 ? releasedChanges : releasedChanges.slice(0, end);
 }
 
 describe("active profile state documentation contract", () => {
