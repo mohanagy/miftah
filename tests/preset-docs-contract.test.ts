@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildPresetConfig, PRESET_CATALOG } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { documentedChangesSection } from "./helpers/changelog.js";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -9,21 +10,6 @@ function readRepositoryFile(path: string): string {
 
 function parseRepositoryJson(path: string): unknown {
   return JSON.parse(readRepositoryFile(path)) as unknown;
-}
-
-/** Returns pending changes, or all released changes once a release empties Unreleased. */
-function documentedChangesSection(changelog: string): string {
-  const afterHeading = changelog.split(/^## \[Unreleased\]\s*$/mu)[1];
-  if (afterHeading === undefined) {
-    throw new Error("CHANGELOG.md must contain an Unreleased section.");
-  }
-  const nextRelease = afterHeading.search(/^## \[/mu);
-  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
-  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
-
-  const releasedChanges = afterHeading.slice(nextRelease);
-  const end = releasedChanges.search(/\n## (?!\[)/u);
-  return end === -1 ? releasedChanges : releasedChanges.slice(0, end);
 }
 
 describe("preset documentation contract", () => {

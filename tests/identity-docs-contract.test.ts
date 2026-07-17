@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { documentedChangesSection } from "./helpers/changelog.js";
 
-const unreleasedHeadingPattern = /^## \[Unreleased\]\s*$/mu;
-const releaseHeadingPattern = /^## \[/mu;
 const identityVerificationHeadingPattern = /^## Identity verification\s*$/mu;
 const sectionHeadingPattern = /^## /mu;
 const identityFingerprintFieldPattern = /^\s+(\w+)\?: string;$/gmu;
@@ -18,19 +17,6 @@ const documentedIdentityPattern = /\[#21\][\s\S]*identity/iu;
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-}
-
-/** Returns pending changes, or all released changes once a release empties Unreleased. */
-function documentedChangesSection(changelog: string): string {
-  const afterHeading = changelog.split(unreleasedHeadingPattern)[1];
-  if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
-  const nextRelease = afterHeading.search(releaseHeadingPattern);
-  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
-  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
-
-  const releasedChanges = afterHeading.slice(nextRelease);
-  const end = releasedChanges.search(/\n## (?!\[)/u);
-  return end === -1 ? releasedChanges : releasedChanges.slice(0, end);
 }
 
 function identityVerificationSection(config: string): string {

@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { documentedChangesSection } from "./helpers/changelog.js";
 
 const activeProfileStateHeading = /^### Active profile state\s*$/mu;
 const sectionHeading = /^## |^### /mu;
-const unreleasedHeading = /^## \[Unreleased\]\s*$/mu;
-const releaseHeading = /^## \[/mu;
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -15,19 +14,6 @@ function section(content: string, heading: RegExp): string {
   if (afterHeading === undefined) throw new Error("Expected documentation section is missing.");
   const nextSection = afterHeading.search(sectionHeading);
   return nextSection === -1 ? afterHeading : afterHeading.slice(0, nextSection);
-}
-
-/** Returns pending changes, or all released changes once a release empties Unreleased. */
-function documentedChangesSection(changelog: string): string {
-  const afterHeading = changelog.split(unreleasedHeading)[1];
-  if (afterHeading === undefined) throw new Error("CHANGELOG.md must contain an Unreleased section.");
-  const nextRelease = afterHeading.search(releaseHeading);
-  const unreleased = nextRelease === -1 ? afterHeading : afterHeading.slice(0, nextRelease);
-  if (unreleased.trim() !== "" || nextRelease === -1) return unreleased;
-
-  const releasedChanges = afterHeading.slice(nextRelease);
-  const end = releasedChanges.search(/\n## (?!\[)/u);
-  return end === -1 ? releasedChanges : releasedChanges.slice(0, end);
 }
 
 describe("active profile state documentation contract", () => {
