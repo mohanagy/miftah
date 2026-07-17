@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-17
+
+### Fixed
+
+- [#79](https://github.com/mohanagy/miftah/issues/79) Documented the OAuth support boundary and capability matrix for current static headers, upstream-owned local OAuth, and future standards-compatible remote HTTP OAuth. Miftah does not implement native OAuth, browser callbacks, token refresh, or revocation; upstream-owned and provider-owned OAuth remains managed by the upstream, not Miftah.
+- [#80](https://github.com/mohanagy/miftah/issues/80) Documented the design-only OAuth broker and local Console threat model, including canonical resource and issuer binding, secure-store isolation, conditional client registration, effective-header collision prevention, and pre-implementation security tests. It does not run native OAuth, a Console, callback listener, or token store.
+
 ## [0.2.0] - 2026-07-14
 
 ### Added
