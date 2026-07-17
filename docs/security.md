@@ -1,6 +1,6 @@
 # Security model
 
-For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). This page is the detailed operating-security reference for those controls.
+For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records future-only security gates; this page is the detailed operating-security reference for implemented controls.
 
 Miftah is a credential broker, so safe defaults are part of the product contract:
 
@@ -60,6 +60,8 @@ Miftah cannot reduce privileges granted by a provider token. A read-only Miftah 
 The STDIO transport is the default because it avoids a network listener. Remote upstream connections carry profile-bound credentials, so Miftah requires HTTPS outside loopback development URLs (`localhost`, `127.0.0.0/8`, or `::1`). It uses Node's normal certificate validation and does not disable TLS verification; self-signed endpoints fail closed unless an operator explicitly provides a trusted local CA through Node's normal trust configuration. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0`, and do not send credentials to a cleartext non-loopback endpoint.
 
 For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. The local HTTP server follows the same lifecycle rule for each isolated session and adds loopback-first binding, explicit nonloopback authentication, Host validation, Origin denial by default, and bounded cleanup.
+
+Miftah does not currently broker OAuth. It can pass explicit secret-backed headers or launch an upstream that manages its own authentication under the ordinary configuration contract, but it does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. OAuth authorization codes, callback parameters, and tokens must never enter configuration, audit records, or diagnostics. See [OAuth support](oauth-support.md) for the supported classes and the planned standards-compatible remote boundary.
 
 ## Identity verification boundary
 
