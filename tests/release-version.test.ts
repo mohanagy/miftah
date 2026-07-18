@@ -77,6 +77,7 @@ describe("v0.3.0 release artifacts", () => {
     expect(notes).toMatch(/delegated-agent/iu);
     expect(notes).toMatch(/profile-switch confirmation/iu);
     expect(notes).toMatch(/Claude Code/iu);
+    expect(notes).toMatch(/miftah_list_approvals.*read-only/iu);
     expect(readRepositoryFile("README.md")).toContain("experimental and pre-1.0");
   });
 });

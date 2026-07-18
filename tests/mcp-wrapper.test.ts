@@ -29,7 +29,7 @@ import {
   MiftahServer,
   resolveClientVisibleToolName
 } from "../src/mcp/server/miftah-server.js";
-import { managementToolDescriptors } from "../src/mcp/server/management-tools.js";
+import { MANAGEMENT_TOOL_NAMES, managementToolDescriptors } from "../src/mcp/server/management-tools.js";
 import type { RegisteredTool } from "../src/mcp/server/tool-registry.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
@@ -62,10 +62,12 @@ describe("cached routed-tool compatibility", () => {
 describe("client-visible tool compatibility", () => {
   it("keeps management reservation and upstream namespace rules stable", () => {
     expect(resolveClientVisibleToolName("search", "github", "prefix-upstream")).toBe("github__search");
-    expect(resolveClientVisibleToolName("miftah_health", undefined, "prefix-upstream")).toBe(
-      "upstream_miftah_health"
-    );
-    expect(() => resolveClientVisibleToolName("miftah_health", undefined, "fail")).toThrow(/TOOL_COLLISION/u);
+    for (const managementToolName of MANAGEMENT_TOOL_NAMES) {
+      expect(resolveClientVisibleToolName(managementToolName, undefined, "prefix-upstream")).toBe(
+        `upstream_${managementToolName}`
+      );
+      expect(() => resolveClientVisibleToolName(managementToolName, undefined, "fail")).toThrow(toolCollisionPattern);
+    }
     expect(resolveClientVisibleToolName("miftah_custom", undefined, "fail")).toBe("miftah_custom");
   });
 });

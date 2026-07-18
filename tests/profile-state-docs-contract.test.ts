@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { changelogIssueEntry } from "./helpers/changelog.js";
 
 const activeProfileStateHeading = /^### Active profile state\s*$/mu;
 const sectionHeading = /^## |^### /mu;
@@ -57,6 +58,6 @@ describe("active profile state documentation contract", () => {
     }
     expect(security).toContain("other MCP request data");
     expect(cli).toContain("`selectionSource`, `selectedAt`, and `scope`");
-    expect(changelog).toMatch(/\[#23\][\s\S]*active-profile persistence/iu);
+    expect(changelogIssueEntry(changelog, 23)).toMatch(/active-profile persistence/iu);
   });
 });
