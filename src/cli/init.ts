@@ -233,6 +233,7 @@ function isExistingOutputError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
+/** Resolves user input into a validated, side-effect-free plan for `miftah init`. */
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
   if (values.client !== undefined && !isClientSelection(values.client)) {

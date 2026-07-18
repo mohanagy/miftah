@@ -97,6 +97,7 @@ export type RoutingContextCollector = (
   roots: readonly RoutingContextMcpRoot[]
 ) => Promise<RoutingContextSnapshot>;
 
+/** Derives a collision-safe tool name that can be exposed to an MCP client. */
 export function resolveClientVisibleToolName(
   name: string,
   upstreamName: string | undefined,
@@ -727,6 +728,7 @@ export class MiftahServer {
     }
   }
 
+  /** Registers the wrapper's MCP request handlers for the lifetime of this server instance. */
   private registerHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
       const source = await this.captureStableProfileState();
@@ -1110,6 +1112,7 @@ export class MiftahServer {
     });
   }
 
+  /** Executes a built-in management request against the caller's captured profile state. */
   private async handleManagement(
     name: string,
     args: Record<string, unknown>,
@@ -1489,6 +1492,7 @@ export class MiftahServer {
     };
   }
 
+  /** Requires one mechanism-bound approval, creating a fail-closed request when none is available. */
   private async requireApproval(
     binding: ApprovalBinding,
     context?: ApprovalRequestContext,
@@ -1655,6 +1659,7 @@ export class MiftahServer {
     }
   }
 
+  /** Persists a safe approval transition and pairs required profile-confirmation audit events. */
   private async writeApproval(
     action: ApprovalAuditAction,
     approval: ApprovalSummary
@@ -2452,6 +2457,7 @@ export class MiftahServer {
     }
   }
 
+  /** Maps a safe domain error to its terminal audit outcome without exposing diagnostic detail. */
   private auditStatus(error: MiftahError): AuditStatus {
     if (
       error.code === "POLICY_BLOCKED" ||
