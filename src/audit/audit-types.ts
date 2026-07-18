@@ -7,6 +7,7 @@ import type {
 import type { RoutingContextEvidence, RoutingMatcherEvidence } from "../routing/routing-types.js";
 import type { IdentityStatus } from "../identity/identity-types.js";
 import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "../profiles/profile-manager.js";
+import type { ApprovalMechanism } from "../approvals/approval-store.js";
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
@@ -67,6 +68,7 @@ export interface AuditEvent {
   approvalId?: string;
   approvalSessionId?: string;
   approvalAction?: ApprovalAuditAction;
+  approvalMechanism?: ApprovalMechanism;
   profileAction?: ProfileAuditAction;
   expiresAt?: string;
   lockToProfile?: string;

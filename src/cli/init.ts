@@ -9,9 +9,15 @@ import type { MiftahConfig } from "../config/types.js";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
+  renderClaudeCodePermissionGuidance,
   renderClientSnippets
 } from "./client-snippets.js";
-import type { ClientLauncher, ClientSelection, ClientSnippet } from "./client-snippets.js";
+import type {
+  ClaudeCodePermissionGuidance,
+  ClientLauncher,
+  ClientSelection,
+  ClientSnippet
+} from "./client-snippets.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
 
@@ -48,6 +54,7 @@ interface InitPlan {
   readonly output: string;
   readonly config: MiftahConfig;
   readonly snippets: readonly ClientSnippet[];
+  readonly claudeCodePermissionGuidance?: ClaudeCodePermissionGuidance;
 }
 
 interface Cancellation {
@@ -226,6 +233,7 @@ function isExistingOutputError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
+/** Resolves user input into a validated, side-effect-free plan for `miftah init`. */
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
   if (values.client !== undefined && !isClientSelection(values.client)) {
@@ -250,6 +258,7 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
   }
 
   let snippets: ClientSnippet[] = [];
+  let claudeCodePermissionGuidance: ClaudeCodePermissionGuidance | undefined;
   if (values.client !== undefined) {
     try {
       snippets = renderClientSnippets(values.client, {
@@ -261,15 +270,34 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       if (error instanceof ClientSnippetError) throw new CliUsageError(error.message);
       throw error;
     }
+    if (values.client === "claude-code" || values.client === "all") {
+      claudeCodePermissionGuidance = renderClaudeCodePermissionGuidance(config.name, {
+        delegatedAgentApproval: config.security?.approvalMode === "delegated-agent"
+      });
+    }
   }
 
-  return { output, config, snippets };
+  return { output, config, snippets, claudeCodePermissionGuidance };
 }
 
-function writeSnippets(output: Writable, snippets: readonly ClientSnippet[]): void {
+/** Writes copy-paste client configuration and optional Claude Code review guidance without modifying client settings. */
+function writeSnippets(
+  output: Writable,
+  snippets: readonly ClientSnippet[],
+  claudeCodePermissionGuidance: ClaudeCodePermissionGuidance | undefined
+): void {
   for (const snippet of snippets) {
     output.write(`${snippet.target.label} (${snippet.client}):\n${snippet.json}\n`);
   }
+  if (claudeCodePermissionGuidance === undefined) return;
+  if (claudeCodePermissionGuidance.kind === "manual") {
+    output.write(`${claudeCodePermissionGuidance.target.label}:\n${claudeCodePermissionGuidance.message}\n`);
+    return;
+  }
+  output.write(
+    `${claudeCodePermissionGuidance.target.label}:\n${claudeCodePermissionGuidance.json}\n` +
+      "Manually merge this fragment into .claude/settings.local.json, .claude/settings.json, or ~/.claude/settings.json. It is client-side defense in depth; Miftah enforces authorization.\n"
+  );
 }
 
 /** Creates a strict catalog config and optionally prints copy-paste client snippets. */
@@ -289,5 +317,5 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
     throw error;
   }
   context.output.write(`Created ${plan.output}\n`);
-  writeSnippets(context.output, plan.snippets);
+  writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
 }

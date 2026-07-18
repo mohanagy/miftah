@@ -8,6 +8,7 @@ import type {
   AuditStatus,
   ProfileAuditAction
 } from "./audit-types.js";
+import type { ApprovalMechanism } from "../approvals/approval-store.js";
 import type { RoutingContextEvidence, RoutingMatcherEvidence } from "../routing/routing-types.js";
 
 export interface AuditOperationInput {
@@ -58,6 +59,7 @@ export interface AuditApprovalInput {
   approvalId: string;
   approvalSessionId: string;
   approvalAction: ApprovalAuditAction;
+  approvalMechanism: ApprovalMechanism;
   sourceProfile: string;
   profile: string;
   upstream: string;
@@ -144,6 +146,7 @@ export class AuditTrail {
     await this.writeRequiredBatch([this.approvalEvent(input), this.profileEvent(profile)]);
   }
 
+  /** Builds an approval audit event without including an approval bearer or invocation arguments. */
   private approvalEvent(input: AuditApprovalInput): AuditEvent {
     return {
       wrapper: this.wrapperName,
@@ -153,6 +156,7 @@ export class AuditTrail {
       approvalId: input.approvalId,
       approvalSessionId: input.approvalSessionId,
       approvalAction: input.approvalAction,
+      approvalMechanism: input.approvalMechanism,
       sourceProfile: input.sourceProfile,
       profile: input.profile,
       upstream: input.upstream,

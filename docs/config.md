@@ -323,9 +323,9 @@ Every policy decision carries stable `riskSource` and `riskConfidence` values. R
 
 When `requireConfirmation` matches, Miftah binds one approval to the current MCP connection, the source and routed profiles, upstream, operation kind, exact target, a normalized argument digest, and a short expiry. It never forwards the protected operation until that approval is consumed, and a consumed, denied, expired, or prior-connection approval cannot be replayed.
 
-Clients that advertise MCP **form elicitation** receive a generic boolean form (`approved`) and never receive the target arguments, digest, or bearer. Clients without that capability receive a one-time fallback bearer in `POLICY_CONFIRMATION_REQUIRED`; use `miftah_approve` with its `approval` field, then retry the exact operation. `miftah_deny` rejects that pending approval, and `miftah_list_approvals` returns only safe pending metadata. A fallback bearer is connection-bound and should be treated as a short-lived capability, not as a durable credential or a human-identity assertion.
+The default `security.approvalMode` is `"human"`. Clients that advertise MCP **form elicitation** receive a generic boolean form (`approved`) and never receive target arguments, a digest, or a bearer. A client without form elicitation fails closed with `POLICY_CONFIRMATION_REQUIRED`; it receives no approval bearer and cannot self-approve. Set `security.approvalMode: "delegated-agent"` only for intentionally delegated automation. That explicit mode exposes a connection-bound, one-time bearer in `POLICY_CONFIRMATION_REQUIRED`; use `miftah_approve` or `miftah_deny` with its `approval` field, then retry the exact operation. Delegated-agent approval is not a human-identity assertion. `miftah_list_approvals` returns only safe pending metadata.
 
-Approval lifecycle events record request, approval, denial, expiry, and consumption when audit logging is configured. They contain safe profile/upstream/operation metadata and expiry only; they never contain the fallback bearer or full operation arguments.
+Approval lifecycle events record request, approval, denial, expiry, and consumption when audit logging is configured. They contain safe profile/upstream/operation metadata, expiry, and `approvalMechanism` (`"form"` or `"delegated-agent"`) only; they never contain an approval bearer or full operation arguments.
 
 Audit logging writes local JSONL when a path is configured. Every supported MCP request emits one terminal operation event with a request ID, per-process session ID, source/selected profiles, stable outcome/error code, duration, and any available upstream, routing, policy, and risk metadata; route previews and proxied operations add sanitized `routingEvidence` when a collector snapshot is available and canonical `routingMatcherEvidence` for a static matcher result or ambiguity. Wrapper and upstream lifecycle transitions emit separate event records. Arguments are excluded unless `includeArguments` is true, and all configured secret values are redacted before writing. Audit directories and files are created with owner-only permissions where the platform supports them.
 
@@ -396,6 +396,7 @@ Profile changes can require connection-bound confirmation:
 ```json
 {
   "security": {
+    "approvalMode": "human",
     "requireProfileSwitchConfirmation": true,
     "allowProfileLockingFromMcp": true,
     "requireExplicitSelectionForDestructive": true
@@ -411,7 +412,9 @@ Profile changes can require connection-bound confirmation:
 }
 ```
 
-`security.requireProfileSwitchConfirmation` makes each `miftah_use_profile` and `miftah_reset_profile` exact-action confirmation-bound. Form-capable MCP clients receive a generic boolean form. Other clients receive one short-lived fallback bearer for `miftah_approve` or `miftah_deny`, then must retry the exact same change; the fallback cannot bypass confirmation, change profile, source selection generation, or connection session.
+`security.requireProfileSwitchConfirmation` makes each `miftah_use_profile` and `miftah_reset_profile` exact-action confirmation-bound. With the default `security.approvalMode: "human"`, form-capable MCP clients receive a generic boolean form and clients without form elicitation fail closed. The explicit `"delegated-agent"` mode instead allows a short-lived bearer through `miftah_approve` or `miftah_deny`, then requires the exact same change to be retried; it cannot bypass confirmation, change profile, source selection generation, or connection session. This mode authorizes an agent, not a human.
+
+The generated multi-profile GitHub preset enables `requireProfileSwitchConfirmation` and `requireExplicitSelectionForDestructive` by default. It therefore cannot silently switch a profile or let an implicit default/profile hint satisfy the destructive-selection boundary. Choose a form-capable MCP client for human confirmation, or explicitly opt in to delegated-agent automation after reviewing that trade-off.
 
 `security.allowProfileLockingFromMcp` is an explicit opt-in for `miftah_lock_profile` and `miftah_unlock_profile`. A runtime lock is connection-bound, in-memory, and clears for a new transport. It does not change `state` files. `security.lockToProfile` remains the stronger operator-controlled lock and cannot be removed through MCP.
 

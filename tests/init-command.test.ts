@@ -150,6 +150,22 @@ describe("init command", () => {
     });
   });
 
+  it("prints Claude Code permission guidance without writing user settings", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "miftah.json");
+
+    await runInitCommand({ name: "miftah", output: "miftah.json", client: "claude-code" }, commandContext(streams));
+    streams.input.end();
+
+    expect(streams.transcript.contents).toContain("Claude Code settings permissions:");
+    expect(streams.transcript.contents).toContain('"mcp__miftah__miftah_use_profile"');
+    expect(streams.transcript.contents).not.toContain("miftah_approve");
+    expect(streams.transcript.contents).toContain("Manually merge this fragment");
+    await expectNoPath(resolve(outputRoot, ".claude", "settings.local.json"));
+    await expectNoPath(resolve(outputRoot, ".claude", "settings.json"));
+    await expect(readFile(output, "utf8")).resolves.toContain('"name": "miftah"');
+  });
+
   it("runs the TTY wizard with real streams for a generic config", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "wizard-generic.json");

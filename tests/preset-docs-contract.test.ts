@@ -89,9 +89,13 @@ describe("preset documentation contract", () => {
       expect(cli).toContain(option);
     }
     expect(compatibility).not.toContain("runtime construction");
+    expect(compatibility).toContain(
+      "Miftah does not generate equivalent per-tool client permission guidance for Claude Desktop, Cursor, or VS Code"
+    );
 
     const documentedChanges = documentedChangesSection(changelog);
-    expect(documentedChanges).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);
+    expect(changelog).toMatch(/\[#19\][\s\S]*catalog[\s\S]*onboarding/iu);
+    expect(documentedChanges).toMatch(/\[#98\][\s\S]*permission/iu);
     expect(documentedChanges).not.toContain("runtime construction");
   });
 });

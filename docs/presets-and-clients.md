@@ -54,7 +54,7 @@ miftah init [name] \
   [--header-name <name>] [--header-prefix <prefix>]
 ```
 
-Without `--interactive`, `init` creates only a configuration unless `--client` is supplied. With `--client`, it still creates the configuration and prints JSON snippets; it never writes a client file. Creation is exclusive and never overwrites an existing output path.
+Without `--interactive`, `init` creates only a configuration unless `--client` is supplied. With `--client`, it still creates the configuration and prints JSON snippets; it never writes a client file. For `--client claude-code` or `--client all`, it also prints a separately labelled Claude Code `permissions.ask` fragment for the visible Miftah management tools that require explicit client review. It never writes or overwrites Claude Code settings. Creation is exclusive and never overwrites an existing output path.
 
 `--interactive` is available only when both input and output are real TTYs. EOF or Ctrl-C cancels before the configuration write. The wizard asks only for a name, catalog preset, safe preset metadata (variable names, URLs, header metadata, pins), output location, and client selection. It never asks for or echoes a secret value.
 
@@ -73,9 +73,19 @@ Miftah does not create any of these files. Copy only the generated JSON into the
 
 For Claude Code, the official [`claude mcp add` workflow](https://code.claude.com/docs/en/mcp) is a secondary way to manage its own configuration. Prefer the generated project `.mcp.json` here so the copied JSON remains reviewable and matches Miftah's output.
 
+### Claude Code permission guidance
+
+The optional `init` permissions fragment is a manual, client-side review layer, not Miftah authorization. Merge it into one appropriate Claude Code settings file—`.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`—rather than `.mcp.json`. It contains only exact `mcp__<server>__<tool>` rules derived from Miftah's visible management tools, never a wildcard that would also authorize upstream provider tools. Miftah still enforces profile policy and approvals for every MCP client and direct protocol call.
+
+The fragment is generated only when the configured server name matches the literal grammar `[A-Za-z0-9-]+`; otherwise `init` prints a manual-only warning rather than guessing an undocumented Claude Code permission-pattern escape. The normal human-confirmation default omits `miftah_approve` and `miftah_deny`; they appear only if the configured server explicitly enables delegated-agent approval. Review and merge this fragment yourself—Miftah deliberately does not modify a settings file that can contain unrelated local policy.
+
+Miftah does not generate equivalent per-tool client permission guidance for Claude Desktop, Cursor, or VS Code in this release. Their generated snippets configure the MCP server entry only. Do not treat a client enable/disable control as a replacement for Miftah's routing, policy, approval, and profile-selection enforcement; add equivalent guidance only after its client contract is explicitly reviewed and supported.
+
 ## Client references
 
 - [Claude Code MCP](https://code.claude.com/docs/en/mcp)
+- [Claude Code permissions](https://code.claude.com/docs/en/permissions)
+- [Claude Code settings](https://code.claude.com/docs/en/settings)
 - [Cursor MCP](https://cursor.com/docs/mcp)
 - [VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)
 - [VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)

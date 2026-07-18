@@ -52,7 +52,9 @@
   },
   "security": {
     "allowProfileSwitchingFromMcp": true,
-    "requireExplicitProfileForDestructive": true
+    "requireExplicitProfileForDestructive": true,
+    "requireProfileSwitchConfirmation": true,
+    "requireExplicitSelectionForDestructive": true
   },
   "secrets": {
     "allowPlaintextSecrets": false
