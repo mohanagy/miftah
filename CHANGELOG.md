@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-18
+
+### Fixed
+
+- Secret-provider cleanup now force-kills a retained POSIX descendant as soon as its direct provider process exits, keeping timeout and cancellation cleanup contained.
+
+### Changed
+
+- The README now leads with Miftah's product value and quick-start, while retaining explicit security, OAuth, and desktop-environment boundaries.
+
 ## [0.3.0] - 2026-07-18
 
 ### Changed

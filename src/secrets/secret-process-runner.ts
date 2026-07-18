@@ -114,6 +114,7 @@ function runPreparedSecretCommand(
     let forceKill: NodeJS.Timeout | undefined;
     let terminationPoll: NodeJS.Timeout | undefined;
     let childClosed = false;
+    let directChildExited = child.exitCode !== null || child.signalCode !== null;
     let terminationComplete = true;
     let finished = false;
 
@@ -137,6 +138,10 @@ function runPreparedSecretCommand(
     const terminatePosixProcessGroup = (): Promise<void> => {
       const pid = child.pid;
       if (pid === undefined) return Promise.resolve();
+      if (directChildExited) {
+        signalPosixProcessGroup(pid, "SIGKILL");
+        return Promise.resolve();
+      }
       signalPosixProcessGroup(pid, "SIGTERM");
       return new Promise((resolve) => {
         const complete = () => {
@@ -206,6 +211,9 @@ function runPreparedSecretCommand(
       const retained = value.subarray(0, maximumStderrBytes - stderrBytes);
       stderrBytes += retained.length;
       stderrChunks.push(retained);
+    });
+    child.on("exit", () => {
+      directChildExited = true;
     });
     child.on("error", () => {
       terminalKind ??= "unavailable";

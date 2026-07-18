@@ -24,7 +24,18 @@ async function writeRecord(descendantPid) {
 }
 
 async function spawnDescendant() {
-  const descendant = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5_000)"], { stdio: "inherit" });
+  const descendantScript =
+    mode === "early-exit-stubborn-descendant"
+      ? [
+          'const { writeFileSync } = require("node:fs");',
+          'const readyPath = process.env.MIFTAH_FAKE_DESCENDANT_READY_PATH;',
+          'const signalPath = process.env.MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH;',
+          'if (readyPath) writeFileSync(readyPath, "ready");',
+          'process.on("SIGTERM", () => { if (signalPath) writeFileSync(signalPath, "SIGTERM"); });',
+          "setTimeout(() => {}, 5_000);"
+        ].join("")
+      : "setTimeout(() => {}, 5_000)";
+  const descendant = spawn(process.execPath, ["-e", descendantScript], { stdio: "inherit" });
   if (descendant.pid === undefined) throw new Error("Fake descendant did not start");
   await writeRecord(descendant.pid);
 }
@@ -44,7 +55,7 @@ if (mode === "sleep") {
 } else if (mode === "descendant" || mode === "slow-descendant") {
   await spawnDescendant();
   await new Promise((resolve) => globalThis.setTimeout(resolve, mode === "slow-descendant" ? 10_000 : 500));
-} else if (mode === "early-exit-descendant") {
+} else if (mode === "early-exit-descendant" || mode === "early-exit-stubborn-descendant") {
   await spawnDescendant();
   process.exit(0);
 } else if (mode === "locked") {
