@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.2.1";
+const releaseVersion = "0.3.0";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,13 +21,13 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.2.1 release artifacts", () => {
+describe("v0.3.0 release artifacts", () => {
   it.each([
-    "## [0.2.1] - 2026-7-17\n\n### Fixed\n",
-    "Release candidate: ## [0.2.1] - 2026-07-17\n\n### Fixed\n"
+    "## [0.3.0] - 2026-7-18\n\n### Fixed\n",
+    "Release candidate: ## [0.3.0] - 2026-07-18\n\n### Fixed\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
-      "Unable to find the 0.2.1 changelog entry."
+      "Unable to find the 0.3.0 changelog entry."
     );
   });
 
@@ -69,14 +69,14 @@ describe("v0.2.1 release artifacts", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
-    expect(notes).toContain("### Fixed");
-    for (const issue of ["#79", "#80"]) {
+    expect(notes).toContain("### Changed");
+    for (const issue of ["#96", "#97", "#98"]) {
       expect(notes).toContain(issue);
     }
-    expect(notes).toMatch(/OAuth support boundary/iu);
-    expect(notes).toMatch(/threat.model/iu);
-    expect(notes).toMatch(/does not (?:implement|run).*native OAuth/iu);
-    expect(notes).toMatch(/upstream.owned|provider.owned/iu);
+    expect(notes).toMatch(/fail closed/iu);
+    expect(notes).toMatch(/delegated-agent/iu);
+    expect(notes).toMatch(/profile-switch confirmation/iu);
+    expect(notes).toMatch(/Claude Code/iu);
     expect(readRepositoryFile("README.md")).toContain("experimental and pre-1.0");
   });
 });
