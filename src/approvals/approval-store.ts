@@ -330,6 +330,7 @@ export class ApprovalStore {
   }
 }
 
+/** Returns the non-sensitive approval metadata that can be exposed to an MCP client or audit caller. */
 function summary(record: ApprovalRecord): ApprovalSummary {
   return {
     id: record.id,

@@ -146,6 +146,7 @@ export class AuditTrail {
     await this.writeRequiredBatch([this.approvalEvent(input), this.profileEvent(profile)]);
   }
 
+  /** Builds an approval audit event without including an approval bearer or invocation arguments. */
   private approvalEvent(input: AuditApprovalInput): AuditEvent {
     return {
       wrapper: this.wrapperName,
