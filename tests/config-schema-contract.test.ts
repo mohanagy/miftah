@@ -299,6 +299,7 @@ describe("published config schema", () => {
     ]);
     expect(security).toMatchObject({
       redactSecrets: { const: true },
+      approvalMode: { enum: ["human", "delegated-agent"] },
       requireProfileSwitchConfirmation: { type: "boolean" },
       allowProfileLockingFromMcp: { type: "boolean" },
       requireExplicitSelectionForDestructive: { type: "boolean" }

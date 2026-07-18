@@ -35,7 +35,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
 import type { PluginRegistry } from "../../plugins/plugin-registry.js";
-import { ApprovalStore, type ApprovalBinding, type ApprovalSummary } from "../../approvals/approval-store.js";
+import {
+  ApprovalStore,
+  type ApprovalBinding,
+  type ApprovalMechanism,
+  type ApprovalSummary
+} from "../../approvals/approval-store.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import {
   bindProfileTransitionConfirmationVerifier,
@@ -70,6 +75,7 @@ import {
   type ResolvedOperation
 } from "./operation-pipeline.js";
 import { ResourcePromptRegistry } from "./resource-prompt-registry.js";
+import { isManagementToolName, managementTools } from "./management-tools.js";
 import {
   canonicalJson,
   ToolRegistry,
@@ -78,25 +84,6 @@ import {
   type ToolDiscoveryResult,
   type ToolSnapshot
 } from "./tool-registry.js";
-
-const managementTools: Tool[] = [
-  tool("miftah_list_profiles", "List configured profiles without exposing secrets."),
-  tool("miftah_current_profile", "Show the active and default profile."),
-  tool("miftah_use_profile", "Switch the active profile according to the configured state scope.", ["profile"]),
-  tool("miftah_reset_profile", "Reset the active profile to the configured default."),
-  tool("miftah_lock_profile", "Lock the current profile for this MCP connection when enabled."),
-  tool("miftah_unlock_profile", "Unlock the current profile for this MCP connection when enabled."),
-  tool("miftah_profile_info", "Show non-secret metadata for a profile.", ["profile"]),
-  tool("miftah_health", "Show redacted wrapper and upstream health."),
-  tool("miftah_validate_config", "Validate the loaded wrapper configuration."),
-  tool("miftah_list_upstream_tools", "List tools discovered from an upstream profile.", ["profile"]),
-  tool("miftah_restart_profile", "Restart all upstream processes for a profile.", ["profile"]),
-  tool("miftah_verify_identity", "Explicitly verify configured upstream identity.", [], ["profile", "upstream"]),
-  tool("miftah_route_preview", "Preview routing for a hypothetical tool call.", ["toolName"]),
-  tool("miftah_list_approvals", "List safe metadata for approvals pending in this connection."),
-  tool("miftah_approve", "Approve a pending operation using its one-time approval token.", ["approval"]),
-  tool("miftah_deny", "Deny a pending operation using its one-time approval token.", ["approval"])
-];
 
 const EMPTY_MCP_ROOTS: readonly RoutingContextMcpRoot[] = Object.freeze([]);
 const defaultResourceSubscriptionCleanupTimeoutMs = 5_000;
@@ -110,13 +97,14 @@ export type RoutingContextCollector = (
   roots: readonly RoutingContextMcpRoot[]
 ) => Promise<RoutingContextSnapshot>;
 
+/** Derives a collision-safe tool name that can be exposed to an MCP client. */
 export function resolveClientVisibleToolName(
   name: string,
   upstreamName: string | undefined,
   collisionStrategy: ToolingConfig["collisionStrategy"]
 ): string {
   if (upstreamName) return `${upstreamName}__${name}`;
-  if (managementTools.some((item) => item.name === name)) {
+  if (isManagementToolName(name)) {
     if ((collisionStrategy ?? "prefix-upstream") === "fail") {
       throw new MiftahError("TOOL_COLLISION", `TOOL_COLLISION: upstream tool '${name}' is reserved by Miftah`);
     }
@@ -137,22 +125,6 @@ export function hasCompatibleCachedToolTarget(
     source.originalName === target.originalName &&
     source.upstreamName === target.upstreamName
   );
-}
-
-function tool(name: string, description: string, required: string[] = [], optional: string[] = []): Tool {
-  const fields = [...new Set([...required, ...optional])];
-  return {
-    name,
-    description,
-    inputSchema: {
-      type: "object",
-      properties: fields.reduce<Record<string, { type: string }>>((result, key) => {
-        result[key] = { type: "string" };
-        return result;
-      }, {}),
-      required
-    }
-  };
 }
 
 function textResult(text: string, isError = false): CallToolResult {
@@ -193,12 +165,13 @@ type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePr
 
 type ApprovalResolution =
   | { readonly kind: "consumed" }
-  | { readonly kind: "fallback"; readonly token: string }
+  | { readonly kind: "delegated-agent"; readonly token: string }
   | { readonly kind: "form"; readonly token: string };
 
 interface ApprovalErrorFactory {
   required(binding: ApprovalBinding, token: string): MiftahError;
   notAccepted(binding: ApprovalBinding): MiftahError;
+  unavailable(binding: ApprovalBinding): MiftahError;
 }
 
 interface ProfileAuditRequest {
@@ -259,10 +232,17 @@ const genericApprovalErrors: ApprovalErrorFactory = {
       "POLICY_CONFIRMATION_REQUIRED",
       `POLICY_CONFIRMATION_REQUIRED: approval required for '${binding.displayName}'. Use miftah_approve with approval '${token}' then retry the exact operation.`
     ),
+  /** Reports an unaccepted ordinary-operation confirmation without exposing a bearer. */
   notAccepted: (binding) =>
     new MiftahError(
       "POLICY_CONFIRMATION_REQUIRED",
       `POLICY_CONFIRMATION_REQUIRED: approval was not accepted for '${binding.displayName}'`
+    ),
+  /** Reports that form-only confirmation cannot be completed by the current client. */
+  unavailable: () =>
+    new MiftahError(
+      "POLICY_CONFIRMATION_REQUIRED",
+      "POLICY_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
     )
 };
 
@@ -272,10 +252,17 @@ const profileSwitchApprovalErrors: ApprovalErrorFactory = {
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
       `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation required for ${binding.displayName}. Use miftah_approve with approval '${token}' then retry the exact operation.`
     ),
+  /** Reports an unaccepted profile-switch confirmation without exposing a bearer. */
   notAccepted: (binding) =>
     new MiftahError(
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
       `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation was not accepted for ${binding.displayName}`
+    ),
+  /** Reports that form-only profile switching cannot be completed by the current client. */
+  unavailable: () =>
+    new MiftahError(
+      "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
+      "PROFILE_SWITCH_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
     )
 };
 
@@ -745,6 +732,7 @@ export class MiftahServer {
     }
   }
 
+  /** Registers the wrapper's MCP request handlers for the lifetime of this server instance. */
   private registerHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
       const source = await this.captureStableProfileState();
@@ -759,7 +747,7 @@ export class MiftahServer {
             () => this.activeToolSnapshot(upstreamRequest.options)
           );
           audit.update({ profile });
-          return { tools: [...managementTools, ...snapshot.getTools()] };
+          return { tools: [...this.visibleManagementTools(), ...snapshot.getTools()] };
         }
       );
     });
@@ -768,7 +756,7 @@ export class MiftahServer {
       const name = request.params.name;
       const args = request.params.arguments ?? {};
       const source = await this.captureStableProfileState();
-      const isManagementTool = managementTools.some((tool) => tool.name === name);
+      const isManagementTool = isManagementToolName(name);
       const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
       const upstreamRequest = this.upstreamRequestContext(extra);
       return this.runAudited(
@@ -1128,6 +1116,7 @@ export class MiftahServer {
     });
   }
 
+  /** Executes a built-in management request against the caller's captured profile state. */
   private async handleManagement(
     name: string,
     args: Record<string, unknown>,
@@ -1298,6 +1287,7 @@ export class MiftahServer {
       });
     }
     if (name === "miftah_approve") {
+      this.assertDelegatedAgentApprovalEnabled();
       return this.enqueueApprovalTransition(async () => {
         await this.expireApprovals();
         const approval = await this.withApprovalExpiryAudit(
@@ -1314,6 +1304,7 @@ export class MiftahServer {
       });
     }
     if (name === "miftah_deny") {
+      this.assertDelegatedAgentApprovalEnabled();
       return this.enqueueApprovalTransition(async () => {
         await this.expireApprovals();
         const approval = await this.withApprovalExpiryAudit(
@@ -1505,6 +1496,7 @@ export class MiftahServer {
     };
   }
 
+  /** Requires one mechanism-bound approval, creating a fail-closed request when none is available. */
   private async requireApproval(
     binding: ApprovalBinding,
     context?: ApprovalRequestContext,
@@ -1512,10 +1504,17 @@ export class MiftahServer {
   ): Promise<void> {
     const supportsFormElicitation =
       context !== undefined && this.server.getClientCapabilities()?.elicitation?.form !== undefined;
+    const approvalMechanism: ApprovalMechanism = supportsFormElicitation ? "form" : "delegated-agent";
+    if (!supportsFormElicitation && !this.delegatedAgentApprovalEnabled()) {
+      await this.enqueueApprovalTransition(async () => {
+        await this.expireApprovals();
+      });
+      throw errors.unavailable(binding);
+    }
     const resolution = await this.enqueueApprovalTransition(async (): Promise<ApprovalResolution> => {
       await this.expireApprovals();
       const consumed = await this.withApprovalExpiryAudit(
-        () => this.approvals.consume(binding),
+        () => this.approvals.consume(binding, approvalMechanism),
         (value) => {
           if (value !== undefined) this.approvals.revoke(value.id);
         }
@@ -1531,10 +1530,13 @@ export class MiftahServer {
       }
       const requested = await this.withApprovalExpiryAudit(
         () =>
-          this.approvals.request(
-            binding,
-            supportsFormElicitation ? undefined : (bearer) => this.redactor.redactText(bearer) === bearer
-          ),
+          supportsFormElicitation
+            ? this.approvals.request(binding, "form")
+            : this.approvals.request(
+                binding,
+                "delegated-agent",
+                (bearer) => this.redactor.redactText(bearer) === bearer
+              ),
         (value) => this.approvals.revoke(value.approval.id)
       );
       if (requested.created) {
@@ -1545,10 +1547,12 @@ export class MiftahServer {
           throw error;
         }
       }
-      return supportsFormElicitation ? { kind: "form", token: requested.token } : { kind: "fallback", token: requested.token };
+      return supportsFormElicitation
+        ? { kind: "form", token: requested.token }
+        : { kind: "delegated-agent", token: requested.token };
     });
     if (resolution.kind === "consumed") return;
-    if (resolution.kind === "fallback") {
+    if (resolution.kind === "delegated-agent") {
       throw errors.required(binding, resolution.token);
     }
     if (context === undefined) throw new Error("Form approval requires an MCP request context.");
@@ -1659,6 +1663,7 @@ export class MiftahServer {
     }
   }
 
+  /** Persists a safe approval transition and pairs required profile-confirmation audit events. */
   private async writeApproval(
     action: ApprovalAuditAction,
     approval: ApprovalSummary
@@ -1667,6 +1672,7 @@ export class MiftahServer {
       approvalId: approval.id,
       approvalSessionId: this.approvals.activeSessionId,
       approvalAction: action,
+      approvalMechanism: approval.mechanism,
       sourceProfile: approval.sourceProfile,
       profile: approval.profile,
       upstream: approval.upstream,
@@ -1690,6 +1696,26 @@ export class MiftahServer {
     );
   }
 
+  /** Whether configuration explicitly permits bearer-based delegated approval. */
+  private delegatedAgentApprovalEnabled(): boolean {
+    return this.config.security?.approvalMode === "delegated-agent";
+  }
+
+  /** Returns only management tools valid for the configured approval mode. */
+  private visibleManagementTools() {
+    return managementTools({ delegatedAgentApproval: this.delegatedAgentApprovalEnabled() });
+  }
+
+  /** Fails closed before a direct approval-management call when delegation is not configured. */
+  private assertDelegatedAgentApprovalEnabled(): void {
+    if (this.delegatedAgentApprovalEnabled()) return;
+    throw new MiftahError(
+      "APPROVAL_DELEGATION_DISABLED",
+      "APPROVAL_DELEGATION_DISABLED: delegated agent approval is disabled"
+    );
+  }
+
+  /** Produces a lease-issued audit request only while the current profile lease remains active. */
   private leaseIssuedAuditAction(
     sourceProfile: string,
     operation: string,
@@ -2436,6 +2462,7 @@ export class MiftahServer {
     }
   }
 
+  /** Maps a safe domain error to its terminal audit outcome without exposing diagnostic detail. */
   private auditStatus(error: MiftahError): AuditStatus {
     if (
       error.code === "POLICY_BLOCKED" ||
@@ -2446,7 +2473,8 @@ export class MiftahServer {
       error.code === "PROFILE_SELECTION_STALE" ||
       error.code === "PROFILE_LEASE_REQUIRED" ||
       error.code === "PROFILE_LEASE_EXPIRED" ||
-      error.code === "PROFILE_SELECTION_REQUIRED"
+      error.code === "PROFILE_SELECTION_REQUIRED" ||
+      error.code === "APPROVAL_DELEGATION_DISABLED"
     ) {
       return "denied";
     }

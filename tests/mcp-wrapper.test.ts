@@ -29,6 +29,7 @@ import {
   MiftahServer,
   resolveClientVisibleToolName
 } from "../src/mcp/server/miftah-server.js";
+import { MANAGEMENT_TOOL_NAMES, managementToolDescriptors } from "../src/mcp/server/management-tools.js";
 import type { RegisteredTool } from "../src/mcp/server/tool-registry.js";
 import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
@@ -37,24 +38,7 @@ import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
-const managementToolNames = [
-  "miftah_list_profiles",
-  "miftah_current_profile",
-  "miftah_use_profile",
-  "miftah_reset_profile",
-  "miftah_lock_profile",
-  "miftah_unlock_profile",
-  "miftah_profile_info",
-  "miftah_health",
-  "miftah_validate_config",
-  "miftah_list_upstream_tools",
-  "miftah_restart_profile",
-  "miftah_verify_identity",
-  "miftah_route_preview",
-  "miftah_list_approvals",
-  "miftah_approve",
-  "miftah_deny"
-] as const;
+const managementToolNames = managementToolDescriptors({ delegatedAgentApproval: false }).map((descriptor) => descriptor.name);
 
 function registeredTool(originalName: string): RegisteredTool {
   return {
@@ -78,10 +62,12 @@ describe("cached routed-tool compatibility", () => {
 describe("client-visible tool compatibility", () => {
   it("keeps management reservation and upstream namespace rules stable", () => {
     expect(resolveClientVisibleToolName("search", "github", "prefix-upstream")).toBe("github__search");
-    expect(resolveClientVisibleToolName("miftah_health", undefined, "prefix-upstream")).toBe(
-      "upstream_miftah_health"
-    );
-    expect(() => resolveClientVisibleToolName("miftah_health", undefined, "fail")).toThrow(/TOOL_COLLISION/u);
+    for (const managementToolName of MANAGEMENT_TOOL_NAMES) {
+      expect(resolveClientVisibleToolName(managementToolName, undefined, "prefix-upstream")).toBe(
+        `upstream_${managementToolName}`
+      );
+      expect(() => resolveClientVisibleToolName(managementToolName, undefined, "fail")).toThrow(toolCollisionPattern);
+    }
     expect(resolveClientVisibleToolName("miftah_custom", undefined, "fail")).toBe("miftah_custom");
   });
 });

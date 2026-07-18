@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { documentedChangesSection } from "./helpers/changelog.js";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -33,6 +32,6 @@ describe("profile lease and lock documentation contract", () => {
     expect(architecture).toContain("captured lease");
     expect(cli).toContain("miftah_lock_profile");
     expect(cli).toContain("miftah_unlock_profile");
-    expect(documentedChangesSection(changelog)).toMatch(/\[#28\][\s\S]*profile/iu);
+    expect(changelog).toMatch(/\[#28\][\s\S]*profile/iu);
   });
 });

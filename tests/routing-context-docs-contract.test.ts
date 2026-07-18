@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { documentedChangesSection } from "./helpers/changelog.js";
+import { changelogIssueEntry } from "./helpers/changelog.js";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -44,6 +44,8 @@ describe("routing context documentation contract", () => {
     expect(security).toContain("Project markers cannot");
     expect(security).toContain("cannot add credentials");
     expect(security).toContain("never contains the raw `MIFTAH_PROJECT` value");
-    expect(documentedChangesSection(changelog)).toMatch(/\[#20\][\s\S]*routing context[\s\S]*audit/iu);
+    const issue20 = changelogIssueEntry(changelog, 20);
+    expect(issue20).toContain("routing context");
+    expect(issue20).toContain("audit");
   });
 });

@@ -16,6 +16,9 @@ describe("approval documentation contract", () => {
     expect(config).toContain("miftah_approve");
     expect(config).toContain("miftah_deny");
     expect(config).toContain("form elicitation");
+    expect(config).toContain(
+      "When form elicitation is unavailable, that explicit mode exposes a connection-bound, one-time bearer"
+    );
     expect(security).toContain("approval bearer");
     expect(architecture).toContain("approval lifecycle");
     expect(architecture).toContain("raw approval bearer or operation arguments");

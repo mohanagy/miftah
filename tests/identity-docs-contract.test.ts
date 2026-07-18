@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { documentedChangesSection } from "./helpers/changelog.js";
 
 const identityVerificationHeadingPattern = /^## Identity verification\s*$/mu;
 const sectionHeadingPattern = /^## /mu;
@@ -75,6 +74,7 @@ describe("identity verification documentation contract", () => {
     const manager = readRepositoryFile("src/identity/identity-manager.ts");
     const statusTypes = readRepositoryFile("src/identity/identity-types.ts");
     const server = readRepositoryFile("src/mcp/server/miftah-server.ts");
+    const managementTools = readRepositoryFile("src/mcp/server/management-tools.ts");
     const pipeline = readRepositoryFile("src/mcp/server/operation-pipeline.ts");
     const doctor = readRepositoryFile("src/cli/doctor.ts");
     const doctorReport = readRepositoryFile("src/cli/doctor-report.ts");
@@ -98,7 +98,7 @@ describe("identity verification documentation contract", () => {
     expect(identityConfig).toContain("only when `requiredForRisk` explicitly names the selected write or destructive risk");
     expect(identityConfig).toContain("Read discovery, resource reads, and prompt retrieval are not gated");
 
-    expect(server).toContain('tool("miftah_verify_identity"');
+    expect(managementTools).toContain('name: "miftah_verify_identity"');
     expect(server).toContain("args.profile === undefined ? source.activeProfile");
     expect(server).toContain("const targetUpstreams = this.identityTargetUpstreams(requestedUpstream);");
     expect(server).toContain('requestedUpstream === "default" && configured.length === 1 && configured[0] === undefined');
@@ -144,6 +144,6 @@ describe("identity verification documentation contract", () => {
     ]) {
       expect(security).toContain(claim);
     }
-    expect(documentedChangesSection(changelog)).toMatch(documentedIdentityPattern);
+    expect(changelog).toMatch(documentedIdentityPattern);
   });
 });
