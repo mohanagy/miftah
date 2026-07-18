@@ -1127,6 +1127,50 @@ exit 0`);
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "force-kills a retained descendant after its direct provider exits",
+    async () => {
+      await inSandbox(async (directory) => {
+        const readyPath = join(directory, "descendant-ready");
+        const signalPath = join(directory, "descendant-signal");
+        const pending = runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath],
+            environment: {
+              ...fakeProviderEnvironment(directory, "early-exit-stubborn-descendant"),
+              MIFTAH_FAKE_DESCENDANT_READY_PATH: readyPath,
+              MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH: signalPath
+            }
+          },
+          { timeoutMs: 1_000 }
+        );
+        const descendantPid = await readDescendantPid(directory);
+
+        try {
+          await waitForCondition(
+            async () => {
+              try {
+                return (await readFile(readyPath, "utf8")) === "ready";
+              } catch (error) {
+                if (errorCode(error) === "ENOENT") return false;
+                throw error;
+              }
+            },
+            "stubborn descendant to start",
+            500
+          );
+
+          await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+          await expect(readFile(signalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+          await waitForProcessExit(descendantPid);
+        } finally {
+          await terminateTestProcess(descendantPid);
+        }
+      });
+    }
+  );
+
   it.runIf(process.platform === "win32")(
     "closes an orphaned descendant when its direct provider process exits",
     async () => {
