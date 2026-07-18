@@ -1687,14 +1687,17 @@ export class MiftahServer {
     );
   }
 
+  /** Whether configuration explicitly permits bearer-based delegated approval. */
   private delegatedAgentApprovalEnabled(): boolean {
     return this.config.security?.approvalMode === "delegated-agent";
   }
 
+  /** Returns only management tools valid for the configured approval mode. */
   private visibleManagementTools() {
     return managementTools({ delegatedAgentApproval: this.delegatedAgentApprovalEnabled() });
   }
 
+  /** Fails closed before a direct approval-management call when delegation is not configured. */
   private assertDelegatedAgentApprovalEnabled(): void {
     if (this.delegatedAgentApprovalEnabled()) return;
     throw new MiftahError(

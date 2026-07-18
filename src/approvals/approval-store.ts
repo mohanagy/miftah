@@ -103,6 +103,10 @@ export class ApprovalStore {
     this.sessionId = this.createSessionId();
   }
 
+  /**
+   * Issues a connection-bound approval token under an explicit confirmation mechanism.
+   * Delegated callers must supply the redaction-safety check used before a bearer is disclosed.
+   */
   request(binding: ApprovalBinding, mechanism: "form"): ApprovalRequest;
   request(
     binding: ApprovalBinding,

@@ -25,6 +25,7 @@ interface ManagementToolOptions {
   readonly delegatedAgentApproval: boolean;
 }
 
+/** Creates the schema contract for one string-valued management-tool input. */
 const stringInput = (name: string, required = false): ManagementToolInput => ({
   name,
   required,
@@ -223,20 +224,24 @@ const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] 
 export const MANAGEMENT_TOOL_DESCRIPTORS = Object.freeze(MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL);
 export const MANAGEMENT_TOOL_NAMES = Object.freeze(MANAGEMENT_TOOL_DESCRIPTORS.map((descriptor) => descriptor.name));
 
+/** Returns whether a tool name is reserved by Miftah's management surface. */
 export function isManagementToolName(name: string): boolean {
   return MANAGEMENT_TOOL_NAMES.includes(name);
 }
 
+/** Returns descriptors visible under the configured delegated-approval mode. */
 export function managementToolDescriptors(options: ManagementToolOptions): readonly ManagementToolDescriptor[] {
   return MANAGEMENT_TOOL_DESCRIPTORS.filter(
     (descriptor) => descriptor.availability === "always" || options.delegatedAgentApproval
   );
 }
 
+/** Projects the visible descriptor contract into MCP SDK tool definitions. */
 export function managementTools(options: ManagementToolOptions): readonly Tool[] {
   return managementToolDescriptors(options).map(toolFromDescriptor);
 }
 
+/** Converts one immutable management descriptor into its MCP tool representation. */
 function toolFromDescriptor(descriptor: ManagementToolDescriptor): Tool {
   const required = descriptor.inputs.filter((input) => input.required).map((input) => input.name);
   return {

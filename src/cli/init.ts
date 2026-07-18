@@ -279,6 +279,7 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
   return { output, config, snippets, claudeCodePermissionGuidance };
 }
 
+/** Writes copy-paste client configuration and optional Claude Code review guidance without modifying client settings. */
 function writeSnippets(
   output: Writable,
   snippets: readonly ClientSnippet[],
