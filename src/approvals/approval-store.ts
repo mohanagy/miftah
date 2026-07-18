@@ -103,16 +103,15 @@ export class ApprovalStore {
     this.sessionId = this.createSessionId();
   }
 
-  /**
-   * Issues a connection-bound approval token under an explicit confirmation mechanism.
-   * Delegated callers must supply the redaction-safety check used before a bearer is disclosed.
-   */
+  /** Issues a connection-bound approval token for an MCP form confirmation. */
   request(binding: ApprovalBinding, mechanism: "form"): ApprovalRequest;
+  /** Issues a connection-bound token for explicitly enabled delegated-agent confirmation. */
   request(
     binding: ApprovalBinding,
     mechanism: "delegated-agent",
     isBearerSafe: (bearer: string) => boolean
   ): ApprovalRequest;
+  /** Implements the explicit mechanism-bound approval request contract for both confirmation paths. */
   request(
     binding: ApprovalBinding,
     mechanism: ApprovalMechanism,

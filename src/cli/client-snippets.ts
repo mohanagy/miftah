@@ -59,6 +59,7 @@ const targetLabels: Record<ClientName, string> = {
 const claudeCodePermissionTarget = { label: "Claude Code settings permissions" };
 const literalClaudeCodeServerName = /^[A-Za-z0-9-]+$/u;
 
+/** Throws one stable input error for invalid client-snippet configuration. */
 function inputError(message: string): never {
   throw new ClientSnippetError(message);
 }

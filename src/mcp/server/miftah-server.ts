@@ -232,11 +232,13 @@ const genericApprovalErrors: ApprovalErrorFactory = {
       "POLICY_CONFIRMATION_REQUIRED",
       `POLICY_CONFIRMATION_REQUIRED: approval required for '${binding.displayName}'. Use miftah_approve with approval '${token}' then retry the exact operation.`
     ),
+  /** Reports an unaccepted ordinary-operation confirmation without exposing a bearer. */
   notAccepted: (binding) =>
     new MiftahError(
       "POLICY_CONFIRMATION_REQUIRED",
       `POLICY_CONFIRMATION_REQUIRED: approval was not accepted for '${binding.displayName}'`
     ),
+  /** Reports that form-only confirmation cannot be completed by the current client. */
   unavailable: () =>
     new MiftahError(
       "POLICY_CONFIRMATION_REQUIRED",
@@ -250,11 +252,13 @@ const profileSwitchApprovalErrors: ApprovalErrorFactory = {
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
       `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation required for ${binding.displayName}. Use miftah_approve with approval '${token}' then retry the exact operation.`
     ),
+  /** Reports an unaccepted profile-switch confirmation without exposing a bearer. */
   notAccepted: (binding) =>
     new MiftahError(
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
       `PROFILE_SWITCH_CONFIRMATION_REQUIRED: confirmation was not accepted for ${binding.displayName}`
     ),
+  /** Reports that form-only profile switching cannot be completed by the current client. */
   unavailable: () =>
     new MiftahError(
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED",
@@ -1711,6 +1715,7 @@ export class MiftahServer {
     );
   }
 
+  /** Produces a lease-issued audit request only while the current profile lease remains active. */
   private leaseIssuedAuditAction(
     sourceProfile: string,
     operation: string,
