@@ -103,11 +103,23 @@ export class ApprovalStore {
     this.sessionId = this.createSessionId();
   }
 
+  request(binding: ApprovalBinding, mechanism: "form"): ApprovalRequest;
   request(
     binding: ApprovalBinding,
-    isBearerSafe: (bearer: string) => boolean = acceptsAnyBearer,
-    mechanism: ApprovalMechanism = "delegated-agent"
+    mechanism: "delegated-agent",
+    isBearerSafe: (bearer: string) => boolean
+  ): ApprovalRequest;
+  request(
+    binding: ApprovalBinding,
+    mechanism: ApprovalMechanism,
+    isBearerSafe: (bearer: string) => boolean = acceptsAnyBearer
   ): ApprovalRequest {
+    if (mechanism !== "form" && mechanism !== "delegated-agent") {
+      throw new MiftahError(
+        "APPROVAL_MECHANISM_MISMATCH",
+        "APPROVAL_MECHANISM_MISMATCH: approval mechanism must be explicit"
+      );
+    }
     this.expire();
     const bindingDigest = this.digestBinding(binding);
     const pending = [...this.records.values()].find(
@@ -116,7 +128,15 @@ export class ApprovalStore {
         record.status === "pending" &&
         timingSafeEqual(record.bindingDigest, bindingDigest)
     );
-    if (pending !== undefined) return this.issueToken(pending, false, isBearerSafe);
+    if (pending !== undefined) {
+      if (pending.mechanism !== mechanism) {
+        throw new MiftahError(
+          "APPROVAL_MECHANISM_MISMATCH",
+          "APPROVAL_MECHANISM_MISMATCH: pending approval cannot be reused through a different mechanism"
+        );
+      }
+      return this.issueToken(pending, false, isBearerSafe);
+    }
     this.discardTerminalRecords();
     if (this.records.size >= this.maxRecords) {
       throw new MiftahError("APPROVAL_LIMIT_EXCEEDED", "APPROVAL_LIMIT_EXCEEDED: too many outstanding approvals");
@@ -166,6 +186,12 @@ export class ApprovalStore {
   /** Claims an accepted form approval without leaving an async window for a second consumer. */
   approveAndConsume(token: string, binding: ApprovalBinding): ApprovalSummary {
     const record = this.requirePending(token);
+    if (record.mechanism !== "form") {
+      throw new MiftahError(
+        "APPROVAL_MECHANISM_MISMATCH",
+        "APPROVAL_MECHANISM_MISMATCH: delegated approval cannot be consumed as a form confirmation"
+      );
+    }
     if (!timingSafeEqual(record.bindingDigest, this.digestBinding(binding))) {
       throw new MiftahError("APPROVAL_INVALID", "APPROVAL_INVALID: approval token does not match this operation");
     }
@@ -174,13 +200,14 @@ export class ApprovalStore {
   }
 
   /** Atomically claims one matching approved record before any asynchronous upstream work begins. */
-  consume(binding: ApprovalBinding): ApprovalSummary | undefined {
+  consume(binding: ApprovalBinding, mechanism: ApprovalMechanism): ApprovalSummary | undefined {
     this.expire();
     const bindingDigest = this.digestBinding(binding);
     const record = [...this.records.values()].find(
       (candidate) =>
         candidate.sessionId === this.sessionId &&
         candidate.status === "approved" &&
+        candidate.mechanism === mechanism &&
         timingSafeEqual(candidate.bindingDigest, bindingDigest)
     );
     if (record === undefined) return undefined;

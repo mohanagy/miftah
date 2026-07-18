@@ -1506,7 +1506,7 @@ export class MiftahServer {
     const resolution = await this.enqueueApprovalTransition(async (): Promise<ApprovalResolution> => {
       await this.expireApprovals();
       const consumed = await this.withApprovalExpiryAudit(
-        () => this.approvals.consume(binding),
+        () => this.approvals.consume(binding, approvalMechanism),
         (value) => {
           if (value !== undefined) this.approvals.revoke(value.id);
         }
@@ -1522,11 +1522,13 @@ export class MiftahServer {
       }
       const requested = await this.withApprovalExpiryAudit(
         () =>
-          this.approvals.request(
-            binding,
-            supportsFormElicitation ? undefined : (bearer) => this.redactor.redactText(bearer) === bearer,
-            approvalMechanism
-          ),
+          supportsFormElicitation
+            ? this.approvals.request(binding, "form")
+            : this.approvals.request(
+                binding,
+                "delegated-agent",
+                (bearer) => this.redactor.redactText(bearer) === bearer
+              ),
         (value) => this.approvals.revoke(value.approval.id)
       );
       if (requested.created) {
@@ -2457,7 +2459,8 @@ export class MiftahServer {
       error.code === "PROFILE_SELECTION_STALE" ||
       error.code === "PROFILE_LEASE_REQUIRED" ||
       error.code === "PROFILE_LEASE_EXPIRED" ||
-      error.code === "PROFILE_SELECTION_REQUIRED"
+      error.code === "PROFILE_SELECTION_REQUIRED" ||
+      error.code === "APPROVAL_DELEGATION_DISABLED"
     ) {
       return "denied";
     }

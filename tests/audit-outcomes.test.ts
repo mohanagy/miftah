@@ -489,6 +489,39 @@ describe("audit outcomes", () => {
     }
   });
 
+  it("records disabled delegated approval controls as denied outcomes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-delegation-denied-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} },
+      audit: { path: auditPath }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 1_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config, config.security), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(await client.callTool({ name: "miftah_approve", arguments: { approval: "not-disclosed" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("APPROVAL_DELEGATION_DISABLED") }]
+      });
+      expect(await waitForAuditEvent(
+        auditPath,
+        (event) => event.name === "miftah_approve" && event.errorCode === "APPROVAL_DELEGATION_DISABLED"
+      )).toMatchObject({ status: "denied" });
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("records safe profile confirmation, transition, lease, and runtime-lock actions", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-profile-actions-"));
     const auditPath = join(directory, "audit.jsonl");

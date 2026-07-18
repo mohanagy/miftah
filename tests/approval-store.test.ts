@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ApprovalStore } from "../src/approvals/approval-store.js";
+import { ApprovalStore, type ApprovalBinding } from "../src/approvals/approval-store.js";
+
+function requestDelegated(store: ApprovalStore, binding: ApprovalBinding) {
+  return store.request(binding, "delegated-agent", () => true);
+}
+
+function consumeDelegated(store: ApprovalStore, binding: ApprovalBinding) {
+  return store.consume(binding, "delegated-agent");
+}
 
 describe("approval store", () => {
   it("does not consume an approved approval for a different normalized argument set", () => {
@@ -18,11 +26,11 @@ describe("approval store", () => {
       arguments: { first: "one", second: "two" }
     };
 
-    const requested = store.request(binding);
+    const requested = requestDelegated(store, binding);
     store.approve(requested.token);
 
-    expect(store.consume({ ...binding, arguments: { first: "one", second: "changed" } })).toBeUndefined();
-    expect(store.consume({ ...binding, arguments: { second: "two", first: "one" } })).toMatchObject({
+    expect(consumeDelegated(store, { ...binding, arguments: { first: "one", second: "changed" } })).toBeUndefined();
+    expect(consumeDelegated(store, { ...binding, arguments: { second: "two", first: "one" } })).toMatchObject({
       id: requested.approval.id,
       status: "consumed"
     });
@@ -42,12 +50,39 @@ describe("approval store", () => {
       arguments: { name: "first" }
     };
 
-    const first = store.request(binding);
-    const second = store.request(binding);
+    const first = requestDelegated(store, binding);
+    const second = requestDelegated(store, binding);
 
     expect(second).toMatchObject({ created: false });
     expect(store.approve(first.token)).toMatchObject({ id: first.approval.id, status: "approved" });
-    expect(store.consume(binding)).toMatchObject({ id: first.approval.id, status: "consumed" });
+    expect(consumeDelegated(store, binding)).toMatchObject({ id: first.approval.id, status: "consumed" });
+  });
+
+  it("fails closed when the same pending operation is requested through another approval mechanism", () => {
+    const store = new ApprovalStore({ createToken: () => "approval-mechanism-token" });
+    const binding = {
+      sourceProfile: "work",
+      profile: "work",
+      upstream: "default",
+      operation: "tools/call" as const,
+      name: "create_item",
+      displayName: "create_item",
+      arguments: { name: "first" }
+    };
+
+    const requested = store.request(binding, "form");
+
+    expect(requested.approval.mechanism).toBe("form");
+    const requestWithoutMechanism = store.request as unknown as (input: typeof binding) => unknown;
+    expect(() => requestWithoutMechanism.call(store, binding)).toThrow(
+      expect.objectContaining({ code: "APPROVAL_MECHANISM_MISMATCH" })
+    );
+    expect(() => store.request(binding, "delegated-agent", () => true)).toThrow(
+      expect.objectContaining({ code: "APPROVAL_MECHANISM_MISMATCH" })
+    );
+    store.approve(requested.token);
+    expect(store.consume(binding, "delegated-agent")).toBeUndefined();
+    expect(store.consume(binding, "form")).toMatchObject({ id: requested.approval.id, status: "consumed" });
   });
 
   it("bounds bearer variants for one pending operation without retaining bearer values", () => {
@@ -63,9 +98,9 @@ describe("approval store", () => {
       arguments: { name: "first" }
     };
 
-    for (let index = 0; index < 8; index += 1) store.request(binding);
+    for (let index = 0; index < 8; index += 1) requestDelegated(store, binding);
 
-    expect(() => store.request(binding)).toThrow(expect.objectContaining({ code: "APPROVAL_LIMIT_EXCEEDED" }));
+    expect(() => requestDelegated(store, binding)).toThrow(expect.objectContaining({ code: "APPROVAL_LIMIT_EXCEEDED" }));
     expect(JSON.stringify(store.list())).not.toContain("approval-bounded-");
   });
 
@@ -73,7 +108,7 @@ describe("approval store", () => {
     const token = "approval-record-secret-token";
     const secretArgument = "approval-record-sensitive-argument";
     const store = new ApprovalStore({ createToken: () => token });
-    store.request({
+    requestDelegated(store, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
@@ -98,7 +133,7 @@ describe("approval store", () => {
       ttlMs: 1_000,
       createToken: () => "approval-expired-token"
     });
-    const requested = store.request({
+    const requested = requestDelegated(store, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
@@ -130,13 +165,13 @@ describe("approval store", () => {
       displayName: "create_item",
       arguments: { name: "first" }
     };
-    const requested = store.request(binding);
+    const requested = requestDelegated(store, binding);
     store.approve(requested.token);
 
     now = new Date("2026-07-12T00:00:01.000Z");
 
     expect(store.expire()).toEqual([expect.objectContaining({ id: requested.approval.id, status: "expired" })]);
-    expect(store.consume(binding)).toBeUndefined();
+    expect(consumeDelegated(store, binding)).toBeUndefined();
   });
 
   it("does not require a caller to sweep expiry before consuming an approval", () => {
@@ -155,11 +190,11 @@ describe("approval store", () => {
       displayName: "create_item",
       arguments: { name: "first" }
     };
-    const requested = store.request(binding);
+    const requested = requestDelegated(store, binding);
     store.approve(requested.token);
     now = new Date("2026-07-12T00:00:01.000Z");
 
-    expect(store.consume(binding)).toBeUndefined();
+    expect(consumeDelegated(store, binding)).toBeUndefined();
   });
 
   it("rejects a bearer from a previous connection session", () => {
@@ -168,7 +203,7 @@ describe("approval store", () => {
       createToken: () => "approval-old-session-token",
       createSessionId: () => `session-${++session}`
     });
-    const requested = store.request({
+    const requested = requestDelegated(store, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
@@ -185,7 +220,7 @@ describe("approval store", () => {
 
   it("rejects a replay after an explicit denial", () => {
     const store = new ApprovalStore({ createToken: () => "approval-denied-token" });
-    const requested = store.request({
+    const requested = requestDelegated(store, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
@@ -210,10 +245,13 @@ describe("approval store", () => {
       displayName: "create_item",
       arguments: { name: "first" }
     };
-    const requested = store.request(binding);
+    const requested = requestDelegated(store, binding);
     store.approve(requested.token);
 
-    const consumed = await Promise.all([Promise.resolve().then(() => store.consume(binding)), Promise.resolve().then(() => store.consume(binding))]);
+    const consumed = await Promise.all([
+      Promise.resolve().then(() => consumeDelegated(store, binding)),
+      Promise.resolve().then(() => consumeDelegated(store, binding))
+    ]);
 
     expect(consumed.filter((approval) => approval !== undefined)).toEqual([
       expect.objectContaining({ id: requested.approval.id, status: "consumed" })
@@ -236,11 +274,13 @@ describe("approval store", () => {
       arguments: { name }
     });
 
-    const first = store.request(binding("first"));
-    store.request(binding("second"));
+    const first = requestDelegated(store, binding("first"));
+    requestDelegated(store, binding("second"));
 
-    expect(() => store.request(binding("third"))).toThrow(expect.objectContaining({ code: "APPROVAL_LIMIT_EXCEEDED" }));
+    expect(() => requestDelegated(store, binding("third"))).toThrow(
+      expect.objectContaining({ code: "APPROVAL_LIMIT_EXCEEDED" })
+    );
     store.deny(first.token);
-    expect(store.request(binding("third"))).toMatchObject({ created: true });
+    expect(requestDelegated(store, binding("third"))).toMatchObject({ created: true });
   });
 });

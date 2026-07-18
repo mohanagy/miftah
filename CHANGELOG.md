@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
-- [#96](https://github.com/mohanagy/miftah/issues/96) Confirmation-required MCP calls now default to human form elicitation and fail closed when the client cannot present that form. The former self-approval bearer path is available only through explicit `security.approvalMode: "delegated-agent"`, is hidden from normal tool discovery, and is audited as delegated authorization rather than human proof.
+- [#96](https://github.com/mohanagy/miftah/issues/96) Confirmation-required MCP calls now default to human form elicitation and fail closed when the client cannot present that form. The former self-approval bearer path is available only through explicit `security.approvalMode: "delegated-agent"`, is hidden from normal tool discovery, and is audited as delegated authorization rather than human proof; approval records are bound to that form or delegated mechanism.
 - [#97](https://github.com/mohanagy/miftah/issues/97) The generated multi-profile GitHub preset now requires exact profile-switch confirmation and explicit current-session selection before destructive work, preventing a silent profile change or implicit selection from satisfying that boundary.
 - [#98](https://github.com/mohanagy/miftah/issues/98) Management tools now publish reviewed MCP behavioral annotations from one contract table. `miftah init --client claude-code` prints exact, manually merged Claude Code permission guidance for visible privileged management tools without modifying client settings.
 

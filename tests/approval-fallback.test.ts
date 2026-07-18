@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
-import { ApprovalStore } from "../src/approvals/approval-store.js";
+import { ApprovalStore, type ApprovalBinding } from "../src/approvals/approval-store.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { managementToolDescriptors } from "../src/mcp/server/management-tools.js";
@@ -17,6 +17,10 @@ import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const delegatedAgentApprovalSecurity = { approvalMode: "delegated-agent" } as const;
+
+function requestDelegatedApproval(approvals: ApprovalStore, binding: ApprovalBinding) {
+  return approvals.request(binding, "delegated-agent", () => true);
+}
 
 describe("approval fallback", () => {
   it("invalidates pending approvals when an MCP connection begins", async () => {
@@ -38,7 +42,7 @@ describe("approval fallback", () => {
       name: "create_item",
       displayName: "create_item",
       arguments: { name: "first" }
-    });
+    }, "form");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "approval-session-client", version: "1.0.0" });
 
@@ -669,7 +673,7 @@ describe("approval fallback", () => {
       displayName: "create_item",
       arguments: { name: "first" }
     };
-    const requested = host.approvals.request(binding);
+    const requested = requestDelegatedApproval(host.approvals, binding);
 
     try {
       host.writeApproval = async (action, approval) => {
@@ -935,7 +939,7 @@ describe("approval fallback", () => {
       displayName: "create_item",
       arguments: { name: "first" }
     };
-    const requested = approvals.request(binding);
+    const requested = requestDelegatedApproval(approvals, binding);
     approvals.approve(requested.token);
     raceRead = true;
 
@@ -988,7 +992,7 @@ describe("approval fallback", () => {
       }): Promise<void>;
     };
     host.approvals = approvals;
-    approvals.request({
+    requestDelegatedApproval(approvals, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
@@ -1057,7 +1061,7 @@ describe("approval fallback", () => {
       ): Promise<unknown>;
     };
     host.approvals = approvals;
-    const requested = approvals.request({
+    const requested = requestDelegatedApproval(approvals, {
       sourceProfile: "work",
       profile: "work",
       upstream: "default",
