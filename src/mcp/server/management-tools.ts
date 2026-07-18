@@ -191,15 +191,10 @@ const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] 
     name: "miftah_list_approvals",
     description: "List safe metadata for approvals pending in this connection.",
     inputs: [],
-    interaction: "state-changing",
+    interaction: "observational",
     availability: "always",
     askInClaudeCode: false,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false
-    }
+    annotations: readOnlyLocal
   },
   {
     name: "miftah_approve",

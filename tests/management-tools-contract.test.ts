@@ -10,13 +10,37 @@ describe("management tool descriptors", () => {
     expect(new Set(names).size).toBe(names.length);
 
     const visible = managementTools({ delegatedAgentApproval: false });
-    expect(visible.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(["miftah_approve", "miftah_deny"]));
+    const visibleNames = visible.map((tool) => tool.name);
+    expect(visibleNames).not.toContain("miftah_approve");
+    expect(visibleNames).not.toContain("miftah_deny");
 
     for (const tool of visible) {
       const descriptor = MANAGEMENT_TOOL_DESCRIPTORS.find((candidate) => candidate.name === tool.name);
       expect(descriptor).toBeDefined();
       expect(tool.annotations).toEqual(descriptor?.annotations);
     }
+
+    const delegated = managementTools({ delegatedAgentApproval: true });
+    expect(delegated).toHaveLength(MANAGEMENT_TOOL_DESCRIPTORS.length);
+    for (const descriptor of MANAGEMENT_TOOL_DESCRIPTORS) {
+      const tool = delegated.find((candidate) => candidate.name === descriptor.name);
+      expect(tool).toBeDefined();
+      expect(tool?.annotations).toEqual(descriptor.annotations);
+    }
+  });
+
+  it("classifies pending-approval listing as a read-only local observation", () => {
+    const descriptor = MANAGEMENT_TOOL_DESCRIPTORS.find((candidate) => candidate.name === "miftah_list_approvals");
+
+    expect(descriptor).toMatchObject({
+      interaction: "observational",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    });
   });
 
   it("keeps profile discovery and route-preview schemas aligned with their handlers", () => {

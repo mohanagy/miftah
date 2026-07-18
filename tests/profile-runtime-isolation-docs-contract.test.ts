@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { changelogIssueEntry } from "./helpers/changelog.js";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -32,7 +33,7 @@ describe("profile credential isolation documentation contract", () => {
     expect(architecture).toContain("ProfileRuntimeIsolation");
     expect(architecture).toContain("--mount");
     expect(architecture).toContain("macOS Podman isolation fail closed");
-    expect(changelog).toMatch(/\[#29\][\s\S]*credential/iu);
+    expect(changelogIssueEntry(changelog, 29)).toMatch(/credential/iu);
   });
 
   it("states the native same-user and container boundaries without overclaiming containment", () => {
