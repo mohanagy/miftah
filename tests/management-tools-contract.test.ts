@@ -21,6 +21,7 @@ describe("management tool descriptors", () => {
     }
 
     const delegated = managementTools({ delegatedAgentApproval: true });
+    expect(delegated).toHaveLength(MANAGEMENT_TOOL_DESCRIPTORS.length);
     for (const descriptor of MANAGEMENT_TOOL_DESCRIPTORS) {
       const tool = delegated.find((candidate) => candidate.name === descriptor.name);
       expect(tool).toBeDefined();
