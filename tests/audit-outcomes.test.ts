@@ -507,7 +507,8 @@ describe("audit outcomes", () => {
       security: {
         allowProfileSwitchingFromMcp: true,
         requireProfileSwitchConfirmation: true,
-        allowProfileLockingFromMcp: true
+        allowProfileLockingFromMcp: true,
+        approvalMode: "delegated-agent"
       },
       audit: { path: auditPath }
     });
@@ -564,6 +565,13 @@ describe("audit outcomes", () => {
           })
         ])
       );
+      const approvalEvents = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "approval");
+      expect(approvalEvents).toHaveLength(3);
+      expect(approvalEvents.every((event) => event.approvalMechanism === "delegated-agent")).toBe(true);
       expect(JSON.stringify(profileEvents)).not.toContain(token);
     } finally {
       await client.close();

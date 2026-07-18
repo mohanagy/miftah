@@ -1,4 +1,5 @@
 import { posix, win32 } from "node:path";
+import { managementToolDescriptors } from "../mcp/server/management-tools.js";
 
 export const CLIENT_NAMES = Object.freeze(["claude-desktop", "claude-code", "cursor", "vscode"] as const);
 
@@ -24,6 +25,23 @@ export interface ClientSnippet {
   json: string;
 }
 
+export interface ClaudeCodePermissionGuidanceOptions {
+  /** Includes only management tools exposed by delegated-agent approval mode. */
+  delegatedAgentApproval: boolean;
+}
+
+export type ClaudeCodePermissionGuidance =
+  | {
+      kind: "snippet";
+      target: { label: string };
+      json: string;
+    }
+  | {
+      kind: "manual";
+      target: { label: string };
+      message: string;
+    };
+
 export class ClientSnippetError extends Error {
   constructor(message: string) {
     super(message);
@@ -37,6 +55,9 @@ const targetLabels: Record<ClientName, string> = {
   cursor: "Cursor .cursor/mcp.json",
   vscode: "VS Code .vscode/mcp.json"
 };
+
+const claudeCodePermissionTarget = { label: "Claude Code settings permissions" };
+const literalClaudeCodeServerName = /^[A-Za-z0-9-]+$/u;
 
 function inputError(message: string): never {
   throw new ClientSnippetError(message);
@@ -132,4 +153,32 @@ export function renderClientSnippets(selection: ClientSelection, input: ClientSn
     return CLIENT_NAMES.map((client) => renderClientSnippet(client, input));
   }
   return [renderClientSnippet(selection, input)];
+}
+
+/**
+ * Renders defense-in-depth Claude Code review rules. These rules never replace
+ * Miftah's server-side authorization and are intentionally not written to a
+ * settings file because it may contain unrelated user policy.
+ */
+export function renderClaudeCodePermissionGuidance(
+  serverName: string,
+  options: ClaudeCodePermissionGuidanceOptions
+): ClaudeCodePermissionGuidance {
+  if (typeof serverName !== "string" || !literalClaudeCodeServerName.test(serverName)) {
+    return {
+      kind: "manual",
+      target: claudeCodePermissionTarget,
+      message:
+        "Claude Code permission guidance was not generated because the configured server name is not a literal name matching [A-Za-z0-9-]+. Choose a literal server name and manually add exact management-tool rules to Claude Code settings."
+    };
+  }
+
+  const ask = managementToolDescriptors({ delegatedAgentApproval: options.delegatedAgentApproval })
+    .filter((descriptor) => descriptor.askInClaudeCode)
+    .map((descriptor) => `mcp__${serverName}__${descriptor.name}`);
+  return {
+    kind: "snippet",
+    target: claudeCodePermissionTarget,
+    json: JSON.stringify({ permissions: { ask } }, undefined, 2)
+  };
 }

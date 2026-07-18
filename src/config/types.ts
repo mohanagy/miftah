@@ -216,6 +216,8 @@ export interface SecurityConfig {
   redactSecrets?: true;
   allowProfileSwitchingFromMcp?: boolean;
   requireProfileSwitchConfirmation?: boolean;
+  /** Human confirmation is the default; delegated-agent mode explicitly permits the bearer fallback. */
+  approvalMode?: "human" | "delegated-agent";
   allowProfileLockingFromMcp?: boolean;
   requireExplicitProfileForDestructive?: boolean;
   requireExplicitSelectionForDestructive?: boolean;

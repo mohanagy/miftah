@@ -60,13 +60,19 @@ function validateCredentialEnv(credentialEnv: unknown): void {
   }
 }
 
-/** Builds fresh shared runtime defaults so generated configs never share mutable state. */
-function buildSharedDefaults(): SharedDefaults {
+/** Builds fresh runtime defaults so generated configs never share mutable state. */
+function buildSharedDefaults(options: { multiProfile?: boolean } = {}): SharedDefaults {
   return {
     routing: { mode: "hybrid", fallback: "activeProfile", rules: [] },
     security: {
       allowProfileSwitchingFromMcp: true,
-      requireExplicitProfileForDestructive: true
+      requireExplicitProfileForDestructive: true,
+      ...(options.multiProfile
+        ? {
+            requireProfileSwitchConfirmation: true,
+            requireExplicitSelectionForDestructive: true
+          }
+        : {})
     },
     secrets: { allowPlaintextSecrets: false },
     process: { startupTimeoutMs: 30_000 },
@@ -178,7 +184,7 @@ function buildGithubPreset(name: string): MiftahConfig {
       }
     },
     policies: buildReadonlyPolicies(),
-    ...buildSharedDefaults()
+    ...buildSharedDefaults({ multiProfile: true })
   };
 }
 

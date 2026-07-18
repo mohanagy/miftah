@@ -24,6 +24,12 @@ describe("preset config", () => {
     expect(config.profiles.personal?.env?.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("${GITHUB_PERSONAL_TOKEN}");
     expect(config.profiles.work?.policy).toBe("readonly");
     expect(config.profiles.personal?.policy).toBe("readonly");
+    expect(config.security).toMatchObject({
+      allowProfileSwitchingFromMcp: true,
+      requireProfileSwitchConfirmation: true,
+      requireExplicitProfileForDestructive: true,
+      requireExplicitSelectionForDestructive: true
+    });
 
     const refs = [
       config.profiles.work?.env?.GITHUB_PERSONAL_ACCESS_TOKEN,
@@ -50,6 +56,8 @@ describe("preset config", () => {
       },
       profiles: { default: { description: "Default account", env: {} } }
     });
+    expect(config.security?.requireProfileSwitchConfirmation).toBeUndefined();
+    expect(config.security?.requireExplicitSelectionForDestructive).toBeUndefined();
   });
 
   it("retains the public generic fallback for unknown preset names", () => {
@@ -74,5 +82,7 @@ describe("preset config", () => {
       },
       policies: { readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] } }
     });
+    expect(config.security?.requireProfileSwitchConfirmation).toBeUndefined();
+    expect(config.security?.requireExplicitSelectionForDestructive).toBeUndefined();
   });
 });

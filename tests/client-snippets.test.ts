@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
+  renderClaudeCodePermissionGuidance,
   renderClientSnippet,
   renderClientSnippets
 } from "../src/cli/client-snippets.js";
@@ -42,6 +43,48 @@ describe("client snippets", () => {
           args: ["/Applications/Miftah/dist/cli/main.js", "serve", "--config", "/Users/Ada Lovelace/Miftah/config.json"]
         }
       }
+    });
+  });
+
+  it("renders exact Claude Code review rules for visible privileged Miftah tools", () => {
+    const guidance = renderClaudeCodePermissionGuidance("miftah", { delegatedAgentApproval: false });
+
+    expect(guidance.kind).toBe("snippet");
+    if (guidance.kind !== "snippet") throw new Error("expected a permission snippet");
+    expect(guidance.target.label).toContain("Claude Code settings permissions");
+    expect(guidance.json).not.toContain("*");
+    expect(JSON.parse(guidance.json)).toEqual({
+      permissions: {
+        ask: [
+          "mcp__miftah__miftah_use_profile",
+          "mcp__miftah__miftah_reset_profile",
+          "mcp__miftah__miftah_lock_profile",
+          "mcp__miftah__miftah_unlock_profile",
+          "mcp__miftah__miftah_restart_profile",
+          "mcp__miftah__miftah_verify_identity",
+          "mcp__miftah__miftah_route_preview"
+        ]
+      }
+    });
+  });
+
+  it("includes delegated approval decisions only when that automation mode is explicitly enabled", () => {
+    const guidance = renderClaudeCodePermissionGuidance("miftah", { delegatedAgentApproval: true });
+
+    expect(guidance.kind).toBe("snippet");
+    if (guidance.kind !== "snippet") throw new Error("expected a permission snippet");
+    expect(JSON.parse(guidance.json).permissions.ask).toEqual(
+      expect.arrayContaining(["mcp__miftah__miftah_approve", "mcp__miftah__miftah_deny"])
+    );
+  });
+
+  it("refuses to generate permission patterns for names without a documented literal grammar", () => {
+    const guidance = renderClaudeCodePermissionGuidance("miftah server", { delegatedAgentApproval: false });
+
+    expect(guidance).toEqual({
+      kind: "manual",
+      target: { label: "Claude Code settings permissions" },
+      message: expect.stringContaining("not generated")
     });
   });
 

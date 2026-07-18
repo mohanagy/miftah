@@ -11,10 +11,12 @@ import { validateConfig } from "../src/config/validate-config.js";
 import { ApprovalStore } from "../src/approvals/approval-store.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
+import { managementToolDescriptors } from "../src/mcp/server/management-tools.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const delegatedAgentApprovalSecurity = { approvalMode: "delegated-agent" } as const;
 
 describe("approval fallback", () => {
   it("invalidates pending approvals when an MCP connection begins", async () => {
@@ -50,7 +52,7 @@ describe("approval fallback", () => {
     }
   });
 
-  it("advertises management tools for listing and deciding pending approvals", async () => {
+  it("does not advertise delegated approval tools in human confirmation mode", async () => {
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -68,7 +70,36 @@ describe("approval fallback", () => {
 
       const tools = await client.listTools();
 
-      expect(tools.tools.map((tool) => tool.name)).toEqual(
+      const names = tools.tools.map((tool) => tool.name);
+      expect(names).toEqual(expect.arrayContaining(["miftah_list_approvals"]));
+      expect(names).not.toEqual(expect.arrayContaining(["miftah_approve", "miftah_deny"]));
+      for (const descriptor of managementToolDescriptors({ delegatedAgentApproval: false })) {
+        expect(tools.tools.find((tool) => tool.name === descriptor.name)?.annotations).toEqual(descriptor.annotations);
+      }
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("advertises delegated approval tools only after the explicit automation opt-in", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} },
+      security: delegatedAgentApprovalSecurity
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "delegated-approval-list-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining(["miftah_list_approvals", "miftah_approve", "miftah_deny"])
       );
     } finally {
@@ -77,7 +108,7 @@ describe("approval fallback", () => {
     }
   });
 
-  it("returns a one-time fallback approval without forwarding a confirmation-required call", async () => {
+  it("does not disclose a fallback bearer to a non-form client by default", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-approval-fallback-"));
     const createCountPath = join(directory, "create-count");
     const config = validateConfig({
@@ -108,17 +139,75 @@ describe("approval fallback", () => {
         content: [
           {
             type: "text",
-            text: expect.stringMatching(
-              /POLICY_CONFIRMATION_REQUIRED: approval required for 'create_item'\. Use miftah_approve with approval '[A-Za-z0-9_-]+' then retry the exact operation\./u
-            )
+            text: "POLICY_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
           }
         ]
+      });
+      expect(textContent(result)).not.toContain("miftah_approve");
+      expect(textContent(result)).not.toMatch(/approval '[A-Za-z0-9_-]+'/u);
+      expect(await client.callTool({ name: "miftah_approve", arguments: { approval: "not-disclosed" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("APPROVAL_DELEGATION_DISABLED") }]
       });
       await expect(access(createCountPath)).rejects.toThrow();
     } finally {
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not allow a non-form client to self-confirm a profile switch by default", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: { env: { TEST_ACCOUNT_NAME: "work" } },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      },
+      security: {
+        allowProfileSwitchingFromMcp: true,
+        requireProfileSwitchConfirmation: true
+      },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const profiles = new ProfileManager(config, config.security);
+    const wrapper = new MiftahServer(config, profiles, manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "secure-profile-switch-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "PROFILE_SWITCH_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
+          }
+        ]
+      });
+      expect(profiles.current().activeProfile).toBe("work");
+      expect(await client.callTool({ name: "miftah_reset_profile", arguments: {} })).toMatchObject({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "PROFILE_SWITCH_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
+          }
+        ]
+      });
+      expect(await client.callTool({ name: "miftah_approve", arguments: { approval: "not-disclosed" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("APPROVAL_DELEGATION_DISABLED") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
     }
   });
 
@@ -132,7 +221,11 @@ describe("approval fallback", () => {
         work: { env: { TEST_ACCOUNT_NAME: "work" } },
         personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
       },
-      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      security: {
+        allowProfileSwitchingFromMcp: true,
+        requireProfileSwitchConfirmation: true,
+        ...delegatedAgentApprovalSecurity
+      },
       audit: { enabled: false }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -175,7 +268,11 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: {}, personal: {} },
-      security: { allowProfileSwitchingFromMcp: true, requireProfileSwitchConfirmation: true },
+      security: {
+        allowProfileSwitchingFromMcp: true,
+        requireProfileSwitchConfirmation: true,
+        ...delegatedAgentApprovalSecurity
+      },
       audit: { enabled: false }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -371,7 +468,8 @@ describe("approval fallback", () => {
           env: { API_TOKEN: "unsafe", TEST_CREATE_ITEM_COUNT_PATH: createCountPath }
         }
       },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -405,7 +503,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -437,7 +536,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -477,7 +577,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm", env: { TEST_CREATE_ITEM_COUNT_PATH: createCountPath } } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -526,6 +627,7 @@ describe("approval fallback", () => {
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
       policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity,
       audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -603,7 +705,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -684,6 +787,7 @@ describe("approval fallback", () => {
         }
       },
       policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity,
       audit: { path: auditPath, includeArguments: true }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -721,6 +825,12 @@ describe("approval fallback", () => {
         "consumed",
         "requested"
       ]);
+      expect(approvalEvents.map((event) => event.approvalMechanism)).toEqual([
+        "delegated-agent",
+        "delegated-agent",
+        "delegated-agent",
+        "delegated-agent"
+      ]);
       expect(JSON.stringify(approvalEvents)).not.toContain(token);
       expect(JSON.stringify(approvalEvents)).not.toContain('"name":"first"');
     } finally {
@@ -742,6 +852,7 @@ describe("approval fallback", () => {
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
       policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity,
       audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -797,6 +908,7 @@ describe("approval fallback", () => {
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
       policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity,
       audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
@@ -857,7 +969,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -928,7 +1041,8 @@ describe("approval fallback", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
       profiles: { work: { policy: "confirm" } },
-      policies: { confirm: { requireConfirmation: ["create_item"] } }
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      security: delegatedAgentApprovalSecurity
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
@@ -1063,13 +1177,13 @@ describe("approval fallback", () => {
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("APPROVAL_EXPIRED") }]
       });
-      const approvalActions = (await readFile(auditPath, "utf8"))
+      const approvalEvents = (await readFile(auditPath, "utf8"))
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((event) => event.kind === "approval")
-        .map((event) => event.approvalAction);
-      expect(approvalActions).toEqual(["requested", "expired"]);
+        .filter((event) => event.kind === "approval");
+      expect(approvalEvents.map((event) => event.approvalAction)).toEqual(["requested", "expired"]);
+      expect(approvalEvents.map((event) => event.approvalMechanism)).toEqual(["form", "form"]);
     } finally {
       await client.close();
       await wrapper.close();

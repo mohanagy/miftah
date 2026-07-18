@@ -8,6 +8,7 @@ const MAX_BEARER_ISSUE_ATTEMPTS = 32;
 const acceptsAnyBearer = (): boolean => true;
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "consumed" | "expired";
+export type ApprovalMechanism = "form" | "delegated-agent";
 
 export interface ApprovalBinding {
   readonly sourceProfile: string;
@@ -29,6 +30,7 @@ export interface ApprovalSummary {
   readonly upstream: string;
   readonly operation: string;
   readonly name: string;
+  readonly mechanism: ApprovalMechanism;
   readonly expiresAt: string;
 }
 
@@ -56,6 +58,7 @@ interface ApprovalRecord {
   readonly upstream: string;
   readonly operation: string;
   readonly name: string;
+  readonly mechanism: ApprovalMechanism;
   readonly sessionId: string;
   readonly tokenDigests: Buffer[];
   readonly bindingDigest: Buffer;
@@ -100,7 +103,11 @@ export class ApprovalStore {
     this.sessionId = this.createSessionId();
   }
 
-  request(binding: ApprovalBinding, isBearerSafe: (bearer: string) => boolean = acceptsAnyBearer): ApprovalRequest {
+  request(
+    binding: ApprovalBinding,
+    isBearerSafe: (bearer: string) => boolean = acceptsAnyBearer,
+    mechanism: ApprovalMechanism = "delegated-agent"
+  ): ApprovalRequest {
     this.expire();
     const bindingDigest = this.digestBinding(binding);
     const pending = [...this.records.values()].find(
@@ -124,6 +131,7 @@ export class ApprovalStore {
       upstream: binding.upstream,
       operation: binding.operation,
       name: binding.displayName,
+      mechanism,
       sessionId: this.sessionId,
       tokenDigests: [],
       bindingDigest,
@@ -300,6 +308,7 @@ function summary(record: ApprovalRecord): ApprovalSummary {
     upstream: record.upstream,
     operation: record.operation,
     name: record.name,
+    mechanism: record.mechanism,
     expiresAt: new Date(record.expiresAtMs).toISOString()
   };
 }
