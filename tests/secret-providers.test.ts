@@ -104,6 +104,20 @@ async function waitForCondition(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+async function waitForProviderEntered(providerReadyPath: string, description: string): Promise<void> {
+  await waitForCondition(
+    async () => {
+      try {
+        return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") return false;
+        throw error;
+      }
+    },
+    description
+  );
+}
+
 async function readDescendantPid(directory: string): Promise<number> {
   let descendantPid: number | undefined;
   await waitForCondition(async () => {
@@ -409,17 +423,7 @@ describe("secret command runner", () => {
         let settlementTimer: NodeJS.Timeout | undefined;
 
         try {
-          await waitForCondition(
-            async () => {
-              try {
-                return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
-              } catch (error) {
-                if (errorCode(error) === "ENOENT") return false;
-                throw error;
-              }
-            },
-            "the cold fake provider to enter through the Windows helper"
-          );
+          await waitForProviderEntered(providerReadyPath, "the cold fake provider to enter through the Windows helper");
           const outcome = await Promise.race([
             observed,
             new Promise<{ status: "pending" }>((resolve) => {
@@ -1248,17 +1252,7 @@ exit 0`);
             }
           }
         );
-        await waitForCondition(
-          async () => {
-            try {
-              return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
-            } catch (error) {
-              if (errorCode(error) === "ENOENT") return false;
-              throw error;
-            }
-          },
-          "the fake provider to enter before recording its descendant PID"
-        );
+        await waitForProviderEntered(providerReadyPath, "the fake provider to enter before recording its descendant PID");
         const descendantPid = await readDescendantPid(directory);
 
         try {
