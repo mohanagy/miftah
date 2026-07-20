@@ -60,6 +60,41 @@ export interface ProxiedOperation<Result> {
 
 export type RoutingContextProvider = () => Promise<RoutingContextSnapshot>;
 
+export type PolicyEnforcementResult =
+  | { readonly status: "allowed" }
+  | { readonly status: "blocked"; readonly errorCode: "POLICY_BLOCKED"; readonly message: string };
+
+export interface PolicyEnforcementInput {
+  readonly policyName: string;
+  readonly route: RoutingDecision;
+  readonly decision: PolicyDecision;
+  readonly profile: string;
+  readonly requireExplicitRuleForDestructive?: boolean;
+}
+
+/** Evaluates the local policy boundary shared by real calls and route previews. */
+export function evaluatePolicyEnforcement(input: PolicyEnforcementInput): PolicyEnforcementResult {
+  if (
+    input.requireExplicitRuleForDestructive &&
+    input.decision.risk === "destructive" &&
+    !input.route.reason.startsWith("rule:")
+  ) {
+    return {
+      status: "blocked",
+      errorCode: "POLICY_BLOCKED",
+      message: `POLICY_BLOCKED: destructive tool '${input.policyName}' requires an explicit routing rule`
+    };
+  }
+  if (input.decision.action === "deny") {
+    return {
+      status: "blocked",
+      errorCode: "POLICY_BLOCKED",
+      message: `POLICY_BLOCKED: operation '${input.policyName}' is blocked for profile '${input.profile}'`
+    };
+  }
+  return { status: "allowed" };
+}
+
 interface PipelineOptions {
   readonly profiles: ProfileManager;
   readonly routing: RoutingEngine;
@@ -174,21 +209,15 @@ export class OperationPipeline {
     decision: PolicyDecision,
     profile: string
   ): void {
-    if (
-      operation.requireExplicitRuleForDestructive &&
-      decision.risk === "destructive" &&
-      !route.reason.startsWith("rule:")
-    ) {
-      throw new MiftahError(
-        "POLICY_BLOCKED",
-        `POLICY_BLOCKED: destructive tool '${operation.policyName}' requires an explicit routing rule`
-      );
-    }
-    if (decision.action === "deny") {
-      throw new MiftahError(
-        "POLICY_BLOCKED",
-        `POLICY_BLOCKED: operation '${operation.policyName}' is blocked for profile '${profile}'`
-      );
+    const enforcement = evaluatePolicyEnforcement({
+      policyName: operation.policyName,
+      route,
+      decision,
+      profile,
+      requireExplicitRuleForDestructive: operation.requireExplicitRuleForDestructive
+    });
+    if (enforcement.status === "blocked") {
+      throw new MiftahError(enforcement.errorCode, enforcement.message);
     }
   }
 

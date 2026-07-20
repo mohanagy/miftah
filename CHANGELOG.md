@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- [#106](https://github.com/mohanagy/miftah/issues/106) Miftah now recognizes the strict PostHog command-wrapper grammar only at the canonical official MCP endpoint, so documented read/discovery commands can run under destructive-routing safeguards without a per-user routing workaround. Generic `exec` tools, alternate origins, malformed commands, and unknown nested operations remain fail-closed; route preview now exposes the same local policy-enforcement block as a real call.
+
 ## [0.3.1] - 2026-07-18
 
 ### Fixed

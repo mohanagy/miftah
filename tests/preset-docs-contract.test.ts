@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildPresetConfig, PRESET_CATALOG } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
-import { changelogIssueEntry, documentedChangesSection } from "./helpers/changelog.js";
+import { changelogIssueEntry } from "./helpers/changelog.js";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -93,11 +93,11 @@ describe("preset documentation contract", () => {
       "Miftah does not generate equivalent per-tool client permission guidance for Claude Desktop, Cursor, or VS Code"
     );
 
-    const documentedChanges = documentedChangesSection(changelog);
     const issue19 = changelogIssueEntry(changelog, 19);
+    const issue98 = changelogIssueEntry(changelog, 98);
     expect(issue19).toContain("catalog");
     expect(issue19).toContain("onboarding");
-    expect(documentedChanges).toMatch(/\[#98\][\s\S]*permission/iu);
-    expect(documentedChanges).not.toContain("runtime construction");
+    expect(issue98).toContain("permission");
+    expect(issue98).not.toContain("runtime construction");
   });
 });

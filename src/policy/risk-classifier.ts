@@ -1,5 +1,6 @@
 import type { RiskLevel, UnknownToolRisk } from "../config/types.js";
 import type { RiskClassification, ToolRiskAnnotations } from "./policy-types.js";
+import { classifyPosthogCommandRisk } from "./posthog-command-wrapper.js";
 
 const destructivePattern = /(delete|remove|destroy|revoke|archive|close|merge)/i;
 const writePattern = /(create|update|edit|post|comment|send|resolve|assign|move|set)/i;
@@ -8,6 +9,8 @@ const readPattern = /(get|list|search|read|fetch|query|find|whoami|status|health
 export interface ToolRiskMetadata {
   readonly trusted?: boolean;
   readonly annotations?: ToolRiskAnnotations;
+  /** Command payload from Miftah's origin-pinned PostHog adapter; never supplied by an upstream tool. */
+  readonly posthogCommand?: { readonly command: unknown };
 }
 
 export interface RiskClassifierOptions {
@@ -29,6 +32,10 @@ export function classifyToolRisk(
   if (metadata.trusted && metadata.annotations !== undefined) {
     const annotationRisk = classifyTrustedAnnotations(metadata.annotations);
     if (annotationRisk !== undefined) return annotationRisk;
+  }
+
+  if (metadata.posthogCommand !== undefined) {
+    return trustedCommandAdapter(classifyPosthogCommandRisk(metadata.posthogCommand.command));
   }
 
   if (destructivePattern.test(toolName)) return heuristic("destructive");
@@ -65,6 +72,10 @@ function booleanHint(value: unknown): boolean | undefined {
 
 function trusted(risk: RiskLevel): RiskClassification {
   return { risk, riskSource: "trusted-upstream-annotation", riskConfidence: "medium" };
+}
+
+function trustedCommandAdapter(risk: RiskLevel): RiskClassification {
+  return { risk, riskSource: "trusted-command-adapter", riskConfidence: "high" };
 }
 
 function heuristic(risk: RiskLevel): RiskClassification {
