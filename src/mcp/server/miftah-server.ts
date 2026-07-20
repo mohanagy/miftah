@@ -476,9 +476,23 @@ export class MiftahServer {
   async close(): Promise<void> {
     this.profileTransitionSession += 1;
     this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
-    await this.unsubscribeResourceSubscriptions(() => true);
-    await this.server.close();
-    await this.upstreams.close();
+    let closeFailure: { readonly error: unknown } | undefined;
+    try {
+      await this.unsubscribeResourceSubscriptions(() => true);
+    } catch (error) {
+      closeFailure = { error };
+    }
+    try {
+      await this.server.close();
+    } catch (error) {
+      closeFailure ??= { error };
+    }
+    try {
+      await this.upstreams.close();
+    } catch (error) {
+      closeFailure ??= { error };
+    }
+    if (closeFailure !== undefined) throw closeFailure.error;
     await this.auditTrail.writeLifecycle({
       operation: "wrapper/shutdown",
       name: this.config.name,
