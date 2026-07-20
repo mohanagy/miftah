@@ -407,6 +407,63 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("keeps cold previews aligned with calls for a single named PostHog upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstreams: {
+        posthog: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: { TEST_COMMAND_WRAPPER: "posthog" }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"] } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { enabled: false }
+    });
+    // The wrapper keeps the production origin while the manager uses the local
+    // fixture, so this covers both named-upstream routing and the trust boundary.
+    const upstreams = new MultiUpstreamProcessManager(
+      {
+        ...config,
+        upstreams: {
+          posthog: { transport: "stdio", command: process.execPath, args: [fixture] }
+        }
+      },
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-posthog-command-wrapper-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "posthog__exec", args: readArguments }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "allow", risk: "read", riskSource: "trusted-command-adapter", riskConfidence: "high" },
+        enforcement: { status: "allowed" }
+      });
+      expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
+        content: [{ type: "text", text: "exec:info query-trends" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it.each([
     ["has a query", "https://mcp.posthog.com/mcp?untrusted=true"],
     ["declares the default HTTPS port", "https://mcp.posthog.com:443/mcp"]

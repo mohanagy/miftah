@@ -1534,9 +1534,19 @@ export class MiftahServer {
     return tool.originalName === "exec" && this.isOfficialPosthogCommandUpstream(tool.upstreamName);
   }
 
-  /** Allows cold preview parsing only for the literal exec name in a single-upstream configuration. */
+  /** Allows cold preview parsing only for the canonical exec name from one pinned upstream. */
   private isOfficialPosthogCommandToolName(toolName: string): boolean {
-    return toolName === "exec" && this.config.upstream !== undefined && this.isOfficialPosthogCommandUpstream(undefined);
+    if (this.config.upstream !== undefined) {
+      return toolName === "exec" && this.isOfficialPosthogCommandUpstream(undefined);
+    }
+    const upstreamNames = Object.keys(this.config.upstreams ?? {});
+    if (upstreamNames.length !== 1) return false;
+    const upstreamName = upstreamNames[0];
+    return (
+      upstreamName !== undefined &&
+      toolName === this.exposedToolName("exec", upstreamName) &&
+      this.isOfficialPosthogCommandUpstream(upstreamName)
+    );
   }
 
   /**
