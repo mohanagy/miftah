@@ -211,6 +211,7 @@ const whoamiInputSchema =
       ? { type: "object", properties: {}, required: "account" }
       : { type: "object", properties: {} };
 const createItemAnnotations = parseOptionalJson(process.env.TEST_CREATE_ITEM_ANNOTATIONS, "TEST_CREATE_ITEM_ANNOTATIONS");
+const posthogCommandWrapper = process.env.TEST_COMMAND_WRAPPER === "posthog";
 const server = new Server(
   { name: "fake-upstream", version: "1.0.0" },
   { capabilities: { tools: {}, resources: resourceSubscriptions ? { subscribe: true } : {}, prompts: {} } }
@@ -282,7 +283,23 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   const secondPage = paginateTools && request.params?.cursor === "next";
   return {
     tools: [
-      ...(secondPage
+      ...(posthogCommandWrapper
+        ? [
+            {
+              name: "exec",
+              description: "Execute a PostHog command.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  command: { type: "string" },
+                  context: { type: "string" }
+                },
+                required: ["command", "context"],
+                additionalProperties: false
+              }
+            }
+          ]
+        : secondPage
         ? [
             {
               name: "whoami_second",
@@ -409,6 +426,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (callToolDelayMs > 0) {
     await delay(callToolDelayMs);
+  }
+  if (posthogCommandWrapper && request.params.name === "exec") {
+    return { content: [{ type: "text", text: `exec:${String(request.params.arguments?.command ?? "")}` }] };
   }
   if (request.params.name === "whoami") {
     return { content: [{ type: "text", text: oversizedIdentityLogin ?? account }] };

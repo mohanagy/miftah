@@ -33,7 +33,7 @@ import {
   type UnsubscribeRequest,
   type Tool
 } from "@modelcontextprotocol/sdk/types.js";
-import type { MiftahConfig, ToolingConfig } from "../../config/types.js";
+import type { MiftahConfig, ToolingConfig, UpstreamConfig } from "../../config/types.js";
 import type { PluginRegistry } from "../../plugins/plugin-registry.js";
 import {
   ApprovalStore,
@@ -70,6 +70,7 @@ import { MiftahError } from "../../utils/errors.js";
 import { MIFTAH_VERSION } from "../../version.js";
 import {
   OperationPipeline,
+  evaluatePolicyEnforcement,
   type ApprovalRequestContext,
   type CapturedProfileState,
   type ResolvedOperation
@@ -1076,7 +1077,7 @@ export class MiftahServer {
           ...(upstreamRequest === undefined ? {} : { upstreamRequestOptions: upstreamRequest.options }),
           riskMetadataForProfile: (profile) => {
             const target = this.toolRegistry.peek(profile)?.resolve(name);
-            return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target) : undefined;
+            return hasCompatibleCachedToolTarget(mapped, target) ? this.riskMetadata(target, args) : undefined;
           },
           requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive,
           requireExplicitSelectionForDestructive: this.config.security?.requireExplicitSelectionForDestructive,
@@ -1378,6 +1379,7 @@ export class MiftahServer {
     }
     if (name === "miftah_route_preview") {
       const toolName = requiredString(args, "toolName");
+      const previewArgs = isRecord(args.args) ? args.args : {};
       const snapshot = await this.provideRoutingContext();
       const evidence = this.redactor.redactForAudit(snapshot.evidence);
       audit.update({ routingEvidence: evidence });
@@ -1387,7 +1389,7 @@ export class MiftahServer {
           {
             toolName,
             matcherToolName: toolName,
-            args: isRecord(args.args) ? args.args : {},
+            args: previewArgs,
             context: snapshot.context,
             matcherContext: snapshot.matcherContext,
             profileHints: snapshot.profileHints
@@ -1413,8 +1415,15 @@ export class MiftahServer {
       const policy = this.policy.evaluate(
         profile.policy,
         policyName,
-        hasCompatibleCachedTarget && targetTool !== undefined ? this.riskMetadata(targetTool) : undefined
+        this.previewRiskMetadata(toolName, previewArgs, sourceTool, targetTool, hasCompatibleCachedTarget)
       );
+      const enforcement = evaluatePolicyEnforcement({
+        policyName,
+        route,
+        decision: policy,
+        profile: route.profile,
+        requireExplicitRuleForDestructive: this.config.security?.requireExplicitProfileForDestructive
+      });
       audit.update({
         profile: route.profile,
         routingReason: route.reason,
@@ -1428,7 +1437,7 @@ export class MiftahServer {
           ? {}
           : { routingMatcherEvidence: this.redactor.redactForAudit(route.matcherEvidence) })
       });
-      return textResult(JSON.stringify({ ...route, policy, evidence, identity: this.identityStatuses(route.profile) }));
+      return textResult(JSON.stringify({ ...route, policy, enforcement, evidence, identity: this.identityStatuses(route.profile) }));
     }
     throw new MiftahError("TOOL_NOT_FOUND", `TOOL_NOT_FOUND: management tool '${name}' is not registered`);
   }
@@ -1489,11 +1498,74 @@ export class MiftahServer {
     return resolveClientVisibleToolName(name, upstreamName, this.config.tooling?.collisionStrategy);
   }
 
-  private riskMetadata(tool: RegisteredTool): ToolRiskMetadata {
+  /**
+   * Produces trusted local metadata for a registered tool, adding command
+   * payload only when the tool originates from the pinned PostHog endpoint.
+   */
+  private riskMetadata(tool: RegisteredTool, args: Record<string, unknown>): ToolRiskMetadata {
     return {
       trusted: this.trustsToolAnnotations(tool.upstreamName),
-      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
+      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
+      ...(this.isOfficialPosthogCommandWrapper(tool) ? { posthogCommand: { command: args.command } } : {})
     };
+  }
+
+  /**
+   * Supplies argument-aware metadata for a cold single-upstream preview,
+   * before tool discovery has produced a registered target. Multi-upstream
+   * previews stay conservative until their source is known.
+   */
+  private previewRiskMetadata(
+    toolName: string,
+    args: Record<string, unknown>,
+    source: RegisteredTool | undefined,
+    target: RegisteredTool | undefined,
+    hasCompatibleTarget: boolean
+  ): ToolRiskMetadata | undefined {
+    if (hasCompatibleTarget && target !== undefined) return this.riskMetadata(target, args);
+    if (source === undefined && this.isOfficialPosthogCommandToolName(toolName)) {
+      return { posthogCommand: { command: args.command } };
+    }
+    return undefined;
+  }
+
+  /** Limits trusted command parsing to the original exec tool from the pinned vendor origin. */
+  private isOfficialPosthogCommandWrapper(tool: RegisteredTool): boolean {
+    return tool.originalName === "exec" && this.isOfficialPosthogCommandUpstream(tool.upstreamName);
+  }
+
+  /** Allows cold preview parsing only for the canonical exec name from one pinned upstream. */
+  private isOfficialPosthogCommandToolName(toolName: string): boolean {
+    if (this.config.upstream !== undefined) {
+      return toolName === "exec" && this.isOfficialPosthogCommandUpstream(undefined);
+    }
+    const upstreamNames = Object.keys(this.config.upstreams ?? {});
+    if (upstreamNames.length !== 1) return false;
+    const upstreamName = upstreamNames[0];
+    return (
+      upstreamName !== undefined &&
+      toolName === this.exposedToolName("exec", upstreamName) &&
+      this.isOfficialPosthogCommandUpstream(upstreamName)
+    );
+  }
+
+  /**
+   * Establishes the origin boundary for the PostHog adapter. A literal URL
+   * comparison deliberately rejects normalizations such as an explicit port.
+   */
+  private isOfficialPosthogCommandUpstream(upstreamName: string | undefined): boolean {
+    const upstream = this.configuredUpstream(upstreamName);
+    if (upstream === undefined || (upstream.transport !== "streamable-http" && upstream.transport !== "http")) return false;
+    // Match the literal vendor endpoint rather than a normalized URL: URL
+    // normalization would otherwise silently accept an explicit default port.
+    return upstream.url === "https://mcp.posthog.com/mcp";
+  }
+
+  /** Resolves the active named or single configured upstream without inventing a fallback. */
+  private configuredUpstream(upstreamName: string | undefined): UpstreamConfig | undefined {
+    if (this.config.upstream !== undefined) return upstreamName === undefined ? this.config.upstream : undefined;
+    if (upstreamName === undefined || this.config.upstreams === undefined) return undefined;
+    return this.config.upstreams[upstreamName];
   }
 
   /** Requires one mechanism-bound approval, creating a fail-closed request when none is available. */
