@@ -176,6 +176,58 @@ class DropInitializedNotificationTransport implements Transport {
   }
 }
 
+class RejectingCloseTransport implements Transport {
+  constructor(
+    private readonly delegate: Transport,
+    private readonly closeError: Error
+  ) {}
+
+  get onclose(): Transport["onclose"] {
+    return this.delegate.onclose;
+  }
+
+  set onclose(handler: Transport["onclose"]) {
+    this.delegate.onclose = handler;
+  }
+
+  get onerror(): Transport["onerror"] {
+    return this.delegate.onerror;
+  }
+
+  set onerror(handler: Transport["onerror"]) {
+    this.delegate.onerror = handler;
+  }
+
+  get onmessage(): Transport["onmessage"] {
+    return this.delegate.onmessage;
+  }
+
+  set onmessage(handler: Transport["onmessage"]) {
+    this.delegate.onmessage = handler;
+  }
+
+  get sessionId(): string | undefined {
+    return this.delegate.sessionId;
+  }
+
+  get setProtocolVersion(): Transport["setProtocolVersion"] {
+    return this.delegate.setProtocolVersion;
+  }
+
+  async start(): Promise<void> {
+    await this.delegate.start();
+  }
+
+  async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    await this.delegate.send(message, options);
+  }
+
+  async close(): Promise<void> {
+    await this.delegate.close();
+    throw this.closeError;
+  }
+}
+
 function deferred(): { readonly promise: Promise<void>; resolve(): void } {
   let resolvePromise: (() => void) | undefined;
   const promise = new Promise<void>((resolve) => {
@@ -215,6 +267,38 @@ interface ProfileManagementHost {
     };
   };
 }
+
+describe("Miftah server lifecycle", () => {
+  it("stops upstream processes when downstream transport close rejects", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } },
+      audit: { enabled: false }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "rejecting-close-client", version: "1.0.0" });
+    const closeError = new Error("simulated downstream close failure");
+
+    try {
+      await Promise.all([
+        wrapper.connect(new RejectingCloseTransport(serverTransport, closeError)),
+        client.connect(clientTransport)
+      ]);
+      await client.listTools();
+      expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "running" }]);
+
+      await expect(wrapper.close()).rejects.toBe(closeError);
+      expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "stopped", pid: null }]);
+    } finally {
+      await Promise.allSettled([client.close(), wrapper.close(), upstreams.close()]);
+    }
+  });
+});
 
 describe("Miftah MCP wrapper", () => {
   it("uses explicitly trusted tool annotations and records risk provenance", async () => {
