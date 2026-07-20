@@ -72,7 +72,11 @@ export interface PolicyEnforcementInput {
   readonly requireExplicitRuleForDestructive?: boolean;
 }
 
-/** Evaluates the local policy boundary shared by real calls and route previews. */
+/**
+ * Evaluates the local policy boundary shared by real calls and route previews.
+ * Returns serializable enforcement data so previews cannot claim a call would
+ * be allowed when the execution path would block it.
+ */
 export function evaluatePolicyEnforcement(input: PolicyEnforcementInput): PolicyEnforcementResult {
   if (
     input.requireExplicitRuleForDestructive &&

@@ -1498,6 +1498,10 @@ export class MiftahServer {
     return resolveClientVisibleToolName(name, upstreamName, this.config.tooling?.collisionStrategy);
   }
 
+  /**
+   * Produces trusted local metadata for a registered tool, adding command
+   * payload only when the tool originates from the pinned PostHog endpoint.
+   */
   private riskMetadata(tool: RegisteredTool, args: Record<string, unknown>): ToolRiskMetadata {
     return {
       trusted: this.trustsToolAnnotations(tool.upstreamName),
@@ -1506,6 +1510,11 @@ export class MiftahServer {
     };
   }
 
+  /**
+   * Supplies argument-aware metadata for a cold single-upstream preview,
+   * before tool discovery has produced a registered target. Multi-upstream
+   * previews stay conservative until their source is known.
+   */
   private previewRiskMetadata(
     toolName: string,
     args: Record<string, unknown>,
@@ -1520,14 +1529,20 @@ export class MiftahServer {
     return undefined;
   }
 
+  /** Limits trusted command parsing to the original exec tool from the pinned vendor origin. */
   private isOfficialPosthogCommandWrapper(tool: RegisteredTool): boolean {
     return tool.originalName === "exec" && this.isOfficialPosthogCommandUpstream(tool.upstreamName);
   }
 
+  /** Allows cold preview parsing only for the literal exec name in a single-upstream configuration. */
   private isOfficialPosthogCommandToolName(toolName: string): boolean {
     return toolName === "exec" && this.config.upstream !== undefined && this.isOfficialPosthogCommandUpstream(undefined);
   }
 
+  /**
+   * Establishes the origin boundary for the PostHog adapter. A literal URL
+   * comparison deliberately rejects normalizations such as an explicit port.
+   */
   private isOfficialPosthogCommandUpstream(upstreamName: string | undefined): boolean {
     const upstream = this.configuredUpstream(upstreamName);
     if (upstream === undefined || (upstream.transport !== "streamable-http" && upstream.transport !== "http")) return false;
@@ -1536,6 +1551,7 @@ export class MiftahServer {
     return upstream.url === "https://mcp.posthog.com/mcp";
   }
 
+  /** Resolves the active named or single configured upstream without inventing a fallback. */
   private configuredUpstream(upstreamName: string | undefined): UpstreamConfig | undefined {
     if (this.config.upstream !== undefined) return upstreamName === undefined ? this.config.upstream : undefined;
     if (upstreamName === undefined || this.config.upstreams === undefined) return undefined;

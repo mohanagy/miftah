@@ -25,6 +25,11 @@ export function classifyPosthogCommandRisk(command: unknown): RiskLevel {
   return "destructive";
 }
 
+/**
+ * Narrows an untrusted command string to the small grammar that Miftah can
+ * reason about. It intentionally does not implement shell quoting or shell
+ * expansion: those forms must remain destructive.
+ */
 function parsePosthogCommand(command: unknown): ParsedPosthogCommand {
   if (typeof command !== "string" || command.length === 0 || command.length > MAX_COMMAND_LENGTH) {
     return { kind: "invalid" };
@@ -46,12 +51,14 @@ function parsePosthogCommand(command: unknown): ParsedPosthogCommand {
   return parseCallCommand(input);
 }
 
+/** Returns the non-empty remainder of a single-word command verb. */
 function commandArgument(input: string, verb: string): string | undefined {
   if (!input.startsWith(`${verb} `)) return undefined;
   const argument = input.slice(verb.length).trim();
   return argument.length === 0 ? undefined : argument;
 }
 
+/** Rejects control characters and syntax that could change shell semantics. */
 function hasUnsafeCommandCharacter(command: string): boolean {
   for (let index = 0; index < command.length; index += 1) {
     const code = command.charCodeAt(index);
@@ -60,6 +67,10 @@ function hasUnsafeCommandCharacter(command: string): boolean {
   return unsafeCommandSyntaxPattern.test(command);
 }
 
+/**
+ * Accepts one canonical discovery target (and, for schema, one canonical
+ * field path) without allowing extra flags or positional arguments.
+ */
 function parseNamedReadCommand(input: string, verb: "info" | "schema", allowJson: boolean): string | undefined {
   const argument = commandArgument(input, verb);
   if (argument === undefined) return undefined;
@@ -79,6 +90,10 @@ function parseNamedReadCommand(input: string, verb: "info" | "schema", allowJson
   return target;
 }
 
+/**
+ * Parses an explicit PostHog tool call without executing or interpreting a
+ * shell. Only known flags, a canonical tool name, and one JSON object pass.
+ */
 function parseCallCommand(input: string): ParsedPosthogCommand {
   if (input === "call" || !input.startsWith("call ")) return { kind: "invalid" };
   let remaining = input.slice("call".length).trim();
@@ -100,6 +115,7 @@ function parseCallCommand(input: string): ParsedPosthogCommand {
   return { kind: "call", toolName: target.value };
 }
 
+/** Splits whitespace-delimited grammar tokens; quoted shell tokens are not supported. */
 function firstToken(input: string): { readonly value: string; readonly remaining: string } | undefined {
   const trimmed = input.trim();
   if (trimmed.length === 0) return undefined;
@@ -108,6 +124,7 @@ function firstToken(input: string): { readonly value: string; readonly remaining
   return { value: trimmed.slice(0, separator), remaining: trimmed.slice(separator).trim() };
 }
 
+/** Keeps call payloads structurally bounded to a JSON object. */
 function isJsonObject(input: string): boolean {
   try {
     const value: unknown = JSON.parse(input);
@@ -117,6 +134,7 @@ function isJsonObject(input: string): boolean {
   }
 }
 
+/** Applies Miftah's conservative shared name heuristics to a nested tool. */
 function classifyNestedToolRisk(toolName: string): RiskLevel {
   if (destructiveRiskNamePattern.test(toolName)) return "destructive";
   if (writeRiskNamePattern.test(toolName)) return "write";

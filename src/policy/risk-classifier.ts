@@ -71,6 +71,7 @@ function trusted(risk: RiskLevel): RiskClassification {
   return { risk, riskSource: "trusted-upstream-annotation", riskConfidence: "medium" };
 }
 
+/** Marks a risk derived by Miftah's origin-pinned command adapter as high confidence. */
 function trustedCommandAdapter(risk: RiskLevel): RiskClassification {
   return { risk, riskSource: "trusted-command-adapter", riskConfidence: "high" };
 }
