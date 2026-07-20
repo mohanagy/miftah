@@ -1,4 +1,5 @@
 import type { RiskLevel } from "../config/types.js";
+import { destructiveRiskNamePattern, readRiskNamePattern, writeRiskNamePattern } from "./risk-name-patterns.js";
 
 const MAX_COMMAND_LENGTH = 4_096;
 const MAX_SEARCH_QUERY_LENGTH = 256;
@@ -6,9 +7,6 @@ const canonicalToolNamePattern = /^[A-Za-z][A-Za-z0-9:_-]{0,127}$/u;
 const canonicalFieldPathPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u;
 const safeSearchQueryPattern = /^[A-Za-z0-9][A-Za-z0-9 .,:_\-/()]{0,255}$/u;
 const unsafeCommandSyntaxPattern = /[;|&`$<>\\]/u;
-const destructivePattern = /(delete|remove|destroy|revoke|archive|close|merge)/i;
-const writePattern = /(create|update|edit|post|comment|send|resolve|assign|move|set)/i;
-const readPattern = /(get|list|search|read|fetch|query|find|whoami|status|health)/i;
 
 type ParsedPosthogCommand =
   | { readonly kind: "read-discovery" }
@@ -120,8 +118,8 @@ function isJsonObject(input: string): boolean {
 }
 
 function classifyNestedToolRisk(toolName: string): RiskLevel {
-  if (destructivePattern.test(toolName)) return "destructive";
-  if (writePattern.test(toolName)) return "write";
-  if (readPattern.test(toolName)) return "read";
+  if (destructiveRiskNamePattern.test(toolName)) return "destructive";
+  if (writeRiskNamePattern.test(toolName)) return "write";
+  if (readRiskNamePattern.test(toolName)) return "read";
   return "destructive";
 }

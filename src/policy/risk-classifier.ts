@@ -1,10 +1,7 @@
 import type { RiskLevel, UnknownToolRisk } from "../config/types.js";
 import type { RiskClassification, ToolRiskAnnotations } from "./policy-types.js";
 import { classifyPosthogCommandRisk } from "./posthog-command-wrapper.js";
-
-const destructivePattern = /(delete|remove|destroy|revoke|archive|close|merge)/i;
-const writePattern = /(create|update|edit|post|comment|send|resolve|assign|move|set)/i;
-const readPattern = /(get|list|search|read|fetch|query|find|whoami|status|health)/i;
+import { destructiveRiskNamePattern, readRiskNamePattern, writeRiskNamePattern } from "./risk-name-patterns.js";
 
 export interface ToolRiskMetadata {
   readonly trusted?: boolean;
@@ -38,9 +35,9 @@ export function classifyToolRisk(
     return trustedCommandAdapter(classifyPosthogCommandRisk(metadata.posthogCommand.command));
   }
 
-  if (destructivePattern.test(toolName)) return heuristic("destructive");
-  if (writePattern.test(toolName)) return heuristic("write");
-  if (readPattern.test(toolName)) return heuristic("read");
+  if (destructiveRiskNamePattern.test(toolName)) return heuristic("destructive");
+  if (writeRiskNamePattern.test(toolName)) return heuristic("write");
+  if (readRiskNamePattern.test(toolName)) return heuristic("read");
   return {
     risk: options.unknownRisk ?? "destructive",
     riskSource: "unknown-default",
