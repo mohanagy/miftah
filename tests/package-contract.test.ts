@@ -16,6 +16,7 @@ interface PackageManifest {
   homepage?: unknown;
   bugs?: unknown;
   keywords?: unknown;
+  overrides?: Record<string, string>;
   publishConfig?: unknown;
   scripts?: Record<string, string>;
 }
@@ -474,6 +475,14 @@ describe("package metadata contract", () => {
 
   it("exposes the package verification command", () => {
     expect(readPackageManifest().scripts?.["check:pack"]).toBe("node scripts/check-pack.mjs");
+  });
+
+  it("pins the patched esbuild release for GHSA-g7r4-m6w7-qqqr", () => {
+    const manifest = readPackageManifest();
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    expect(manifest.overrides?.esbuild).toBe("0.28.1");
+    expect(lock.packages?.["node_modules/esbuild"]?.["version"]).toBe("0.28.1");
   });
 });
 
