@@ -177,7 +177,10 @@ class DropInitializedNotificationTransport implements Transport {
 }
 
 class RejectingCloseTransport implements Transport {
-  constructor(private readonly delegate: Transport) {}
+  constructor(
+    private readonly delegate: Transport,
+    private readonly closeError: Error
+  ) {}
 
   get onclose(): Transport["onclose"] {
     return this.delegate.onclose;
@@ -221,7 +224,7 @@ class RejectingCloseTransport implements Transport {
 
   async close(): Promise<void> {
     await this.delegate.close();
-    throw new Error("simulated downstream close failure");
+    throw this.closeError;
   }
 }
 
@@ -279,13 +282,17 @@ describe("Miftah server lifecycle", () => {
     const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "rejecting-close-client", version: "1.0.0" });
+    const closeError = new Error("simulated downstream close failure");
 
     try {
-      await Promise.all([wrapper.connect(new RejectingCloseTransport(serverTransport)), client.connect(clientTransport)]);
+      await Promise.all([
+        wrapper.connect(new RejectingCloseTransport(serverTransport, closeError)),
+        client.connect(clientTransport)
+      ]);
       await client.listTools();
       expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "running" }]);
 
-      await expect(wrapper.close()).rejects.toThrow("simulated downstream close failure");
+      await expect(wrapper.close()).rejects.toBe(closeError);
       expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "stopped", pid: null }]);
     } finally {
       await Promise.allSettled([client.close(), wrapper.close(), upstreams.close()]);
