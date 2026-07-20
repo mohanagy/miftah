@@ -1175,12 +1175,27 @@ exit 0`);
     "closes an orphaned descendant when its direct provider process exits",
     async () => {
       await inSandbox(async (directory) => {
+        const providerReadyPath = join(directory, "provider-ready");
         const pending = runSecretCommand(
           {
             executable: process.execPath,
             args: [fakeProviderPath],
-            environment: fakeProviderEnvironment(directory, "early-exit-descendant")
+            environment: {
+              ...fakeProviderEnvironment(directory, "early-exit-descendant"),
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
           }
+        );
+        await waitForCondition(
+          async () => {
+            try {
+              return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
+            } catch (error) {
+              if (errorCode(error) === "ENOENT") return false;
+              throw error;
+            }
+          },
+          "the fake provider to enter before recording its descendant PID"
         );
         const descendantPid = await readDescendantPid(directory);
 
