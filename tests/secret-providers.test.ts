@@ -104,6 +104,20 @@ async function waitForCondition(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+async function waitForProviderEntered(providerReadyPath: string, description: string): Promise<void> {
+  await waitForCondition(
+    async () => {
+      try {
+        return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") return false;
+        throw error;
+      }
+    },
+    description
+  );
+}
+
 async function readDescendantPid(directory: string): Promise<number> {
   let descendantPid: number | undefined;
   await waitForCondition(async () => {
@@ -378,6 +392,58 @@ describe("external secret-reference grammar", () => {
 });
 
 describe("secret command runner", () => {
+  it.runIf(process.platform === "win32")(
+    "observes a cold Node provider entry before its Windows helper settles",
+    async () => {
+      await inSandbox(async (directory) => {
+        const controller = new AbortController();
+        const providerReadyPath = join(directory, "provider-ready");
+        const pending = runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath],
+            environment: {
+              ...fakeProviderEnvironment(directory, "success"),
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
+          },
+          { signal: controller.signal }
+        );
+        let commandSettled = false;
+        const observed = pending.then(
+          (result) => {
+            commandSettled = true;
+            return { status: "fulfilled" as const, result };
+          },
+          (error: unknown) => {
+            commandSettled = true;
+            return { status: "rejected" as const, error };
+          }
+        );
+        let settlementTimer: NodeJS.Timeout | undefined;
+
+        try {
+          await waitForProviderEntered(providerReadyPath, "the cold fake provider to enter through the Windows helper");
+          const outcome = await Promise.race([
+            observed,
+            new Promise<{ status: "pending" }>((resolve) => {
+              settlementTimer = setTimeout(() => resolve({ status: "pending" }), 2_000);
+            })
+          ]);
+          if (outcome.status === "pending") {
+            throw new Error("The provider entered through the Windows helper but the helper did not settle within 2000ms");
+          }
+          if (outcome.status === "rejected") throw outcome.error;
+          expect(outcome.result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+        } finally {
+          if (settlementTimer) clearTimeout(settlementTimer);
+          if (!commandSettled) controller.abort();
+          await observed;
+        }
+      });
+    }
+  );
+
   it("runs argv without a shell and returns bounded stdout", async () => {
         await inSandbox(async (directory) => {
           const result = await runSecretCommand(
@@ -1175,13 +1241,18 @@ exit 0`);
     "closes an orphaned descendant when its direct provider process exits",
     async () => {
       await inSandbox(async (directory) => {
+        const providerReadyPath = join(directory, "provider-ready");
         const pending = runSecretCommand(
           {
             executable: process.execPath,
             args: [fakeProviderPath],
-            environment: fakeProviderEnvironment(directory, "early-exit-descendant")
+            environment: {
+              ...fakeProviderEnvironment(directory, "early-exit-descendant"),
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
           }
         );
+        await waitForProviderEntered(providerReadyPath, "the fake provider to enter before recording its descendant PID");
         const descendantPid = await readDescendantPid(directory);
 
         try {

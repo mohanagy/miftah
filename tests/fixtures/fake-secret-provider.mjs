@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { appendFile, writeFile } from "node:fs/promises";
 
 const mode = process.env.MIFTAH_FAKE_MODE ?? "success";
 const recordPath = process.env.MIFTAH_FAKE_RECORD_PATH;
 const countPath = process.env.MIFTAH_FAKE_COUNT_PATH;
+const providerReadyPath = process.env.MIFTAH_FAKE_PROVIDER_READY_PATH;
+
+if (providerReadyPath) writeFileSync(providerReadyPath, "provider-entered");
 
 async function writeRecord(descendantPid) {
   if (!recordPath) return;
