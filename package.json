@@ -74,6 +74,9 @@
     "typescript-eslint": "^8.63.0",
     "vitest": "^3.2.4"
   },
+  "overrides": {
+    "esbuild": "0.28.1"
+  },
   "license": "MIT",
   "publishConfig": {
     "access": "public",
