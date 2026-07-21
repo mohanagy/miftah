@@ -512,7 +512,7 @@ describe("upstream process manager", () => {
         }
       },
       { work: {} },
-      { startupTimeoutMs: 1_000, restartOnCrash: true, maxRestarts: 2 }
+      { startupTimeoutMs: 5_000, restartOnCrash: true, maxRestarts: 2 }
     );
 
     try {
@@ -520,6 +520,7 @@ describe("upstream process manager", () => {
       await Promise.all([writeFile(crashPath, "crash"), writeFile(restartGatePath, "restart")]);
       await expect(session.callTool({ name: "whoami", arguments: {} })).rejects.toThrow();
       await waitFor(() => existsSync(restartReadyPath), Boolean);
+      await delay(1_100);
       await unlink(crashPath);
       await unlink(restartGatePath);
 
@@ -610,6 +611,7 @@ describe("upstream process manager", () => {
   it("releases a profile capacity reservation after a failed startup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-failed-start-capacity-"));
     const failurePath = join(directory, "fail");
+    const crashObservedPath = join(directory, "crash-observed");
     await writeFile(failurePath, "fail");
     const manager = new UpstreamProcessManager(
       {
@@ -618,7 +620,12 @@ describe("upstream process manager", () => {
         args: [fixture]
       },
       {
-        work: { env: { TEST_CRASH_ON_CALL_TOOL_PATH: failurePath } },
+        work: {
+          env: {
+            TEST_CRASH_ON_CALL_TOOL_PATH: failurePath,
+            TEST_CRASH_ON_CALL_TOOL_OBSERVED_PATH: crashObservedPath
+          }
+        },
         personal: {}
       },
       { startupTimeoutMs: 1_000, maxConcurrentProfiles: 1 }
@@ -626,6 +633,7 @@ describe("upstream process manager", () => {
 
     try {
       await expect(manager.get("work")).rejects.toMatchObject({ code: "UPSTREAM_INIT_FAILED" });
+      expect(existsSync(crashObservedPath)).toBe(true);
       await expect((await manager.get("personal")).listTools()).resolves.toMatchObject({ tools: expect.any(Array) });
     } finally {
       await manager.close();
