@@ -473,6 +473,7 @@ export class MiftahServer {
     }).catch(() => undefined);
   }
 
+  /** Closes subscriptions, the MCP server, and upstreams while preserving the first shutdown failure. */
   async close(): Promise<void> {
     this.profileTransitionSession += 1;
     this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
@@ -1053,6 +1054,7 @@ export class MiftahServer {
     }
   }
 
+  /** Resolves an exposed upstream tool, validates its routed target, and executes it through the policy pipeline. */
   private async handleUpstreamTool(
     name: string,
     args: Record<string, unknown>,
@@ -1425,7 +1427,8 @@ export class MiftahServer {
           ? undefined
           : this.toolRegistry.peek(route.profile)?.resolve(toolName);
       const hasCompatibleCachedTarget = hasCompatibleCachedToolTarget(sourceTool, targetTool);
-      const policyName = sourceTool?.originalName ?? toolName;
+      const policyName =
+        sourceTool?.originalName ?? (this.isOfficialPosthogCommandToolName(toolName) ? "exec" : toolName);
       const policy = this.policy.evaluate(
         profile.policy,
         policyName,

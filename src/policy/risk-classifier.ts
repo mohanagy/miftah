@@ -26,13 +26,13 @@ export function classifyToolRisk(
     return { risk: override[toolName]!, riskSource: "local-override", riskConfidence: "high" };
   }
 
+  if (metadata.posthogCommand !== undefined) {
+    return trustedCommandAdapter(classifyPosthogCommandRisk(metadata.posthogCommand.command));
+  }
+
   if (metadata.trusted && metadata.annotations !== undefined) {
     const annotationRisk = classifyTrustedAnnotations(metadata.annotations);
     if (annotationRisk !== undefined) return annotationRisk;
-  }
-
-  if (metadata.posthogCommand !== undefined) {
-    return trustedCommandAdapter(classifyPosthogCommandRisk(metadata.posthogCommand.command));
   }
 
   if (destructiveRiskNamePattern.test(toolName)) return heuristic("destructive");

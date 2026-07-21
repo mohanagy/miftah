@@ -38,4 +38,22 @@ describe("risk classification documentation contract", () => {
     expect(libraryApi).toContain("UnknownToolRisk");
     expect(changelog).toMatch(changelogRiskClassificationPattern);
   });
+
+  it("keeps the documented classification precedence aligned with the runtime", () => {
+    const config = readRepositoryFile("docs/config.md");
+    const precedence = [
+      "1. an exact local `tooling.toolRiskOverrides` entry;",
+      "2. Miftah's fixed PostHog command adapter",
+      "3. MCP tool annotations only when",
+      "4. conservative name heuristics; then",
+      "5. `tooling.unknownToolRisk`"
+    ];
+
+    let previousIndex = -1;
+    for (const step of precedence) {
+      const currentIndex = config.indexOf(step);
+      expect(currentIndex, `missing or out-of-order documentation step: ${step}`).toBeGreaterThan(previousIndex);
+      previousIndex = currentIndex;
+    }
+  });
 });

@@ -159,7 +159,7 @@ class DropInitializedNotificationTransport implements Transport {
   }
 
   get setProtocolVersion(): Transport["setProtocolVersion"] {
-    return this.delegate.setProtocolVersion;
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
   }
 
   async start(): Promise<void> {
@@ -211,7 +211,7 @@ class RejectingCloseTransport implements Transport {
   }
 
   get setProtocolVersion(): Transport["setProtocolVersion"] {
-    return this.delegate.setProtocolVersion;
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
   }
 
   async start(): Promise<void> {
@@ -227,6 +227,30 @@ class RejectingCloseTransport implements Transport {
     throw this.closeError;
   }
 }
+
+describe("transport wrapper delegation", () => {
+  it("keeps the underlying transport as the receiver for protocol-version updates", () => {
+    const createDelegate = () => ({
+      protocolVersion: undefined as string | undefined,
+      setProtocolVersion(version: string): void {
+        this.protocolVersion = version;
+      },
+      async start(): Promise<void> {},
+      async send(): Promise<void> {},
+      async close(): Promise<void> {}
+    });
+
+    const droppedNotificationDelegate = createDelegate();
+    const droppedNotificationTransport = new DropInitializedNotificationTransport(droppedNotificationDelegate);
+    droppedNotificationTransport.setProtocolVersion?.("2025-06-18");
+    expect(droppedNotificationDelegate.protocolVersion).toBe("2025-06-18");
+
+    const rejectingCloseDelegate = createDelegate();
+    const rejectingCloseTransport = new RejectingCloseTransport(rejectingCloseDelegate, new Error("close failed"));
+    rejectingCloseTransport.setProtocolVersion?.("2025-06-18");
+    expect(rejectingCloseDelegate.protocolVersion).toBe("2025-06-18");
+  });
+});
 
 function deferred(): { readonly promise: Promise<void>; resolve(): void } {
   let resolvePromise: (() => void) | undefined;
@@ -541,6 +565,62 @@ describe("Miftah MCP wrapper", () => {
       });
       expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
         content: [{ type: "text", text: "exec:info query-trends" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("uses the canonical exec policy name for cold named PostHog previews", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstreams: {
+        posthog: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: { TEST_COMMAND_WRAPPER: "posthog" }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"], deny: ["exec"] } },
+      tooling: { toolRiskOverrides: { exec: "read" } },
+      audit: { enabled: false }
+    });
+    const upstreams = new MultiUpstreamProcessManager(
+      {
+        ...config,
+        upstreams: {
+          posthog: { transport: "stdio", command: process.execPath, args: [fixture] }
+        }
+      },
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-posthog-canonical-policy-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "posthog__exec", args: readArguments }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "deny", risk: "read", riskSource: "local-override", riskConfidence: "high" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
+      });
+      expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
       });
     } finally {
       await client.close();
