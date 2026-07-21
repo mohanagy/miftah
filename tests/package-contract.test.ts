@@ -85,6 +85,17 @@ function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
 }
 
+function assertPatchedEsbuildLockEntries(lock: PackageLock): void {
+  const esbuildEntries = Object.entries(lock.packages ?? {}).filter(([packagePath]) =>
+    packagePath.endsWith("node_modules/esbuild")
+  );
+
+  expect(esbuildEntries).not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of esbuildEntries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched esbuild release`).toBe("0.28.1");
+  }
+}
+
 async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
   const manifest = readPackageManifest();
   if (!manifest.name) throw new Error("Package manifest is missing a name.");
@@ -482,7 +493,18 @@ describe("package metadata contract", () => {
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
     expect(manifest.overrides?.esbuild).toBe("0.28.1");
-    expect(lock.packages?.["node_modules/esbuild"]?.["version"]).toBe("0.28.1");
+    assertPatchedEsbuildLockEntries(lock);
+  });
+
+  it("rejects stale nested esbuild lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/esbuild": { version: "0.28.1" },
+        "node_modules/vite/node_modules/esbuild": { version: "0.27.0" }
+      }
+    };
+
+    expect(() => assertPatchedEsbuildLockEntries(lock)).toThrow(/node_modules\/vite\/node_modules\/esbuild/);
   });
 });
 
