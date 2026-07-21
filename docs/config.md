@@ -311,8 +311,8 @@ Routing rules receive a tool's original arguments unchanged. Resource reads and 
 Policies classify operations as `read`, `write`, or `destructive` in this order:
 
 1. an exact local `tooling.toolRiskOverrides` entry;
-2. MCP tool annotations only when that exact base `upstream` or named `upstreams.<name>` declaration sets `trustToolAnnotations: true`;
-3. Miftah's fixed PostHog command adapter, only for an `exec` tool on the canonical official Streamable HTTP endpoint `https://mcp.posthog.com/mcp` (the version-1 `http` compatibility alias is equivalent);
+2. Miftah's fixed PostHog command adapter, only for an `exec` tool on the canonical official Streamable HTTP endpoint `https://mcp.posthog.com/mcp` (the version-1 `http` compatibility alias is equivalent);
+3. MCP tool annotations only when that exact base `upstream` or named `upstreams.<name>` declaration sets `trustToolAnnotations: true`;
 4. conservative name heuristics; then
 5. `tooling.unknownToolRisk`, which defaults to `"destructive"` and may be set only to `"write"` or `"destructive"`.
 
