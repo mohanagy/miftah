@@ -2,6 +2,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("Windows secret command contract", () => {
+  it("verifies the trusted PowerShell launcher with asynchronous filesystem access", () => {
+    const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('import { access, constants } from "node:fs/promises";');
+    expect(source).toContain("const launcher = await trustedPowerShellExecutable();");
+    expect(source).toContain("await access(executable, constants.X_OK);");
+    expect(source).not.toContain("existsSync(");
+  });
+
   it("preserves C# escape sequences in the embedded helper", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 

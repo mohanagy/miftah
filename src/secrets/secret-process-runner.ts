@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import {
   resolveWindowsSecretCommand,
   spawnWindowsSecretCommand,
@@ -64,13 +65,52 @@ export function runSecretCommand(
   }
   if (process.platform !== "win32") return runPreparedSecretCommand(command, options);
 
-  return resolveWindowsSecretCommand(command).then(
-    (resolved) =>
-      resolved === undefined
-        ? Promise.reject(new SecretProcessError("unavailable"))
-        : runPreparedSecretCommand(resolved, options),
-    () => Promise.reject(new SecretProcessError("unavailable"))
-  );
+  return runWindowsSecretCommand(command, options);
+}
+
+function runWindowsSecretCommand(command: SecretCommand, options: SecretCommandOptions): Promise<SecretCommandResult> {
+  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+  const deadline = performance.now() + timeoutMs;
+  return resolveWindowsSecretCommandWithinBounds(command, options, deadline).then((resolved) => {
+    const remainingTimeoutMs = deadline - performance.now();
+    if (remainingTimeoutMs <= 0) throw new SecretProcessError("timeout");
+    if (resolved === undefined) throw new SecretProcessError("unavailable");
+    return runPreparedSecretCommand(resolved, { ...options, timeoutMs: remainingTimeoutMs });
+  });
+}
+
+function resolveWindowsSecretCommandWithinBounds(
+  command: SecretCommand,
+  options: SecretCommandOptions,
+  deadline: number
+): Promise<ResolvedWindowsSecretCommand | undefined> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (result: ResolvedWindowsSecretCommand | undefined | SecretProcessError) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
+      if (result instanceof SecretProcessError) {
+        reject(result);
+      } else resolve(result);
+    };
+    const onAbort = () => finish(new SecretProcessError("cancelled"));
+    const finishResolution = (result: ResolvedWindowsSecretCommand | undefined | SecretProcessError) => {
+      if (performance.now() >= deadline) {
+        finish(new SecretProcessError("timeout"));
+        return;
+      }
+      finish(result);
+    };
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const timeout = setTimeout(() => finish(new SecretProcessError("timeout")), Math.max(0, deadline - performance.now()));
+    void resolveWindowsSecretCommand(command).then(
+      (resolved) => finishResolution(resolved),
+      () => finishResolution(new SecretProcessError("unavailable"))
+    );
+  });
 }
 
 function runPreparedSecretCommand(
