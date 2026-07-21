@@ -461,13 +461,15 @@ describe("secret command runner", () => {
       await inSandbox(async (directory) => {
         const controller = new AbortController();
         const barrier = await createProviderReadinessBarrier();
+        const providerReadyPath = join(directory, "provider-ready");
         const pending = runSecretCommand(
           {
             executable: process.execPath,
             args: [fakeProviderPath, "readiness-barrier-argument"],
             environment: {
               ...fakeProviderEnvironment(directory, "success"),
-              MIFTAH_FAKE_PROVIDER_BARRIER_PORT: `${barrier.port}`
+              MIFTAH_FAKE_PROVIDER_BARRIER_PORT: `${barrier.port}`,
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
             }
           },
           { signal: controller.signal }
@@ -485,6 +487,7 @@ describe("secret command runner", () => {
         );
 
         try {
+          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
           expect(await Promise.race([barrier.reached.then(() => "barrier" as const), settlement])).toBe("barrier");
           expect(settled).toBe(false);
 
