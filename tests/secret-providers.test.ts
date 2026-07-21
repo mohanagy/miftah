@@ -485,21 +485,47 @@ describe("secret command runner", () => {
             return "settled" as const;
           }
         );
+        let barrierReached = false;
+        void barrier.reached.then(() => {
+          barrierReached = true;
+        });
 
         try {
-          const readiness = await Promise.race([barrier.reached.then(() => "barrier" as const), settlement]);
-          expect(readiness).toBe("barrier");
-          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
+          const entry = await Promise.race([
+            waitForProviderEntered(
+              providerReadyPath,
+              "the cold fake provider to enter through the Windows helper"
+            ).then(() => "entered" as const),
+            settlement
+          ]);
+          expect(entry).toBe("entered");
+          expect(settled).toBe(false);
+
+          await waitForCondition(
+            () => barrierReached || settled,
+            "the entered fake provider to reach its readiness barrier"
+          );
+          if (!barrierReached) {
+            throw new Error(
+              "The cold fake provider entered through the Windows helper but settled before its readiness barrier"
+            );
+          }
           expect(settled).toBe(false);
 
           barrier.release();
+          await waitForCondition(
+            () => settled,
+            "the released cold provider command to settle through the Windows helper"
+          );
           const result = await pending;
           expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
           await expect(readFakeRecord(directory)).resolves.toMatchObject({
             argv: ["readiness-barrier-argument"]
           });
         } finally {
+          if (!settled) controller.abort();
           await barrier.close();
+          await settlement;
         }
       });
     }
