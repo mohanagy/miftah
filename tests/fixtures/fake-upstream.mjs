@@ -68,6 +68,7 @@ const failOnRestartPath = process.env.TEST_FAIL_ON_RESTART_PATH;
 const failListResourcesPath = process.env.TEST_FAIL_LIST_RESOURCES_PATH;
 const failListPromptsPath = process.env.TEST_FAIL_LIST_PROMPTS_PATH;
 const crashOnCallToolPath = process.env.TEST_CRASH_ON_CALL_TOOL_PATH;
+const crashOnCallToolObservedPath = process.env.TEST_CRASH_ON_CALL_TOOL_OBSERVED_PATH;
 const crashAfterInitializedPath = process.env.TEST_CRASH_AFTER_INITIALIZED_PATH;
 const startCountPath = process.env.TEST_START_COUNT_PATH;
 const initializedPath = process.env.TEST_INITIALIZED_PATH;
@@ -176,6 +177,9 @@ if (stderrMessage) {
   }
 }
 if (crashOnCallToolPath && existsSync(crashOnCallToolPath)) {
+  if (crashOnCallToolObservedPath) {
+    writeFileSync(crashOnCallToolObservedPath, "observed");
+  }
   throw new Error("test upstream configured to stay unavailable after an abrupt exit");
 }
 if (failOnRestartPath) {

@@ -6,7 +6,8 @@ const MAX_SEARCH_QUERY_LENGTH = 256;
 const canonicalToolNamePattern = /^[A-Za-z][A-Za-z0-9:_-]{0,127}$/u;
 const canonicalFieldPathPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u;
 const safeSearchQueryPattern = /^[A-Za-z0-9][A-Za-z0-9 .,:_\-/()]{0,255}$/u;
-const unsafeCommandSyntaxPattern = /[;|&`$<>\\]/u;
+const unsafeCommandSyntaxPattern = /[;|&`<>\\]/u;
+const unsafeDollarSubstitutionPattern = /\$(?:\(|\{)/u;
 
 type ParsedPosthogCommand =
   | { readonly kind: "read-discovery" }
@@ -58,7 +59,10 @@ function commandArgument(input: string, verb: string): string | undefined {
   return argument.length === 0 ? undefined : argument;
 }
 
-/** Rejects control characters and syntax that could change shell semantics. */
+/**
+ * Rejects control characters and syntax that could change shell semantics.
+ * Dollar handling is deliberately deferred to the validated JSON call payload.
+ */
 function hasUnsafeCommandCharacter(command: string): boolean {
   for (let index = 0; index < command.length; index += 1) {
     const code = command.charCodeAt(index);
@@ -111,8 +115,15 @@ function parseCallCommand(input: string): ParsedPosthogCommand {
   if (target === undefined || !canonicalToolNamePattern.test(target.value) || target.remaining.length === 0) {
     return { kind: "invalid" };
   }
-  if (!isJsonObject(target.remaining)) return { kind: "invalid" };
+  if (!isJsonObject(target.remaining) || hasUnsafeDollarSubstitution(target.remaining)) {
+    return { kind: "invalid" };
+  }
   return { kind: "call", toolName: target.value };
+}
+
+/** Rejects actual shell command-substitution forms while preserving HogQL `$identifier` data. */
+function hasUnsafeDollarSubstitution(payload: string): boolean {
+  return unsafeDollarSubstitutionPattern.test(payload);
 }
 
 /** Splits whitespace-delimited grammar tokens; quoted shell tokens are not supported. */
