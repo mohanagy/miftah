@@ -444,6 +444,26 @@ describe("secret command runner", () => {
     }
   );
 
+  it.runIf(process.platform === "win32")(
+    "retains a cold Node provider entry marker after its Windows helper settles",
+    async () => {
+      await inSandbox(async (directory) => {
+        const providerReadyPath = join(directory, "provider-ready");
+        const result = await runSecretCommand({
+          executable: process.execPath,
+          args: [fakeProviderPath],
+          environment: {
+            ...fakeProviderEnvironment(directory, "success"),
+            MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+          }
+        });
+
+        expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+        await expect(readFile(providerReadyPath, "utf8")).resolves.toBe("provider-entered");
+      });
+    }
+  );
+
   it("runs argv without a shell and returns bounded stdout", async () => {
         await inSandbox(async (directory) => {
           const result = await runSecretCommand(
