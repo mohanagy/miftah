@@ -448,15 +448,19 @@ describe("secret command runner", () => {
     "retains a cold Node provider entry marker after its Windows helper settles",
     async () => {
       await inSandbox(async (directory) => {
+        const controller = new AbortController();
         const providerReadyPath = join(directory, "provider-ready");
-        const result = await runSecretCommand({
-          executable: process.execPath,
-          args: [fakeProviderPath],
-          environment: {
-            ...fakeProviderEnvironment(directory, "success"),
-            MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
-          }
-        });
+        const result = await runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath],
+            environment: {
+              ...fakeProviderEnvironment(directory, "success"),
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
+          },
+          { signal: controller.signal }
+        );
 
         expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
         await expect(readFile(providerReadyPath, "utf8")).resolves.toBe("provider-entered");
