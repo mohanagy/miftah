@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { delimiter, join, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
@@ -120,6 +120,7 @@ async function waitForProviderEntered(providerReadyPath: string, description: st
 }
 
 async function createProviderReadinessBarrier(): Promise<{
+  server: Server;
   port: number;
   reached: Promise<void>;
   release: () => void;
@@ -144,6 +145,7 @@ async function createProviderReadinessBarrier(): Promise<{
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       server.off("error", reject);
+      server.on("error", () => undefined);
       resolve();
     });
   });
@@ -157,6 +159,7 @@ async function createProviderReadinessBarrier(): Promise<{
   }
 
   return {
+    server,
     port: address.port,
     reached,
     release: () => fixtureSocket?.end("release"),
@@ -443,6 +446,15 @@ describe("external secret-reference grammar", () => {
 });
 
 describe("secret command runner", () => {
+  it("keeps provider readiness-barrier server errors handled after startup", async () => {
+    const barrier = await createProviderReadinessBarrier();
+    try {
+      expect(() => barrier.server.emit("error", new Error("test readiness barrier error"))).not.toThrow();
+    } finally {
+      await barrier.close();
+    }
+  });
+
   it.runIf(process.platform === "win32")(
     "keeps a cold Node provider pending at a readiness barrier through its Windows helper",
     async () => {
