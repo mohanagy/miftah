@@ -461,7 +461,10 @@ describe("Miftah MCP wrapper", () => {
     const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "posthog-command-wrapper-client", version: "1.0.0" });
-    const readArguments = { command: "info query-trends", context: "scheduled task" };
+    const readArguments = {
+      command: "call query-trends {\"event\":\"$pageview\",\"math\":\"dau\"}",
+      context: "scheduled task"
+    };
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
@@ -476,7 +479,7 @@ describe("Miftah MCP wrapper", () => {
         enforcement: { status: "allowed" }
       });
       expect(await client.callTool({ name: "exec", arguments: readArguments })).toMatchObject({
-        content: [{ type: "text", text: "exec:info query-trends" }]
+        content: [{ type: "text", text: `exec:${readArguments.command}` }]
       });
 
       expect(
@@ -507,7 +510,7 @@ describe("Miftah MCP wrapper", () => {
 
       const audit = await readFile(auditPath, "utf8");
       expect(audit).toContain('"riskSource":"trusted-command-adapter"');
-      expect(audit).not.toContain("info query-trends");
+      expect(audit).not.toContain(readArguments.command);
     } finally {
       await client.close();
       await wrapper.close();
