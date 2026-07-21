@@ -69,6 +69,7 @@ describe("v0.3.2 release artifacts", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
+    expect(changelog).toContain("Miftah is experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
     expect(notes).toMatch(/PostHog command-wrapper grammar/iu);
     expect(notes).toMatch(/upstream process containment/iu);
