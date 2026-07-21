@@ -572,6 +572,62 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("uses the canonical exec policy name for cold named PostHog previews", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstreams: {
+        posthog: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: { TEST_COMMAND_WRAPPER: "posthog" }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"], deny: ["exec"] } },
+      tooling: { toolRiskOverrides: { exec: "read" } },
+      audit: { enabled: false }
+    });
+    const upstreams = new MultiUpstreamProcessManager(
+      {
+        ...config,
+        upstreams: {
+          posthog: { transport: "stdio", command: process.execPath, args: [fixture] }
+        }
+      },
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-posthog-canonical-policy-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "posthog__exec", args: readArguments }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "deny", risk: "read", riskSource: "local-override", riskConfidence: "high" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
+      });
+      expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it.each([
     ["has a query", "https://mcp.posthog.com/mcp?untrusted=true"],
     ["declares the default HTTPS port", "https://mcp.posthog.com:443/mcp"]
