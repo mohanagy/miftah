@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { access, constants } from "node:fs/promises";
 import { win32 } from "node:path";
 import { gzipSync } from "node:zlib";
 import { resolveExecutablePath } from "./executable-resolver.js";
@@ -29,7 +29,7 @@ export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
 export async function resolveWindowsSecretCommand(
   command: WindowsSecretCommand
 ): Promise<ResolvedWindowsSecretCommand | undefined> {
-  const launcher = trustedPowerShellExecutable();
+  const launcher = await trustedPowerShellExecutable();
   if (launcher === undefined) return undefined;
 
   const executable = await resolveTargetExecutable(command.executable, command.environment, launcher);
@@ -79,7 +79,7 @@ async function resolveTargetExecutable(
   return resolveExecutablePath(executable, { environment, platform: "win32" });
 }
 
-function trustedPowerShellExecutable(): string | undefined {
+async function trustedPowerShellExecutable(): Promise<string | undefined> {
   const systemRoot = environmentValue(process.env, "SystemRoot") ?? environmentValue(process.env, "windir") ?? "C:\\Windows";
   if (!win32.isAbsolute(systemRoot)) return undefined;
   const executable = win32.join(
@@ -89,7 +89,12 @@ function trustedPowerShellExecutable(): string | undefined {
     "v1.0",
     "powershell.exe"
   );
-  return existsSync(executable) ? executable : undefined;
+  try {
+    await access(executable, constants.X_OK);
+    return executable;
+  } catch {
+    return undefined;
+  }
 }
 
 function isBatchFile(executable: string): boolean {
