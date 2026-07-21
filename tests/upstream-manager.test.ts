@@ -493,7 +493,7 @@ describe("upstream process manager", () => {
   it("automatically recovers a crashed profile after a bounded backoff", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-auto-restart-"));
     const crashPath = join(directory, "crash");
-    const crashObservedPath = join(directory, "crash-observed");
+    const recoveryCrashObservedPath = join(directory, "recovery-crash-observed");
     const restartGatePath = join(directory, "restart-gate");
     const restartReadyPath = join(directory, "restart-ready");
     const startCountPath = join(directory, "starts");
@@ -505,7 +505,7 @@ describe("upstream process manager", () => {
         args: [fixture],
         env: {
           TEST_CRASH_ON_CALL_TOOL_PATH: crashPath,
-          TEST_CRASH_ON_CALL_TOOL_OBSERVED_PATH: crashObservedPath,
+          TEST_CRASH_ON_CALL_TOOL_OBSERVED_PATH: recoveryCrashObservedPath,
           TEST_HANG_ON_START_PATH: restartGatePath,
           TEST_HANG_ON_START_READY_PATH: restartReadyPath,
           TEST_START_COUNT_PATH: startCountPath
@@ -519,8 +519,14 @@ describe("upstream process manager", () => {
       const session = await manager.get("work");
       await Promise.all([writeFile(crashPath, "crash"), writeFile(restartGatePath, "restart")]);
       await expect(session.callTool({ name: "whoami", arguments: {} })).rejects.toThrow();
+      expect(existsSync(recoveryCrashObservedPath)).toBe(false);
       await waitFor(() => existsSync(restartReadyPath), Boolean);
-      await delay(1_100);
+      const restarting = await waitFor(
+        () => manager.listHealth().find((health) => health.profile === "work"),
+        (health) => health?.processState === "starting" && health.restartCount === 1
+      );
+      expect(restarting).toMatchObject({ processState: "starting", restartCount: 1 });
+      expect(await countStarts(startCountPath)).toBe(2);
       await unlink(crashPath);
       await unlink(restartGatePath);
 
@@ -531,7 +537,7 @@ describe("upstream process manager", () => {
       );
       if (!recovered) throw new Error("Expected recovered health");
       expect(recovered.restartCount).toBe(1);
-      expect(existsSync(crashObservedPath)).toBe(false);
+      expect(existsSync(recoveryCrashObservedPath)).toBe(false);
       await expect((await manager.get("work")).callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
         content: [{ type: "text", text: "unknown" }]
       });
