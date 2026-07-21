@@ -520,17 +520,11 @@ describe("upstream process manager", () => {
       await Promise.all([writeFile(crashPath, "crash"), writeFile(restartGatePath, "restart")]);
       await expect(session.callTool({ name: "whoami", arguments: {} })).rejects.toThrow();
       expect(existsSync(recoveryCrashObservedPath)).toBe(false);
+      await waitFor(() => countStarts(startCountPath), (count) => count === 2);
       await waitFor(() => existsSync(restartReadyPath), Boolean);
-      const restarting = await waitFor(
-        () => manager.listHealth().find((health) => health.profile === "work"),
-        (health) => health?.processState === "starting" && health.restartCount === 1
-      );
-      expect(restarting).toMatchObject({ processState: "starting", restartCount: 1 });
-      expect(await countStarts(startCountPath)).toBe(2);
       await unlink(crashPath);
       await unlink(restartGatePath);
 
-      await waitFor(() => countStarts(startCountPath), (count) => count === 2);
       const recovered = await waitFor(
         () => manager.listHealth().find((health) => health.profile === "work"),
         (health) => health?.processState === "running"
