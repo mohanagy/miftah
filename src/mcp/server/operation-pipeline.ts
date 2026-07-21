@@ -207,6 +207,7 @@ export class OperationPipeline {
     }
   }
 
+  /** Throws the safe policy error when the routed operation is blocked by its enforcement decision. */
   private assertPolicyAllows(
     operation: ProxiedOperation<unknown>,
     route: RoutingDecision,
