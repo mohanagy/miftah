@@ -488,8 +488,8 @@ describe("secret command runner", () => {
 
         try {
           const readiness = await Promise.race([barrier.reached.then(() => "barrier" as const), settlement]);
-          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
           expect(readiness).toBe("barrier");
+          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
           expect(settled).toBe(false);
 
           barrier.release();
