@@ -493,6 +493,9 @@ describe("upstream process manager", () => {
   it("automatically recovers a crashed profile after a bounded backoff", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-auto-restart-"));
     const crashPath = join(directory, "crash");
+    const crashObservedPath = join(directory, "crash-observed");
+    const restartGatePath = join(directory, "restart-gate");
+    const restartReadyPath = join(directory, "restart-ready");
     const startCountPath = join(directory, "starts");
     await writeFile(startCountPath, "");
     const manager = new UpstreamProcessManager(
@@ -502,6 +505,9 @@ describe("upstream process manager", () => {
         args: [fixture],
         env: {
           TEST_CRASH_ON_CALL_TOOL_PATH: crashPath,
+          TEST_CRASH_ON_CALL_TOOL_OBSERVED_PATH: crashObservedPath,
+          TEST_HANG_ON_START_PATH: restartGatePath,
+          TEST_HANG_ON_START_READY_PATH: restartReadyPath,
           TEST_START_COUNT_PATH: startCountPath
         }
       },
@@ -511,9 +517,11 @@ describe("upstream process manager", () => {
 
     try {
       const session = await manager.get("work");
-      await writeFile(crashPath, "crash");
+      await Promise.all([writeFile(crashPath, "crash"), writeFile(restartGatePath, "restart")]);
       await expect(session.callTool({ name: "whoami", arguments: {} })).rejects.toThrow();
+      await waitFor(() => existsSync(restartReadyPath), Boolean);
       await unlink(crashPath);
+      await unlink(restartGatePath);
 
       await waitFor(() => countStarts(startCountPath), (count) => count === 2);
       const recovered = await waitFor(
@@ -522,6 +530,7 @@ describe("upstream process manager", () => {
       );
       if (!recovered) throw new Error("Expected recovered health");
       expect(recovered.restartCount).toBe(1);
+      expect(existsSync(crashObservedPath)).toBe(false);
       await expect((await manager.get("work")).callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
         content: [{ type: "text", text: "unknown" }]
       });
