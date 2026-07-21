@@ -72,6 +72,7 @@ describe("v0.3.2 release artifacts", () => {
     expect(changelog).toContain("Miftah is experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
     expect(notes).toMatch(/PostHog command-wrapper grammar/iu);
+    expect(notes).toMatch(/trusted PostHog command metadata.*generic static annotations/iu);
     expect(notes).toMatch(/upstream process containment/iu);
     expect(notes).toMatch(/esbuild.*0\.28\.1/iu);
     const readme = readRepositoryFile("README.md");
