@@ -468,7 +468,7 @@ describe("secret command runner", () => {
         const barrier = await createProviderReadinessBarrier();
         const providerReadyPath = join(directory, "provider-ready");
         // Keep every observation plus failure cleanup inside the existing 5s test limit.
-        const diagnosticDeadline = Date.now() + 4_000;
+        const diagnosticDeadline = Date.now() + 3_750;
         const remainingDiagnosticTime = () => Math.max(1, diagnosticDeadline - Date.now());
         const pending = runSecretCommand(
           {
@@ -483,16 +483,20 @@ describe("secret command runner", () => {
           { signal: controller.signal }
         );
         let settled = false;
+        let settlementError: unknown;
         const settlement = pending.then(
           () => {
             settled = true;
             return "settled" as const;
           },
-          () => {
+          (error: unknown) => {
             settled = true;
+            settlementError = error;
             return "settled" as const;
           }
         );
+        const prematureSettlement = (message: string) =>
+          settlementError === undefined ? new Error(message) : new Error(message, { cause: settlementError });
         let barrierReached = false;
         void barrier.reached.then(() => {
           barrierReached = true;
@@ -509,7 +513,9 @@ describe("secret command runner", () => {
             settlement
           ]);
           if (entry !== "entered") {
-            throw new Error("The cold provider command settled before the fake provider entered through the Windows helper");
+            throw prematureSettlement(
+              "The cold provider command settled before the fake provider entered through the Windows helper"
+            );
           }
           expect(settled).toBe(false);
 
@@ -519,7 +525,7 @@ describe("secret command runner", () => {
             remainingDiagnosticTime()
           );
           if (!barrierReached) {
-            throw new Error(
+            throw prematureSettlement(
               "The cold fake provider entered through the Windows helper but settled before its readiness barrier"
             );
           }
