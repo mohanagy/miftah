@@ -1427,7 +1427,8 @@ export class MiftahServer {
           ? undefined
           : this.toolRegistry.peek(route.profile)?.resolve(toolName);
       const hasCompatibleCachedTarget = hasCompatibleCachedToolTarget(sourceTool, targetTool);
-      const policyName = sourceTool?.originalName ?? toolName;
+      const policyName =
+        sourceTool?.originalName ?? (this.isOfficialPosthogCommandToolName(toolName) ? "exec" : toolName);
       const policy = this.policy.evaluate(
         profile.policy,
         policyName,
