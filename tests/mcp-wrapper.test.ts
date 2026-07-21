@@ -159,7 +159,7 @@ class DropInitializedNotificationTransport implements Transport {
   }
 
   get setProtocolVersion(): Transport["setProtocolVersion"] {
-    return this.delegate.setProtocolVersion;
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
   }
 
   async start(): Promise<void> {
@@ -211,7 +211,7 @@ class RejectingCloseTransport implements Transport {
   }
 
   get setProtocolVersion(): Transport["setProtocolVersion"] {
-    return this.delegate.setProtocolVersion;
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
   }
 
   async start(): Promise<void> {
@@ -227,6 +227,30 @@ class RejectingCloseTransport implements Transport {
     throw this.closeError;
   }
 }
+
+describe("transport wrapper delegation", () => {
+  it("keeps the underlying transport as the receiver for protocol-version updates", () => {
+    const createDelegate = () => ({
+      protocolVersion: undefined as string | undefined,
+      setProtocolVersion(version: string): void {
+        this.protocolVersion = version;
+      },
+      async start(): Promise<void> {},
+      async send(): Promise<void> {},
+      async close(): Promise<void> {}
+    });
+
+    const droppedNotificationDelegate = createDelegate();
+    const droppedNotificationTransport = new DropInitializedNotificationTransport(droppedNotificationDelegate);
+    droppedNotificationTransport.setProtocolVersion?.("2025-06-18");
+    expect(droppedNotificationDelegate.protocolVersion).toBe("2025-06-18");
+
+    const rejectingCloseDelegate = createDelegate();
+    const rejectingCloseTransport = new RejectingCloseTransport(rejectingCloseDelegate, new Error("close failed"));
+    rejectingCloseTransport.setProtocolVersion?.("2025-06-18");
+    expect(rejectingCloseDelegate.protocolVersion).toBe("2025-06-18");
+  });
+});
 
 function deferred(): { readonly promise: Promise<void>; resolve(): void } {
   let resolvePromise: (() => void) | undefined;
