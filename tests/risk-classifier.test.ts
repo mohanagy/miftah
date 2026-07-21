@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { classifyToolRisk } from "../src/policy/risk-classifier.js";
 
 describe("tool risk classifier", () => {
+  it("keeps a PostHog HogQL dollar identifier read-only through the trusted adapter", () => {
+    expect(
+      classifyToolRisk("exec", {}, {
+        posthogCommand: { command: "call query-trends {\"event\":\"$pageview\",\"math\":\"dau\"}" }
+      })
+    ).toEqual({ risk: "read", riskSource: "trusted-command-adapter", riskConfidence: "high" });
+  });
+
   it("gives a trusted PostHog command precedence over a static read-only hint", () => {
     expect(
       classifyToolRisk("exec", {}, {
