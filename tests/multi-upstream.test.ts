@@ -1412,9 +1412,12 @@ describe("multi-upstream wrapper", () => {
   it("waits for every bundled restart to settle before returning a restart failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-bundle-restart-settle-"));
     const githubFailurePath = join(directory, "github-restart-failure");
+    const githubStartCountPath = join(directory, "github-start-count");
     const sentryBlockPath = join(directory, "sentry-restart-block");
     const sentryReadyPath = join(directory, "sentry-restart-ready");
     const sentryReleasePath = join(directory, "sentry-restart-release");
+    const sentryStartCountPath = join(directory, "sentry-start-count");
+    await Promise.all([writeFile(githubStartCountPath, ""), writeFile(sentryStartCountPath, "")]);
     const config = validateConfig({
       version: "1",
       name: "bundle",
@@ -1429,7 +1432,8 @@ describe("multi-upstream wrapper", () => {
             github: {
               env: {
                 TEST_ACCOUNT_NAME: "github-work",
-                TEST_FAIL_ON_RESTART_PATH: githubFailurePath
+                TEST_FAIL_ON_RESTART_PATH: githubFailurePath,
+                TEST_START_COUNT_PATH: githubStartCountPath
               }
             },
             sentry: {
@@ -1437,7 +1441,8 @@ describe("multi-upstream wrapper", () => {
                 TEST_ACCOUNT_NAME: "sentry-work",
                 TEST_BLOCK_ON_RESTART_PATH: sentryBlockPath,
                 TEST_BLOCK_ON_RESTART_READY_PATH: sentryReadyPath,
-                TEST_BLOCK_ON_RESTART_RELEASE_PATH: sentryReleasePath
+                TEST_BLOCK_ON_RESTART_RELEASE_PATH: sentryReleasePath,
+                TEST_START_COUNT_PATH: sentryStartCountPath
               }
             }
           }
@@ -1457,20 +1462,56 @@ describe("multi-upstream wrapper", () => {
       await Promise.all([unlink(githubFailurePath), unlink(sentryBlockPath)]);
 
       await client.listTools();
+      const countStarts = async (path: string): Promise<number> => {
+        const contents = await readFile(path, "utf8");
+        return contents.split("\n").filter(Boolean).length;
+      };
+      const [githubStartsBeforeRestart, sentryStartsBeforeRestart] = await Promise.all([
+        countStarts(githubStartCountPath),
+        countStarts(sentryStartCountPath)
+      ]);
       const restart = client.callTool(
         { name: "miftah_restart_profile", arguments: { profile: "work" } },
         CallToolResultSchema
       );
-      await expect
-        .poll(async () => {
-          try {
-            await access(sentryReadyPath);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-        .toBe(true);
+      try {
+        await expect
+          .poll(async () => {
+            try {
+              await access(sentryReadyPath);
+              return true;
+            } catch {
+              return false;
+            }
+          })
+          .toBe(true);
+      } catch {
+        const [githubStarts, sentryStarts] = await Promise.all([
+          countStarts(githubStartCountPath),
+          countStarts(sentryStartCountPath)
+        ]);
+        const health = manager.listHealth().map((entry) => ({
+          profile: entry.profile,
+          upstreamName: entry.upstreamName,
+          state: entry.state,
+          processState: entry.processState,
+          restartCount: entry.restartCount,
+          lastStopReason: entry.lastStopReason,
+          restartLimitReached: entry.restartLimitReached,
+          capabilities: Object.fromEntries(
+            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
+          )
+        }));
+        throw new Error(
+          `Restart readiness poll failed: ${JSON.stringify({
+            markerDeltas: {
+              github: githubStarts - githubStartsBeforeRestart,
+              sentry: sentryStarts - sentryStartsBeforeRestart
+            },
+            health
+          })}`
+        );
+      }
 
       const restartState = await Promise.race([
         restart.then(() => "settled"),
