@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server, type Socket } from "node:net";
 import { delimiter, join, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
@@ -102,6 +103,73 @@ async function waitForCondition(
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForProviderEntered(providerReadyPath: string, description: string): Promise<void> {
+  await waitForCondition(
+    async () => {
+      try {
+        return (await readFile(providerReadyPath, "utf8")) === "provider-entered";
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") return false;
+        throw error;
+      }
+    },
+    description
+  );
+}
+
+async function createProviderReadinessBarrier(): Promise<{
+  server: Server;
+  port: number;
+  reached: Promise<void>;
+  release: () => void;
+  close: () => Promise<void>;
+}> {
+  let resolveReached!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    resolveReached = resolve;
+  });
+  let fixtureSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    if (fixtureSocket !== undefined) {
+      socket.destroy();
+      return;
+    }
+    fixtureSocket = socket;
+    socket.once("error", () => undefined);
+    resolveReached();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      server.on("error", () => undefined);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    throw new Error("Expected readiness barrier to listen on a TCP port");
+  }
+
+  return {
+    server,
+    port: address.port,
+    reached,
+    release: () => fixtureSocket?.end("release"),
+    close: async () => {
+      fixtureSocket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  };
 }
 
 async function readDescendantPid(directory: string): Promise<number> {
@@ -378,6 +446,65 @@ describe("external secret-reference grammar", () => {
 });
 
 describe("secret command runner", () => {
+  it("keeps provider readiness-barrier server errors handled after startup", async () => {
+    const barrier = await createProviderReadinessBarrier();
+    try {
+      expect(() => barrier.server.emit("error", new Error("test readiness barrier error"))).not.toThrow();
+    } finally {
+      await barrier.close();
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "keeps a cold Node provider pending at a readiness barrier through its Windows helper",
+    async () => {
+      await inSandbox(async (directory) => {
+        const controller = new AbortController();
+        const barrier = await createProviderReadinessBarrier();
+        const providerReadyPath = join(directory, "provider-ready");
+        const pending = runSecretCommand(
+          {
+            executable: process.execPath,
+            args: [fakeProviderPath, "readiness-barrier-argument"],
+            environment: {
+              ...fakeProviderEnvironment(directory, "success"),
+              MIFTAH_FAKE_PROVIDER_BARRIER_PORT: `${barrier.port}`,
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
+          },
+          { signal: controller.signal }
+        );
+        let settled = false;
+        const settlement = pending.then(
+          () => {
+            settled = true;
+            return "settled" as const;
+          },
+          () => {
+            settled = true;
+            return "settled" as const;
+          }
+        );
+
+        try {
+          const readiness = await Promise.race([barrier.reached.then(() => "barrier" as const), settlement]);
+          expect(readiness).toBe("barrier");
+          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
+          expect(settled).toBe(false);
+
+          barrier.release();
+          const result = await pending;
+          expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+          await expect(readFakeRecord(directory)).resolves.toMatchObject({
+            argv: ["readiness-barrier-argument"]
+          });
+        } finally {
+          await barrier.close();
+        }
+      });
+    }
+  );
+
   it("runs argv without a shell and returns bounded stdout", async () => {
         await inSandbox(async (directory) => {
           const result = await runSecretCommand(
@@ -1175,13 +1302,18 @@ exit 0`);
     "closes an orphaned descendant when its direct provider process exits",
     async () => {
       await inSandbox(async (directory) => {
+        const providerReadyPath = join(directory, "provider-ready");
         const pending = runSecretCommand(
           {
             executable: process.execPath,
             args: [fakeProviderPath],
-            environment: fakeProviderEnvironment(directory, "early-exit-descendant")
+            environment: {
+              ...fakeProviderEnvironment(directory, "early-exit-descendant"),
+              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+            }
           }
         );
+        await waitForProviderEntered(providerReadyPath, "the fake provider to enter before recording its descendant PID");
         const descendantPid = await readDescendantPid(directory);
 
         try {

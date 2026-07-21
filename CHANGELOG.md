@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-21
+
+### Fixed
+
+- [#106](https://github.com/mohanagy/miftah/issues/106) Miftah now recognizes the strict PostHog command-wrapper grammar only at the canonical official MCP endpoint, so documented read/discovery commands can run under destructive-routing safeguards without a per-user routing workaround. Generic `exec` tools, alternate origins, malformed commands, and unknown nested operations remain fail-closed; route preview now exposes the same local policy-enforcement block as a real call.
+- [#142](https://github.com/mohanagy/miftah/issues/142) Risk classification now prioritizes trusted PostHog command metadata over generic static annotations, so a destructive wrapper operation cannot be treated as read-only and bypass its routing safeguards.
+- [#112](https://github.com/mohanagy/miftah/issues/112) Shutdown now completes upstream process containment even when a downstream transport close rejects, then rethrows the original close error after cleanup.
+- [#120](https://github.com/mohanagy/miftah/issues/120) The development build toolchain now resolves `esbuild` 0.28.1, removing the known low-severity development-server path-traversal advisory.
+
 ## [0.3.1] - 2026-07-18
 
 ### Fixed

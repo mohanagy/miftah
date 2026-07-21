@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.3.1";
+const releaseVersion = "0.3.2";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,13 +21,13 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.3.1 release artifacts", () => {
+describe("v0.3.2 release artifacts", () => {
   it.each([
-    "## [0.3.1] - 2026-7-18\n\n### Fixed\n",
-    "Release candidate: ## [0.3.1] - 2026-07-18\n\n### Fixed\n"
+    "## [0.3.2] - 2026-7-21\n\n### Fixed\n",
+    "Release candidate: ## [0.3.2] - 2026-07-21\n\n### Fixed\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
-      "Unable to find the 0.3.1 changelog entry."
+      `Unable to find the ${releaseVersion} changelog entry.`
     );
   });
 
@@ -65,14 +65,18 @@ describe("v0.3.1 release artifacts", () => {
     }
   });
 
-  it("documents the full release while retaining the experimental package status", () => {
+  it("documents the security and containment fixes while retaining the experimental package status", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
+    expect(changelog).toContain("Miftah is experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
-    expect(notes).toContain("### Changed");
-    expect(notes).toMatch(/force-kills a retained POSIX descendant/iu);
-    expect(notes).toMatch(/product value and quick-start/iu);
+    expect(notes).toMatch(/PostHog command-wrapper grammar/iu);
+    expect(notes).toMatch(
+      /Risk classification now prioritizes\s+trusted PostHog command metadata\s+over\s+generic static annotations/iu
+    );
+    expect(notes).toMatch(/upstream process containment/iu);
+    expect(notes).toMatch(/esbuild.*0\.28\.1/iu);
     const readme = readRepositoryFile("README.md");
     expect(readme).toContain("One MCP connector. Deliberate account selection.");
     expect(readme).toContain("experimental and pre-1.0");

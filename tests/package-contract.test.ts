@@ -16,6 +16,7 @@ interface PackageManifest {
   homepage?: unknown;
   bugs?: unknown;
   keywords?: unknown;
+  overrides?: Record<string, string>;
   publishConfig?: unknown;
   scripts?: Record<string, string>;
 }
@@ -82,6 +83,17 @@ const requiredPackPaths = [
 
 function readPackageManifest(): PackageManifest {
   return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
+}
+
+function assertPatchedEsbuildLockEntries(lock: PackageLock): void {
+  const esbuildEntries = Object.entries(lock.packages ?? {}).filter(([packagePath]) =>
+    packagePath.endsWith("node_modules/esbuild")
+  );
+
+  expect(esbuildEntries).not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of esbuildEntries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched esbuild release`).toBe("0.28.1");
+  }
 }
 
 async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
@@ -475,6 +487,25 @@ describe("package metadata contract", () => {
   it("exposes the package verification command", () => {
     expect(readPackageManifest().scripts?.["check:pack"]).toBe("node scripts/check-pack.mjs");
   });
+
+  it("pins the patched esbuild release for GHSA-g7r4-m6w7-qqqr", () => {
+    const manifest = readPackageManifest();
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    expect(manifest.overrides?.esbuild).toBe("0.28.1");
+    assertPatchedEsbuildLockEntries(lock);
+  });
+
+  it("rejects stale nested esbuild lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/esbuild": { version: "0.28.1" },
+        "node_modules/vite/node_modules/esbuild": { version: "0.27.0" }
+      }
+    };
+
+    expect(() => assertPatchedEsbuildLockEntries(lock)).toThrow(/node_modules\/vite\/node_modules\/esbuild/);
+  });
 });
 
 describe("packed artifact contract", () => {
@@ -508,15 +539,15 @@ describe("packed artifact contract", () => {
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
-    await expect(
-      runNpm([
-        "exec",
-        "--",
-        process.execPath,
-        "--eval",
-        'process.stdout.write("miftah-diagnostic-out"); process.stderr.write("miftah-diagnostic-err"); process.exit(1);'
-      ])
-    ).rejects.toThrow(
+    const child = new TermIgnoringNpmProcess();
+    const spawnFailedChild: NpmSpawner = () => child;
+    const failedRun = runNpm(["diagnostic"], repositoryRoot, 1_000, spawnFailedChild);
+
+    child.stdout.end("miftah-diagnostic-out");
+    child.stderr.end("miftah-diagnostic-err");
+    child.emit("close", 1, null);
+
+    await expect(failedRun).rejects.toThrow(
       /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
     );
   });

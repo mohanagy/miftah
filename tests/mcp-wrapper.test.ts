@@ -159,7 +159,7 @@ class DropInitializedNotificationTransport implements Transport {
   }
 
   get setProtocolVersion(): Transport["setProtocolVersion"] {
-    return this.delegate.setProtocolVersion;
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
   }
 
   async start(): Promise<void> {
@@ -175,6 +175,82 @@ class DropInitializedNotificationTransport implements Transport {
     await this.delegate.close();
   }
 }
+
+class RejectingCloseTransport implements Transport {
+  constructor(
+    private readonly delegate: Transport,
+    private readonly closeError: Error
+  ) {}
+
+  get onclose(): Transport["onclose"] {
+    return this.delegate.onclose;
+  }
+
+  set onclose(handler: Transport["onclose"]) {
+    this.delegate.onclose = handler;
+  }
+
+  get onerror(): Transport["onerror"] {
+    return this.delegate.onerror;
+  }
+
+  set onerror(handler: Transport["onerror"]) {
+    this.delegate.onerror = handler;
+  }
+
+  get onmessage(): Transport["onmessage"] {
+    return this.delegate.onmessage;
+  }
+
+  set onmessage(handler: Transport["onmessage"]) {
+    this.delegate.onmessage = handler;
+  }
+
+  get sessionId(): string | undefined {
+    return this.delegate.sessionId;
+  }
+
+  get setProtocolVersion(): Transport["setProtocolVersion"] {
+    return this.delegate.setProtocolVersion?.bind(this.delegate);
+  }
+
+  async start(): Promise<void> {
+    await this.delegate.start();
+  }
+
+  async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    await this.delegate.send(message, options);
+  }
+
+  async close(): Promise<void> {
+    await this.delegate.close();
+    throw this.closeError;
+  }
+}
+
+describe("transport wrapper delegation", () => {
+  it("keeps the underlying transport as the receiver for protocol-version updates", () => {
+    const createDelegate = () => ({
+      protocolVersion: undefined as string | undefined,
+      setProtocolVersion(version: string): void {
+        this.protocolVersion = version;
+      },
+      async start(): Promise<void> {},
+      async send(): Promise<void> {},
+      async close(): Promise<void> {}
+    });
+
+    const droppedNotificationDelegate = createDelegate();
+    const droppedNotificationTransport = new DropInitializedNotificationTransport(droppedNotificationDelegate);
+    droppedNotificationTransport.setProtocolVersion?.("2025-06-18");
+    expect(droppedNotificationDelegate.protocolVersion).toBe("2025-06-18");
+
+    const rejectingCloseDelegate = createDelegate();
+    const rejectingCloseTransport = new RejectingCloseTransport(rejectingCloseDelegate, new Error("close failed"));
+    rejectingCloseTransport.setProtocolVersion?.("2025-06-18");
+    expect(rejectingCloseDelegate.protocolVersion).toBe("2025-06-18");
+  });
+});
 
 function deferred(): { readonly promise: Promise<void>; resolve(): void } {
   let resolvePromise: (() => void) | undefined;
@@ -215,6 +291,38 @@ interface ProfileManagementHost {
     };
   };
 }
+
+describe("Miftah server lifecycle", () => {
+  it("stops upstream processes when downstream transport close rejects", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } },
+      audit: { enabled: false }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "rejecting-close-client", version: "1.0.0" });
+    const closeError = new Error("simulated downstream close failure");
+
+    try {
+      await Promise.all([
+        wrapper.connect(new RejectingCloseTransport(serverTransport, closeError)),
+        client.connect(clientTransport)
+      ]);
+      await client.listTools();
+      expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "running" }]);
+
+      await expect(wrapper.close()).rejects.toBe(closeError);
+      expect(upstreams.listHealth()).toMatchObject([{ profile: "work", processState: "stopped", pid: null }]);
+    } finally {
+      await Promise.allSettled([client.close(), wrapper.close(), upstreams.close()]);
+    }
+  });
+});
 
 describe("Miftah MCP wrapper", () => {
   it("uses explicitly trusted tool annotations and records risk provenance", async () => {
@@ -314,6 +422,302 @@ describe("Miftah MCP wrapper", () => {
       expect(await client.callTool({ name: "untrusted__create_item", arguments: { name: "x" } })).toMatchObject({
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("classifies canonical PostHog command-wrapper reads without weakening command safety", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-posthog-command-wrapper-"));
+    const callCountPath = join(directory, "tool-call-count");
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: {
+            TEST_COMMAND_WRAPPER: "posthog",
+            TEST_CALL_TOOL_COUNT_PATH: callCountPath
+          }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"] } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { path: auditPath }
+    });
+    // The fixture emulates the pinned provider protocol locally. The wrapper configuration remains
+    // the exact official remote endpoint so this test covers the production trust boundary.
+    const upstreams = new UpstreamProcessManager(
+      { transport: "stdio", command: process.execPath, args: [fixture] },
+      config.profiles,
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "posthog-command-wrapper-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "exec", args: readArguments } })
+        )
+      ).toMatchObject({
+        policy: { action: "allow", risk: "read", riskSource: "trusted-command-adapter", riskConfidence: "high" },
+        enforcement: { status: "allowed" }
+      });
+      expect(await client.callTool({ name: "exec", arguments: readArguments })).toMatchObject({
+        content: [{ type: "text", text: "exec:info query-trends" }]
+      });
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "exec", args: { command: "call dashboard-create {}", context: "scheduled task" } }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "deny", risk: "write", riskSource: "trusted-command-adapter", riskConfidence: "high" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
+      });
+      expect(
+        await client.callTool({ name: "exec", arguments: { command: "call dashboard-create {}", context: "scheduled task" } })
+      ).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+
+      expect(
+        await client.callTool({ name: "exec", arguments: { command: "call made-up {}", context: "scheduled task" } })
+      ).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("requires an explicit routing rule") }]
+      });
+      expect(await readFile(callCountPath, "utf8")).toBe("1\n");
+
+      const audit = await readFile(auditPath, "utf8");
+      expect(audit).toContain('"riskSource":"trusted-command-adapter"');
+      expect(audit).not.toContain("info query-trends");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cold previews aligned with calls for a single named PostHog upstream", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstreams: {
+        posthog: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: { TEST_COMMAND_WRAPPER: "posthog" }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"] } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { enabled: false }
+    });
+    // The wrapper keeps the production origin while the manager uses the local
+    // fixture, so this covers both named-upstream routing and the trust boundary.
+    const upstreams = new MultiUpstreamProcessManager(
+      {
+        ...config,
+        upstreams: {
+          posthog: { transport: "stdio", command: process.execPath, args: [fixture] }
+        }
+      },
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-posthog-command-wrapper-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "posthog__exec", args: readArguments }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "allow", risk: "read", riskSource: "trusted-command-adapter", riskConfidence: "high" },
+        enforcement: { status: "allowed" }
+      });
+      expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
+        content: [{ type: "text", text: "exec:info query-trends" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it("uses the canonical exec policy name for cold named PostHog previews", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstreams: {
+        posthog: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" }
+      },
+      profiles: {
+        work: {
+          policy: "readonly",
+          env: { TEST_COMMAND_WRAPPER: "posthog" }
+        }
+      },
+      policies: { readonly: { allowRisk: ["read"], deny: ["exec"] } },
+      tooling: { toolRiskOverrides: { exec: "read" } },
+      audit: { enabled: false }
+    });
+    const upstreams = new MultiUpstreamProcessManager(
+      {
+        ...config,
+        upstreams: {
+          posthog: { transport: "stdio", command: process.execPath, args: [fixture] }
+        }
+      },
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "named-posthog-canonical-policy-client", version: "1.0.0" });
+    const readArguments = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "posthog__exec", args: readArguments }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "deny", risk: "read", riskSource: "local-override", riskConfidence: "high" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
+      });
+      expect(await client.callTool({ name: "posthog__exec", arguments: readArguments })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("POLICY_BLOCKED") }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
+  it.each([
+    ["has a query", "https://mcp.posthog.com/mcp?untrusted=true"],
+    ["declares the default HTTPS port", "https://mcp.posthog.com:443/mcp"]
+  ])("keeps generic exec tools blocked when the PostHog origin %s", async (_description, upstreamUrl) => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-posthog-command-wrapper-origin-"));
+    const callCountPath = join(directory, "tool-call-count");
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: upstreamUrl },
+      profiles: {
+        work: {
+          env: {
+            TEST_COMMAND_WRAPPER: "posthog",
+            TEST_CALL_TOOL_COUNT_PATH: callCountPath
+          }
+        }
+      },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { enabled: false }
+    });
+    const upstreams = new UpstreamProcessManager(
+      { transport: "stdio", command: process.execPath, args: [fixture] },
+      config.profiles,
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "posthog-command-wrapper-origin-client", version: "1.0.0" });
+    const arguments_ = { command: "info query-trends", context: "scheduled task" };
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "exec", args: arguments_ } })
+        )
+      ).toMatchObject({
+        policy: { action: "allow", risk: "destructive", riskSource: "unknown-default", riskConfidence: "low" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
+      });
+      expect(await client.callTool({ name: "exec", arguments: arguments_ })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("requires an explicit routing rule") }]
+      });
+      await expect(access(callCountPath)).rejects.toThrow();
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an explicit exec risk override ahead of the PostHog command adapter", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "posthog",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.posthog.com/mcp" },
+      profiles: { work: { env: { TEST_COMMAND_WRAPPER: "posthog" } } },
+      tooling: { toolRiskOverrides: { exec: "destructive" } },
+      security: { requireExplicitProfileForDestructive: true },
+      audit: { enabled: false }
+    });
+    const upstreams = new UpstreamProcessManager(
+      { transport: "stdio", command: process.execPath, args: [fixture] },
+      config.profiles,
+      { startupTimeoutMs: 5_000 }
+    );
+    const wrapper = new MiftahServer(config, new ProfileManager(config), upstreams);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "posthog-command-wrapper-override-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.listTools();
+
+      expect(
+        parseJsonToolResult(
+          await client.callTool({
+            name: "miftah_route_preview",
+            arguments: { toolName: "exec", args: { command: "info query-trends", context: "scheduled task" } }
+          })
+        )
+      ).toMatchObject({
+        policy: { action: "allow", risk: "destructive", riskSource: "local-override", riskConfidence: "high" },
+        enforcement: { status: "blocked", errorCode: "POLICY_BLOCKED" }
       });
     } finally {
       await client.close();

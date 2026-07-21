@@ -20,6 +20,9 @@ describe("risk classification documentation contract", () => {
       "tooling.unknownToolRisk",
       "riskSource",
       "riskConfidence",
+      "trusted-command-adapter",
+      "https://mcp.posthog.com/mcp",
+      "enforcement",
       "`idempotentHint`",
       "`openWorldHint`",
       "defaults to `\"destructive\"`",
@@ -29,8 +32,28 @@ describe("risk classification documentation contract", () => {
     }
     expect(security).toContain("behavioral hints");
     expect(security).toContain("profile override cannot change");
+    expect(security).toContain("Invalid or unrecognized command forms remain destructive");
     expect(architecture).toContain("normalizes only the four MCP behavioral booleans");
+    expect(architecture).toContain("shares the local policy-enforcement evaluator");
     expect(libraryApi).toContain("UnknownToolRisk");
     expect(changelog).toMatch(changelogRiskClassificationPattern);
+  });
+
+  it("keeps the documented classification precedence aligned with the runtime", () => {
+    const config = readRepositoryFile("docs/config.md");
+    const precedence = [
+      "1. an exact local `tooling.toolRiskOverrides` entry;",
+      "2. Miftah's fixed PostHog command adapter",
+      "3. MCP tool annotations only when",
+      "4. conservative name heuristics; then",
+      "5. `tooling.unknownToolRisk`"
+    ];
+
+    let previousIndex = -1;
+    for (const step of precedence) {
+      const currentIndex = config.indexOf(step);
+      expect(currentIndex, `missing or out-of-order documentation step: ${step}`).toBeGreaterThan(previousIndex);
+      previousIndex = currentIndex;
+    }
   });
 });
