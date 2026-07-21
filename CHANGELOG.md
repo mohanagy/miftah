@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-22
+
+### Fixed
+
+- [#169](https://github.com/mohanagy/miftah/issues/169) The trusted PostHog command adapter now accepts HogQL dollar identifiers such as `$pageview` in canonical JSON `call` payloads, including DAU queries. Shell-substitution forms (`$()` and `${...}`), malformed commands, non-call dollar syntax, alternate origins, and destructive nested operations remain fail-closed.
+
 ## [0.3.2] - 2026-07-21
 
 ### Fixed
