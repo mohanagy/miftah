@@ -2,13 +2,42 @@
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { appendFile, writeFile } from "node:fs/promises";
+import { connect } from "node:net";
 
 const mode = process.env.MIFTAH_FAKE_MODE ?? "success";
 const recordPath = process.env.MIFTAH_FAKE_RECORD_PATH;
 const countPath = process.env.MIFTAH_FAKE_COUNT_PATH;
 const providerReadyPath = process.env.MIFTAH_FAKE_PROVIDER_READY_PATH;
+const providerBarrierPort = process.env.MIFTAH_FAKE_PROVIDER_BARRIER_PORT;
 
 if (providerReadyPath) writeFileSync(providerReadyPath, "provider-entered");
+
+async function waitForProviderBarrier() {
+  if (providerBarrierPort === undefined) return;
+  const port = Number(providerBarrierPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("Fake provider received an invalid readiness barrier port");
+  }
+
+  await new Promise((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      socket.end();
+      resolve();
+    };
+    socket.once("error", reject);
+    socket.once("data", release);
+    socket.once("end", release);
+    socket.once("close", () => {
+      if (!released) reject(new Error("Readiness barrier closed before release"));
+    });
+  });
+}
+
+await waitForProviderBarrier();
 
 async function writeRecord(descendantPid) {
   if (!recordPath) return;

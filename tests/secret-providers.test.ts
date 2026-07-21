@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server, type Socket } from "node:net";
 import { delimiter, join, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
@@ -116,6 +117,59 @@ async function waitForProviderEntered(providerReadyPath: string, description: st
     },
     description
   );
+}
+
+async function createProviderReadinessBarrier(): Promise<{
+  server: Server;
+  port: number;
+  reached: Promise<void>;
+  release: () => void;
+  close: () => Promise<void>;
+}> {
+  let resolveReached!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    resolveReached = resolve;
+  });
+  let fixtureSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    if (fixtureSocket !== undefined) {
+      socket.destroy();
+      return;
+    }
+    fixtureSocket = socket;
+    socket.once("error", () => undefined);
+    resolveReached();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      server.on("error", () => undefined);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    throw new Error("Expected readiness barrier to listen on a TCP port");
+  }
+
+  return {
+    server,
+    port: address.port,
+    reached,
+    release: () => fixtureSocket?.end("release"),
+    close: async () => {
+      fixtureSocket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  };
 }
 
 async function readDescendantPid(directory: string): Promise<number> {
@@ -392,30 +446,57 @@ describe("external secret-reference grammar", () => {
 });
 
 describe("secret command runner", () => {
+  it("keeps provider readiness-barrier server errors handled after startup", async () => {
+    const barrier = await createProviderReadinessBarrier();
+    try {
+      expect(() => barrier.server.emit("error", new Error("test readiness barrier error"))).not.toThrow();
+    } finally {
+      await barrier.close();
+    }
+  });
+
   it.runIf(process.platform === "win32")(
-    "preserves a cold Node provider entry marker through Windows helper settlement",
+    "keeps a cold Node provider pending at a readiness barrier through its Windows helper",
     async () => {
       await inSandbox(async (directory) => {
         const controller = new AbortController();
-        const providerReadyPath = join(directory, "provider-ready");
-        const result = await runSecretCommand(
+        const barrier = await createProviderReadinessBarrier();
+        const pending = runSecretCommand(
           {
             executable: process.execPath,
-            args: [fakeProviderPath],
+            args: [fakeProviderPath, "readiness-barrier-argument"],
             environment: {
               ...fakeProviderEnvironment(directory, "success"),
-              MIFTAH_FAKE_PROVIDER_READY_PATH: providerReadyPath
+              MIFTAH_FAKE_PROVIDER_BARRIER_PORT: `${barrier.port}`
             }
           },
           { signal: controller.signal }
         );
+        let settled = false;
+        const settlement = pending.then(
+          () => {
+            settled = true;
+            return "settled" as const;
+          },
+          () => {
+            settled = true;
+            return "settled" as const;
+          }
+        );
 
-        // The fixture writes this marker synchronously before stdout and exit;
-        // runSecretCommand settles only after the contained helper has waited
-        // for that provider process. This proves the intended ordering without
-        // asserting a cold-start latency that the production contract does not promise.
-        expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
-        await expect(readFile(providerReadyPath, "utf8")).resolves.toBe("provider-entered");
+        try {
+          expect(await Promise.race([barrier.reached.then(() => "barrier" as const), settlement])).toBe("barrier");
+          expect(settled).toBe(false);
+
+          barrier.release();
+          const result = await pending;
+          expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
+          await expect(readFakeRecord(directory)).resolves.toMatchObject({
+            argv: ["readiness-barrier-argument"]
+          });
+        } finally {
+          await barrier.close();
+        }
       });
     }
   );
