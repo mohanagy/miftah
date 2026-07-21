@@ -517,15 +517,15 @@ describe("packed artifact contract", () => {
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
-    await expect(
-      runNpm([
-        "exec",
-        "--",
-        process.execPath,
-        "--eval",
-        'process.stdout.write("miftah-diagnostic-out"); process.stderr.write("miftah-diagnostic-err"); process.exit(1);'
-      ])
-    ).rejects.toThrow(
+    const child = new TermIgnoringNpmProcess();
+    const spawnFailedChild: NpmSpawner = () => child;
+    const failedRun = runNpm(["diagnostic"], repositoryRoot, 1_000, spawnFailedChild);
+
+    child.stdout.end("miftah-diagnostic-out");
+    child.stderr.end("miftah-diagnostic-err");
+    child.emit("close", 1, null);
+
+    await expect(failedRun).rejects.toThrow(
       /exited with status 1\.\nCaptured npm output:\nstdout:\nmiftah-diagnostic-out\nstderr:\nmiftah-diagnostic-err/u
     );
   });
