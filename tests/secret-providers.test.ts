@@ -105,7 +105,11 @@ async function waitForCondition(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function waitForProviderEntered(providerReadyPath: string, description: string): Promise<void> {
+async function waitForProviderEntered(
+  providerReadyPath: string,
+  description: string,
+  timeoutMs?: number
+): Promise<void> {
   await waitForCondition(
     async () => {
       try {
@@ -115,7 +119,8 @@ async function waitForProviderEntered(providerReadyPath: string, description: st
         throw error;
       }
     },
-    description
+    description,
+    timeoutMs
   );
 }
 
@@ -462,6 +467,9 @@ describe("secret command runner", () => {
         const controller = new AbortController();
         const barrier = await createProviderReadinessBarrier();
         const providerReadyPath = join(directory, "provider-ready");
+        // Keep every observation plus failure cleanup inside the existing 5s test limit.
+        const diagnosticDeadline = Date.now() + 3_750;
+        const remainingDiagnosticTime = () => Math.max(1, diagnosticDeadline - Date.now());
         const pending = runSecretCommand(
           {
             executable: process.execPath,
@@ -475,32 +483,92 @@ describe("secret command runner", () => {
           { signal: controller.signal }
         );
         let settled = false;
+        let settlementError: unknown;
         const settlement = pending.then(
           () => {
             settled = true;
             return "settled" as const;
           },
-          () => {
+          (error: unknown) => {
             settled = true;
+            settlementError = error;
             return "settled" as const;
           }
         );
+        const prematureSettlement = (message: string) =>
+          settlementError === undefined ? new Error(message) : new Error(message, { cause: settlementError });
+        let barrierReached = false;
+        void barrier.reached.then(() => {
+          barrierReached = true;
+        });
 
+        let diagnosticFailure: unknown;
         try {
-          const readiness = await Promise.race([barrier.reached.then(() => "barrier" as const), settlement]);
-          expect(readiness).toBe("barrier");
-          await waitForProviderEntered(providerReadyPath, "the fake provider to enter the readiness barrier");
+          const entry = await Promise.race([
+            waitForProviderEntered(
+              providerReadyPath,
+              "the cold fake provider to enter through the Windows helper",
+              remainingDiagnosticTime()
+            ).then(() => "entered" as const),
+            settlement
+          ]);
+          if (entry !== "entered") {
+            throw prematureSettlement(
+              "The cold provider command settled before the fake provider entered through the Windows helper"
+            );
+          }
+          expect(settled).toBe(false);
+
+          await waitForCondition(
+            () => barrierReached || settled,
+            "the entered fake provider to reach its readiness barrier",
+            remainingDiagnosticTime()
+          );
+          if (!barrierReached) {
+            throw prematureSettlement(
+              "The cold fake provider entered through the Windows helper but settled before its readiness barrier"
+            );
+          }
           expect(settled).toBe(false);
 
           barrier.release();
+          await waitForCondition(
+            () => settled,
+            "the released cold provider command to settle through the Windows helper",
+            remainingDiagnosticTime()
+          );
           const result = await pending;
           expect(result.stdout.toString("utf8")).toBe("fixture-provider-secret");
           await expect(readFakeRecord(directory)).resolves.toMatchObject({
             argv: ["readiness-barrier-argument"]
           });
-        } finally {
-          await barrier.close();
+        } catch (error) {
+          diagnosticFailure = error;
         }
+
+        let cleanupFailure: unknown;
+        try {
+          if (!settled) controller.abort();
+          await barrier.close();
+          if (!settled) {
+            await waitForCondition(
+              () => settled,
+              "the aborted cold provider command to settle through the Windows helper",
+              500
+            );
+          }
+        } catch (error) {
+          cleanupFailure = error;
+        }
+
+        if (diagnosticFailure !== undefined && cleanupFailure !== undefined) {
+          throw new AggregateError(
+            [diagnosticFailure, cleanupFailure],
+            "Cold Windows provider diagnostic and cleanup both failed"
+          );
+        }
+        if (diagnosticFailure !== undefined) throw diagnosticFailure;
+        if (cleanupFailure !== undefined) throw cleanupFailure;
       });
     }
   );
