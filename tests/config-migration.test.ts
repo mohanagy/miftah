@@ -103,7 +103,7 @@ import { loadConfig } from "../src/config/load-config.js";
 import { validateConfig } from "../src/config/validate-config.js";
 
 describe("config migration planning", () => {
-  it("upgrades a v1 compatibility declaration to canonical v2 without exposing a raw diff", () => {
+  it("upgrades a v1 compatibility declaration to canonical v3 without exposing a raw diff", () => {
     const plan = planConfigMigration({
       version: "1",
       name: "legacy-wrapper",
@@ -116,7 +116,7 @@ describe("config migration planning", () => {
 
     expect(plan).toMatchObject({
       fromVersion: "1",
-      toVersion: "2",
+      toVersion: "3",
       changed: true,
       actions: expect.arrayContaining([
         expect.stringContaining("streamable-http"),
@@ -125,7 +125,7 @@ describe("config migration planning", () => {
       ])
     });
     expect(validateConfig(plan.config)).toMatchObject({
-      version: "2",
+      version: "3",
       upstream: { transport: "streamable-http", url: "https://mcp.example.test" },
       secrets: { allowPlaintextSecrets: true }
     });
@@ -223,9 +223,39 @@ describe("config migration planning", () => {
     });
   });
 
-  it("rejects input versions outside the explicit v1-to-v2 migration path", () => {
-    expect(() => planConfigMigration({ version: "3" })).toThrow(
-      /UNSUPPORTED_CONFIG_VERSION: migrate-config supports version 1 input and version 2 output only/u
+  it("migrates v2 without synthesizing an OAuth connection from a static Authorization header", () => {
+    const plan = planConfigMigration({
+      version: "2",
+      name: "canonical-wrapper",
+      defaultProfile: "default",
+      upstream: {
+        transport: "streamable-http",
+        url: "https://mcp.example.test",
+        headers: { Authorization: "secretref:env://MCP_TOKEN" }
+      },
+      profiles: { default: {} }
+    });
+
+    expect(plan).toMatchObject({ fromVersion: "2", toVersion: "3", changed: true });
+    expect(plan.config).toMatchObject({ version: "3" });
+    expect(plan.config).not.toHaveProperty("oauth");
+    expect(plan.config).toMatchObject({ upstream: { headers: { Authorization: "secretref:env://MCP_TOKEN" } } });
+  });
+
+  it("leaves an already-v3 configuration unchanged", () => {
+    const config = {
+      version: "3",
+      name: "v3-wrapper",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node" },
+      profiles: { default: {} }
+    };
+    expect(planConfigMigration(config)).toMatchObject({ fromVersion: "3", toVersion: "3", changed: false, actions: [] });
+  });
+
+  it("rejects input versions outside the explicit v1/v2-to-v3 migration path", () => {
+    expect(() => planConfigMigration({ version: "4" })).toThrow(
+      /UNSUPPORTED_CONFIG_VERSION: migrate-config supports versions 1 and 2 input and version 3 output only/u
     );
   });
 
@@ -277,7 +307,7 @@ describe("migrate-config command", () => {
 
     expect(report).toMatchObject({
       fromVersion: "1",
-      toVersion: "2",
+      toVersion: "3",
       changed: true,
       write: false,
       backupCreated: false
@@ -300,7 +330,7 @@ describe("migrate-config command", () => {
     expect(report).toMatchObject({ changed: true, write: true, backupCreated: true });
     expect(await readFile(`${configPath}.bak`, "utf8")).toBe(original);
     const migrated = JSON.parse(await readFile(configPath, "utf8"));
-    expect(validateConfig(migrated)).toMatchObject({ version: "2" });
+    expect(validateConfig(migrated)).toMatchObject({ version: "3" });
     expect(migrated).not.toHaveProperty("security.allowPlaintextSecrets");
     expect(migrated).not.toHaveProperty("audit.redact");
     if (process.platform !== "win32") expect((await stat(configPath)).mode & 0o777).toBe(0o640);
@@ -336,7 +366,7 @@ describe("migrate-config command", () => {
     expect(await readFile(`${configPath}.bak`, "utf8")).toBe("existing backup");
   });
 
-  it("does not write or create a backup for an already canonical v2 configuration", async () => {
+  it("migrates a canonical v2 configuration to v3 without synthesizing OAuth state", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-config-migration-"));
     temporaryDirectories.push(directory);
     const configPath = join(directory, "miftah.json");
@@ -352,13 +382,14 @@ describe("migrate-config command", () => {
 
     await expect(runMigrateConfigCommand({ configPath, write: true })).resolves.toMatchObject({
       fromVersion: "2",
-      toVersion: "2",
-      changed: false,
-      write: false,
-      backupCreated: false
+      toVersion: "3",
+      changed: true,
+      write: true,
+      backupCreated: true
     });
-    expect(await readFile(configPath, "utf8")).toBe(original);
-    await expect(access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(`${configPath}.bak`, "utf8")).toBe(original);
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({ version: "3" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).not.toHaveProperty("oauth");
   });
 
   it.skipIf(process.platform === "win32")("refuses to migrate a symlinked source before creating a backup", async () => {
@@ -500,7 +531,7 @@ describe("migrate-config command", () => {
     await expect(applyConfigMigration(configPath, source, plan)).rejects.toThrow("migrated configuration was installed");
 
     expect(migrationRace.mutatedHeldAfterPublish).toBe(true);
-    expect(validateConfig(JSON.parse(await readFile(configPath, "utf8")))).toMatchObject({ version: "2" });
+    expect(validateConfig(JSON.parse(await readFile(configPath, "utf8")))).toMatchObject({ version: "3" });
     expect(await readFile(`${configPath}.bak`, "utf8")).toBe(original);
     const entries = await readdir(directory);
     const recoveryDirectories = entries.filter((entry) => entry.startsWith(".miftah.json.miftah-migrate-"));

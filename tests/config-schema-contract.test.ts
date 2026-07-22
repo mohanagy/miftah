@@ -406,6 +406,38 @@ describe("published config schema", () => {
     });
   });
 
+  it("publishes OAuth as a strict v3-only non-secret connection registry", () => {
+    const schema = generateConfigSchema() as unknown as ConfigSchema;
+    const oauth = schema.properties?.oauth;
+    const connections = oauth?.properties?.connections;
+    const connection = mapValue(connections, "oauth connections");
+    const versionOneConstraint = schema.allOf?.find(
+      (constraint) => constraint.if?.properties?.version?.const === "1"
+    );
+    const versionTwoConstraint = schema.allOf?.find(
+      (constraint) => constraint.if?.properties?.version?.const === "2" && constraint.then?.not !== undefined
+    );
+
+    expect(oauth).toMatchObject({ additionalProperties: false });
+    expect(connections).toBeDefined();
+    expect(connection).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        profile: { type: "string" },
+        resource: { type: "string" },
+        issuer: { type: "string" },
+        scopes: { type: "array", maxItems: 64 }
+      }
+    });
+    expect(connection.properties).toHaveProperty("upstream");
+    expect(connection.properties).toHaveProperty("clientRegistration");
+    expect(connection.properties).not.toHaveProperty("accessToken");
+    expect(connection.properties).not.toHaveProperty("refreshToken");
+    expect(connection.properties).not.toHaveProperty("authorization");
+    expect(versionOneConstraint).toMatchObject({ then: { not: { required: ["oauth"] } } });
+    expect(versionTwoConstraint).toMatchObject({ then: { not: { required: ["oauth"] } } });
+  });
+
   it("encodes isolation path safety in the generated editor schema", () => {
     const schema = generateConfigSchema() as unknown as ConfigSchema;
     const profile = mapValue(schema.properties?.profiles, "profiles");

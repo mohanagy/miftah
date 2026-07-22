@@ -728,7 +728,7 @@ describe("packed artifact contract", () => {
             "  ValidatedRoutingConfig, MiftahPlugin, RoutingMatcherPlugin, RoutingMatcherPluginRequest, RoutingMatcherPluginResult, RoutingMatcherPluginSignal, SecretProviderPlugin, SecretProviderPluginRequest, SecretProviderPluginResult",
             "];",
             "declare const types: SupportedTypes;",
-            'const currentConfigVersion: "2" = CURRENT_CONFIG_VERSION;',
+            'const currentConfigVersion: "3" = CURRENT_CONFIG_VERSION;',
             "const version: string = MIFTAH_VERSION;",
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
@@ -1025,7 +1025,7 @@ describe("packed artifact contract", () => {
         expect(migrationDryRun.stderr).toBe("");
         expect(JSON.parse(migrationDryRun.stdout)).toMatchObject({
           fromVersion: "1",
-          toVersion: "2",
+          toVersion: "3",
           changed: true,
           write: false,
           backupCreated: false
@@ -1042,7 +1042,7 @@ describe("packed artifact contract", () => {
         expect(migrationWrite.stderr).toBe("");
         expect(JSON.parse(migrationWrite.stdout)).toMatchObject({ changed: true, write: true, backupCreated: true });
         expect(await readFile(`${migrationConfigPath}.bak`, "utf8")).toBe(migrationOriginal);
-        expect(JSON.parse(await readFile(migrationConfigPath, "utf8"))).toMatchObject({ version: "2" });
+        expect(JSON.parse(await readFile(migrationConfigPath, "utf8"))).toMatchObject({ version: "3" });
 
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
         const initialized = runInstalledBinaryThroughShell(

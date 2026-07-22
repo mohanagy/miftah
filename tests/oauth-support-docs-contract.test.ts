@@ -23,8 +23,10 @@ describe("OAuth support documentation contract", () => {
     expect(libraryApi).toContain("[OAuth support](oauth-support.md)");
 
     expect(oauthSupport).toContain("# OAuth support and compatibility");
+    expect(oauthSupport).toContain("Version 3 introduces a deliberately narrow OAuth connection core");
+    expect(oauthSupport).toContain("OAUTH_AUTHORIZATION_NOT_ENABLED");
     expect(oauthSupport).toContain(
-      "Miftah does not currently perform OAuth discovery, client registration, browser authorization, callbacks, token refresh, or revocation."
+      "Miftah does not currently perform OAuth discovery, browser authorization, callbacks, token exchange, refresh, remote Authorization-header injection, or revocation."
     );
     expect(oauthSupport).toContain("Miftah does not support OAuth for every MCP server or provider.");
     expect(oauthSupport).toContain("| Support class | Transport and current ownership | Operator fallback |");
@@ -82,13 +84,18 @@ describe("OAuth support documentation contract", () => {
     expect(configTypes).toContain('headers?: Record<string, string>;');
     expect(schema).toContain("headers: z.record(z.string(), z.string()).optional()");
     expect(schema).toContain(".strict()");
-    expect(schema).not.toContain("oauth:");
-    expect(libraryIndex).not.toContain("OAuth");
+    expect(configTypes).toContain("export interface OAuthConfig");
+    expect(configTypes).toContain("export interface OAuthConnectionConfig");
+    expect(schema).toContain("oauth: oauthConfigSchema.optional()");
+    expect(libraryIndex).toContain("OAuthConfig");
+    expect(libraryIndex).toContain("OAuthConnectionConfig");
+    expect(libraryIndex).toContain("OAuthConnectionRef");
     expect(upstreamManager).toMatch(/requestInit:\s*\{\s*headers\s*\}/u);
     expect(upstreamManager).not.toContain("authProvider");
 
-    expect(oauthSupport).toContain("There is no `oauth` configuration object, OAuth public type/export, or adapter API in this release.");
+    expect(oauthSupport).toContain("Version 3 adds `oauth.connections`");
+    expect(oauthSupport).toContain("Static `Authorization` headers on that exact profile/upstream are rejected");
     expect(oauthSupport).toContain("Remote transports use configured static `headers` only; they do not pass an OAuth client provider to the MCP SDK.");
-    expect(oauthSupport).toContain("Any future OAuth surface must be additive, versioned, and paired with an explicit migration and release note.");
+    expect(oauthSupport).toContain("The remaining OAuth runtime surface must be additive, versioned, and paired with an explicit migration and release note.");
   });
 });

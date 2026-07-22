@@ -23,7 +23,7 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(readme).toContain("[OAuth and Console security design](docs/oauth-console-threat-model.md)");
 
     expect(delta).toContain("# OAuth broker and local Console design delta");
-    expect(delta).toContain("No production OAuth broker, Console, callback listener, or token store exists in this release.");
+    expect(delta).toContain("No production OAuth broker, Console, callback listener, or enabled token-store integration exists in this release.");
     expect(delta).toContain("The future Console control API is distinct from the MCP /mcp endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");

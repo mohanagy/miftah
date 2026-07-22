@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- [#81](https://github.com/mohanagy/miftah/issues/81) Added configuration format v3 and a strict, non-secret OAuth connection core: opaque profile/upstream/resource/issuer bindings, canonical HTTPS Streamable HTTP validation, static-Authorization collision refusal, OS-vault credential isolation, crash-released binding-scoped transaction coordination, redacted lifecycle primitives, and v1/v2-to-v3 migration with no credential synthesis. Native OAuth remains intentionally disabled until the separate discovery, browser, callback, exchange, and header-injection work is complete; v3 OAuth declarations fail closed with `OAUTH_AUTHORIZATION_NOT_ENABLED`.
+
 ## [0.3.3] - 2026-07-22
 
 ### Fixed
