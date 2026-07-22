@@ -221,6 +221,35 @@ describe("init command", () => {
     expect(() => validateConfig(fileConfig)).not.toThrow();
   });
 
+  it("creates the GSC pilot and prints ownership guidance without exposing the configured path", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "gsc.json");
+    const clientSecretsFile = resolve(outputRoot, "private", "client-secrets.json");
+
+    await runInitCommand(
+      {
+        name: "gsc",
+        preset: "google-search-console",
+        output: "gsc.json",
+        oauthClientSecretsFile: clientSecretsFile
+      },
+      commandContext(streams)
+    );
+    streams.input.end();
+
+    const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+    expect(config.upstream?.args).toEqual(["mcp-search-console@0.3.2"]);
+    expect(streams.transcript.contents).toContain("Provider adapter: Google Search Console");
+    expect(streams.transcript.contents).toContain("Credential ownership: upstream");
+    expect(streams.transcript.contents).toContain("Browser handoff: upstream");
+    expect(streams.transcript.contents).toContain("Token store: upstream-private");
+    expect(streams.transcript.contents).toContain("Identity evidence: unavailable");
+    expect(streams.transcript.contents).toContain("Reauthentication: upstream MCP tool 'reauthenticate'");
+    expect(streams.transcript.contents).toContain("Disconnect/revocation: manual-only");
+    expect(streams.transcript.contents).toContain("Miftah will not read or manage the upstream token cache.");
+    expect(streams.transcript.contents).not.toContain(clientSecretsFile);
+  });
+
   it("normalizes wizard EOF and SIGINT cancellation to usage errors without creating files", async () => {
     const eofStreams = createStreams();
     eofStreams.input.end();

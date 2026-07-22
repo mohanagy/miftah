@@ -11,6 +11,7 @@ type ValueOptionName =
   | "url"
   | "headerName"
   | "headerPrefix"
+  | "oauthClientSecretsFile"
   | "transport"
   | "connection"
   | "upstream"
@@ -34,6 +35,7 @@ export interface CliOptions {
   readonly url?: string;
   readonly headerName?: string;
   readonly headerPrefix?: string;
+  readonly oauthClientSecretsFile?: string;
   readonly transport?: "stdio" | "http";
   readonly connection?: string;
   readonly upstream?: string;
@@ -90,7 +92,8 @@ export const CLI_COMMANDS = {
       "dockerImage",
       "url",
       "headerName",
-      "headerPrefix"
+      "headerPrefix",
+      "oauthClientSecretsFile"
     ]
   },
   "list-tools": {
@@ -247,6 +250,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--header-prefix <prefix>",
     description: "Credential header prefix for the streamable-http preset."
   },
+  oauthClientSecretsFile: {
+    name: "oauthClientSecretsFile",
+    takesValue: true,
+    usage: "--oauth-client-secrets-file <file>",
+    description: "Absolute Google OAuth client-secrets file for the GSC preset."
+  },
   transport: {
     name: "transport",
     takesValue: true,
@@ -340,6 +349,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--url": OPTION_DEFINITIONS.url,
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
+  "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
   "--transport": OPTION_DEFINITIONS.transport,
   "--connection": OPTION_DEFINITIONS.connection,
   "--upstream": OPTION_DEFINITIONS.upstream,

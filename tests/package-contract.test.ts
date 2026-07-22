@@ -73,6 +73,7 @@ const requiredPackPaths = [
   "dist/plugin-host.js",
   "docs/cli.md",
   "docs/library-api.md",
+  "docs/provider-adapters.md",
   "docs/plugins.md",
   "examples/generic.miftah.json",
   "examples/plugins.miftah.json",
@@ -1083,6 +1084,37 @@ describe("packed artifact contract", () => {
         expect(validatedInit.status, validatedInit.stderr || validatedInit.stdout).toBe(0);
         expect(validatedInit.stderr).toBe("");
         expect(JSON.parse(validatedInit.stdout)).toMatchObject({ ok: true, name: "starter config with spaces" });
+
+        const gscOutputPath = join(cliContractDirectory, "gsc pilot.json");
+        const gscClientSecretsPath = join(cliContractDirectory, "private client secrets.json");
+        const initializedGsc = runInstalledBinaryThroughShell(
+          binary,
+          [
+            "init",
+            "gsc-pilot",
+            "--preset",
+            "google-search-console",
+            "--oauth-client-secrets-file",
+            gscClientSecretsPath,
+            "--output",
+            gscOutputPath
+          ],
+          cliContractDirectory
+        );
+        expect(initializedGsc.status, initializedGsc.stderr || initializedGsc.stdout).toBe(0);
+        expect(initializedGsc.stderr).toBe("");
+        expect(initializedGsc.stdout).toContain("Credential ownership: upstream");
+        expect(initializedGsc.stdout).not.toContain(gscClientSecretsPath);
+        expect(JSON.parse(await readFile(gscOutputPath, "utf8"))).toMatchObject({
+          name: "gsc-pilot",
+          upstream: { command: "uvx", args: ["mcp-search-console@0.3.2"] },
+          profiles: {
+            default: {
+              env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsPath },
+              policy: "readonly"
+            }
+          }
+        });
 
         const automationConfigPath = await writeCliConfig(
           "automation config with spaces.json",

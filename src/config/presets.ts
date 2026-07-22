@@ -1,4 +1,6 @@
+import { isAbsolute } from "node:path";
 import type { MiftahConfig, ProfileConfig } from "./types.js";
+import { PROVIDER_ADAPTER_CATALOG } from "./provider-adapters.js";
 import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 /** Pinned GitHub MCP server image used by the GitHub preset. */
@@ -26,6 +28,7 @@ export interface PresetBuildOptions {
   url?: string;
   headerName?: string;
   headerPrefix?: string;
+  oauthClientSecretsFile?: string;
 }
 
 type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
@@ -143,6 +146,42 @@ function buildSentryPreset(name: string): MiftahConfig {
   config.profiles.default = {
     description: "Default account",
     env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
+    policy: "readonly"
+  };
+  config.policies = buildReadonlyPolicies();
+  return config;
+}
+
+function requireOAuthClientSecretsFile(value: unknown): string {
+  if (typeof value !== "string") {
+    catalogError("Preset option 'oauthClientSecretsFile' must be a string.");
+  }
+  if (
+    !value ||
+    value.trim() !== value ||
+    !isAbsolute(value) ||
+    Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+    })
+  ) {
+    catalogError("Preset 'google-search-console' requires an absolute OAuth client-secrets file path without controls or surrounding whitespace.");
+  }
+  return value;
+}
+
+function buildGoogleSearchConsolePreset(name: string, options: PresetBuildOptions): MiftahConfig {
+  const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+  const config = buildStandardPreset(name, {
+    transport: adapter.launch.transport,
+    command: adapter.launch.command,
+    args: [...adapter.launch.args]
+  });
+  config.profiles.default = {
+    description: "Google Search Console account (OAuth owned by upstream)",
+    env: {
+      GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(options.oauthClientSecretsFile)
+    },
     policy: "readonly"
   };
   config.policies = buildReadonlyPolicies();
@@ -302,7 +341,7 @@ function buildStreamableHttpPreset(name: string, options: PresetBuildOptions): M
  * caller-supplied inputs each builder may receive.
  */
 export const PRESET_CATALOG = {
-  version: "1",
+  version: "2",
   presets: {
     generic: {
       requirements: { credentialEnv: "optional" },
@@ -315,6 +354,10 @@ export const PRESET_CATALOG = {
     sentry: {
       requirements: { credentialEnv: "provider-managed" },
       build: buildSentryPreset
+    },
+    "google-search-console": {
+      requirements: { oauthClientSecretsFile: "required" },
+      build: buildGoogleSearchConsolePreset
     },
     "generic-npx": {
       requirements: { npmPackage: "required", credentialEnv: "optional" },

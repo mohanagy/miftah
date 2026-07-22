@@ -167,6 +167,22 @@ describe("CLI parser", () => {
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([
+        "init",
+        "gsc",
+        "--preset=google-search-console",
+        "--oauth-client-secrets-file=/Users/example/.config/gsc/client-secrets.json"
+      ])
+    ).toEqual({
+      kind: "run",
+      command: "init",
+      options: {
+        name: "gsc",
+        preset: "google-search-console",
+        oauthClientSecretsFile: "/Users/example/.config/gsc/client-secrets.json"
+      }
+    });
+    expect(
+      parseCli([
         "--interactive",
         "--client=all",
         "--credential-env",
@@ -239,6 +255,7 @@ describe("CLI parser", () => {
     expect(initHelp).toContain("--url <url>");
     expect(initHelp).toContain("--header-name <name>");
     expect(initHelp).toContain("--header-prefix <prefix>");
+    expect(initHelp).toContain("--oauth-client-secrets-file <file>");
     expect(renderCommandHelp("connection add")).toContain("miftah connection add");
     expect(renderCommandHelp("connection add")).toContain("--scope <scope>");
     expect(renderCommandHelp("auth reauth")).toContain("--non-interactive");
@@ -280,6 +297,7 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--url"]);
     expectUsageError(["init", "--header-name"]);
     expectUsageError(["init", "--header-prefix"]);
+    expectUsageError(["init", "--oauth-client-secrets-file"]);
     expectUsageError(["init", "--interactive", "--interactive"]);
     expectUsageError(["init", "--client=cursor", "--client=cursor"]);
     expectUsageError(["init", "--credential-env=MCP_TOKEN", "--credential-env=MCP_TOKEN"]);
@@ -292,6 +310,11 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--url=https://one.example", "--url=https://two.example"]);
     expectUsageError(["init", "--header-name=Authorization", "--header-name=Authorization"]);
     expectUsageError(["init", "--header-prefix=Bearer", "--header-prefix=Bearer"]);
+    expectUsageError([
+      "init",
+      "--oauth-client-secrets-file=/one.json",
+      "--oauth-client-secrets-file=/two.json"
+    ]);
     expectUsageError(["validate", "unexpected"]);
     expectUsageError(["connection"]);
     expectUsageError(["connection", "unknown"]);

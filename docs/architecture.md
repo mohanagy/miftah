@@ -1,6 +1,6 @@
 # Architecture
 
-The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks. The [OAuth and Console security design delta](oauth-console-threat-model.md) describes the control-plane and credential-lifecycle gates. Version 3 adds a standards-compatible remote OAuth runtime, in-process operator lifecycle services, and a separately launched local Console control API for exact HTTPS Streamable HTTP connections; provider adapters, provider-side revocation, and the browser UI remain separate milestones.
+The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks. The [OAuth and Console security design delta](oauth-console-threat-model.md) describes the control-plane and credential-lifecycle gates. Version 3 adds a standards-compatible remote OAuth runtime, in-process operator lifecycle services, and a separately launched local Console control API for exact HTTPS Streamable HTTP connections. A separate typed built-in [provider-adapter catalog](provider-adapters.md) can launch and describe upstream-owned local authentication without entering the native OAuth engine; provider-side revocation and the browser UI remain separate milestones.
 
 Miftah is an MCP-aware proxy, not a byte-level reverse proxy:
 
