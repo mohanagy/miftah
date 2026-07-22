@@ -1,6 +1,9 @@
 import { isIP } from "node:net";
 import { z } from "zod";
-import { CURRENT_CONFIG_VERSION, SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
+import { canonicalizeOAuthResource } from "../oauth/canonical-resource.js";
+import { parseOAuthConnectionRef, validateOAuthIssuer } from "../oauth/connection-types.js";
+import { hasMergedHeader } from "../upstream/headers.js";
+import { SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
 
 const recordSchema = z.record(z.string(), z.unknown());
 const unsupportedOptionSchema = z.unknown().optional();
@@ -18,6 +21,80 @@ const configVersionSchema = z.string().superRefine((value, context) => {
     });
   }
 });
+
+function hasWhitespaceOrControl(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0);
+    return code === undefined || code <= 0x20 || code === 0x7f;
+  });
+}
+
+function isExactOAuthIssuer(value: string): boolean {
+  try {
+    validateOAuthIssuer(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCanonicalOAuthResource(value: string): boolean {
+  try {
+    return canonicalizeOAuthResource(value) === value;
+  } catch {
+    return false;
+  }
+}
+
+const oauthConnectionReferenceSchema = z.string().superRefine((value, context) => {
+  try {
+    parseOAuthConnectionRef(value);
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "OAuth connection references must be opaque generated identifiers" });
+  }
+});
+const oauthTargetIdentifierSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((value) => value.trim() === value && !hasWhitespaceOrControl(value), {
+    message: "OAuth identifiers must not contain whitespace or control characters"
+  });
+const oauthClientRegistrationSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => value.trim() === value && !hasWhitespaceOrControl(value), {
+    message: "OAuth identifiers must not contain whitespace or control characters"
+  });
+const oauthScopeSchema = z.string().min(1).max(256).regex(/^[\x21-\x7e]+$/u);
+const oauthConnectionSchema = z
+  .object({
+    profile: oauthTargetIdentifierSchema,
+    upstream: oauthTargetIdentifierSchema,
+    resource: z.string().min(1).max(2_048).refine(isCanonicalOAuthResource, {
+      message: "OAuth resource must be an exact canonical HTTPS endpoint"
+    }),
+    issuer: z.string().min(1).max(2_048).refine(isExactOAuthIssuer, {
+      message: "OAuth issuer must be an exact HTTPS issuer identifier"
+    }),
+    clientRegistration: oauthClientRegistrationSchema,
+    scopes: z.array(oauthScopeSchema).max(64)
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.scopes).size !== value.scopes.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scopes"], message: "OAuth scopes must be unique" });
+    }
+  });
+const oauthConfigSchema = z
+  .object({ connections: z.record(oauthConnectionReferenceSchema, oauthConnectionSchema) })
+  .strict()
+  .superRefine((value, context) => {
+    if (Object.keys(value.connections).length === 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["connections"], message: "OAuth requires at least one connection" });
+    }
+  });
 
 const upstreamBaseShape = {
   transport: z.enum(["stdio", "http", "sse", "streamable-http"]),
@@ -855,6 +932,8 @@ type ProfileIsolationReferenceInput = {
 
 type UpstreamTransportReference = {
   transport: "stdio" | "http" | "sse" | "streamable-http";
+  url?: string;
+  headers?: Record<string, string>;
 };
 
 type ConfigReferenceInput = {
@@ -865,8 +944,9 @@ type ConfigReferenceInput = {
     string,
     {
       policy?: string;
+      headers?: Record<string, string>;
       isolation?: ProfileIsolationReferenceInput;
-      upstreams?: Record<string, { isolation?: ProfileIsolationReferenceInput }>;
+      upstreams?: Record<string, { headers?: Record<string, string>; isolation?: ProfileIsolationReferenceInput }>;
     }
   >;
   routing?: { rules?: { profile: string }[] };
@@ -875,6 +955,19 @@ type ConfigReferenceInput = {
   };
   policies?: Record<string, unknown>;
   security?: { lockToProfile?: string | null };
+  oauth?: {
+    connections: Record<
+      string,
+      {
+        profile: string;
+        upstream: string;
+        resource: string;
+        issuer: string;
+        clientRegistration: string;
+        scopes: string[];
+      }
+    >;
+  };
 };
 
 type ConfigIssueCode =
@@ -1026,6 +1119,112 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
         "Choose a profile name defined under `profiles`."
       );
     }
+  }
+
+  validateOAuthConnections(value, context, profileNames, namedUpstreams);
+}
+
+function validateOAuthConnections(
+  value: ConfigReferenceInput,
+  context: z.RefinementCtx,
+  profileNames: ReadonlySet<string>,
+  namedUpstreams: Readonly<Record<string, UpstreamTransportReference>>
+): void {
+  for (const [connectionRef, connection] of Object.entries(value.oauth?.connections ?? {})) {
+    const path = ["oauth", "connections", connectionRef] as const;
+    const profile = value.profiles[connection.profile];
+    if (!profileNames.has(connection.profile) || profile === undefined) {
+      addConfigIssue(
+        context,
+        "ROUTING_PROFILE_NOT_FOUND",
+        [...path, "profile"],
+        "OAuth connection targets a profile that does not exist",
+        "Choose a profile defined under profiles."
+      );
+      continue;
+    }
+
+    const singleton = value.upstream;
+    const upstream = singleton ?? namedUpstreams[connection.upstream];
+    if (singleton !== undefined && connection.upstream !== "default") {
+      addConfigIssue(
+        context,
+        "UPSTREAM_NOT_FOUND",
+        [...path, "upstream"],
+        "a singleton upstream must be referenced as 'default'",
+        "Set oauth.connections.<ref>.upstream to 'default'."
+      );
+      continue;
+    }
+    if (singleton === undefined && upstream === undefined) {
+      addConfigIssue(
+        context,
+        "UPSTREAM_NOT_FOUND",
+        [...path, "upstream"],
+        "OAuth connection targets an upstream that does not exist",
+        "Choose an upstream defined under upstreams."
+      );
+      continue;
+    }
+    if (upstream === undefined || upstream.transport !== "streamable-http" || upstream.url === undefined) {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        [...path, "upstream"],
+        "OAuth connections require an HTTPS streamable-http upstream",
+        "Configure the selected upstream with transport 'streamable-http' and an HTTPS URL."
+      );
+      continue;
+    }
+
+    let canonicalUpstreamResource: string;
+    try {
+      canonicalUpstreamResource = canonicalizeOAuthResource(upstream.url);
+    } catch {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        [...path, "resource"],
+        "OAuth requires a canonical HTTPS upstream resource URL",
+        "Use the exact canonical HTTPS streamable-http endpoint for both upstream.url and oauth resource."
+      );
+      continue;
+    }
+    if (upstream.url !== canonicalUpstreamResource || connection.resource !== canonicalUpstreamResource) {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        [...path, "resource"],
+        "OAuth resource must exactly match the canonical selected upstream URL",
+        "Use the same canonical HTTPS URL for upstream.url and oauth resource."
+      );
+    }
+
+    const upstreamOverride = singleton === undefined ? profile.upstreams?.[connection.upstream] : undefined;
+    if (hasMergedHeader("authorization", upstream.headers, profile.headers, upstreamOverride?.headers)) {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        [...path, "resource"],
+        "OAuth connections cannot coexist with an effective Authorization header",
+        "Remove the static Authorization header before configuring native OAuth for this profile and upstream."
+      );
+    }
+  }
+
+  const targets = new Set<string>();
+  for (const [connectionRef, connection] of Object.entries(value.oauth?.connections ?? {})) {
+    const key = JSON.stringify([connection.profile, connection.upstream]);
+    if (targets.has(key)) {
+      addConfigIssue(
+        context,
+        "CONFIG_SCHEMA_INVALID",
+        ["oauth", "connections", connectionRef],
+        "only one OAuth connection may target a profile and upstream",
+        "Use one connection per profile/upstream target."
+      );
+    }
+    targets.add(key);
   }
 }
 
@@ -1199,15 +1398,23 @@ type ConfigVersionSurface = {
   readonly audit?: { readonly redact?: unknown };
   readonly upstream?: { readonly transport?: unknown };
   readonly upstreams?: Record<string, { readonly transport?: unknown }>;
+  readonly oauth?: unknown;
 };
 
-/** Version 2 removes aliases that the explicit v1-to-v2 migrator can preserve without changing behavior. */
+/** Canonical versions remove aliases that the explicit v1-to-v2 migrator can preserve without changing behavior. */
 function validateConfigVersionSurface(value: ConfigVersionSurface, context: z.RefinementCtx): void {
-  if (value.version !== CURRENT_CONFIG_VERSION) return;
-
   const rejectLegacyAlias = (path: (string | number)[], explanation: string, remediation: string): void => {
     addConfigIssue(context, "UNSUPPORTED_CONFIG_OPTION", path, explanation, remediation);
   };
+
+  if (value.version !== "3" && value.oauth !== undefined) {
+    rejectLegacyAlias(
+      ["oauth"],
+      "OAuth connection bindings require config version 3",
+      "Run `miftah migrate-config --config <file> --write` before adding oauth connections."
+    );
+  }
+  if (value.version === "1") return;
 
   if (value.security?.allowPlaintextSecrets !== undefined) {
     rejectLegacyAlias(
@@ -1243,6 +1450,7 @@ function validateConfigVersionSurface(value: ConfigVersionSurface, context: z.Re
   for (const name of Object.keys(value.upstreams ?? {}).sort()) {
     validateTransport(value.upstreams?.[name]?.transport, ["upstreams", name, "transport"]);
   }
+
 }
 
 /** The strict, supported configuration surface used for runtime output and JSON Schema generation. */
@@ -1264,7 +1472,8 @@ export const miftahPublicConfigSchema = z
     secrets: secretsSchema.optional(),
     plugins: pluginsSchema.optional(),
     state: publicStateSchema.optional(),
-    server: publicServerSchema.optional()
+    server: publicServerSchema.optional(),
+    oauth: oauthConfigSchema.optional()
   })
   .strict()
   .superRefine((value, context) => {
@@ -1292,6 +1501,7 @@ export const miftahConfigSchema = z
     plugins: pluginsSchema.optional(),
     state: stateSchema.optional(),
     server: serverSchema.optional(),
+    oauth: oauthConfigSchema.optional(),
     ui: unsupportedOptionSchema
   })
   .strict()

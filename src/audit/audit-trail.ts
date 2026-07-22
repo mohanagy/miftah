@@ -53,6 +53,8 @@ export interface AuditLifecycleInput {
   lockToProfile?: string;
   status: AuditStatus;
   errorCode?: string;
+  oauthConnectionState?: AuditEvent["oauthConnectionState"];
+  oauthIdentityState?: AuditEvent["oauthIdentityState"];
 }
 
 export interface AuditApprovalInput {
@@ -132,7 +134,9 @@ export class AuditTrail {
       durationMs: 0,
       ...(input.upstream === undefined ? {} : { upstream: input.upstream }),
       ...(input.lockToProfile === undefined ? {} : { lockToProfile: input.lockToProfile }),
-      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode })
+      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+      ...(input.oauthConnectionState === undefined ? {} : { oauthConnectionState: input.oauthConnectionState }),
+      ...(input.oauthIdentityState === undefined ? {} : { oauthIdentityState: input.oauthIdentityState })
     });
   }
 

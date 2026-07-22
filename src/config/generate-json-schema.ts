@@ -1,6 +1,5 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { CANONICAL_HTTPS_ORIGIN_PATTERN, miftahPublicConfigSchema } from "./schema.js";
-import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 type SchemaObject = Record<string, unknown>;
 
@@ -91,8 +90,8 @@ function addAuditRotationConstraints(schema: SchemaObject): void {
   rotation.anyOf = [{ required: ["maxBytes"] }, { required: ["maxAgeMs"] }];
 }
 
-/** Mirrors v2's runtime-only alias rejection for editor JSON Schema consumers. */
-function versionTwoCompatibilityConstraint(): SchemaObject {
+/** Mirrors canonical-version runtime alias rejection for editor JSON Schema consumers. */
+function canonicalVersionCompatibilityConstraint(version: "2" | "3"): SchemaObject {
   const forbiddenProperty = (section: string, property: string): SchemaObject => ({
     not: {
       required: [section],
@@ -106,7 +105,7 @@ function versionTwoCompatibilityConstraint(): SchemaObject {
   return {
     if: {
       required: ["version"],
-      properties: { version: { const: CURRENT_CONFIG_VERSION } }
+      properties: { version: { const: version } }
     },
     then: {
       allOf: [
@@ -128,6 +127,19 @@ function versionTwoCompatibilityConstraint(): SchemaObject {
           }
         }
       ]
+    }
+  };
+}
+
+/** OAuth connection records are an explicit v3-only additive configuration surface. */
+function oauthVersionConstraint(version: "1" | "2"): SchemaObject {
+  return {
+    if: {
+      required: ["version"],
+      properties: { version: { const: version } }
+    },
+    then: {
+      not: { required: ["oauth"] }
     }
   };
 }
@@ -204,7 +216,10 @@ export function generateConfigSchema(): Record<string, unknown> {
           }
         }
       },
-      versionTwoCompatibilityConstraint()
+      canonicalVersionCompatibilityConstraint("2"),
+      canonicalVersionCompatibilityConstraint("3"),
+      oauthVersionConstraint("1"),
+      oauthVersionConstraint("2")
     ],
     title: "Miftah configuration"
   };

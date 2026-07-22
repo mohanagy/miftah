@@ -1,8 +1,10 @@
 # OAuth support and compatibility
 
-Miftah is an MCP wrapper and credential-profile boundary. It can carry explicitly configured credentials to an upstream, but it is not an OAuth broker today.
+Miftah is an MCP wrapper and credential-profile boundary. It can carry explicitly configured credentials to an upstream, but it is not an end-to-end OAuth broker today.
 
-**Miftah does not currently perform OAuth discovery, client registration, browser authorization, callbacks, token refresh, or revocation.** `streamable-http` is a remote transport choice, not evidence that an upstream's OAuth flow is supported. **Miftah does not support OAuth for every MCP server or provider.**
+Version 3 introduces a deliberately narrow OAuth connection core: strict non-secret `oauth.connections` bindings, canonical HTTPS resource checks, exact issuer/profile/upstream isolation, an OS-vault credential contract, and redacted lifecycle primitives guarded by a crash-released local transaction lock for each exact connection binding. It does **not** make native OAuth usable yet. A configured v3 OAuth connection stops at startup with `OAUTH_AUTHORIZATION_NOT_ENABLED` until the authorization engine is delivered.
+
+**Miftah does not currently perform OAuth discovery, browser authorization, callbacks, token exchange, refresh, remote Authorization-header injection, or revocation.** `streamable-http` is a remote transport choice, not evidence that an upstream's OAuth flow is supported. **Miftah does not support OAuth for every MCP server or provider.**
 
 This page is the public compatibility contract for OAuth-shaped upstream authentication. It distinguishes what operators can use now from the deliberately unimplemented work proposed in the OAuth roadmap. It does not authorize the runtime to begin managing provider credentials.
 
@@ -12,7 +14,7 @@ The [OAuth and local Console design delta](oauth-console-threat-model.md) define
 
 | Support class | Transport and current ownership | Operator fallback |
 | --- | --- | --- |
-| Standards-compatible remote HTTP MCP OAuth | Future target for an HTTPS Streamable HTTP MCP server that follows protected-resource and authorization-server metadata conventions. Miftah has no enabled native implementation for discovery, client registration, authorization, callback, refresh, reauth, revoke, or identity evidence yet. | Use the upstream's documented manual/pre-registered credential path and configured static headers, or wait for the versioned native contract. |
+| Standards-compatible remote HTTP MCP OAuth | v3 validates a non-secret profile/upstream/resource/issuer binding and has an internal secure-store lifecycle contract. Miftah has no enabled discovery, client-registration, browser, callback, exchange, header-injection, or revoke implementation yet. | Use the upstream's documented manual/pre-registered credential path and configured static headers, or wait for the enabled authorization engine. |
 | Provider-adapter-backed local or non-standard OAuth | No provider-adapter API exists today. Miftah does not automate a provider browser flow, private callback convention, or token-store format. | Use the upstream's documented login and configuration; Miftah can launch, redact, and diagnose the configured upstream only. |
 | Upstream-owned or manual credentials | `stdio`, legacy `sse`, and remote Streamable HTTP headers can be wrapped now. The upstream/provider owns login, callback, token cache, refresh, reauth, and revoke; Miftah only resolves explicit environment/header secret references and starts the upstream. | Complete the provider-owned login, supply its documented credential path, environment value, or static secret reference, then run `miftah validate` and `miftah doctor`. |
 | Unsupported authentication patterns | Provider passwords, browser cookies, and arbitrary third-party token caches are not a supported Miftah-managed OAuth mechanism. Miftah does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. An operator can still pass an explicit value or path through ordinary `env`/`headers`/process configuration; that does not make it a supported OAuth flow. | Use a provider-supported mechanism, or leave that upstream unconfigured when its only path depends on opaque private state. |
@@ -45,17 +47,17 @@ Miftah's optional identity verifier is independent of OAuth. Its meaningful life
 
 ## Configuration and public API boundary
 
-Current `UpstreamConfig` supports `stdio`, `streamable-http`, and legacy `sse` transports plus explicit `headers`; version 1 also retains the documented `http` alias. **There is no `oauth` configuration object, OAuth public type/export, or adapter API in this release.** Strict configuration rejects unknown OAuth/callback/client keys rather than accepting a no-op security setting.
+Current `UpstreamConfig` supports `stdio`, `streamable-http`, and legacy `sse` transports plus explicit `headers`; version 1 also retains the documented `http` alias. Version 3 adds `oauth.connections`: an opaque generated connection reference maps only to a profile, upstream, canonical resource, exact issuer, non-secret client-registration handle, and bounded scopes. It cannot contain an access token, refresh token, client secret, callback setting, or Authorization header. Static `Authorization` headers on that exact profile/upstream are rejected rather than being merged with native OAuth.
 
-**Remote transports use configured static `headers` only; they do not pass an OAuth client provider to the MCP SDK.** The public library API likewise exports no OAuth client type or credential-lifecycle API. Existing environment, dotenv, keychain, 1Password, and explicit local secret-provider plugins resolve configured values; they do not become a generic OAuth cache.
+**Remote transports use configured static `headers` only; they do not pass an OAuth client provider to the MCP SDK.** `OAuthConfig` and `OAuthConnectionConfig` are public non-secret configuration types, not a browser/client-provider/token-lifecycle API. Existing environment, dotenv, keychain, 1Password, and explicit local secret-provider plugins resolve configured values; they do not become a generic OAuth cache.
 
-**Any future OAuth surface must be additive, versioned, and paired with an explicit migration and release note.** It must define profile-bound connection records, secure storage, static-`Authorization` conflict behavior, CLI/doctor diagnostics, lifecycle recovery, and backward compatibility before schema or runtime support is added.
+**The remaining OAuth runtime surface must be additive, versioned, and paired with an explicit migration and release note.** It must add discovery, browser/callback handling, token exchange, safe header injection, CLI/doctor diagnostics, lifecycle recovery, and backward compatibility without weakening the v3 binding or secure-store invariants.
 
 ## Operator decision guide
 
 1. If the upstream accepts a stable API key or bearer value, configure an explicit secret reference in `headers` or `env`, then validate and doctor the exact configuration.
 2. If the upstream owns a local OAuth login, complete that login under the upstream's instructions and configure only its documented input. Treat the upstream's token cache as its private state.
-3. If the upstream advertises standards-compatible remote OAuth, do not assume Miftah can currently drive it. Use the upstream's supported manual/pre-registered alternative until Miftah ships a reviewed native connection contract.
+3. If the upstream advertises standards-compatible remote OAuth, do not assume Miftah can currently drive it. v3 can validate a connection declaration but intentionally fails closed before authorization; use the upstream's supported manual/pre-registered alternative until Miftah ships the enabled authorization engine.
 4. If the provider requires passwords, browser cookies, or an undocumented token cache, do not treat it as a Miftah-managed OAuth flow. Use a provider-supported mechanism or leave the upstream unconfigured; an explicit operator-provided value does not make Miftah responsible for that credential lifecycle.
 
 See [configuration](config.md#remote-upstream-transports), [security](security.md), and [architecture](architecture.md) for the corresponding current transport, redaction, and public-API boundaries.

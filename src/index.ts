@@ -9,6 +9,7 @@ export { loadConfig } from "./config/load-config.js";
 export { validateConfig } from "./config/validate-config.js";
 export { generateConfigSchema } from "./config/generate-json-schema.js";
 export { presetConfig } from "./config/presets.js";
+export type { OAuthConnectionRef } from "./oauth/connection-types.js";
 export type {
   ActiveProfileStateScope,
   AuditConfig,
@@ -22,6 +23,8 @@ export type {
   JiraProfileRoutingMatch,
   LinearProfileRoutingMatch,
   MiftahConfig,
+  OAuthConfig,
+  OAuthConnectionConfig,
   PolicyConfig,
   PluginConfig,
   PluginKind,

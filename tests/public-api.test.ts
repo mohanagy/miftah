@@ -25,6 +25,9 @@ import type {
   MiftahErrorCode,
   MiftahErrorDetails,
   MiftahRuntime,
+  OAuthConfig,
+  OAuthConnectionConfig,
+  OAuthConnectionRef,
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
@@ -95,6 +98,9 @@ const supportedTypeExports = [
   "MiftahErrorCode",
   "MiftahErrorDetails",
   "MiftahRuntime",
+  "OAuthConfig",
+  "OAuthConnectionConfig",
+  "OAuthConnectionRef",
   "PolicyConfig",
   "ProcessConfig",
   "ProfileConfig",
@@ -436,13 +442,51 @@ void [
   invalidVersionTwoAuditRedactAlias
 ];
 
+const versionThreeOAuthConfig: MiftahConfig = {
+  version: "3",
+  name: "oauth-config",
+  defaultProfile: "work",
+  upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+  profiles: { work: {} },
+  oauth: {
+    connections: {
+      "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5": {
+        profile: "work",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://issuer.example.test",
+        clientRegistration: "pre-registered:desktop",
+        scopes: ["mcp:tools"]
+      }
+    }
+  }
+};
+
+const invalidVersionTwoOAuthConfig: MiftahConfig = {
+  ...versionTwoConfigBase,
+  upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+  // @ts-expect-error OAuth bindings are introduced only by version 3.
+  oauth: versionThreeOAuthConfig.oauth
+};
+
+type OAuthConfigShape = OAuthConfig;
+type OAuthConnectionConfigShape = OAuthConnectionConfig;
+const oauthConnectionRef: OAuthConnectionRef = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
+void [
+  versionThreeOAuthConfig,
+  invalidVersionTwoOAuthConfig,
+  oauthConnectionRef,
+  (0 as unknown as OAuthConfigShape),
+  (0 as unknown as OAuthConnectionConfigShape)
+];
+
 describe("public library API", () => {
   it("exposes only the intentionally supported runtime API", () => {
     expect(Object.keys(api).sort()).toEqual([...supportedRuntimeExports].sort());
     for (const name of supportedRuntimeExports) {
       expect(api).toHaveProperty(name);
     }
-    expect(api.CURRENT_CONFIG_VERSION).toBe("2");
+    expect(api.CURRENT_CONFIG_VERSION).toBe("3");
   });
 
   it("keeps internal runtime wiring out of the package root", () => {

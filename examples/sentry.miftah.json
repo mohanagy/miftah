@@ -1,5 +1,5 @@
 {
-  "version": "2",
+  "version": "3",
   "name": "sentry",
   "description": "sentry wrapped by Miftah",
   "defaultProfile": "default",

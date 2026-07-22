@@ -15,6 +15,7 @@ import { ProgressPreservingTransport, unwrapProgressPreservingTransport } from "
 import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MIFTAH_VERSION } from "../version.js";
+import { mergeHeaders } from "./headers.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
@@ -24,18 +25,6 @@ const maximumRestartDelayMs = 5_000;
 const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
 const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
-
-function mergeHeaders(
-  ...headerSets: Array<Record<string, string> | undefined>
-): Record<string, string> {
-  const merged = new Map<string, string>();
-  for (const headers of headerSets) {
-    for (const [name, value] of Object.entries(headers ?? {})) {
-      merged.set(name.toLowerCase(), value);
-    }
-  }
-  return Object.fromEntries(merged);
-}
 
 function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
   if (process.platform !== "win32") return Object.assign({}, ...environmentSets);

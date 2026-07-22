@@ -15,7 +15,7 @@ const exactSemver =
 const canonicalDigestImage =
   /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?\/)?(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)*[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@sha256:[A-Fa-f0-9]{64}$/u;
 
-type CurrentMiftahConfig = Extract<MiftahConfig, { version: "2" }>;
+type CurrentMiftahConfig = Extract<MiftahConfig, { version: "3" }>;
 type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
 type SharedDefaults = Pick<CurrentMiftahConfig, "routing" | "security" | "secrets" | "process" | "audit" | "tooling">;
 
