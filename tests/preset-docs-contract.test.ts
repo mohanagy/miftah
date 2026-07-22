@@ -18,6 +18,8 @@ describe("preset documentation contract", () => {
     const readme = readRepositoryFile("README.md");
     const cli = readRepositoryFile("docs/cli.md");
     const claudeDesktop = readRepositoryFile("docs/claude-desktop.md");
+    const providerAdapters = readRepositoryFile("docs/provider-adapters.md");
+    const oauthSupport = readRepositoryFile("docs/oauth-support.md");
     const changelog = readRepositoryFile("CHANGELOG.md");
     const packageManifest = parseRepositoryJson("package.json") as { version: string };
 
@@ -43,7 +45,9 @@ describe("preset documentation contract", () => {
       "--read-only",
       "repos,issues,pull_requests",
       "@sentry/mcp-server@0.36.0",
-      "--skills=inspect"
+      "--skills=inspect",
+      "mcp-search-console@0.3.2",
+      "GSC_OAUTH_CLIENT_SECRETS_FILE"
     ]) {
       expect(compatibility).toContain(requiredFact);
     }
@@ -58,6 +62,9 @@ describe("preset documentation contract", () => {
       "[Sentry `0.36.0` CLI usage](https://github.com/getsentry/sentry-mcp/blob/0.36.0/packages/mcp-server/src/cli/usage.ts)",
       "[MCP Everything source](https://github.com/modelcontextprotocol/servers/tree/main/src/everything)",
       "[MCP Everything npm package](https://www.npmjs.com/package/@modelcontextprotocol/server-everything)",
+      "[Google Search Console MCP source](https://github.com/AminForou/mcp-gsc)",
+      "[Google Search Console MCP package](https://pypi.org/project/mcp-search-console/0.3.2/)",
+      "[uv tool version pinning](https://docs.astral.sh/uv/guides/tools/#installing-tools)",
       "[Claude Code MCP](https://code.claude.com/docs/en/mcp)",
       "[Cursor MCP](https://cursor.com/docs/mcp)",
       "[VS Code MCP servers](https://code.visualstudio.com/docs/agent-customization/mcp-servers)",
@@ -84,7 +91,8 @@ describe("preset documentation contract", () => {
       "--docker-image",
       "--url",
       "--header-name",
-      "--header-prefix"
+      "--header-prefix",
+      "--oauth-client-secrets-file"
     ]) {
       expect(cli).toContain(option);
     }
@@ -95,9 +103,21 @@ describe("preset documentation contract", () => {
 
     const issue19 = changelogIssueEntry(changelog, 19);
     const issue98 = changelogIssueEntry(changelog, 98);
+    const issue87 = changelogIssueEntry(changelog, 87);
     expect(issue19).toContain("catalog");
     expect(issue19).toContain("onboarding");
     expect(issue98).toContain("permission");
     expect(issue98).not.toContain("runtime construction");
+    expect(issue87).toContain("upstream-owned");
+    expect(providerAdapters).toContain("## Google Search Console pilot");
+    expect(providerAdapters).toContain("Credential ownership | Upstream");
+    expect(providerAdapters).toContain("Miftah never reads, copies, exports, or deletes that cache");
+    expect(providerAdapters).toContain("GSC_CREDENTIALS_PATH");
+    expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
+    expect(providerAdapters).toContain("get_capabilities");
+    expect(providerAdapters).toContain("reauthenticate");
+    expect(providerAdapters).toContain("GSC_ALLOW_DESTRUCTIVE");
+    expect(oauthSupport).not.toContain("No provider-adapter API exists today");
+    expect(oauthSupport).toContain("Google Search Console pilot");
   });
 });

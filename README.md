@@ -91,7 +91,7 @@ When you need the other product, select its profile deliberately. When a tool ca
 - **Other compatible MCP servers:** configure a generic STDIO, Streamable HTTP, or legacy SSE upstream, then add profiles around it.
 - **Multiple upstreams in one wrapper:** use an account bundle when related upstreams belong behind one controlled connection.
 
-Miftah can authorize a standards-compatible remote HTTPS Streamable HTTP MCP server through discovery, PKCE, a bounded loopback browser callback, OS-vault storage, and refresh. `miftah connection …` and `miftah auth …` provide reviewed setup, status, noninteractive testing, connect, safe reauth, and local disconnect. Provider-specific or local STDIO OAuth remains owned by that upstream, and local disconnect does not claim provider-side token revocation. Read [OAuth support](docs/oauth-support.md) for the exact compatibility and configuration boundary.
+Miftah can authorize a standards-compatible remote HTTPS Streamable HTTP MCP server through discovery, PKCE, a bounded loopback browser callback, OS-vault storage, and refresh. `miftah connection …` and `miftah auth …` provide reviewed setup, status, noninteractive testing, connect, safe reauth, and local disconnect. Provider-specific or local STDIO OAuth remains owned by that upstream, and local disconnect does not claim provider-side token revocation. A bounded [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot) now generates an exact-pinned upstream-owned setup without reading its token cache or pretending it is native Miftah OAuth. Read [OAuth support](docs/oauth-support.md) for the exact compatibility and configuration boundary.
 
 ## Trust and control boundaries
 
@@ -117,6 +117,7 @@ If you use one account with one direct MCP server and do not need profile, routi
 - [Configuration reference](docs/config.md)
 - [Security boundary](docs/security.md), [Threat model](docs/threat-model.md), and [OAuth and Console security design](docs/oauth-console-threat-model.md)
 - [OAuth support](docs/oauth-support.md)
+- [Provider adapters and Google Search Console pilot](docs/provider-adapters.md)
 - [Local Console control API](docs/console-api.md)
 - [CLI reference](docs/cli.md)
 - [Architecture](docs/architecture.md)

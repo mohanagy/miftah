@@ -2,7 +2,7 @@
 
 This is the compatibility source of truth for generated `miftah init` configurations and client snippets.
 
-- Catalog version: `1`
+- Catalog version: `2`
 - Miftah package version: `0.3.3`
 - Last tested / validation boundary: the catalog builds strict Miftah configuration that `validateConfig` accepts. The docs contract test checks generated configuration only; it does **not** construct a runtime, start, authenticate to, or smoke-test external providers.
 
@@ -15,6 +15,7 @@ Miftah itself requires Node.js `>=20`. That does not establish an upstream serve
 | `generic` | `npx --yes @modelcontextprotocol/server-everything@2026.7.4 stdio` | This is the MCP reference/test server, not a production-ready provider recommendation. Its npm metadata declares no upstream Node engine floor. An optional `--credential-env <name>` adds only a `${ENV_NAME}` reference. |
 | `github` | Docker STDIO: `docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server:v1.5.0 stdio --read-only --toolsets=repos,issues,pull_requests` | Docker is required. Supply least-privilege GitHub provider tokens through the generated environment references. The catalog intentionally pins a tag, **not** an invented OCI digest. Before a reproducible production deployment, use an authenticated registry process to promote the approved tag, inspect and record its resolved digest in deployment records, then deploy that recorded digest according to the [GitHub digest guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pull-by-digest). |
 | `sentry` | `npx --yes @sentry/mcp-server@0.36.0 --skills=inspect`; generated environment reference: `SENTRY_ACCESS_TOKEN` | The upstream package requires Node.js `>=20`. Use least-privilege Sentry token scopes. `--skills=inspect` filters CLI skills; it is not provider-token authorization and is not a read-only flag or preset. Miftah local policy does not reduce provider token permissions. |
+| `google-search-console` | Required: `--oauth-client-secrets-file <absolute-path>`; generated command: `uvx mcp-search-console@0.3.2`; generated environment: `GSC_OAUTH_CLIENT_SECRETS_FILE` | Python `>=3.11` and `uvx` are required. OAuth, browser handoff, token cache, reauthentication, and revocation remain upstream/manual-owned. Miftah applies a read-only policy, does not set `GSC_ALLOW_DESTRUCTIVE`, and never reads the upstream cache. See the [provider-adapter contract](provider-adapters.md#google-search-console-pilot). |
 | `generic-npx` | Required: `--npm-package <exact-package@x.y.z>`; optional `--credential-env <name>` | Only an exact npm package SemVer is accepted. The selected external package, not Miftah, declares its own Node requirement. |
 | `generic-docker` | Required: `--docker-image <canonical-image@sha256:...>`; optional `--credential-env <name>` | Docker is required. Only a canonical image reference with a 64-hex-character `@sha256:` digest is accepted. |
 | `streamable-http` | Required: `--url <https-url>`; optional credential metadata: `--credential-env`, `--header-name`, and `--header-prefix` | The URL must be HTTPS and must not contain userinfo, a query, or a fragment. Credentials may appear only as `${ENV_NAME}` through validated header metadata; allowed prefixes are empty, `Bearer `, and `Sentry `. Never place a credential in a URL or URL component. |
@@ -41,6 +42,12 @@ Use the following upstream materials when assessing a pin or provider configurat
 - [MCP Everything source](https://github.com/modelcontextprotocol/servers/tree/main/src/everything)
 - [MCP Everything npm package](https://www.npmjs.com/package/@modelcontextprotocol/server-everything)
 
+### Google Search Console pilot
+
+- [Google Search Console MCP source](https://github.com/AminForou/mcp-gsc)
+- [Google Search Console MCP package](https://pypi.org/project/mcp-search-console/0.3.2/)
+- [uv tool version pinning](https://docs.astral.sh/uv/guides/tools/#installing-tools)
+
 ## First run
 
 `init` uses the strict catalog. The default preset is `generic`; an unknown preset is rejected rather than falling back. (The legacy library-only `presetConfig` fallback does not describe CLI behavior.)
@@ -51,14 +58,15 @@ miftah init [name] \
   [--interactive] [--client <claude-desktop|claude-code|cursor|vscode|all>] \
   [--credential-env <name>] [--npm-package <package>] \
   [--docker-image <image>] [--url <url>] \
-  [--header-name <name>] [--header-prefix <prefix>]
+  [--header-name <name>] [--header-prefix <prefix>] \
+  [--oauth-client-secrets-file <absolute-path>]
 ```
 
 Without `--interactive`, `init` creates only a configuration unless `--client` is supplied. With `--client`, it still creates the configuration and prints JSON snippets; it never writes a client file. For `--client claude-code` or `--client all`, it also prints a separately labelled Claude Code `permissions.ask` fragment for the visible Miftah management tools that require explicit client review. It never writes or overwrites Claude Code settings. Creation is exclusive and never overwrites an existing output path.
 
 `--interactive` is available only when both input and output are real TTYs. EOF or Ctrl-C cancels before the configuration write. The wizard asks only for a name, catalog preset, safe preset metadata (variable names, URLs, header metadata, pins), output location, and client selection. It never asks for or echoes a secret value.
 
-The printed snippets use absolute paths to the Node executable and compiled Miftah CLI so GUI clients do not depend on `PATH`. Regenerate them after moving or upgrading Miftah, or after changing the configuration path. Copy generated JSON as JSON; do not hand-edit the command into a shell string.
+For `google-search-console`, `--oauth-client-secrets-file` is required and is written only to the generated profile environment. The safe adapter summary printed by `init` does not echo that path. The printed client snippets use absolute paths to the Node executable and compiled Miftah CLI so GUI clients do not depend on `PATH`. Regenerate them after moving or upgrading Miftah, or after changing the configuration path. Copy generated JSON as JSON; do not hand-edit the command into a shell string.
 
 ## Client destinations and JSON shapes
 
