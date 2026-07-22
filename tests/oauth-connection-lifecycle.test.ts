@@ -106,6 +106,30 @@ function deferred<Value>() {
 }
 
 describe("OAuth connection lifecycle", () => {
+  it("reports persisted credentials as expired when wall-clock time passes their expiry", async () => {
+    let now = "2026-07-22T00:00:00.000Z";
+    const metadata = new MemoryMetadataStore();
+    const keyring = new MemoryKeyringAdapter();
+    const lifecycle = new OAuthConnectionLifecycle({
+      registry: new OAuthConnectionRegistry(metadata, () => now),
+      store: new PlatformOAuthCredentialStore(keyring, new SecretRedactor()),
+      now: () => new Date(now)
+    });
+    const exact = binding();
+    await lifecycle.connect(exact, {
+      accessToken: "fixture-access-token",
+      refreshToken: "fixture-refresh-token",
+      expiresAt: "2026-07-22T01:00:00.000Z"
+    });
+
+    now = "2026-07-22T02:00:00.000Z";
+
+    await expect(lifecycle.status(exact)).resolves.toMatchObject({
+      credentialState: "expired",
+      expiresAt: "2026-07-22T01:00:00.000Z"
+    });
+  });
+
   it("emits redacted lifecycle and identity audit events", async () => {
     const audit = new MemoryLifecycleAuditSink();
     const { lifecycle: service } = lifecycle(undefined, 50, audit);

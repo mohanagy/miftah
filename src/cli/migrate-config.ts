@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { resolvePath } from "../config/path-resolve.js";
 import { planConfigMigration, type ConfigMigrationPlan } from "../config/migrate-config.js";
+import { validateConfig } from "../config/validate-config.js";
 import { MiftahError } from "../utils/errors.js";
 import {
   copyWindowsConfigSecurityDescriptor,
@@ -351,7 +352,8 @@ async function installWithoutOverwriting(
   path: string,
   transaction: MigrationTransaction,
   source: ConfigMigrationSource,
-  candidateContent: string
+  candidateContent: string,
+  publishedBackupPath: string
 ): Promise<void> {
   try {
     await rename(path, transaction.holdingPath);
@@ -380,8 +382,8 @@ async function installWithoutOverwriting(
 
   try {
     await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
-    await link(transaction.backupPath, `${path}.bak`);
-    const [privateBackup, publishedBackup] = await Promise.all([lstat(transaction.backupPath), lstat(`${path}.bak`)]);
+    await link(transaction.backupPath, publishedBackupPath);
+    const [privateBackup, publishedBackup] = await Promise.all([lstat(transaction.backupPath), lstat(publishedBackupPath)]);
     if (!sameRegularFileIdentity(privateBackup, publishedBackup)) {
       throw new Error("migration backup publication did not retain the private backup file");
     }
@@ -508,7 +510,45 @@ export async function applyConfigMigration(
   }
   const transaction = await createMigrationTransaction(path);
   try {
-    await installWithoutOverwriting(path, transaction, source, `${JSON.stringify(plan.config, null, 2)}\n`);
+    await installWithoutOverwriting(path, transaction, source, `${JSON.stringify(plan.config, null, 2)}\n`, `${path}.bak`);
+  } catch (error) {
+    if (error instanceof MigrationSourceChangedError) {
+      throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);
+    }
+    if (error instanceof MigrationTransactionError) {
+      throw transactionWriteError(path, error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Applies an already planned, schema-valid configuration replacement through the same guarded
+ * transaction as migration while publishing a unique recovery backup for repeatable mutations.
+ */
+export async function applyConfigReplacement(
+  path: string,
+  source: ConfigMigrationSource,
+  config: unknown
+): Promise<string> {
+  validateConfig(config);
+  try {
+    await assertMigrationSourceUnchanged(path, source);
+  } catch (error) {
+    if (error instanceof MigrationSourceChangedError) throw sourceChangedWriteError();
+    throw error;
+  }
+  const transaction = await createMigrationTransaction(path);
+  const backupPath = join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`);
+  try {
+    await installWithoutOverwriting(
+      path,
+      transaction,
+      source,
+      `${JSON.stringify(config, null, 2)}\n`,
+      backupPath
+    );
+    return backupPath;
   } catch (error) {
     if (error instanceof MigrationSourceChangedError) {
       throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);

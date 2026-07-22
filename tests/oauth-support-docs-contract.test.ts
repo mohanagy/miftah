@@ -100,6 +100,8 @@ describe("OAuth support documentation contract", () => {
     expect(oauthSupport).toContain("Version 3 adds `oauth.connections`");
     expect(oauthSupport).toContain("Static `Authorization` headers on that exact profile/upstream are rejected");
     expect(oauthSupport).toContain("The exact OAuth-bound Streamable HTTP transport receives the profile-bound OAuth client provider.");
-    expect(oauthSupport).toContain("Revocation and operator lifecycle commands are not implemented in this release.");
+    expect(oauthSupport).toContain("`auth disconnect` does not claim provider-side token revocation");
+    expect(oauthSupport).toContain("miftah auth reauth");
+    expect(oauthSupport).toContain("OAUTH_INTERACTIVE_REQUIRED");
   });
 });

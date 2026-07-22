@@ -49,6 +49,15 @@ class DeferredHandoff implements OAuthAuthorizationHandoff {
   async close(): Promise<void> {}
 }
 
+class CountingHandoff extends DeferredHandoff {
+  authorizations = 0;
+
+  override authorize(): Promise<string> {
+    this.authorizations += 1;
+    return Promise.resolve("fixture-code");
+  }
+}
+
 function binding(overrides: { clientRegistration?: string; scopes?: readonly string[] } = {}) {
   return createOAuthConnectionBinding({
     configIdentity: "a".repeat(64),
@@ -116,6 +125,59 @@ function providerForRegistration(clientRegistration: string) {
 }
 
 describe("remote OAuth client provider", () => {
+  it("returns a typed headless diagnostic before browser handoff", async () => {
+    const { lifecycle } = service();
+    const handoff = new CountingHandoff();
+    const exact = new RemoteOAuthClientProvider({
+      binding: binding(),
+      lifecycle,
+      handoff,
+      interactiveAuthorization: false,
+      state: () => "fixture-state-value-that-is-long-enough"
+    });
+    await exact.saveDiscoveryState(discovery());
+    const authorizationUrl = new URL("https://issuer.example.test/authorize");
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("state", exact.state());
+    authorizationUrl.searchParams.set("redirect_uri", exact.redirectUrl.toString());
+    authorizationUrl.searchParams.set("resource", "https://mcp.example.test/mcp");
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+    authorizationUrl.searchParams.set("code_challenge", "a".repeat(43));
+    authorizationUrl.searchParams.set("scope", "mcp:tools");
+
+    expect(() => exact.redirectToAuthorization(authorizationUrl)).toThrowError(
+      expect.objectContaining({ code: "OAUTH_INTERACTIVE_REQUIRED" })
+    );
+    expect(handoff.authorizations).toBe(0);
+  });
+
+  it("forces reauthorization without deleting the usable credential before replacement succeeds", async () => {
+    const exactBinding = binding();
+    const { lifecycle, store } = service();
+    await lifecycle.connect(exactBinding, {
+      accessToken: "old-access-token",
+      refreshToken: "old-refresh-token",
+      scopes: ["mcp:tools"]
+    });
+    const exact = new RemoteOAuthClientProvider({
+      binding: exactBinding,
+      lifecycle,
+      handoff: new DeferredHandoff(),
+      forceAuthorization: true
+    });
+
+    await expect(exact.tokens()).resolves.toBeUndefined();
+    expect(store.credential).toMatchObject({ accessToken: "old-access-token" });
+
+    await exact.saveTokens({
+      access_token: "new-access-token",
+      refresh_token: "new-refresh-token",
+      token_type: "Bearer",
+      scope: "mcp:tools"
+    });
+    expect(store.credential).toMatchObject({ accessToken: "new-access-token" });
+  });
+
   it("accepts only discovery metadata bound to the exact resource, issuer, PKCE, and issuer response", async () => {
     const exact = provider();
     await expect(exact.saveDiscoveryState(discovery())).resolves.toBeUndefined();

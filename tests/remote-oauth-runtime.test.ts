@@ -249,6 +249,62 @@ describe("remote OAuth runtime wiring", () => {
     ]);
   });
 
+  it("exposes only redacted configured state and disconnects the exact selected connection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-application-state-"));
+    directories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const reference = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "3",
+        name: "oauth-application-state",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+        profiles: { work: {} },
+        oauth: {
+          connections: {
+            [reference]: {
+              profile: "work",
+              upstream: "default",
+              resource: "https://mcp.example.test/mcp",
+              issuer: "https://mcp.example.test",
+              clientRegistration: "dynamic",
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      }),
+      "utf8"
+    );
+    const metadataStore = new MemoryMetadataStore();
+    const credentialStore = new MemoryCredentialStore();
+    const runtime = await createRuntime(configPath, undefined, { oauth: { metadataStore, credentialStore } });
+    closeRuntime.push(() => runtime.manager.close());
+
+    expect(runtime.oauth?.connections()).toEqual([
+      {
+        connectionRef: reference,
+        profile: "work",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://mcp.example.test",
+        clientRegistration: "dynamic",
+        scopes: ["mcp:tools"]
+      }
+    ]);
+    expect(JSON.stringify(runtime.oauth?.connections())).not.toContain("configIdentity");
+    await expect(runtime.oauth?.status("work", "default")).resolves.toMatchObject({
+      connectionRef: reference,
+      credentialState: "disconnected",
+      identityState: "unverified"
+    });
+    await expect(runtime.oauth?.disconnect("work", "default")).resolves.toMatchObject({
+      connectionRef: reference,
+      credentialState: "disconnected"
+    });
+  });
+
   it("records an unconfigured verifier as unsupported for its OAuth connection", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-unconfigured-identity-"));
     directories.push(directory);

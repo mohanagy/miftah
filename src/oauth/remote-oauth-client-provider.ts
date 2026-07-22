@@ -34,6 +34,10 @@ export interface RemoteOAuthClientProviderOptions {
   readonly now?: () => Date;
   readonly state?: () => string;
   readonly issuerResponseSupported?: (issuer: string) => boolean;
+  /** Refuses browser handoff while still allowing an existing credential to be tested. */
+  readonly interactiveAuthorization?: boolean;
+  /** Ignores an existing token for one explicit reauthorization flow without deleting it first. */
+  readonly forceAuthorization?: boolean;
 }
 
 type ClientRegistration =
@@ -59,6 +63,13 @@ function authorizationFailed(): never {
   throw new MiftahError(
     "OAUTH_AUTHORIZATION_FAILED",
     "OAUTH_AUTHORIZATION_FAILED: OAuth authorization could not be completed"
+  );
+}
+
+function interactiveAuthorizationRequired(): never {
+  throw new MiftahError(
+    "OAUTH_INTERACTIVE_REQUIRED",
+    "OAUTH_INTERACTIVE_REQUIRED: OAuth authorization requires an interactive browser session"
   );
 }
 
@@ -224,6 +235,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
+    if (this.options.forceAuthorization === true) return undefined;
     let credential: OAuthCredential;
     try {
       credential = await this.options.lifecycle.credential(this.options.binding);
@@ -303,6 +315,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     ) {
       authorizationFailed();
     }
+    if (this.options.interactiveAuthorization === false) interactiveAuthorizationRequired();
     if (this.authorization !== undefined) authorizationFailed();
     this.authorization = this.options.handoff.authorize(new URL(authorizationUrl), {
       state: this.transactionState,

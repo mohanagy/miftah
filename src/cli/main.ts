@@ -16,6 +16,32 @@ import { runInitCommand } from "./init.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 import { runMigrateConfigCommand } from "./migrate-config.js";
+import { runConnectionAddCommand } from "../oauth/connection-application-service.js";
+import { OAuthConnectionCommandService } from "../oauth/connection-command-service.js";
+import { CLIENT_NAMES, renderClientSnippets, type ClientSelection } from "./client-snippets.js";
+import { resolvePath } from "../config/path-resolve.js";
+
+function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
+  return {
+    ...(args.connection === undefined ? {} : { connectionRef: args.connection }),
+    ...(args.profile === undefined ? {} : { profile: args.profile }),
+    ...(args.upstream === undefined ? {} : { upstream: args.upstream })
+  };
+}
+
+function requireOption(command: string, name: string, value: string | undefined): string {
+  if (value === undefined) {
+    throw new CliUsageError(
+      `Command '${command}' requires '--${name} <value>'. Use 'miftah ${command} --help' for usage.`
+    );
+  }
+  return value;
+}
+
+function clientSelection(value: string): ClientSelection {
+  if (value === "all" || (CLIENT_NAMES as readonly string[]).includes(value)) return value as ClientSelection;
+  throw new CliUsageError("Option '--client' must name a supported MCP client or 'all'.");
+}
 
 async function serve(configPath: string, transportKind = "stdio"): Promise<void> {
   if (transportKind === "http") {
@@ -76,6 +102,57 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "migrate-config") {
     const report = await runMigrateConfigCommand({ configPath: args.config, write: args.write === true });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "connection add") {
+    const report = await runConnectionAddCommand({
+      configPath: args.config,
+      connectionRef: args.connection,
+      profile: requireOption(command, "profile", args.profile),
+      upstream: args.upstream,
+      issuer: requireOption(command, "issuer", args.issuer),
+      clientRegistration: requireOption(command, "client-registration", args.clientRegistration),
+      scopes: args.scopes ?? [],
+      write: args.write === true
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "connection list") {
+    const service = new OAuthConnectionCommandService(args.config);
+    const connections = await service.list();
+    const config = await loadConfig(args.config);
+    const snippets = args.client === undefined
+      ? undefined
+      : renderClientSnippets(clientSelection(args.client), {
+          serverName: config.name,
+          configPath: resolvePath(args.config),
+          launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+        });
+    process.stdout.write(`${JSON.stringify({ connections, ...(snippets === undefined ? {} : { snippets }) }, null, 2)}\n`);
+    return;
+  }
+  if (command === "connection status") {
+    const service = new OAuthConnectionCommandService(args.config);
+    process.stdout.write(`${JSON.stringify(await service.status(oauthSelector(args)), null, 2)}\n`);
+    return;
+  }
+  if (command === "connection test") {
+    const service = new OAuthConnectionCommandService(args.config);
+    process.stdout.write(`${JSON.stringify(await service.test(oauthSelector(args)), null, 2)}\n`);
+    return;
+  }
+  if (command === "auth connect" || command === "auth reauth") {
+    const service = new OAuthConnectionCommandService(args.config);
+    const result = command === "auth connect"
+      ? await service.connect(oauthSelector(args), { nonInteractive: args.nonInteractive === true })
+      : await service.reauth(oauthSelector(args), { nonInteractive: args.nonInteractive === true });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (command === "auth disconnect") {
+    const service = new OAuthConnectionCommandService(args.config);
+    process.stdout.write(`${JSON.stringify(await service.disconnect(oauthSelector(args)), null, 2)}\n`);
     return;
   }
   if (command === "serve") {

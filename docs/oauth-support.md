@@ -4,7 +4,7 @@ Miftah is an MCP wrapper and credential-profile boundary. Version 3 enables a de
 
 Miftah performs protected-resource and authorization-server discovery, browser authorization, a literal-loopback callback, authorization-code exchange, refresh, and bearer injection only for an exact configured HTTPS Streamable HTTP connection. It requires PKCE `S256`, the OAuth `resource` parameter, and authorization-server support for the RFC 9207 `iss` response parameter. Discovery or callback data that does not match the configured resource and issuer fails closed.
 
-Miftah does not support OAuth for every MCP server or provider. It does not guess private endpoints, scrape provider caches, automate local STDIO providers' custom login flows, accept passwords or browser cookies as OAuth state, or treat a valid token as proof that the correct account was selected. Revocation and operator lifecycle commands are not implemented in this release.
+Miftah does not support OAuth for every MCP server or provider. It does not guess private endpoints, scrape provider caches, automate local STDIO providers' custom login flows, accept passwords or browser cookies as OAuth state, or treat a valid token as proof that the correct account was selected. Operator lifecycle commands manage only Miftah's exact local binding and vault credential; `auth disconnect` does not claim provider-side token revocation.
 
 The [OAuth and local Console design delta](oauth-console-threat-model.md) records the enforced OAuth security controls, residual risks, and the separate no-go gates for the future local Console.
 
@@ -17,7 +17,7 @@ The [OAuth and local Console design delta](oauth-console-threat-model.md) record
 | Upstream-owned or manual credentials | `stdio`, legacy `sse`, and remote Streamable HTTP headers remain supported. The upstream/provider owns login, callback, token cache, refresh, reauth, and revoke. | Complete the provider-owned login, supply its documented credential path, environment value, or static secret reference, then run `miftah validate` and `miftah doctor`. |
 | Unsupported authentication patterns | Provider passwords, browser cookies, and arbitrary third-party token caches are not a supported Miftah-managed OAuth mechanism. Miftah does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. | Use a provider-supported mechanism, or leave that upstream unconfigured when its only path depends on opaque private state. |
 
-`miftah doctor` validates configuration and reachable upstreams. It does not prove that provider consent, scopes, or account identity are correct. OAuth-specific doctor and lifecycle commands belong to the separate lifecycle-management milestone.
+`miftah doctor` validates configuration and reachable upstreams. It does not prove that provider consent, scopes, or account identity are correct. Use the explicit connection and auth commands below for native-OAuth lifecycle state.
 
 ## Configuration
 
@@ -57,6 +57,35 @@ An OAuth connection is version-3 non-secret configuration. Its key is an opaque 
 - `dynamic` uses Dynamic Client Registration only when discovery advertises a secure registration endpoint.
 
 Configuration cannot contain an access token, refresh token, client secret, callback setting, or `Authorization` header for the same profile/upstream. Static `Authorization` headers on that exact profile/upstream are rejected rather than being merged with native OAuth.
+
+## CLI setup and recovery
+
+Connection setup is plan-first. This command reads and validates the configuration, migrates a supported v1/v2 shape in memory, derives the exact resource from the selected upstream, and prints a safe plan without writing:
+
+```sh
+miftah connection add --config remote.json \
+  --profile work --upstream default \
+  --issuer https://auth.example.com \
+  --client-registration dynamic \
+  --scope mcp:read
+```
+
+The report contains a generated opaque connection reference. Review it, then repeat the command with that exact `--connection oauthconn:<uuid>` plus `--write`. The write revalidates the exact captured source, refuses symlinks and concurrent replacement, publishes a unique `remote.json.miftah-backup-<uuid>` recovery copy, atomically installs the candidate without overwriting another file, and writes the configured audit journal. It never resolves a credential or starts an upstream. Stop active clients before restoring a backup manually, then run `miftah validate --config remote.json` before restarting them.
+
+Use the lifecycle commands after the binding exists:
+
+```sh
+miftah connection list --config remote.json
+miftah connection status --config remote.json --connection oauthconn:<uuid>
+miftah connection test --config remote.json --connection oauthconn:<uuid>
+miftah auth connect --config remote.json --connection oauthconn:<uuid>
+miftah auth reauth --config remote.json --connection oauthconn:<uuid>
+miftah auth disconnect --config remote.json --connection oauthconn:<uuid>
+```
+
+`connection list` and `connection status` expose only non-secret binding, credential-state, expiry, and coarse identity-state fields. `connection list --client <claude-desktop|claude-code|cursor|vscode|all>` additionally prints copyable client snippets and never edits a client configuration. `connection test` uses an existing credential and returns `OAUTH_INTERACTIVE_REQUIRED` instead of opening a browser. `auth connect` opens the system browser only if authorization is required. `auth reauth` deliberately ignores the old token for the new flow but retains it in the vault until replacement succeeds. Add `--non-interactive` to connect or reauth in headless automation; a required browser flow then fails with the same typed diagnostic.
+
+`auth disconnect` deletes only the exact local vault credential and marks its local state disconnected. It does not call an undocumented provider revocation endpoint. Revoke provider access separately when the provider offers that control. An unavailable native vault returns `OAUTH_SECURE_STORE_UNAVAILABLE`; expired state is reported as `expired`; unsupported discovery/registration and identity mismatch retain their stable typed diagnostics. No command prints tokens, callback values, raw provider responses, or secret-bearing errors.
 
 ## Authorization and credential lifecycle
 

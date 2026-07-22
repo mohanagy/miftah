@@ -208,7 +208,27 @@ export class OAuthConnectionLifecycle {
   }
 
   async status(binding: OAuthConnectionBinding): Promise<OAuthConnectionRecord> {
-    return this.mutateBinding(binding, () => this.options.registry.get(binding.connectionRef, binding));
+    return this.mutateBinding(binding, async () => {
+      const record = await this.options.registry.get(binding.connectionRef, binding);
+      if (isTerminalCredentialState(record.credentialState) || record.expiresAt === undefined) return record;
+      const expiresAt = Date.parse(record.expiresAt);
+      if (!Number.isFinite(expiresAt)) invalidLifecycle();
+      const now = this.currentTime();
+      const state = expiresAt <= now
+        ? "expired"
+        : expiresAt <= now + this.refreshSkewMs
+          ? "expiring"
+          : "connected";
+      if (state === record.credentialState) return record;
+      const updated = await this.options.registry.setCredentialState(
+        binding.connectionRef,
+        binding,
+        state,
+        record.expiresAt
+      );
+      this.recordAudit("status", binding, updated, "success");
+      return updated;
+    });
   }
 
   async setIdentityState(binding: OAuthConnectionBinding, state: OAuthIdentityState): Promise<OAuthConnectionRecord> {
