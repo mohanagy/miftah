@@ -246,6 +246,29 @@ describe("local Console control server", () => {
     }
   });
 
+  it("reports an unavailable local client launcher as a stable service-availability error", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "console_launcher_unavailable",
+          message: "Client snippets are unavailable because the Console launcher is not configured."
+        }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires an invocation-bound bootstrap before returning redacted control metadata", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"

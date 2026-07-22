@@ -79,18 +79,7 @@ function consolePort(value: string | undefined): number | undefined {
   return Number(value);
 }
 
-async function consoleServe(configPath: string, port: string | undefined): Promise<void> {
-  const server = await startConsoleServer(configPath, {
-    port: consolePort(port),
-    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
-  });
-  process.stdout.write(
-    [
-      `Miftah Console control API listening on ${server.url.toString()}`,
-      `One-time bootstrap code: ${server.bootstrapCredential}`,
-      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
-    ].join("\n") + "\n"
-  );
+function registerConsoleServerLifecycle(server: Awaited<ReturnType<typeof startConsoleServer>>): void {
   const shutdown = (): void => {
     void server.close().catch(() => {
       process.stderr.write("Miftah Console shutdown failed.\n");
@@ -104,6 +93,21 @@ async function consoleServe(configPath: string, port: string | undefined): Promi
       process.stdout.write(`Replacement one-time bootstrap code: ${server.rotateCredential()}\n`);
     });
   }
+}
+
+async function consoleServe(configPath: string, port: string | undefined): Promise<void> {
+  const server = await startConsoleServer(configPath, {
+    port: consolePort(port),
+    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+  });
+  process.stdout.write(
+    [
+      `Miftah Console control API listening on ${server.url.toString()}`,
+      `One-time bootstrap code: ${server.bootstrapCredential}`,
+      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
+    ].join("\n") + "\n"
+  );
+  registerConsoleServerLifecycle(server);
 }
 
 function defaultDashboardConfigPath(): string {
@@ -131,19 +135,7 @@ async function dashboardServe(
   if (openBrowser && !(await openSystemBrowser(server.url))) {
     process.stderr.write(`Miftah could not open the system browser. Open ${server.url.toString()} manually.\n`);
   }
-  const shutdown = (): void => {
-    void server.close().catch(() => {
-      process.stderr.write("Miftah Console shutdown failed.\n");
-      process.exitCode = 1;
-    });
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  if (process.platform !== "win32") {
-    process.on("SIGHUP", () => {
-      process.stdout.write(`Replacement one-time bootstrap code: ${server.rotateCredential()}\n`);
-    });
-  }
+  registerConsoleServerLifecycle(server);
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {

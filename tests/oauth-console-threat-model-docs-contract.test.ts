@@ -44,6 +44,13 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
     expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
     expect(consoleApi).toContain("authenticated `GET` and `HEAD` requests may omit `Origin`");
+    expect(consoleApi).toContain("Every request must use the exact listener `Host`");
+    expect(consoleApi).toContain("Browser mutations, including bootstrap, must also use the exact listener `Origin`");
+    expect(consoleApi).toContain("every mutation still requires exact Origin plus CSRF");
+    expect(delta).toContain("requires the exact listener Origin, including scheme, host, and port");
+    expect(security).toContain(
+      "State-changing browser requests require the exact listener Origin, including scheme, host, and port"
+    );
   });
 
   it("defines protocol go/no-go, abuse cases, residual risks, and implementation evidence", async () => {

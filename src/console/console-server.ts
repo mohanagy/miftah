@@ -175,6 +175,13 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   if (error.code === "CONFIG_CREATE_FAILED") {
     return new ConsoleHttpError(503, "config_create_failed", "The initial configuration could not be created.");
   }
+  if (error.code === "CONSOLE_LAUNCHER_UNAVAILABLE") {
+    return new ConsoleHttpError(
+      503,
+      "console_launcher_unavailable",
+      "Client snippets are unavailable because the Console launcher is not configured."
+    );
+  }
   if (
     error.code.startsWith("CONFIG_") ||
     error.code.startsWith("OAUTH_CONNECTION_") ||
