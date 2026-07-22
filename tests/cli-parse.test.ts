@@ -34,6 +34,16 @@ describe("CLI parser", () => {
     expectUsageError(["serve", "--transport", "websocket"]);
   });
 
+  it("parses only an explicit loopback Console launch with an optional port", () => {
+    expect(parseCli(["console", "--config", "wrapper.json", "--port", "43127"])).toEqual({
+      kind: "run",
+      command: "console",
+      options: { config: "wrapper.json", port: "43127" }
+    });
+    expect(renderCommandHelp("console")).toContain("--port <number>");
+    expectUsageError(["serve", "--port", "43127"]);
+  });
+
   it("accepts command options before and after commands, including equals values", () => {
     expect(parseCli(["--config=wrapper.json", "doctor", "--json"])).toEqual({
       kind: "run",

@@ -1,6 +1,6 @@
 # CLI reference
 
-`miftah` is an MCP wrapper with STDIO as its default transport and an opt-in local Streamable HTTP server. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
+`miftah` is an MCP wrapper with STDIO as its default transport, an opt-in local Streamable HTTP server, and a separately launched local Console control API. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
 
 ## Help
 
@@ -8,7 +8,7 @@
 Usage: miftah [command] [options]
 ```
 
-The root command list includes `serve`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `connection add|list|status|test`, `auth connect|reauth|disconnect`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
+The root command list includes `serve`, `console`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `connection add|list|status|test`, `auth connect|reauth|disconnect`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
 
 Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires the pre-1.0 deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
 
@@ -19,6 +19,7 @@ Documented command names, options, JSON success forms, and exit categories are c
 | Command | Required input | Options | Output and behavior |
 | --- | --- | --- | --- |
 | `miftah serve --config <file>` | `--config` | `--config <file>`, `--transport <stdio\|http>` | Runs the STDIO MCP wrapper by default, or the configured local Streamable HTTP endpoint with `--transport http`. `miftah --config <file>` is the equivalent default-command STDIO form. |
+| `miftah console --config <file>` | `--config` | `--config <file>`, `--port <number>` | Explicitly starts the separate literal-loopback Console control API. It prints the URL and a one-use terminal bootstrap code; no daemon or MCP session is started. |
 | `miftah validate --config <file>` | `--config` | `--config <file>` | Validates the JSON configuration without starting an upstream. Writes a JSON object with `ok`, `name`, and `profiles`. |
 | `miftah doctor --config <file>` | `--config` | `--config <file>`, `--json` | Validates configuration and checks upstream readiness. Default output is a human-readable report; `--json` writes only the JSON report. A healthy or degraded report exits `0`; a failed report exits `1`. |
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
@@ -45,6 +46,12 @@ Every command also accepts `--help` and `-h`; those generated per-command help s
 `miftah serve --config <file>` and `miftah serve --transport stdio --config <file>` accept one STDIO client transport. `miftah serve --transport http --config <file>` starts the `/mcp` Streamable HTTP endpoint from `server.http`; it defaults to `http://127.0.0.1:3000/mcp` when that configuration is absent. The listener URL is written to stdout; HTTP mode does not use the STDIO MCP protocol stream. Signals stop new HTTP admissions and close the per-session runtimes and upstream transports.
 
 HTTP bearer authentication is configured only through `server.http.authToken` as a secret reference. The CLI never accepts a bearer token option and never writes one to its listener or error output. See [HTTP server transport](config.md#http-server-transport) for loopback, non-loopback, Host, Origin, session, and request-limit requirements.
+
+### Local Console control API
+
+`miftah console --config <file>` binds only literal `127.0.0.1`, uses an ephemeral port unless `--port` is supplied, and prints an invocation-bound one-use bootstrap code to the launching terminal. The code is not an OAuth token or MCP bearer. Enter it only in the local Console bootstrap screen; never paste it into a URL, client configuration, log, or support ticket. Stopping the process closes the listener and invalidates every browser session. Restarting produces a fresh bootstrap credential.
+
+The Console API is versioned under `/api/v1` and uses exact Host/Origin checks, a short-lived HttpOnly same-site session, CSRF proof for every mutation, bounded JSON, fail-closed mutation audit, and metadata-only responses. It modifies durable configuration and exact local OAuth credentials for future client connections; it cannot take over or silently change another process's active Claude Desktop session. See the [local Console control API](console-api.md) for the full endpoint and bootstrap contract.
 
 ### `init` presets and paths
 
@@ -92,7 +99,7 @@ When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as 
 
 `miftah_verify_identity` is an MCP management tool, not a shell subcommand. It accepts optional `profile` and `upstream` strings. `profile` defaults to the active profile. Supplying a named `upstream` verifies only that target; `upstream: "default"` is an alias only for a single unnamed upstream. With `upstream` omitted, Miftah verifies every configured target in deterministic upstream order. The response always contains safe structured identity results, including nonverified states, and its audit event contains only safe evidence and a failure outcome when verification did not succeed.
 
-`miftah_list_profiles` and `miftah_profile_info` show each profile's configured and persisted binding evidence; `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose the same configured, persisted, or cached identity status. None starts an upstream or runs a probe. A newly started client reloads persisted evidence and durable profile selection, but another process or future Console action cannot silently replace an already active client's in-memory selection; restart that client when applying an external configuration or durable-selection change.
+`miftah_list_profiles` and `miftah_profile_info` show each profile's configured and persisted binding evidence; `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose the same configured, persisted, or cached identity status. None starts an upstream or runs a probe. A newly started client reloads persisted evidence and durable profile selection, but another process or Console action cannot silently replace an already active client's in-memory selection; restart that client when applying an external configuration or durable-selection change.
 
 ### MCP profile management
 

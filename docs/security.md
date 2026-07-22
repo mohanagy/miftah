@@ -1,6 +1,6 @@
 # Security model
 
-For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records the implemented remote-OAuth gates and the future Console gates; this page is the detailed operating-security reference for implemented controls.
+For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records the implemented remote-OAuth and local Console control-plane gates; this page is the detailed operating-security reference for implemented controls.
 
 Miftah is a credential broker, so safe defaults are part of the product contract:
 
@@ -16,6 +16,7 @@ Miftah is a credential broker, so safe defaults are part of the product contract
 - audit export is explicit and local-only; it applies redaction again and omits stored arguments unless an operator opts in;
 - durable active-profile state is opt-in, uses derived owner-restricted paths, and stores no credentials;
 - the optional Streamable HTTP server binds literal loopback by default and bounds sessions and request bodies before runtime allocation;
+- the separately launched Console control API binds only literal loopback, requires one-use bootstrap, exact Host/Origin, short browser sessions, and CSRF for mutations;
 - MCP tool annotations are ignored for risk downgrades unless the operator explicitly trusts the configured upstream that supplied them;
 - provider tokens should be separate, least-privilege tokens per account and risk level.
 
@@ -36,6 +37,8 @@ Windows profile credential isolation fails closed before it creates or copies a 
 The server rejects duplicate or malformed `Host`, `Origin`, authorization, and MCP-session headers. It compares one `Authorization: Bearer` value to the resolved token in constant time, never places the token in a response or diagnostic, and does not use cookies. Browser requests are denied by default: an absent `Origin` is valid for MCP clients, but a supplied origin must exactly match an explicit `allowedOrigins` entry. Miftah does not emit permissive CORS headers.
 
 Before it allocates a session, the host validates the exact `/mcp` endpoint, method, Host, Origin, authentication, JSON content type, body size, and one initialize request. Session capacity includes in-progress initializations and closing runtimes. Each session receives a distinct Miftah runtime, profile/session state, approval/lock/lease/routing state, and upstream manager. Idle expiry, DELETE, and graceful shutdown detach the session immediately and close its runtime, which closes retained upstream transports and their ordinary descendants; detached cleanup retains capacity until it succeeds, and a failure remains capacity-consuming and is reported. An HTTP reconnect reuses only its existing session ID; it cannot create or access another client's runtime.
+
+The Console control API is not this MCP HTTP server. `miftah console` creates a separate listener with no `/mcp` route, MCP transport, upstream session registry, or MCP bearer. It requires an exact browser Origin even for reads. Its CSPRNG bootstrap code appears only in the launching terminal, expires after five minutes, and is consumed once; the resulting opaque HttpOnly same-site session and in-memory CSRF proof are bounded by idle and absolute lifetimes. Every durable mutation prepares a separate fail-closed owner-restricted Console audit journal first. Browser responses contain allowlisted metadata and redacted status only. See the [Console API contract](console-api.md).
 
 Audit writes default to fail-closed: Miftah verifies the configured sink before dispatch and refuses a request when the sink cannot be prepared. A terminal write can fail after an upstream side effect has completed, so a post-dispatch `AUDIT_WRITE_FAILED` has an indeterminate outcome and must not prompt a blind retry of a non-idempotent operation. An operator can set `audit.failureMode` to `"fail-open"` for availability-sensitive deployments; Miftah then preserves the request outcome but exposes a redacted `AUDIT_WRITE_FAILED` health entry. This mode trades complete auditability for availability.
 

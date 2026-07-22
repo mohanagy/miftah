@@ -360,7 +360,12 @@ interface StartedInstalledCli {
   stop(): Promise<void>;
 }
 
-async function startInstalledCli(entry: string, args: readonly string[], cwd: string): Promise<StartedInstalledCli> {
+async function startInstalledCli(
+  entry: string,
+  args: readonly string[],
+  cwd: string,
+  startupMarker = "Miftah HTTP server listening on "
+): Promise<StartedInstalledCli> {
   const child = spawn(process.execPath, [entry, ...args], {
     cwd,
     shell: false,
@@ -373,14 +378,14 @@ async function startInstalledCli(entry: string, args: readonly string[], cwd: st
 
   const waitForStartup = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error(`Installed CLI did not report HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+      reject(new Error(`Installed CLI did not report startup.${npmDiagnostics(stdout, stderr)}`));
     }, npmCommandTimeoutMs);
     const settle = (outcome: () => void): void => {
       clearTimeout(timeout);
       outcome();
     };
     const reportStartup = (): void => {
-      if (!stdout.includes("Miftah HTTP server listening on ") && !stderr.includes("Miftah HTTP server listening on ")) return;
+      if (!stdout.includes(startupMarker) && !stderr.includes(startupMarker)) return;
       settle(resolve);
     };
     child.stdout.setEncoding("utf8");
@@ -399,7 +404,7 @@ async function startInstalledCli(entry: string, args: readonly string[], cwd: st
     child.once("close", (status, signal) => {
       settle(() => {
         const outcome = status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`;
-        reject(new Error(`Installed CLI ${outcome} before HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+        reject(new Error(`Installed CLI ${outcome} before startup.${npmDiagnostics(stdout, stderr)}`));
       });
     });
   });
@@ -977,12 +982,28 @@ describe("packed artifact contract", () => {
           await httpServe.stop();
         }
 
+        const consoleServe = await startInstalledCli(
+          installedCliEntry,
+          ["console", "--config", httpServeConfigPath],
+          cliContractDirectory,
+          "Miftah Console control API listening on "
+        );
+        try {
+          expect(consoleServe.stdout).toMatch(
+            /^Miftah Console control API listening on http:\/\/127\.0\.0\.1:\d+\/\nOne-time bootstrap code: [A-Za-z0-9_-]{32,}\nEnter this code only in the local Miftah Console\. It expires after first use or shutdown\.\n$/u
+          );
+          expect(consoleServe.stderr).toBe("");
+        } finally {
+          await consoleServe.stop();
+        }
+
         const rootHelp = runInstalledBinary(binary, ["--help"], cliContractDirectory);
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
         expect(rootHelp.stderr).toBe("");
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
         const commandOptions = {
           serve: ["--config <file>"],
+          console: ["--config <file>", "--port <number>"],
           validate: ["--config <file>"],
           doctor: ["--config <file>", "--json"],
           schema: [],

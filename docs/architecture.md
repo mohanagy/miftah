@@ -1,6 +1,6 @@
 # Architecture
 
-The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks. The [OAuth and Console security design delta](oauth-console-threat-model.md) describes the control-plane and credential-lifecycle gates. Version 3 adds a standards-compatible remote OAuth runtime and in-process operator lifecycle services for exact HTTPS Streamable HTTP connections; provider adapters, provider-side revocation, and the local Console remain separate milestones.
+The [threat model](threat-model.md) maps these components and their boundaries to public security controls and residual risks. The [OAuth and Console security design delta](oauth-console-threat-model.md) describes the control-plane and credential-lifecycle gates. Version 3 adds a standards-compatible remote OAuth runtime, in-process operator lifecycle services, and a separately launched local Console control API for exact HTTPS Streamable HTTP connections; provider adapters, provider-side revocation, and the browser UI remain separate milestones.
 
 Miftah is an MCP-aware proxy, not a byte-level reverse proxy:
 
@@ -15,6 +15,8 @@ MCP client
         -> cached upstream MCP client
            -> upstream STDIO server
 ```
+
+The Console control plane is a sibling process boundary, not another MCP transport. `miftah console` binds literal loopback only and routes `/api/v1` browser requests through one-use bootstrap, a bounded HttpOnly session, exact Host/Origin checks, CSRF validation, typed application services, and a separate fail-closed mutation journal. It has no `/mcp` route and cannot mutate another process's active STDIO session.
 
 The STDIO public server is built with the official `@modelcontextprotocol/sdk` `Server` and `StdioServerTransport`. Each profile/upstream pair gets an SDK `Client` and its configured transport on first use: local processes use `StdioClientTransport`; remote upstreams use Streamable HTTP by default (the historical `"http"` alias is accepted only by version 1) or the deprecated legacy SSE client. Resolved profile headers override upstream headers case-insensitively before either remote transport is constructed. An exact version-3 OAuth binding gives only that Streamable HTTP session a profile-bound SDK OAuth provider; static Authorization headers on the same target are rejected. The provider validates protected-resource and authorization-server discovery, drives PKCE/browser/callback exchange, and loads or refreshes credentials through the exact OS-vault binding before reconnecting with bearer authorization. Streamable HTTP session shutdown sends DELETE while its session ID is still available, then closes the local client transport and any pending OAuth handoff; legacy SSE has no corresponding server-session teardown request. Request cancellation and requested progress notifications retain their MCP request context across both STDIO and Streamable HTTP upstreams. Startup HTTP failures and operation HTTP/MCP/OAuth failures are normalized before crossing the proxy boundary, retaining only stable category/code metadata rather than server response text. See [OAuth support](oauth-support.md) for the supported native OAuth boundary.
 

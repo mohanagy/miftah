@@ -22,7 +22,7 @@ The method is intentionally practical: describe the system and its trust boundar
 
 This is a model of Miftah's wrapper and its documented configuration surface, not a claim that every configured upstream, plugin, operating system, dependency, or deployment is safe. Changes to a boundary, secret flow, configuration default, dependency trust decision, or externally exposed transport require this document and its targeted tests to be reviewed together.
 
-The forward-looking [OAuth and local Console design delta](oauth-console-threat-model.md) records the additional protocol, callback, credential, browser, and local-control-plane decisions required before those capabilities can be implemented. It does not change the implemented-control claims in this current model or mark the independent review complete.
+The [OAuth and local Console design delta](oauth-console-threat-model.md) records the implemented protocol, callback, credential, browser-session, and local-control-plane decisions plus the remaining browser-UI and provider-adapter boundaries. It does not mark the independent review complete.
 
 ## Protected assets
 

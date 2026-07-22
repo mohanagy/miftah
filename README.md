@@ -101,6 +101,8 @@ For credential-file workflows, see [profile credential isolation](docs/config.md
 
 When an operator enables profile locking, `miftah_lock_profile` and `miftah_unlock_profile` expose that control to the MCP client. For the complete security scope and future work, read the linked designs below.
 
+The optional local Console control API is started explicitly with `miftah console --config <file>`. It binds only to loopback, uses a one-time terminal bootstrap plus browser session/CSRF protection, and exposes redacted metadata and audited connection operations under `/api/v1`. It is not a daemon and cannot change an already-running MCP client's in-memory session. The browser UI is a separate roadmap layer; see the [Console API contract](docs/console-api.md).
+
 ## Is Miftah right for you?
 
 Miftah is a good fit when account context matters: you work across clients, organizations, environments, or credentials; you want a deliberate boundary before write/destructive actions; or you want one local place to inspect safe, redacted connection activity.
@@ -115,6 +117,7 @@ If you use one account with one direct MCP server and do not need profile, routi
 - [Configuration reference](docs/config.md)
 - [Security boundary](docs/security.md), [Threat model](docs/threat-model.md), and [OAuth and Console security design](docs/oauth-console-threat-model.md)
 - [OAuth support](docs/oauth-support.md)
+- [Local Console control API](docs/console-api.md)
 - [CLI reference](docs/cli.md)
 - [Architecture](docs/architecture.md)
 - [Changelog and release policy](CHANGELOG.md)
