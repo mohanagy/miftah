@@ -4,6 +4,7 @@ import { MiftahError } from "../utils/errors.js";
 
 const keyringService = "miftah.oauth.v1";
 const maximumCredentialBytes = 32 * 1_024;
+/** Complete envelope bound; save enforces it before the keyring write and load enforces the same bound. */
 const maximumSerializedCredentialBytes = maximumCredentialBytes * 2;
 const credentialEnvelopeKeys = new Set([
   "version",

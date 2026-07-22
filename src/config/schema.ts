@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import { canonicalizeOAuthResource } from "../oauth/canonical-resource.js";
 import { parseOAuthConnectionRef, validateOAuthIssuer } from "../oauth/connection-types.js";
+import { isSafeOAuthHttpsUrl } from "../oauth/url-safety.js";
 import { hasMergedHeader } from "../upstream/headers.js";
 import { SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
 
@@ -71,20 +72,10 @@ const oauthClientRegistrationSchema = z
     if (value === "dynamic") return true;
     if (value.startsWith("pre-registered:")) return value.length > "pre-registered:".length;
     if (!value.startsWith("client-id-metadata:")) return false;
-    try {
-      const url = new URL(value.slice("client-id-metadata:".length));
-      return (
-        url.protocol === "https:" &&
-        url.hostname.length > 0 &&
-        url.pathname !== "/" &&
-        url.username.length === 0 &&
-        url.password.length === 0 &&
-        url.search.length === 0 &&
-        url.hash.length === 0
-      );
-    } catch {
-      return false;
-    }
+    return isSafeOAuthHttpsUrl(value.slice("client-id-metadata:".length), {
+      requirePath: true,
+      allowSearch: false
+    });
   }, {
     message: "OAuth client registration must use an approved explicit mode"
   });

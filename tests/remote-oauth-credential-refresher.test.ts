@@ -89,4 +89,27 @@ describe("remote OAuth credential refresher", () => {
     ).resolves.toMatchObject({ accessToken: "fixture-refreshed-access-token" });
     expect(upstream.discoveryRequests()).toContain("/.well-known/openid-configuration");
   });
+
+  it("classifies a locally cancelled refresh separately from reauthentication", async () => {
+    const binding = createOAuthConnectionBinding({
+      configIdentity: "a".repeat(64),
+      connectionRef: "oauthconn:9428bd06-437b-47f4-9343-549dcb880d91",
+      profile: "work",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://mcp.example.test",
+      clientRegistration: "pre-registered:miftah-desktop",
+      scopes: ["mcp:tools"]
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      new RemoteOAuthCredentialRefresher().refresh(
+        binding,
+        { accessToken: "fixture-access-token", refreshToken: "fixture-refresh-token" },
+        controller.signal
+      )
+    ).rejects.toMatchObject({ code: "OAUTH_REFRESH_CANCELLED" });
+  });
 });

@@ -101,7 +101,7 @@ function addOAuthClientRegistrationConstraints(schema: SchemaObject): void {
   const registration = requireSchemaObject(connectionProperties.clientRegistration, "OAuth client registration");
   registration.anyOf = [
     { pattern: "^pre-registered:.+$" },
-    { pattern: "^client-id-metadata:https://.+/.+$" },
+    { pattern: "^client-id-metadata:https://[^?#]+/[^?#]+$" },
     { const: "dynamic" }
   ];
 }

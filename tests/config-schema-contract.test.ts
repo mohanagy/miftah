@@ -433,7 +433,7 @@ describe("published config schema", () => {
     expect(connection.properties?.clientRegistration).toMatchObject({
       anyOf: [
         { pattern: "^pre-registered:.+$" },
-        { pattern: "^client-id-metadata:https://.+/.+$" },
+        { pattern: "^client-id-metadata:https://[^?#]+/[^?#]+$" },
         { const: "dynamic" }
       ]
     });

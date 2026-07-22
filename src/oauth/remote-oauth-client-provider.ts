@@ -13,6 +13,7 @@ import type { OAuthConnectionLifecycle } from "./connection-lifecycle.js";
 import type { OAuthConnectionBinding } from "./connection-types.js";
 import type { OAuthCredential } from "./secure-credential-store.js";
 import { MiftahError } from "../utils/errors.js";
+import { isSafeOAuthHttpsUrl } from "./url-safety.js";
 
 const maximumTokenLifetimeSeconds = 365 * 24 * 60 * 60;
 
@@ -80,7 +81,7 @@ function parseRegistration(value: string): ClientRegistration {
   }
   if (value.startsWith("client-id-metadata:")) {
     const url = value.slice("client-id-metadata:".length);
-    if (!isSafeHttpsUrl(url, true)) registrationUnsupported();
+    if (!isSafeOAuthHttpsUrl(url, { requirePath: true, allowSearch: false })) registrationUnsupported();
     return { kind: "client-id-metadata", url };
   }
   registrationUnsupported();
@@ -107,11 +108,11 @@ export function assertRemoteOAuthDiscovery(
     !metadata.code_challenge_methods_supported?.includes("S256") ||
     (extraMetadata?.authorization_response_iss_parameter_supported !== true &&
       !issuerResponseSupported(binding.issuer)) ||
-    !isSafeHttpsUrl(metadata.authorization_endpoint) ||
-    !isSafeHttpsUrl(metadata.token_endpoint) ||
-    (state.resourceMetadataUrl !== undefined && !isSafeHttpsUrl(state.resourceMetadataUrl)) ||
+    !isSafeOAuthHttpsUrl(metadata.authorization_endpoint) ||
+    !isSafeOAuthHttpsUrl(metadata.token_endpoint) ||
+    (state.resourceMetadataUrl !== undefined && !isSafeOAuthHttpsUrl(state.resourceMetadataUrl)) ||
     (registration.kind === "dynamic" &&
-      (metadata.registration_endpoint === undefined || !isSafeHttpsUrl(metadata.registration_endpoint))) ||
+      (metadata.registration_endpoint === undefined || !isSafeOAuthHttpsUrl(metadata.registration_endpoint))) ||
     (registration.kind === "client-id-metadata" && metadata.client_id_metadata_document_supported !== true)
   ) {
     discoveryUnsupported();
@@ -131,22 +132,6 @@ export function remoteOAuthClientInformation(
     client_id: credential.clientId,
     ...(credential.clientSecret === undefined ? {} : { client_secret: credential.clientSecret })
   };
-}
-
-function isSafeHttpsUrl(value: string, requirePath = false): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      url.hostname.length > 0 &&
-      url.username.length === 0 &&
-      url.password.length === 0 &&
-      url.hash.length === 0 &&
-      (!requirePath || url.pathname !== "/")
-    );
-  } catch {
-    return false;
-  }
 }
 
 function cloneClientInformation(value: OAuthClientInformationMixed): OAuthClientInformationMixed {

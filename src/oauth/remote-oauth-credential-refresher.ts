@@ -27,6 +27,10 @@ function reauthenticationRequired(): never {
   throw new MiftahError("OAUTH_REAUTH_REQUIRED", "OAUTH_REAUTH_REQUIRED: OAuth connection requires reauthentication");
 }
 
+function refreshCancelledLocally(): never {
+  throw new MiftahError("OAUTH_REFRESH_CANCELLED", "OAUTH_REFRESH_CANCELLED: OAuth credential refresh was cancelled");
+}
+
 function currentTime(now: () => Date): number {
   const date = now();
   const value = date instanceof Date ? date.getTime() : Number.NaN;
@@ -92,27 +96,33 @@ export class RemoteOAuthCredentialRefresher implements OAuthCredentialRefresher 
     credential: OAuthCredential,
     signal: AbortSignal
   ): Promise<OAuthCredential> {
-    if (signal.aborted || credential.refreshToken === undefined) reauthenticationRequired();
-    const fetchFn: FetchLike = async (input, init) => {
-      if (signal.aborted) reauthenticationRequired();
-      return this.fetch(input, { ...init, signal });
-    };
-    const server = await discoverOAuthServerInfo(binding.canonicalResource, { fetchFn });
-    if (signal.aborted) reauthenticationRequired();
-    const discovery: OAuthDiscoveryState = {
-      authorizationServerUrl: server.authorizationServerUrl,
-      resourceMetadata: server.resourceMetadata,
-      authorizationServerMetadata: server.authorizationServerMetadata
-    };
-    assertRemoteOAuthDiscovery(binding, discovery, this.issuerResponseSupported);
-    const tokens = await refreshAuthorization(binding.issuer, {
-      metadata: server.authorizationServerMetadata,
-      clientInformation: remoteOAuthClientInformation(binding, credential),
-      refreshToken: credential.refreshToken,
-      resource: new URL(binding.canonicalResource),
-      fetchFn
-    });
-    if (signal.aborted) reauthenticationRequired();
-    return refreshedCredential(binding, credential, tokens, this.now);
+    if (signal.aborted) refreshCancelledLocally();
+    if (credential.refreshToken === undefined) reauthenticationRequired();
+    try {
+      const fetchFn: FetchLike = async (input, init) => {
+        if (signal.aborted) refreshCancelledLocally();
+        return this.fetch(input, { ...init, signal });
+      };
+      const server = await discoverOAuthServerInfo(binding.canonicalResource, { fetchFn });
+      if (signal.aborted) refreshCancelledLocally();
+      const discovery: OAuthDiscoveryState = {
+        authorizationServerUrl: server.authorizationServerUrl,
+        resourceMetadata: server.resourceMetadata,
+        authorizationServerMetadata: server.authorizationServerMetadata
+      };
+      assertRemoteOAuthDiscovery(binding, discovery, this.issuerResponseSupported);
+      const tokens = await refreshAuthorization(binding.issuer, {
+        metadata: server.authorizationServerMetadata,
+        clientInformation: remoteOAuthClientInformation(binding, credential),
+        refreshToken: credential.refreshToken,
+        resource: new URL(binding.canonicalResource),
+        fetchFn
+      });
+      if (signal.aborted) refreshCancelledLocally();
+      return refreshedCredential(binding, credential, tokens, this.now);
+    } catch (error) {
+      if (signal.aborted) refreshCancelledLocally();
+      throw error;
+    }
   }
 }

@@ -17,6 +17,39 @@ function isAuthorizationMetadataPath(pathname: string): boolean {
   );
 }
 
+function metadataIssuerMatchesRequest(requestUrl: URL, issuer: string): boolean {
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+  } catch {
+    return false;
+  }
+  if (
+    issuerUrl.origin !== requestUrl.origin ||
+    issuerUrl.search.length > 0 ||
+    issuerUrl.hash.length > 0 ||
+    issuerUrl.username.length > 0 ||
+    issuerUrl.password.length > 0
+  ) {
+    return false;
+  }
+
+  const authorizationMarker = "/.well-known/oauth-authorization-server";
+  const authorizationIndex = requestUrl.pathname.indexOf(authorizationMarker);
+  if (authorizationIndex === 0) {
+    const issuerPath = requestUrl.pathname.slice(authorizationIndex + authorizationMarker.length) || "/";
+    return issuerUrl.pathname === issuerPath;
+  }
+
+  const openIdMarker = "/.well-known/openid-configuration";
+  const openIdIndex = requestUrl.pathname.indexOf(openIdMarker);
+  if (openIdIndex >= 0 && openIdIndex + openIdMarker.length === requestUrl.pathname.length) {
+    const issuerPath = requestUrl.pathname.slice(0, openIdIndex) || "/";
+    return issuerUrl.pathname === issuerPath;
+  }
+  return false;
+}
+
 async function boundedJson(response: Response): Promise<unknown> {
   const declaredLength = response.headers.get("content-length");
   if (declaredLength !== null) {
@@ -65,6 +98,7 @@ export class OAuthMetadataFetchGuard {
             value !== null &&
             !Array.isArray(value) &&
             typeof (value as Record<string, unknown>).issuer === "string" &&
+            metadataIssuerMatchesRequest(url, (value as Record<string, unknown>).issuer as string) &&
             (value as Record<string, unknown>).authorization_response_iss_parameter_supported === true
           ) {
             this.issuerResponseSupport.add((value as Record<string, unknown>).issuer as string);

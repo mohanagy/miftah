@@ -147,6 +147,22 @@ describe("OAuth secure credential store", () => {
     expect(adapter.entries).toHaveLength(0);
   });
 
+  it("rejects combined bounded fields before writing when the complete envelope exceeds its limit", async () => {
+    const adapter = new MemoryKeyringAdapter();
+    const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());
+    const boundedField = "x".repeat(20 * 1_024);
+
+    await expect(
+      store.save(binding(), {
+        accessToken: boundedField,
+        refreshToken: boundedField,
+        clientId: boundedField,
+        clientSecret: boundedField
+      })
+    ).rejects.toMatchObject({ code: "OAUTH_CREDENTIAL_INVALID" });
+    expect(adapter.entries).toHaveLength(0);
+  });
+
   it("removes the exact credential on disconnect without affecting another binding", async () => {
     const adapter = new MemoryKeyringAdapter();
     const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());

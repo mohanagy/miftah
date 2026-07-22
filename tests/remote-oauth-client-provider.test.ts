@@ -252,6 +252,10 @@ describe("remote OAuth client provider", () => {
         })
       )
     ).resolves.toBeUndefined();
+
+    expect(() =>
+      providerForRegistration("client-id-metadata:https://client.example.test/miftah.json?tenant=work")
+    ).toThrow(expect.objectContaining({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" }));
   });
 
   it("rejects duplicate authorization parameters and a missing PKCE challenge before browser handoff", async () => {

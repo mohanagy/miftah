@@ -185,7 +185,8 @@ describe("OAuth v3 connection configuration", () => {
     "provider-owned",
     "pre-registered:",
     "client-id-metadata:http://client.example.test/metadata",
-    "client-id-metadata:https://client.example.test/"
+    "client-id-metadata:https://client.example.test/",
+    "client-id-metadata:https://client.example.test/metadata?tenant=work"
   ])("rejects an unsupported OAuth client registration mode", (clientRegistration) => {
     const error = validationFailure(
       config({ oauth: { connections: { [connectionRef]: oauthConnection({ clientRegistration }) } } })
