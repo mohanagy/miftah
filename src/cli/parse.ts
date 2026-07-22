@@ -16,7 +16,8 @@ type ValueOptionName =
   | "upstream"
   | "issuer"
   | "clientRegistration"
-  | "scopes";
+  | "scopes"
+  | "port";
 type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
@@ -39,6 +40,7 @@ export interface CliOptions {
   readonly issuer?: string;
   readonly clientRegistration?: string;
   readonly scopes?: readonly string[];
+  readonly port?: string;
   readonly follow?: true;
   readonly json?: true;
   readonly interactive?: true;
@@ -57,6 +59,10 @@ export const CLI_COMMANDS = {
   serve: {
     description: "Start the MCP wrapper server.",
     options: ["config", "transport"]
+  },
+  console: {
+    description: "Start the optional local Console control API.",
+    options: ["config", "port"]
   },
   validate: {
     description: "Validate a Miftah configuration.",
@@ -277,6 +283,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--scope <scope>",
     description: "Least-privilege OAuth scope; repeat for multiple scopes."
   },
+  port: {
+    name: "port",
+    takesValue: true,
+    usage: "--port <number>",
+    description: "Literal-loopback Console port; defaults to an ephemeral port."
+  },
   follow: {
     name: "follow",
     takesValue: false,
@@ -334,6 +346,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--issuer": OPTION_DEFINITIONS.issuer,
   "--client-registration": OPTION_DEFINITIONS.clientRegistration,
   "--scope": OPTION_DEFINITIONS.scopes,
+  "--port": OPTION_DEFINITIONS.port,
   "--follow": OPTION_DEFINITIONS.follow,
   "--include-arguments": OPTION_DEFINITIONS.includeArguments,
   "--json": OPTION_DEFINITIONS.json,

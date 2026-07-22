@@ -6,13 +6,14 @@ async function document(path: string): Promise<string> {
 }
 
 describe("OAuth and Console threat-model documentation contract", () => {
-  it("publishes implemented remote OAuth and the future Console boundary without overstating either", async () => {
-    const [delta, threatModel, oauthSupport, security, architecture, readme] = await Promise.all([
+  it("publishes implemented remote OAuth and the separate Console control boundary without overstating either", async () => {
+    const [delta, threatModel, oauthSupport, security, architecture, consoleApi, readme] = await Promise.all([
       document("docs/oauth-console-threat-model.md"),
       document("docs/threat-model.md"),
       document("docs/oauth-support.md"),
       document("docs/security.md"),
       document("docs/architecture.md"),
+      document("docs/console-api.md"),
       document("README.md")
     ]);
 
@@ -24,11 +25,20 @@ describe("OAuth and Console threat-model documentation contract", () => {
 
     expect(delta).toContain("# OAuth broker and local Console design delta");
     expect(delta).toContain("Version 3 can run the approved standards-compatible remote OAuth flow");
-    expect(delta).toContain("No local Console, provider-specific adapter, provider-revocation client, or hosted broker exists.");
+    expect(delta).toContain("Issue #85 adds a separately launched local Console control API");
+    expect(delta).toContain("no browser Console UI, provider-specific adapter, provider-revocation client, hosted broker, or background daemon exists");
     expect(delta).toContain("The local CLI can plan bindings, report redacted state, connect, reauthenticate, and delete an exact local credential");
-    expect(delta).toContain("The future Console control API is distinct from the MCP /mcp endpoint.");
+    expect(delta).toContain("The Console control API is distinct from the MCP `/mcp` endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");
+    expect(consoleApi).toContain("# Local Console control API");
+    expect(consoleApi).toContain("There is no host option, LAN mode, background daemon, or automatic startup.");
+    expect(consoleApi).toContain("`POST /api/v1/sessions`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/connect`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/reauth`");
+    expect(consoleApi).toContain("`DELETE /api/v1/connections/:ref/credential`");
+    expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
+    expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
   });
 
   it("defines protocol go/no-go, abuse cases, residual risks, and implementation evidence", async () => {
@@ -79,7 +89,7 @@ describe("OAuth and Console threat-model documentation contract", () => {
     }
   });
 
-  it("fails closed on issuer provenance, unsupported MCP metadata, Console bootstrap, and static bearer collisions", async () => {
+  it("fails closed on issuer provenance and static bearer collisions while specifying the implemented Console bootstrap", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("RFC 9207 `iss`");
@@ -97,7 +107,9 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("The Client ID Metadata path requires `client_id_metadata_document_supported` to be `true`");
     expect(delta).toContain("The Dynamic Client Registration path requires `registration_endpoint` to be advertised");
 
-    expect(delta).toContain("Console implementation is NO-GO until its initial browser bootstrap has a separately approved security design");
+    expect(delta).toContain("The approved control credential is not an OAuth token.");
+    expect(delta).toContain("It expires after five minutes, is consumed once");
+    expect(delta).toContain("Restart or explicit rotation invalidates every session");
     expect(delta).toContain("A profile cannot enable native OAuth while the effective headers for that exact upstream contain an `Authorization` header after profile and upstream headers are merged case-insensitively");
     expect(delta).toContain("Any header whose normalized name is `authorization`, including a profile-level lowercase `authorization` entry or a duplicate case variant, blocks native OAuth until explicitly removed or migrated.");
     expect(delta).toContain("Configuration validation must form that effective header set from profile and upstream headers using case-insensitive header names.");

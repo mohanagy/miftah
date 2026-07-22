@@ -20,6 +20,7 @@ import { runConnectionAddCommand } from "../oauth/connection-application-service
 import { OAuthConnectionCommandService } from "../oauth/connection-command-service.js";
 import { CLIENT_NAMES, renderClientSnippets, type ClientSelection } from "./client-snippets.js";
 import { resolvePath } from "../config/path-resolve.js";
+import { startConsoleServer } from "../console/console-server.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -65,6 +66,38 @@ async function serve(configPath: string, transportKind = "stdio"): Promise<void>
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   await runtime.connect(transport);
+}
+
+function consolePort(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d{1,5}$/u.test(value) || Number(value) < 1 || Number(value) > 65_535) {
+    throw new CliUsageError("Option '--port' must be an integer from 1 to 65535.");
+  }
+  return Number(value);
+}
+
+async function consoleServe(configPath: string, port: string | undefined): Promise<void> {
+  const server = await startConsoleServer(configPath, { port: consolePort(port) });
+  process.stdout.write(
+    [
+      `Miftah Console control API listening on ${server.url.toString()}`,
+      `One-time bootstrap code: ${server.bootstrapCredential}`,
+      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
+    ].join("\n") + "\n"
+  );
+  const shutdown = (): void => {
+    void server.close().catch(() => {
+      process.stderr.write("Miftah Console shutdown failed.\n");
+      process.exitCode = 1;
+    });
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  if (process.platform !== "win32") {
+    process.on("SIGHUP", () => {
+      process.stdout.write(`Replacement one-time bootstrap code: ${server.rotateCredential()}\n`);
+    });
+  }
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -157,6 +190,10 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "serve") {
     await serve(args.config, args.transport);
+    return;
+  }
+  if (command === "console") {
+    await consoleServe(args.config, args.port);
     return;
   }
   if (command === "validate") {
