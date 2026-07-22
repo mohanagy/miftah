@@ -4,6 +4,8 @@ import type { Socket } from "node:net";
 import { z } from "zod";
 import { loadConfig } from "../config/load-config.js";
 import { MiftahError } from "../utils/errors.js";
+import { CLIENT_NAMES, type ClientLauncher, type ClientSelection } from "../cli/client-snippets.js";
+import { consoleAsset, type ConsoleAsset } from "./console-assets.js";
 import {
   ConsoleApplicationService,
   type ConsoleControlApplication
@@ -30,6 +32,15 @@ const connectionAddSchema = z.object({
   connectionRef: z.string().min(1).max(512).optional(),
   profile: z.string().min(1).max(256),
   upstream: z.string().min(1).max(256).optional(),
+  issuer: z.string().url().max(2_048),
+  clientRegistration: z.string().min(1).max(2_048),
+  scopes: z.array(z.string().min(1).max(512)).max(128)
+}).strict();
+const nativeOAuthOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  profile: z.string().min(1).max(256),
+  description: z.string().max(1_024).optional(),
+  resource: z.string().url().max(2_048),
   issuer: z.string().url().max(2_048),
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
@@ -62,6 +73,10 @@ export interface ConsoleServerOptions {
   readonly idleSessionMs?: number;
   readonly absoluteSessionMs?: number;
   readonly now?: () => number;
+  /** Allows the dashboard to start before its first configuration is created. */
+  readonly allowMissingConfig?: boolean;
+  /** Exact installed CLI launcher used only to generate copyable client snippets. */
+  readonly launcher?: ClientLauncher;
   /** Internal embedding/test seam; production CLI uses the native in-process application service. */
   readonly application?: ConsoleControlApplication;
 }
@@ -121,6 +136,25 @@ function writeJson(response: ServerResponse, status: number, body: unknown, head
   response.end(JSON.stringify(body));
 }
 
+function writeAsset(response: ServerResponse, requestMethod: string | undefined, asset: ConsoleAsset): void {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy();
+    return;
+  }
+  response.statusCode = 200;
+  response.setHeader("cache-control", "no-store");
+  response.setHeader("content-type", asset.contentType);
+  response.setHeader("x-content-type-options", "nosniff");
+  response.setHeader("x-frame-options", "DENY");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader(
+    "content-security-policy",
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
+      "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  );
+  response.end(requestMethod === "HEAD" ? undefined : asset.body);
+}
+
 function writeError(response: ServerResponse, error: ConsoleHttpError): void {
   writeJson(response, error.status, { error: { code: error.code, message: error.message } }, error.headers);
 }
@@ -134,6 +168,19 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   }
   if (error.code === "OAUTH_CONNECTION_NOT_FOUND") {
     return new ConsoleHttpError(404, "oauth_connection_not_found", "The OAuth connection does not exist.");
+  }
+  if (error.code === "CONFIG_ALREADY_EXISTS") {
+    return new ConsoleHttpError(409, "config_already_exists", "A configuration already exists at this location.");
+  }
+  if (error.code === "CONFIG_CREATE_FAILED") {
+    return new ConsoleHttpError(503, "config_create_failed", "The initial configuration could not be created.");
+  }
+  if (error.code === "CONSOLE_LAUNCHER_UNAVAILABLE") {
+    return new ConsoleHttpError(
+      503,
+      "console_launcher_unavailable",
+      "Client snippets are unavailable because the Console launcher is not configured."
+    );
   }
   if (
     error.code.startsWith("CONFIG_") ||
@@ -249,6 +296,16 @@ class LocalConsoleServer implements ConsoleServer {
 
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (this.closed) throw new ConsoleHttpError(503, "service_unavailable", "The Console is shutting down.");
+    const asset = request.url === undefined ? undefined : consoleAsset(request.url);
+    if (asset !== undefined) {
+      this.requireTrustedNavigation(request);
+      this.admitRequest(false);
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET, HEAD" });
+      }
+      writeAsset(response, request.method, asset);
+      return;
+    }
     this.requireTrustedBrowser(request);
     this.admitRequest(request.url === "/api/v1/sessions");
 
@@ -280,7 +337,55 @@ class LocalConsoleServer implements ConsoleServer {
       try {
         const metadata = await this.application.configMetadata();
         session.lastUsedAt = this.options.now();
-        writeJson(response, 200, { data: request.url.endsWith("/profiles") ? metadata.profiles : metadata });
+        writeJson(response, 200, {
+          data: request.url.endsWith("/profiles")
+            ? metadata.initialized
+              ? metadata.profiles
+              : []
+            : metadata
+        });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/native-oauth") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = nativeOAuthOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      try {
+        const result = await this.application.onboardNativeOAuth(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url?.startsWith("/api/v1/client-snippets")) {
+      if (request.method !== "GET") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET" });
+      }
+      let url: URL;
+      try {
+        url = new URL(request.url, this.url);
+      } catch {
+        throw new ConsoleHttpError(400, "invalid_request", "The request URL is invalid.");
+      }
+      if (url.pathname !== "/api/v1/client-snippets" || [...url.searchParams.keys()].some((key) => key !== "client")) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      const client = url.searchParams.get("client") ?? "all";
+      if (client !== "all" && !(CLIENT_NAMES as readonly string[]).includes(client)) {
+        throw new ConsoleHttpError(422, "validation_error", "The requested MCP client is not supported.");
+      }
+      try {
+        const snippets = await this.application.clientSnippets(client as ClientSelection);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: snippets });
       } catch (error) {
         throw publicApplicationError(error);
       }
@@ -327,9 +432,9 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
-    const connectionAction = /^\/api\/v1\/connections\/([^/]+)\/(connect|reauth|credential)$/u.exec(request.url ?? "");
+    const connectionAction = /^\/api\/v1\/connections\/([^/]+)\/(connect|reauth|test|credential)$/u.exec(request.url ?? "");
     if (connectionAction !== null) {
-      const action = connectionAction[2] as "connect" | "reauth" | "credential";
+      const action = connectionAction[2] as "connect" | "reauth" | "test" | "credential";
       const requiredMethod = action === "credential" ? "DELETE" : "POST";
       if (request.method !== requiredMethod) {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: requiredMethod });
@@ -343,7 +448,9 @@ class LocalConsoleServer implements ConsoleServer {
           ? await this.application.connect(connectionRef)
           : action === "reauth"
             ? await this.application.reauth(connectionRef)
-            : await this.application.disconnect(connectionRef);
+            : action === "test"
+              ? await this.application.testConnection(connectionRef)
+              : await this.application.disconnect(connectionRef);
         session.lastUsedAt = this.options.now();
         writeJson(response, 200, { data: result });
       } catch (error) {
@@ -383,7 +490,16 @@ class LocalConsoleServer implements ConsoleServer {
   private requireTrustedBrowser(request: IncomingMessage): void {
     const host = singleHeader(request, "host");
     const origin = singleHeader(request, "origin");
-    if (host !== this.url.host || origin !== this.url.origin) {
+    const readWithoutOrigin = origin === undefined && (request.method === "GET" || request.method === "HEAD");
+    if (host !== this.url.host || origin === null || (!readWithoutOrigin && origin !== this.url.origin)) {
+      throw new ConsoleHttpError(403, "forbidden", "The request origin is not trusted.");
+    }
+  }
+
+  private requireTrustedNavigation(request: IncomingMessage): void {
+    const host = singleHeader(request, "host");
+    const origin = singleHeader(request, "origin");
+    if (host !== this.url.host || origin === null || (origin !== undefined && origin !== this.url.origin)) {
       throw new ConsoleHttpError(403, "forbidden", "The request origin is not trusted.");
     }
   }
@@ -519,7 +635,13 @@ export async function startConsoleServer(
   configPath: string,
   options: ConsoleServerOptions = {}
 ): Promise<ConsoleServer> {
-  await loadConfig(configPath);
+  try {
+    await loadConfig(configPath);
+  } catch (error) {
+    if (!(options.allowMissingConfig === true && error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND")) {
+      throw error;
+    }
+  }
   const bootstrapCredential = options.bootstrapCredential ?? randomCredential();
   if (bootstrapCredential.length < 16 || bootstrapCredential.length > 4_096) {
     throw new Error("Unable to start the Miftah Console server.");
@@ -556,7 +678,9 @@ export async function startConsoleServer(
     url,
     bootstrapCredential,
     listener,
-    options.application ?? new ConsoleApplicationService(configPath),
+    options.application ?? new ConsoleApplicationService(configPath, {
+      ...(options.launcher === undefined ? {} : { launcher: options.launcher })
+    }),
     {
       maximumRequestBytes: options.maximumRequestBytes ?? defaultMaximumRequestBytes,
       maximumSessions: options.maximumSessions ?? defaultMaximumSessions,

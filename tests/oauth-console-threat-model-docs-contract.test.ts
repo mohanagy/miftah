@@ -26,19 +26,31 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("# OAuth broker and local Console design delta");
     expect(delta).toContain("Version 3 can run the approved standards-compatible remote OAuth flow");
     expect(delta).toContain("Issue #85 adds a separately launched local Console control API");
-    expect(delta).toContain("no browser Console UI, provider-specific adapter, provider-revocation client, hosted broker, or background daemon exists");
+    expect(delta).toContain("Issue #86 adds the optional browser-local Console UI");
+    expect(delta).toContain("no provider-revocation client, hosted broker, or background daemon exists");
     expect(delta).toContain("The local CLI can plan bindings, report redacted state, connect, reauthenticate, and delete an exact local credential");
     expect(delta).toContain("The Console control API is distinct from the MCP `/mcp` endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");
-    expect(consoleApi).toContain("# Local Console control API");
+    expect(consoleApi).toContain("# Local Console dashboard and control API");
     expect(consoleApi).toContain("There is no host option, LAN mode, background daemon, or automatic startup.");
     expect(consoleApi).toContain("`POST /api/v1/sessions`");
+    expect(consoleApi).toContain("`POST /api/v1/onboarding/native-oauth`");
+    expect(consoleApi).toContain("`GET /api/v1/client-snippets?client=<name>`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/test`");
     expect(consoleApi).toContain("`POST /api/v1/connections/:ref/connect`");
     expect(consoleApi).toContain("`POST /api/v1/connections/:ref/reauth`");
     expect(consoleApi).toContain("`DELETE /api/v1/connections/:ref/credential`");
     expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
     expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
+    expect(consoleApi).toContain("authenticated `GET` and `HEAD` requests may omit `Origin`");
+    expect(consoleApi).toContain("Every request must use the exact listener `Host`");
+    expect(consoleApi).toContain("Browser mutations, including bootstrap, must also use the exact listener `Origin`");
+    expect(consoleApi).toContain("every mutation still requires exact Origin plus CSRF");
+    expect(delta).toContain("requires the exact listener Origin, including scheme, host, and port");
+    expect(security).toContain(
+      "State-changing browser requests require the exact listener Origin, including scheme, host, and port"
+    );
   });
 
   it("defines protocol go/no-go, abuse cases, residual risks, and implementation evidence", async () => {

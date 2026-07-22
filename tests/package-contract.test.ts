@@ -1028,6 +1028,23 @@ describe("packed artifact contract", () => {
           await consoleServe.stop();
         }
 
+        const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
+        const dashboardServe = await startInstalledCli(
+          installedCliEntry,
+          ["dashboard", "--config", dashboardConfigPath, "--no-open"],
+          cliContractDirectory,
+          "Miftah Console listening on "
+        );
+        try {
+          expect(dashboardServe.stdout).toMatch(
+            /^Miftah Console listening on http:\/\/127\.0\.0\.1:\d+\/\nConfiguration: .+first dashboard config\.json\nOne-time bootstrap code: [A-Za-z0-9_-]{32,}\nEnter this code only in the local Miftah Console\. It expires after first use or shutdown\.\n$/u
+          );
+          expect(dashboardServe.stderr).toBe("");
+          await expect(readFile(dashboardConfigPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          await dashboardServe.stop();
+        }
+
         const rootHelp = runInstalledBinary(binary, ["--help"], cliContractDirectory);
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
         expect(rootHelp.stderr).toBe("");
@@ -1035,6 +1052,7 @@ describe("packed artifact contract", () => {
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],
+          dashboard: ["--config <file>", "--port <number>", "--no-open"],
           validate: ["--config <file>"],
           doctor: ["--config <file>", "--json"],
           schema: [],

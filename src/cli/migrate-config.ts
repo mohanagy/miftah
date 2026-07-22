@@ -187,6 +187,11 @@ async function writeSyncedExclusive(
   }
 }
 
+/** Creates one synced owner-only configuration file without replacing any existing path. */
+export async function writeNewConfigFile(path: string, content: string): Promise<void> {
+  await writeSyncedExclusive(path, content, 0o600);
+}
+
 async function writeMigrationFile(
   path: string,
   content: string | Uint8Array,

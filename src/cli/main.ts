@@ -1,4 +1,6 @@
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -21,6 +23,7 @@ import { OAuthConnectionCommandService } from "../oauth/connection-command-servi
 import { CLIENT_NAMES, renderClientSnippets, type ClientSelection } from "./client-snippets.js";
 import { resolvePath } from "../config/path-resolve.js";
 import { startConsoleServer } from "../console/console-server.js";
+import { openSystemBrowser } from "../console/open-browser.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -76,15 +79,7 @@ function consolePort(value: string | undefined): number | undefined {
   return Number(value);
 }
 
-async function consoleServe(configPath: string, port: string | undefined): Promise<void> {
-  const server = await startConsoleServer(configPath, { port: consolePort(port) });
-  process.stdout.write(
-    [
-      `Miftah Console control API listening on ${server.url.toString()}`,
-      `One-time bootstrap code: ${server.bootstrapCredential}`,
-      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
-    ].join("\n") + "\n"
-  );
+function registerConsoleServerLifecycle(server: Awaited<ReturnType<typeof startConsoleServer>>): void {
   const shutdown = (): void => {
     void server.close().catch(() => {
       process.stderr.write("Miftah Console shutdown failed.\n");
@@ -98,6 +93,49 @@ async function consoleServe(configPath: string, port: string | undefined): Promi
       process.stdout.write(`Replacement one-time bootstrap code: ${server.rotateCredential()}\n`);
     });
   }
+}
+
+async function consoleServe(configPath: string, port: string | undefined): Promise<void> {
+  const server = await startConsoleServer(configPath, {
+    port: consolePort(port),
+    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+  });
+  process.stdout.write(
+    [
+      `Miftah Console control API listening on ${server.url.toString()}`,
+      `One-time bootstrap code: ${server.bootstrapCredential}`,
+      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
+    ].join("\n") + "\n"
+  );
+  registerConsoleServerLifecycle(server);
+}
+
+function defaultDashboardConfigPath(): string {
+  return join(homedir(), ".config", "miftah", "miftah.json");
+}
+
+async function dashboardServe(
+  configPath: string,
+  port: string | undefined,
+  openBrowser: boolean
+): Promise<void> {
+  const server = await startConsoleServer(configPath, {
+    port: consolePort(port),
+    allowMissingConfig: true,
+    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+  });
+  process.stdout.write(
+    [
+      `Miftah Console listening on ${server.url.toString()}`,
+      `Configuration: ${resolvePath(configPath)}`,
+      `One-time bootstrap code: ${server.bootstrapCredential}`,
+      "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
+    ].join("\n") + "\n"
+  );
+  if (openBrowser && !(await openSystemBrowser(server.url))) {
+    process.stderr.write(`Miftah could not open the system browser. Open ${server.url.toString()} manually.\n`);
+  }
+  registerConsoleServerLifecycle(server);
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -125,6 +163,10 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
         args: [fileURLToPath(import.meta.url), "serve"]
       }
     });
+    return;
+  }
+  if (command === "dashboard") {
+    await dashboardServe(args.config ?? defaultDashboardConfigPath(), args.port, args.noOpen !== true);
     return;
   }
   if (!args.config) {

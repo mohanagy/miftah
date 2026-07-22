@@ -73,6 +73,14 @@ Claude Desktop is a GUI app and does not inherit terminal startup files such as 
 
 Continue with the step-by-step [Claude Desktop setup](docs/claude-desktop.md), or start from the [GitHub example](docs/examples/github.md) or [Sentry example](docs/examples/sentry.md).
 
+Prefer a browser for OAuth setup? Run:
+
+```bash
+miftah dashboard
+```
+
+The optional local Console opens on `127.0.0.1`, creates a validated first native-OAuth profile without hand-written JSON, shows redacted connection/audit state, and generates client JSON for you to review and copy. It stays in the foreground, never edits Claude or another client configuration, and does not accept provider passwords, browser cookies, or raw tokens. Use `--config <file>` to manage another Miftah configuration or `--no-open` when you only want the local URL.
+
 ## A real multi-account setup
 
 Imagine you use Sentry for two products. Instead of adding two separate Sentry servers to Claude Desktop, configure one `miftah-sentry` connector with two profiles:
@@ -101,7 +109,7 @@ For credential-file workflows, see [profile credential isolation](docs/config.md
 
 When an operator enables profile locking, `miftah_lock_profile` and `miftah_unlock_profile` expose that control to the MCP client. For the complete security scope and future work, read the linked designs below.
 
-The optional local Console control API is started explicitly with `miftah console --config <file>`. It binds only to loopback, uses a one-time terminal bootstrap plus browser session/CSRF protection, and exposes redacted metadata and audited connection operations under `/api/v1`. It is not a daemon and cannot change an already-running MCP client's in-memory session. The browser UI is a separate roadmap layer; see the [Console API contract](docs/console-api.md).
+The optional local Console is started explicitly with `miftah dashboard`; `miftah console --config <file>` remains the API-only form. It binds only to loopback, uses a one-time terminal bootstrap plus browser session/CSRF protection, and exposes redacted metadata and audited connection operations under `/api/v1`. It is not a daemon and cannot change an already-running MCP client's in-memory session. See the [Console contract](docs/console-api.md).
 
 ## Is Miftah right for you?
 
@@ -118,7 +126,7 @@ If you use one account with one direct MCP server and do not need profile, routi
 - [Security boundary](docs/security.md), [Threat model](docs/threat-model.md), and [OAuth and Console security design](docs/oauth-console-threat-model.md)
 - [OAuth support](docs/oauth-support.md)
 - [Provider adapters and Google Search Console pilot](docs/provider-adapters.md)
-- [Local Console control API](docs/console-api.md)
+- [Local Console dashboard and control API](docs/console-api.md)
 - [CLI reference](docs/cli.md)
 - [Architecture](docs/architecture.md)
 - [Changelog and release policy](CHANGELOG.md)

@@ -19,7 +19,7 @@ type ValueOptionName =
   | "clientRegistration"
   | "scopes"
   | "port";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive";
+type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -49,6 +49,7 @@ export interface CliOptions {
   readonly includeArguments?: true;
   readonly write?: true;
   readonly nonInteractive?: true;
+  readonly noOpen?: true;
 }
 
 interface CliCommandMetadata {
@@ -65,6 +66,10 @@ export const CLI_COMMANDS = {
   console: {
     description: "Start the optional local Console control API.",
     options: ["config", "port"]
+  },
+  dashboard: {
+    description: "Open the optional local Miftah Console in a browser.",
+    options: ["config", "port", "noOpen"]
   },
   validate: {
     description: "Validate a Miftah configuration.",
@@ -333,6 +338,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--non-interactive",
     description: "Return a typed diagnostic instead of opening a browser."
+  },
+  noOpen: {
+    name: "noOpen",
+    takesValue: false,
+    usage: "--no-open",
+    description: "Print the local dashboard URL without opening a browser."
   }
 };
 
@@ -363,6 +374,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--interactive": OPTION_DEFINITIONS.interactive,
   "--write": OPTION_DEFINITIONS.write,
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
+  "--no-open": OPTION_DEFINITIONS.noOpen,
   "--help": "help",
   "-h": "help",
   "--version": "version",
