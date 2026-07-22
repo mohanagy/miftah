@@ -11,6 +11,7 @@ const credentialEnvelopeKeys = new Set([
   "accessToken",
   "refreshToken",
   "expiresAt",
+  "scopes",
   "clientId",
   "clientSecret"
 ]);
@@ -20,6 +21,8 @@ export interface OAuthCredential {
   readonly accessToken: string;
   readonly refreshToken?: string;
   readonly expiresAt?: string;
+  /** Granted scope set, retained separately from the configured request set. */
+  readonly scopes?: readonly string[];
   /** Dynamic registration state is vault-bound so refresh never registers a different client. */
   readonly clientId?: string;
   readonly clientSecret?: string;
@@ -67,6 +70,19 @@ function validateCredential(value: OAuthCredential): OAuthCredential {
     invalidCredential();
   }
   if (
+    value.scopes !== undefined &&
+    (!Array.isArray(value.scopes) ||
+      value.scopes.length > 256 ||
+      value.scopes.some((scope) =>
+        typeof scope !== "string" ||
+        scope.length === 0 ||
+        Buffer.byteLength(scope, "utf8") > 512 ||
+        /\s/u.test(scope)
+      ))
+  ) {
+    invalidCredential();
+  }
+  if (
     value.clientId !== undefined &&
     (typeof value.clientId !== "string" || value.clientId.length === 0 || Buffer.byteLength(value.clientId, "utf8") > maximumCredentialBytes)
   ) {
@@ -104,6 +120,8 @@ function parseEnvelope(serialized: string, redactor: SecretRedactor): StoredOAut
     Object.keys(value).some((key) => !credentialEnvelopeKeys.has(key)) ||
     (Object.hasOwn(value, "refreshToken") && typeof value.refreshToken !== "string") ||
     (Object.hasOwn(value, "expiresAt") && typeof value.expiresAt !== "string") ||
+    (Object.hasOwn(value, "scopes") &&
+      (!Array.isArray(value.scopes) || value.scopes.some((scope) => typeof scope !== "string"))) ||
     (Object.hasOwn(value, "clientId") && typeof value.clientId !== "string") ||
     (Object.hasOwn(value, "clientSecret") && typeof value.clientSecret !== "string")
   ) {
@@ -118,6 +136,7 @@ function parseEnvelope(serialized: string, redactor: SecretRedactor): StoredOAut
     accessToken: value.accessToken as string,
     ...(typeof value.refreshToken === "string" ? { refreshToken: value.refreshToken } : {}),
     ...(typeof value.expiresAt === "string" ? { expiresAt: value.expiresAt } : {}),
+    ...(Array.isArray(value.scopes) ? { scopes: value.scopes as string[] } : {}),
     ...(typeof value.clientId === "string" ? { clientId: value.clientId } : {}),
     ...(typeof value.clientSecret === "string" ? { clientSecret: value.clientSecret } : {})
   });
@@ -147,6 +166,7 @@ export class PlatformOAuthCredentialStore implements OAuthCredentialStore {
       accessToken: envelope.accessToken,
       ...(envelope.refreshToken === undefined ? {} : { refreshToken: envelope.refreshToken }),
       ...(envelope.expiresAt === undefined ? {} : { expiresAt: envelope.expiresAt }),
+      ...(envelope.scopes === undefined ? {} : { scopes: [...envelope.scopes] }),
       ...(envelope.clientId === undefined ? {} : { clientId: envelope.clientId }),
       ...(envelope.clientSecret === undefined ? {} : { clientSecret: envelope.clientSecret })
     };

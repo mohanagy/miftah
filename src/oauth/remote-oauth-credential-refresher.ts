@@ -41,8 +41,13 @@ function refreshedCredential(
   now: () => Date
 ): OAuthCredential {
   if (tokens.token_type.toLowerCase() !== "bearer" || tokens.access_token.length === 0) reauthenticationRequired();
-  const grantedScopes = tokens.scope?.split(/\s+/u).filter((scope) => scope.length > 0) ?? [];
-  if (grantedScopes.some((scope) => !binding.scopes.includes(scope))) reauthenticationRequired();
+  const grantedScopes = tokens.scope === undefined
+    ? previous.scopes ?? binding.scopes
+    : tokens.scope.split(/\s+/u).filter((scope) => scope.length > 0);
+  if (
+    new Set(grantedScopes).size !== grantedScopes.length ||
+    grantedScopes.some((scope) => !binding.scopes.includes(scope))
+  ) reauthenticationRequired();
   let expiresAt: string | undefined;
   if (tokens.expires_in !== undefined) {
     if (!Number.isFinite(tokens.expires_in) || tokens.expires_in < 0 || tokens.expires_in > maximumTokenLifetimeSeconds) {
@@ -58,6 +63,7 @@ function refreshedCredential(
         ? {}
         : { refreshToken: tokens.refresh_token }),
     ...(expiresAt === undefined ? {} : { expiresAt }),
+    scopes: [...grantedScopes],
     ...(previous.clientId === undefined ? {} : { clientId: previous.clientId }),
     ...(previous.clientSecret === undefined ? {} : { clientSecret: previous.clientSecret })
   };

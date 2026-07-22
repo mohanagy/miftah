@@ -316,6 +316,7 @@ export async function startOAuthCompatibilityProbe(
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
+        client_id_metadata_document_supported: true,
         authorization_response_iss_parameter_supported: true
       });
       return;
@@ -340,6 +341,7 @@ export async function startOAuthCompatibilityProbe(
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
+        client_id_metadata_document_supported: true,
         authorization_response_iss_parameter_supported: true
       });
       return;

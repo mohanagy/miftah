@@ -1,5 +1,7 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
+const maximumMetadataBytes = 64 * 1_024;
+
 function requestUrl(input: Parameters<FetchLike>[0]): URL | undefined {
   try {
     return new URL(input instanceof Request ? input.url : String(input));
@@ -15,6 +17,37 @@ function isAuthorizationMetadataPath(pathname: string): boolean {
   );
 }
 
+async function boundedJson(response: Response): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (!Number.isFinite(parsedLength) || parsedLength < 0 || parsedLength > maximumMetadataBytes) return undefined;
+  }
+  if (response.body === null) return undefined;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let serialized = "";
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > maximumMetadataBytes) {
+        // A cloned undici response can keep cancellation pending until its original branch is read.
+        // Start cancellation without waiting so an oversized metadata response cannot stall discovery.
+        void reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      serialized += decoder.decode(chunk.value, { stream: true });
+    }
+    serialized += decoder.decode();
+    return JSON.parse(serialized) as unknown;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /** Retains only RFC 9207 capability evidence that the SDK's OIDC schema otherwise strips. */
 export class OAuthMetadataFetchGuard {
   private readonly issuerResponseSupport = new Set<string>();
@@ -26,7 +59,7 @@ export class OAuthMetadataFetchGuard {
       const url = requestUrl(input);
       if (response.ok && url !== undefined && isAuthorizationMetadataPath(url.pathname)) {
         try {
-          const value: unknown = await response.clone().json();
+          const value = await boundedJson(response.clone());
           if (
             typeof value === "object" &&
             value !== null &&

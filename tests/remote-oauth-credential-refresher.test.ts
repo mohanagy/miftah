@@ -46,6 +46,7 @@ describe("remote OAuth credential refresher", () => {
       accessToken: "fixture-refreshed-access-token",
       refreshToken: "fixture-rotated-refresh-token",
       expiresAt: "2026-07-22T01:00:00.000Z",
+      scopes: ["mcp:tools"],
       clientId: "miftah-compatibility-client"
     });
     expect(upstream.tokenExchanges()).toEqual([

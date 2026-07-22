@@ -77,7 +77,17 @@ describe("profile-bound remote OAuth transport", () => {
     await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
   });
 
-  it("completes authorization after the initial challenge and reconnects with the exact bearer", async () => {
+  it.each([
+    ["dynamic", "miftah-compatibility-client", 1],
+    ["pre-registered:miftah-desktop", "miftah-desktop", 0],
+    [
+      "client-id-metadata:https://client.example.test/miftah.json",
+      "https://client.example.test/miftah.json",
+      0
+    ]
+  ] as const)(
+    "completes authorization with %s registration and reconnects with the exact bearer",
+    async (clientRegistration, expectedClientId, expectedRegistrationRequests) => {
     const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
     upstreams.push(upstream);
     const binding = createOAuthConnectionBinding({
@@ -87,7 +97,7 @@ describe("profile-bound remote OAuth transport", () => {
       upstream: "default",
       resource: upstream.streamableHttpUrl,
       issuer: "https://mcp.example.test",
-      clientRegistration: "dynamic",
+      clientRegistration,
       scopes: ["mcp:tools"]
     });
     const lifecycle = new OAuthConnectionLifecycle({
@@ -119,11 +129,12 @@ describe("profile-bound remote OAuth transport", () => {
     expect(upstream.authenticatedMcpRequests()).toBeGreaterThanOrEqual(2);
     expect(upstream.tokenExchanges()).toEqual([
       expect.objectContaining({
-        clientId: "miftah-compatibility-client",
+        clientId: expectedClientId,
         pkceVerified: true,
         resource: upstream.streamableHttpUrl
       })
     ]);
+    expect(upstream.registrationRequests()).toHaveLength(expectedRegistrationRequests);
     expect(handoff.closeCount).toBe(1);
     const authenticatedBeforeWrongProfile = upstream.authenticatedMcpRequests();
     await expect(manager.listTools("personal")).rejects.toMatchObject({ code: "UPSTREAM_TOOL_LIST_FAILED" });
@@ -131,7 +142,8 @@ describe("profile-bound remote OAuth transport", () => {
     expect(upstream.tokenExchanges()).toHaveLength(1);
     await manager.close();
     expect(handoff.closeCount).toBe(1);
-  });
+    }
+  );
 
   it("maps provider failures to a typed diagnostic without raw OAuth output", async () => {
     const manager = new UpstreamProcessManager(
@@ -153,5 +165,42 @@ describe("profile-bound remote OAuth transport", () => {
     }
     expect(failure).toMatchObject({ code: "OAUTH_AUTHORIZATION_FAILED" });
     expect((failure as Error).message).not.toContain("fixture-provider-secret-and-raw-response");
+  });
+
+  it("rejects a non-HTTP OAuth binding and closes its authorization handoff", async () => {
+    const lifecycle = new OAuthConnectionLifecycle({
+      registry: new OAuthConnectionRegistry(new MemoryMetadataStore()),
+      store: new MemoryCredentialStore()
+    });
+    let closeCount = 0;
+    const provider = new RemoteOAuthClientProvider({
+      binding: createOAuthConnectionBinding({
+        configIdentity: "a".repeat(64),
+        connectionRef: "oauthconn:1d915a13-f8a5-45e0-8343-1e82e0939129",
+        profile: "work",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://mcp.example.test",
+        clientRegistration: "pre-registered:miftah-desktop",
+        scopes: ["mcp:tools"]
+      }),
+      lifecycle,
+      handoff: {
+        redirectUrl: new URL("http://127.0.0.1:43179/oauth/callback"),
+        authorize: async () => "fixture-code",
+        close: async () => {
+          closeCount += 1;
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(
+      { transport: "stdio", command: process.execPath, args: ["-e", "process.exit(0)"] },
+      { work: {} },
+      { oauthProvider: async () => provider }
+    );
+    managers.push(manager);
+
+    await expect(manager.get("work")).rejects.toMatchObject({ code: "OAUTH_CONNECTION_INVALID" });
+    expect(closeCount).toBe(1);
   });
 });

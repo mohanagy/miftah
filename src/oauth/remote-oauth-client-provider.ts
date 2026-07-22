@@ -257,19 +257,23 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     const expiresIn = credential.expiresAt === undefined
       ? undefined
       : Math.max(0, Math.ceil((Date.parse(credential.expiresAt) - this.currentTime()) / 1_000));
+    const grantedScopes = credential.scopes ?? this.options.binding.scopes;
     return {
       access_token: credential.accessToken,
       token_type: "Bearer",
       ...(credential.refreshToken === undefined ? {} : { refresh_token: credential.refreshToken }),
       ...(expiresIn === undefined ? {} : { expires_in: expiresIn }),
-      ...(this.options.binding.scopes.length === 0 ? {} : { scope: this.options.binding.scopes.join(" ") })
+      ...(grantedScopes.length === 0 ? {} : { scope: grantedScopes.join(" ") })
     };
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     if (tokens.token_type.toLowerCase() !== "bearer" || tokens.access_token.length === 0) authorizationFailed();
-    const grantedScopes = scopes(tokens.scope);
-    if (grantedScopes.some((scope) => !this.options.binding.scopes.includes(scope))) authorizationFailed();
+    const grantedScopes = tokens.scope === undefined ? this.options.binding.scopes : scopes(tokens.scope);
+    if (
+      new Set(grantedScopes).size !== grantedScopes.length ||
+      grantedScopes.some((scope) => !this.options.binding.scopes.includes(scope))
+    ) authorizationFailed();
     let expiresAt: string | undefined;
     if (tokens.expires_in !== undefined) {
       if (!Number.isFinite(tokens.expires_in) || tokens.expires_in < 0 || tokens.expires_in > maximumTokenLifetimeSeconds) {
@@ -283,6 +287,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
       accessToken: tokens.access_token,
       ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
+      scopes: [...grantedScopes],
       ...(this.registration.kind !== "dynamic" || clientInformation === undefined
         ? {}
         : {

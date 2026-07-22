@@ -49,7 +49,7 @@ class DeferredHandoff implements OAuthAuthorizationHandoff {
   async close(): Promise<void> {}
 }
 
-function binding(overrides: { clientRegistration?: string } = {}) {
+function binding(overrides: { clientRegistration?: string; scopes?: readonly string[] } = {}) {
   return createOAuthConnectionBinding({
     configIdentity: "a".repeat(64),
     connectionRef,
@@ -58,7 +58,7 @@ function binding(overrides: { clientRegistration?: string } = {}) {
     resource: "https://mcp.example.test/mcp",
     issuer: "https://issuer.example.test",
     clientRegistration: overrides.clientRegistration ?? "pre-registered:miftah-desktop",
-    scopes: ["mcp:tools"]
+    scopes: overrides.scopes ?? ["mcp:tools"]
   });
 }
 
@@ -194,6 +194,30 @@ describe("remote OAuth client provider", () => {
       client_id: "fixture-dynamic-client",
       client_secret: "fixture-dynamic-client-secret"
     });
+  });
+
+  it("persists the granted scope set instead of reconstructing all requested scopes", async () => {
+    const exactBinding = binding({ scopes: ["mcp:tools", "mcp:resources"] });
+    const { lifecycle } = service();
+    const first = new RemoteOAuthClientProvider({
+      binding: exactBinding,
+      lifecycle,
+      handoff: new DeferredHandoff()
+    });
+    await first.saveTokens({
+      access_token: "fixture-downscoped-access-token",
+      refresh_token: "fixture-refresh-token",
+      token_type: "Bearer",
+      scope: "mcp:tools"
+    });
+
+    const restarted = new RemoteOAuthClientProvider({
+      binding: exactBinding,
+      lifecycle,
+      handoff: new DeferredHandoff()
+    });
+
+    await expect(restarted.tokens()).resolves.toMatchObject({ scope: "mcp:tools" });
   });
 
   it("requires only the discovery capability selected by the client registration mode", async () => {

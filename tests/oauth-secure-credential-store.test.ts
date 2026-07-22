@@ -57,6 +57,7 @@ describe("OAuth secure credential store", () => {
       accessToken,
       refreshToken,
       expiresAt: "2030-01-02T03:04:05.000Z",
+      scopes: ["mcp:tools"],
       clientId: "fixture-client-id",
       clientSecret
     });
@@ -76,6 +77,7 @@ describe("OAuth secure credential store", () => {
       accessToken,
       refreshToken,
       expiresAt: "2030-01-02T03:04:05.000Z",
+      scopes: ["mcp:tools"],
       clientId: "fixture-client-id",
       clientSecret
     });
@@ -102,6 +104,8 @@ describe("OAuth secure credential store", () => {
   it.each([
     ["non-string refresh token", { refreshToken: 7 }],
     ["non-string expiry", { expiresAt: null }],
+    ["non-array scopes", { scopes: "mcp:tools" }],
+    ["invalid scope entry", { scopes: ["mcp:tools", ""] }],
     ["client secret without a client id", { clientSecret: "fixture-unexpected-secret" }],
     ["unexpected field", { authorizationCode: "fixture-code" }]
   ])("fails closed on a vault envelope with a %s", async (_description, tampering) => {
