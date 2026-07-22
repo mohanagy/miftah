@@ -673,6 +673,11 @@ interface LocalJournalLock {
   readonly clients: Set<Socket>;
 }
 
+type LocalLockAttempt =
+  | { readonly status: "acquired"; readonly lock: LocalJournalLock }
+  | { readonly status: "retry" }
+  | { readonly status: "unavailable" };
+
 async function inspectLocalLockPort(port: number, key: string): Promise<LocalLockPortState> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -712,7 +717,7 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
   });
 }
 
-async function tryAcquireLocalLock(port: number, key: string): Promise<LocalJournalLock | undefined> {
+async function tryAcquireLocalLock(port: number, key: string): Promise<LocalLockAttempt> {
   return new Promise((resolve, reject) => {
     const clients = new Set<Socket>();
     const server = createServer((socket) => {
@@ -722,7 +727,11 @@ async function tryAcquireLocalLock(port: number, key: string): Promise<LocalJour
     });
     const fail = (error: NodeJS.ErrnoException): void => {
       if (error.code === "EADDRINUSE") {
-        resolve(undefined);
+        resolve({ status: "retry" });
+        return;
+      }
+      if (error.code === "EACCES") {
+        resolve({ status: "unavailable" });
         return;
       }
       reject(error);
@@ -733,7 +742,7 @@ async function tryAcquireLocalLock(port: number, key: string): Promise<LocalJour
       server.on("error", () => {
         process.emitWarning("Miftah audit local lock listener encountered an error.");
       });
-      resolve({ server, clients });
+      resolve({ status: "acquired", lock: { server, clients } });
     });
   });
 }
@@ -764,8 +773,9 @@ async function acquireJournalLock(location: AuditJournalLocation): Promise<() =>
         break;
       }
       if (state === "available") {
-        const lock = await tryAcquireLocalLock(port, key);
-        if (lock !== undefined) return async () => releaseLocalLock(lock);
+        const attempt = await tryAcquireLocalLock(port, key);
+        if (attempt.status === "acquired") return async () => releaseLocalLock(attempt.lock);
+        if (attempt.status === "unavailable") continue;
         break;
       }
     }
