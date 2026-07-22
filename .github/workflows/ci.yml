@@ -75,10 +75,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      - name: Verify precompiled Windows secret helper
+      - name: Export reviewed Windows secret helper candidate
         if: ${{ runner.os == 'Windows' && matrix.node == '22' }}
         shell: powershell
-        run: ./scripts/verify-windows-secret-job-assembly.ps1
+        run: ./scripts/export-windows-secret-job-assembly.ps1 -OutputPath "$env:RUNNER_TEMP/miftah-secret-job.dll"
 
       - name: Install dependencies
         run: npm ci

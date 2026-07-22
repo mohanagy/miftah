@@ -222,6 +222,7 @@ public static class MiftahSecretJob
         IntPtr providerInput = IntPtr.Zero;
         IntPtr providerInputWriter = IntPtr.Zero;
         bool initializedAttributeList = false;
+        bool ownsProviderInput = false;
         ProcessInformation processInformation = new ProcessInformation();
         try
         {
@@ -239,6 +240,7 @@ public static class MiftahSecretJob
             else
             {
                 if (!CreatePipe(out providerInput, out providerInputWriter, IntPtr.Zero, 0)) return 1;
+                ownsProviderInput = true;
                 if (!SetHandleInformation(providerInput, HandleFlagInherit, HandleFlagInherit) ||
                     !SetHandleInformation(providerInputWriter, HandleFlagInherit, 0)) return 1;
             }
@@ -318,7 +320,7 @@ public static class MiftahSecretJob
                 Marshal.FreeHGlobal(attributeList);
             }
             if (inheritedHandles != IntPtr.Zero) Marshal.FreeHGlobal(inheritedHandles);
-            if (providerInput != IntPtr.Zero) CloseHandle(providerInput);
+            if (ownsProviderInput && providerInput != IntPtr.Zero) CloseHandle(providerInput);
             if (providerInputWriter != IntPtr.Zero) CloseHandle(providerInputWriter);
         }
     }

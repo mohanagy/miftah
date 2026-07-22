@@ -26,6 +26,7 @@ describe("Windows secret command contract", () => {
     expect(source).toContain("public static class MiftahSecretJob");
     expect(source).toContain("JobObjectLimitKillOnJobClose");
     expect(source).toContain("AssignProcessToJobObject(createdJob, GetCurrentProcess())");
+    expect(source).toContain("if (ownsProviderInput && providerInput != IntPtr.Zero) CloseHandle(providerInput);");
     expect(createHash("sha256").update(normalizedSource).digest("hex")).toBe(windowsSecretJobSourceSha256);
     expect(createHash("sha256").update(windowsCheckoutSource).digest("hex")).not.toBe(
       windowsSecretJobSourceSha256
