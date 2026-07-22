@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { IdentityConfig, IdentityFingerprint, MiftahConfig, RiskLevel, ToolingConfig } from "../config/types.js";
 import { classifyRisk } from "../policy/risk-classifier.js";
@@ -7,6 +8,25 @@ import type { IdentityStatus } from "./identity-types.js";
 
 const maxIdentityFieldLength = 256;
 const maxIdentityResponseLength = 4_096;
+
+export interface IdentityBindingRecord {
+  readonly version: 1;
+  readonly profile: string;
+  readonly upstream: string | null;
+  readonly configurationFingerprint: string;
+  readonly evidence: IdentityFingerprint;
+  readonly verifiedAt: string;
+}
+
+/** Persistent boundary for bounded, non-secret identity evidence. */
+export interface IdentityBindingStore {
+  load(): Promise<readonly unknown[]>;
+  save(records: readonly IdentityBindingRecord[]): Promise<void>;
+}
+
+export interface IdentityManagerOptions {
+  readonly bindingStore?: IdentityBindingStore;
+}
 
 export interface IdentityVerificationOptions {
   readonly force?: boolean;
@@ -30,8 +50,21 @@ export class IdentityManager {
   private readonly cache = new Map<string, Map<string, IdentityStatus>>();
   private readonly inFlight = new Map<string, Map<string, PendingVerification>>();
   private readonly epochs = new Map<string, number>();
+  private readonly bindings = new Map<string, IdentityBindingRecord>();
+  private bindingStoreUnavailable = false;
+  private initialization?: Promise<void>;
 
-  constructor(private readonly config: MiftahConfig) {}
+  constructor(
+    private readonly config: MiftahConfig,
+    private readonly options: IdentityManagerOptions = {}
+  ) {}
+
+  /** Loads only evidence that still matches an exact configured identity declaration. */
+  async initialize(): Promise<void> {
+    if (this.options.bindingStore === undefined) return;
+    this.initialization ??= this.loadBindings();
+    await this.initialization;
+  }
 
   status(profile: string, upstreamName?: string): IdentityStatus {
     const effectiveUpstream = this.effectiveUpstreamName(upstreamName);
@@ -39,7 +72,7 @@ export class IdentityManager {
     const identity = this.identityConfig(profile, effectiveUpstream);
     const current = this.statuses.get(key);
     if (current && identity && current.status === "verified" && !isFresh(current, identity.maxAgeMs)) {
-      return { ...structuredClone(current), status: "expired" };
+      return this.withBindingState({ ...structuredClone(current), status: "expired" }, key, identity, "expired");
     }
     return structuredClone(current ?? this.initialStatus(profile, upstreamName));
   }
@@ -51,6 +84,19 @@ export class IdentityManager {
         (requiredRisk) => requiredRisk === risk
       ) === true
     );
+  }
+
+  /** Returns an opt-in selection boundary only when multiple configured accounts can be chosen. */
+  selectionModeForRisk(
+    profile: string,
+    upstreamName: string | undefined,
+    risk: RiskLevel
+  ): IdentityConfig["selectionMode"] | undefined {
+    if (Object.keys(this.config.profiles).length <= 1 || (risk !== "write" && risk !== "destructive")) return undefined;
+    const identity = this.identityConfig(profile, this.effectiveUpstreamName(upstreamName));
+    return identity?.requiredForRisk?.some((requiredRisk) => requiredRisk === risk) === true
+      ? identity.selectionMode
+      : undefined;
   }
 
   /** Records a safe non-cacheable failure when no live session could be acquired. */
@@ -66,8 +112,10 @@ export class IdentityManager {
       expected: structuredClone(identity.expected),
       errorCode: "IDENTITY_VERIFICATION_FAILED"
     };
-    this.statuses.set(statusKey(profile, effectiveUpstream), status);
-    return structuredClone(status);
+    const key = statusKey(profile, effectiveUpstream);
+    const safeStatus = this.withBindingState(status, key, identity, "unavailable");
+    this.statuses.set(key, safeStatus);
+    return structuredClone(safeStatus);
   }
 
   /** Invalidates status and cache entries after an upstream lifecycle replacement. */
@@ -85,6 +133,7 @@ export class IdentityManager {
     session: UpstreamSession,
     options: IdentityVerificationOptions = {}
   ): Promise<IdentityStatus> {
+    await this.initialize();
     const effectiveUpstream = this.effectiveUpstreamName(upstreamName);
     const identity = this.identityConfig(profile, effectiveUpstream);
     if (!identity) return this.status(profile, effectiveUpstream);
@@ -135,11 +184,60 @@ export class IdentityManager {
 
   private initialStatus(profile: string, upstreamName?: string): IdentityStatus {
     const identity = this.identityConfig(profile, upstreamName);
-    return {
+    const status: IdentityStatus = {
       status: identity ? "not-verified" : "unconfigured",
       profile,
       upstream: upstreamName ?? "default",
       ...(identity ? { expected: structuredClone(identity.expected) } : {})
+    };
+    return this.withBindingState(
+      status,
+      statusKey(profile, upstreamName),
+      identity,
+      identity === undefined ? "unavailable" : undefined
+    );
+  }
+
+  private async loadBindings(): Promise<void> {
+    try {
+      const records = await this.options.bindingStore!.load();
+      if (!Array.isArray(records)) throw new Error("Identity binding records must be an array");
+      for (const value of records) {
+        const record = this.validBindingRecord(value);
+        if (record !== undefined) {
+          this.bindings.set(statusKey(record.profile, storedUpstream(record.upstream)), record);
+        }
+      }
+    } catch {
+      this.bindingStoreUnavailable = true;
+    }
+  }
+
+  private validBindingRecord(value: unknown): IdentityBindingRecord | undefined {
+    if (!isRecord(value)) return undefined;
+    if (
+      value.version !== 1 ||
+      typeof value.profile !== "string" ||
+      (value.upstream !== null && typeof value.upstream !== "string") ||
+      typeof value.configurationFingerprint !== "string" ||
+      !isRecord(value.evidence) ||
+      typeof value.verifiedAt !== "string" ||
+      !validTimestamp(value.verifiedAt)
+    ) {
+      return undefined;
+    }
+    const upstreamName = storedUpstream(value.upstream);
+    const identity = this.identityConfig(value.profile, upstreamName);
+    if (identity === undefined || value.configurationFingerprint !== configurationFingerprint(identity)) return undefined;
+    const evidence = parseStoredEvidence(value.evidence, identity.expected);
+    if (evidence === undefined || !matches(identity.expected, evidence)) return undefined;
+    return {
+      version: 1,
+      profile: value.profile,
+      upstream: value.upstream,
+      configurationFingerprint: value.configurationFingerprint,
+      evidence,
+      verifiedAt: value.verifiedAt
     };
   }
 
@@ -174,6 +272,7 @@ export class IdentityManager {
     };
     pending.promise = Promise.resolve()
       .then(() => this.probe(profile, upstreamName, identity, session, this.pendingRequestOptions(pending)))
+      .then((result) => this.applyBindingResult(targetKey, profile, upstreamName, identity, result))
       .then((result) => {
         if (this.epoch(targetKey) === epoch && this.inFlight.get(targetKey)?.get(sessionKey) === pending) {
           let targetCache = this.cache.get(targetKey);
@@ -198,6 +297,79 @@ export class IdentityManager {
     // Keep that completion observed so its rejection cannot become unhandled.
     void pending.promise.catch(() => undefined);
     return pending;
+  }
+
+  private async applyBindingResult(
+    key: string,
+    profile: string,
+    upstreamName: string | undefined,
+    identity: IdentityConfig,
+    result: IdentityStatus
+  ): Promise<IdentityStatus> {
+    if (this.options.bindingStore === undefined) return result;
+    if (this.bindingStoreUnavailable) {
+      return this.withBindingState(
+        { ...result, status: "failed", errorCode: "IDENTITY_BINDING_UNAVAILABLE" },
+        key,
+        identity,
+        "unavailable"
+      );
+    }
+    if (result.status === "mismatch") return this.withBindingState(result, key, identity, "changed");
+    if (result.status !== "verified" || result.actual === undefined || result.verifiedAt === undefined) {
+      return this.withBindingState(result, key, identity, "unavailable");
+    }
+
+    const existing = this.bindings.get(key);
+    const record: IdentityBindingRecord = {
+      version: 1,
+      profile,
+      upstream: storedUpstreamName(upstreamName),
+      configurationFingerprint: configurationFingerprint(identity),
+      evidence: structuredClone(result.actual),
+      verifiedAt: result.verifiedAt
+    };
+    this.bindings.set(key, record);
+    try {
+      await this.options.bindingStore.save([...this.bindings.values()].map((binding) => structuredClone(binding)));
+    } catch {
+      if (existing === undefined) this.bindings.delete(key);
+      else this.bindings.set(key, existing);
+      this.bindingStoreUnavailable = true;
+      return this.withBindingState(
+        { ...result, status: "failed", errorCode: "IDENTITY_BINDING_UNAVAILABLE" },
+        key,
+        identity,
+        "unavailable"
+      );
+    }
+    return this.withBindingState(result, key, identity, "verified");
+  }
+
+  private withBindingState(
+    status: IdentityStatus,
+    key: string,
+    identity: IdentityConfig | undefined,
+    forcedState?: IdentityStatus["bindingState"]
+  ): IdentityStatus {
+    if (this.options.bindingStore === undefined) return status;
+    const binding = this.bindings.get(key);
+    const bindingState =
+      forcedState ??
+      (this.bindingStoreUnavailable
+        ? "unavailable"
+        : binding === undefined
+          ? "unverified"
+          : isFresh({ ...status, verifiedAt: binding.verifiedAt }, identity?.maxAgeMs ?? 0)
+            ? "verified"
+            : "expired");
+    return {
+      ...status,
+      bindingState,
+      ...(binding === undefined
+        ? {}
+        : { bound: structuredClone(binding.evidence), boundAt: binding.verifiedAt })
+    };
   }
 
   private async awaitPending(
@@ -285,6 +457,53 @@ function identityVerificationCancelled(): Error {
 
 function statusKey(profile: string, upstreamName?: string): string {
   return JSON.stringify([profile, upstreamName]);
+}
+
+function storedUpstreamName(upstreamName?: string): string | null {
+  return upstreamName ?? null;
+}
+
+function storedUpstream(upstreamName: string | null): string | undefined {
+  return upstreamName ?? undefined;
+}
+
+function configurationFingerprint(identity: IdentityConfig): string {
+  const expected = Object.fromEntries(
+    (["provider", "login", "organization", "host"] as const)
+      .filter((field) => identity.expected[field] !== undefined)
+      .map((field) => [field, identity.expected[field]])
+  );
+  const probe = {
+    tool: identity.probe.tool,
+    resultFormat: identity.probe.resultFormat,
+    ...(identity.probe.provider === undefined ? {} : { provider: identity.probe.provider })
+  };
+  return createHash("sha256")
+    .update(JSON.stringify({ expected, probe }), "utf8")
+    .digest("hex");
+}
+
+function parseStoredEvidence(
+  value: Record<string, unknown>,
+  expected: IdentityFingerprint
+): IdentityFingerprint | undefined {
+  if (!Object.keys(value).every((field) => ["provider", "login", "organization", "host"].includes(field))) {
+    return undefined;
+  }
+  const evidence: IdentityFingerprint = {};
+  for (const field of Object.keys(expected) as Array<keyof IdentityFingerprint>) {
+    const stored = value[field];
+    if (typeof stored !== "string") return undefined;
+    const normalized = boundedIdentityField(stored);
+    if (normalized === undefined || normalized !== stored) return undefined;
+    evidence[field] = normalized;
+  }
+  return Object.keys(evidence).length === Object.keys(value).length ? evidence : undefined;
+}
+
+function validTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function isSafeProbeTool(

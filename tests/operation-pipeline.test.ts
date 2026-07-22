@@ -24,6 +24,7 @@ describe("operation pipeline", () => {
   it("blocks a configured risky operation before forwarding it when identity mismatches", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-operation-identity-mismatch-"));
     const createCountPath = join(directory, "create-count");
+    const auditPath = join(directory, "audit.jsonl");
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -45,10 +46,23 @@ describe("operation pipeline", () => {
           }
         }
       },
-      tooling: { toolRiskOverrides: { identity: "read" } }
+      tooling: { toolRiskOverrides: { identity: "read" } },
+      audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
-    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const identities = new IdentityManager(config, {
+      bindingStore: { load: async () => [], save: async () => undefined }
+    });
+    await identities.initialize();
+    const wrapper = new MiftahServer(
+      config,
+      new ProfileManager(config),
+      manager,
+      undefined,
+      undefined,
+      undefined,
+      identities
+    );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
 
@@ -60,6 +74,24 @@ describe("operation pipeline", () => {
         content: [{ type: "text", text: expect.stringContaining("IDENTITY_MISMATCH") }]
       });
       await expect(access(createCountPath)).rejects.toThrow();
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.find((event) => event.operation === "tools/call")).toMatchObject({
+        status: "failure",
+        errorCode: "IDENTITY_MISMATCH",
+        profileSelectionSource: "configured-default",
+        profileConfirmation: "not-required",
+        profileLeaseState: "not-required",
+        profileLockState: "none",
+        identity: {
+          status: "mismatch",
+          bindingState: "changed",
+          expected: { login: "work" },
+          actual: { login: "personal" }
+        }
+      });
     } finally {
       try {
         await client.close();
@@ -70,6 +102,93 @@ describe("operation pipeline", () => {
           await rm(directory, { recursive: true, force: true });
         }
       }
+    }
+  });
+
+  it("requires an explicit current-session profile selection for a protected ambiguous account", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-operation-identity-selection-"));
+    const createCountPath = join(directory, "create-count");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work", TEST_CREATE_ITEM_COUNT_PATH: createCountPath },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"],
+            selectionMode: "explicit"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config, config.security), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(await client.callTool({ name: "create_item", arguments: { name: "blocked" } })).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("PROFILE_IDENTITY_SELECTION_REQUIRED") }]
+      });
+      await expect(access(createCountPath)).rejects.toThrow();
+
+      await expect(client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } })).resolves.toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("Active profile changed") }]
+      });
+      await expect(client.callTool({ name: "create_item", arguments: { name: "allowed" } })).resolves.toMatchObject({
+        content: [{ type: "text", text: "created:allowed" }]
+      });
+      await expect(readFile(createCountPath, "utf8")).resolves.toBe("1\n");
+    } finally {
+      await client.close();
+      await wrapper.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a matching configured lock as deterministic confirmed account selection", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      security: { lockToProfile: "work" },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work" },
+          identity: {
+            expected: { login: "work" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"],
+            selectionMode: "confirmed"
+          }
+        },
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config, config.security), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      expect(await client.callTool({ name: "create_item", arguments: { name: "allowed" } })).toMatchObject({
+        content: [{ type: "text", text: "created:allowed" }]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
     }
   });
 

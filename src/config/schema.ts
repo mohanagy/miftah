@@ -174,7 +174,8 @@ const identitySchema = z
     expected: identityFingerprintSchema,
     probe: identityProbeSchema,
     maxAgeMs: z.number().int().positive().max(86_400_000),
-    requiredForRisk: z.array(z.enum(["write", "destructive"])).nonempty().optional()
+    requiredForRisk: z.array(z.enum(["write", "destructive"])).nonempty().optional(),
+    selectionMode: z.enum(["explicit", "confirmed"]).optional()
   })
   .strict()
   .superRefine((value, context) => {
@@ -193,6 +194,13 @@ const identitySchema = z
         code: z.ZodIssueCode.custom,
         path: ["requiredForRisk"],
         message: "identity requiredForRisk entries must be unique"
+      });
+    }
+    if (value.selectionMode !== undefined && value.requiredForRisk === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["selectionMode"],
+        message: "identity selectionMode requires requiredForRisk"
       });
     }
     if (value.probe.resultFormat === "json") {
@@ -957,8 +965,16 @@ type ConfigReferenceInput = {
     {
       policy?: string;
       headers?: Record<string, string>;
+      identity?: { selectionMode?: "explicit" | "confirmed" };
       isolation?: ProfileIsolationReferenceInput;
-      upstreams?: Record<string, { headers?: Record<string, string>; isolation?: ProfileIsolationReferenceInput }>;
+      upstreams?: Record<
+        string,
+        {
+          headers?: Record<string, string>;
+          identity?: { selectionMode?: "explicit" | "confirmed" };
+          isolation?: ProfileIsolationReferenceInput;
+        }
+      >;
     }
   >;
   routing?: { rules?: { profile: string }[] };
@@ -966,7 +982,7 @@ type ConfigReferenceInput = {
     allowlist?: readonly { kind: "secret-provider" | "routing-matcher"; bindings?: Record<string, string> }[];
   };
   policies?: Record<string, unknown>;
-  security?: { lockToProfile?: string | null };
+  security?: { lockToProfile?: string | null; requireProfileSwitchConfirmation?: boolean };
   oauth?: {
     connections: Record<
       string,
@@ -1041,6 +1057,38 @@ function validateConfigReferences(value: ConfigReferenceInput, context: z.Refine
   }
 
   for (const [profileName, profile] of Object.entries(value.profiles)) {
+    const validateIdentitySelection = (
+      identity: { selectionMode?: "explicit" | "confirmed" } | undefined,
+      path: (string | number)[]
+    ): void => {
+      if (identity?.selectionMode === undefined) return;
+      if (profileNames.size <= 1) {
+        addConfigIssue(
+          context,
+          "CONFIG_SCHEMA_INVALID",
+          [...path, "selectionMode"],
+          "identity selectionMode requires multiple configured profiles",
+          "Remove selectionMode or configure the distinct account profiles it must disambiguate."
+        );
+      }
+      if (
+        identity.selectionMode === "confirmed" &&
+        value.security?.requireProfileSwitchConfirmation !== true &&
+        value.security?.lockToProfile !== profileName
+      ) {
+        addConfigIssue(
+          context,
+          "CONFIG_SCHEMA_INVALID",
+          [...path, "selectionMode"],
+          "confirmed identity selection requires profile-switch confirmation or a matching configured lock",
+          "Enable security.requireProfileSwitchConfirmation or set security.lockToProfile to this profile."
+        );
+      }
+    };
+    validateIdentitySelection(profile.identity, ["profiles", profileName, "identity"]);
+    for (const [upstreamName, override] of Object.entries(profile.upstreams ?? {})) {
+      validateIdentitySelection(override.identity, ["profiles", profileName, "upstreams", upstreamName, "identity"]);
+    }
     if (profile.policy !== undefined && !policyNames.has(profile.policy)) {
       addConfigIssue(
         context,

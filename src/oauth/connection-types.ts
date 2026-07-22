@@ -19,7 +19,14 @@ export type OAuthCredentialState =
   | "unsupported";
 
 /** Account evidence is deliberately distinct from OAuth credential validity. */
-export type OAuthIdentityState = "verified" | "unverified" | "unknown" | "unsupported";
+export type OAuthIdentityState =
+  | "verified"
+  | "unverified"
+  | "changed"
+  | "expired"
+  | "unavailable"
+  | "unknown"
+  | "unsupported";
 
 export interface OAuthConnectionBindingInput {
   readonly configIdentity: string;

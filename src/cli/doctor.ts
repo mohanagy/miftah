@@ -7,6 +7,10 @@ import { loadConfig } from "../config/load-config.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, ProfileConfig, ToolingConfig, UpstreamConfig } from "../config/types.js";
 import { IdentityManager } from "../identity/identity-manager.js";
+import {
+  defaultIdentityBindingPath,
+  FileIdentityBindingStore
+} from "../identity/identity-binding-store.js";
 import { canonicalJson } from "../mcp/server/tool-registry.js";
 import { resolveClientVisibleToolName } from "../mcp/server/miftah-server.js";
 import {
@@ -462,7 +466,10 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
     const targets = configuredTargets(config);
-    const identities = new IdentityManager(config);
+    const identities = new IdentityManager(config, {
+      bindingStore: new FileIdentityBindingStore(defaultIdentityBindingPath(resolvedConfigPath))
+    });
+    await identities.initialize();
     const discoveryFailureStatus = config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
     const identityRequired = (target: DoctorTarget): boolean =>
       identities.requiresVerification(target.profile, target.upstreamName, "write") ||

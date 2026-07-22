@@ -164,6 +164,25 @@ describe("profile state", () => {
     expect(secondSession.current()).toMatchObject({ activeProfile: "work", scope: "session" });
   });
 
+  it("does not let another process silently replace an active client's in-memory selection", async () => {
+    const directory = await createDirectory();
+    const state = {
+      persistActiveProfile: true as const,
+      scope: "workspace" as const,
+      configPath: join(directory, "miftah.json")
+    };
+    const activeClient = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+    const externalManager = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+    await Promise.all([activeClient.initialize(), externalManager.initialize()]);
+
+    await externalManager.switchPersisted("personal");
+
+    expect(activeClient.current()).toMatchObject({ activeProfile: "work", selectionSource: "configured-default" });
+    const restartedClient = new ProfileManager(profiles, { allowProfileSwitchingFromMcp: true }, state);
+    await restartedClient.initialize();
+    expect(restartedClient.current()).toMatchObject({ activeProfile: "personal", selectionSource: "persisted-workspace" });
+  });
+
   it("resets session scope when the MCP connection begins", async () => {
     const directory = await createDirectory();
     const manager = new ProfileManager(

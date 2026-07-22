@@ -85,18 +85,35 @@ describe("identity verification documentation contract", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const identityConfig = identityVerificationSection(config);
 
-    const statuses = Array.from(statusTypes.matchAll(identityStatusPattern), (match) => match[1]);
+    const verificationStatuses = statusTypes.split("export type IdentityVerificationStatus =")[1]?.split(";")[0] ?? "";
+    const bindingStatuses = statusTypes.split("export type IdentityBindingState =")[1]?.split(";")[0] ?? "";
+    const statuses = [verificationStatuses, bindingStatuses].flatMap((statusUnion) =>
+      Array.from(statusUnion.matchAll(identityStatusPattern), (match) => match[1])
+    );
     const identityStatus = statusTypes.split("export interface IdentityStatus {")[1]?.split("\n}")[0] ?? "";
     const identityStatusFields = Array.from(identityStatus.matchAll(identityStatusFieldPattern), (match) => match[1]).sort();
     expect(statuses).not.toHaveLength(0);
     for (const status of statuses) expect(security).toContain(`\`${status}\``);
-    expect(identityStatusFields).toEqual(["actual", "errorCode", "expected", "profile", "status", "upstream", "verifiedAt"]);
+    expect(identityStatusFields).toEqual([
+      "actual",
+      "bindingState",
+      "bound",
+      "boundAt",
+      "errorCode",
+      "expected",
+      "profile",
+      "status",
+      "upstream",
+      "verifiedAt"
+    ]);
 
     expect(manager).toContain('if (risk !== "write" && risk !== "destructive") return false;');
     expect(manager).toContain("requiredRisk === risk");
     expect(pipeline).toContain("this.options.identities.requiresVerification(profile, target.identityUpstreamName, decision.risk)");
     expect(identityConfig).toContain("only when `requiredForRisk` explicitly names the selected write or destructive risk");
     expect(identityConfig).toContain("Read discovery, resource reads, and prompt retrieval are not gated");
+    expect(identityConfig).toContain('`selectionMode: "explicit" | "confirmed"`');
+    expect(identityConfig).toContain("another process changing the durable default");
 
     expect(managementTools).toContain('name: "miftah_verify_identity"');
     expect(server).toContain("args.profile === undefined ? source.activeProfile");
@@ -131,16 +148,18 @@ describe("identity verification documentation contract", () => {
 
     expect(manager).toContain("private readonly statuses = new Map<string, IdentityStatus>();");
     expect(manager).toContain("private readonly cache = new Map<string, Map<string, IdentityStatus>>();");
-    expect(architecture).toContain("process-only");
+    expect(manager).toContain("private readonly bindings = new Map<string, IdentityBindingRecord>();");
+    expect(architecture).toContain("file-backed binding store");
+    expect(architecture).toContain("cannot satisfy a protected live request");
     for (const claim of [
-      "does not persist identity state",
       "raw response",
-      "raw account payload",
-      "tool arguments",
+      "unconfigured field",
+      "tool argument",
       "error body",
       "arbitrary JSON",
       "credentials",
-      "credential validity"
+      "credential validity",
+      "raw configuration path"
     ]) {
       expect(security).toContain(claim);
     }

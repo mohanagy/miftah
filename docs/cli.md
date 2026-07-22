@@ -77,7 +77,7 @@ When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as 
 
 `miftah_verify_identity` is an MCP management tool, not a shell subcommand. It accepts optional `profile` and `upstream` strings. `profile` defaults to the active profile. Supplying a named `upstream` verifies only that target; `upstream: "default"` is an alias only for a single unnamed upstream. With `upstream` omitted, Miftah verifies every configured target in deterministic upstream order. The response always contains safe structured identity results, including nonverified states, and its audit event contains only safe evidence and a failure outcome when verification did not succeed.
 
-`miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose configured or cached identity status but do not start an upstream or run a probe.
+`miftah_list_profiles` and `miftah_profile_info` show each profile's configured and persisted binding evidence; `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose the same configured, persisted, or cached identity status. None starts an upstream or runs a probe. A newly started client reloads persisted evidence and durable profile selection, but another process or future Console action cannot silently replace an already active client's in-memory selection; restart that client when applying an external configuration or durable-selection change.
 
 ### MCP profile management
 

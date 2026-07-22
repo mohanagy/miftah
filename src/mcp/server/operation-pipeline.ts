@@ -12,6 +12,7 @@ import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-proce
 import { UpstreamProcessManager } from "../../upstream/upstream-process-manager.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { identityStatusForAudit, type IdentityStatus } from "../../identity/identity-types.js";
 
 export type ProxiedOperationType =
   | "tools/call"
@@ -107,6 +108,11 @@ interface PipelineOptions {
   readonly redactor: SecretRedactor;
   readonly routingContext: RoutingContextProvider;
   readonly identities: IdentityManager;
+  readonly onIdentityStatus?: (
+    profile: string,
+    upstreamName: string | undefined,
+    status: IdentityStatus
+  ) => void | Promise<void>;
   readonly onSession?: (session: UpstreamSession, target: ResolvedOperation<unknown>) => void | Promise<void>;
   readonly approvals: {
     requireApproval(binding: ApprovalBinding, context?: ApprovalRequestContext): Promise<void>;
@@ -172,6 +178,12 @@ export class OperationPipeline {
         name: this.auditName(operation, target.name),
         ...(target.upstreamName === undefined ? {} : { upstream: target.upstreamName })
       });
+      this.assertIdentitySelectionAllows(
+        operation,
+        profile,
+        target.identityUpstreamName,
+        decision.risk
+      );
       if (decision.action === "confirm") {
         const binding: ApprovalBinding = {
           sourceProfile: operation.source.activeProfile,
@@ -190,7 +202,8 @@ export class OperationPipeline {
         const identity = await this.options.identities.verify(profile, target.identityUpstreamName, session, {
           request: operation.upstreamRequestOptions
         });
-        audit.update({ identity: this.options.redactor.redactForAudit(identity) });
+        audit.update({ identity: this.options.redactor.redactForAudit(identityStatusForAudit(identity)) });
+        await this.options.onIdentityStatus?.(profile, target.identityUpstreamName, identity);
         await this.options.identities.requireVerified(profile, target.identityUpstreamName, session, {
           request: operation.upstreamRequestOptions
         });
@@ -254,6 +267,33 @@ export class OperationPipeline {
       (source.selectionSource === "mcp-switch" || source.selectionSource === "reset") &&
       source.confirmation !== "not-confirmed"
     );
+  }
+
+  private assertIdentitySelectionAllows(
+    operation: ProxiedOperation<unknown>,
+    profile: string,
+    upstreamName: string | undefined,
+    risk: "read" | "write" | "destructive"
+  ): void {
+    const mode = this.options.identities.selectionModeForRisk(profile, upstreamName, risk);
+    if (mode === undefined) return;
+    const source = operation.source;
+    if (!this.hasExplicitCurrentSessionSelection(source, profile)) {
+      throw new MiftahError(
+        "PROFILE_IDENTITY_SELECTION_REQUIRED",
+        `PROFILE_IDENTITY_SELECTION_REQUIRED: profile '${profile}' requires an explicit current-session selection for this account-bound ${risk} operation`
+      );
+    }
+    if (
+      mode === "confirmed" &&
+      !(source.lock.state === "configured" && source.lock.profile === profile) &&
+      source.confirmation !== "confirmed"
+    ) {
+      throw new MiftahError(
+        "PROFILE_IDENTITY_CONFIRMATION_REQUIRED",
+        `PROFILE_IDENTITY_CONFIRMATION_REQUIRED: profile '${profile}' requires a confirmed current-session selection for this account-bound ${risk} operation`
+      );
+    }
   }
 
   private async assertCapturedLeaseAllows(

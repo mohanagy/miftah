@@ -67,6 +67,8 @@ type IdentityRequiredRisk = ["write"] | ["destructive"] | ["write", "destructive
 type IdentityVerificationConfig = {
   maxAgeMs: number;
   requiredForRisk?: IdentityRequiredRisk;
+  /** Requires an explicit or human-confirmed current-session selection for protected account use. */
+  selectionMode?: "explicit" | "confirmed";
 };
 
 /** Opt-in identity verification for a profile or one named upstream. */

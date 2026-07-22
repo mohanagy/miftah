@@ -36,6 +36,7 @@ import {
 import type { MiftahConfig, ToolingConfig, UpstreamConfig } from "../../config/types.js";
 import type { PluginRegistry } from "../../plugins/plugin-registry.js";
 import type { RemoteOAuthRuntime } from "../../oauth/remote-oauth-runtime.js";
+import type { OAuthIdentityState } from "../../oauth/connection-types.js";
 import {
   ApprovalStore,
   type ApprovalBinding,
@@ -56,7 +57,7 @@ import type {
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { ToolRiskMetadata } from "../../policy/risk-classifier.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
-import type { IdentityStatus } from "../../identity/identity-types.js";
+import { identityStatusForAudit, type IdentityStatus } from "../../identity/identity-types.js";
 import { AuditLogger } from "../../audit/audit-logger.js";
 import { AuditScope, AuditTrail, type AuditProfileInput, type AuditScopeResult } from "../../audit/audit-trail.js";
 import type { ApprovalAuditAction, AuditStatus, ProfileAuditAction } from "../../audit/audit-types.js";
@@ -320,7 +321,8 @@ export class MiftahServer {
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager,
     private readonly routingContextCollector?: RoutingContextCollector,
     private readonly plugins?: PluginRegistry,
-    private readonly oauth?: RemoteOAuthRuntime
+    private readonly oauth?: RemoteOAuthRuntime,
+    identityManager?: IdentityManager
   ) {
     bindProfileTransitionConfirmationVerifier(profiles, (request) => {
       const binding = this.profileTransitionConfirmations.get(request.proof);
@@ -367,7 +369,7 @@ export class MiftahServer {
     this.policy = new PolicyEngine(config.policies, config.tooling?.toolRiskOverrides ?? {}, {
       unknownRisk: config.tooling?.unknownToolRisk
     });
-    this.identities = new IdentityManager(config);
+    this.identities = identityManager ?? new IdentityManager(config);
     this.toolRegistry = new ToolRegistry(
       (profile, options) => this.discoverTools(profile, options),
       (name, upstreamName) => this.exposedToolName(name, upstreamName)
@@ -416,6 +418,12 @@ export class MiftahServer {
       redactor: this.redactor,
       routingContext: this.provideRoutingContext,
       identities: this.identities,
+      onIdentityStatus: (profile, upstreamName, status) =>
+        this.oauth?.recordIdentityState(
+          profile,
+          upstreamName ?? "default",
+          oauthIdentityState(status)
+        ),
       onSession: (session, target) => this.bindUpstreamSession(session, target.identityUpstreamName),
       approvals: { requireApproval: (binding, context) => this.requireApproval(binding, context) },
       profileAudits: {
@@ -1149,7 +1157,8 @@ export class MiftahServer {
       const activeProfile = source.activeProfile;
       return textResult(JSON.stringify(this.profiles.list().map((profile) => ({
         ...profile,
-        active: profile.name === activeProfile
+        active: profile.name === activeProfile,
+        identity: this.identityStatuses(profile.name)
       }))));
     }
     if (name === "miftah_current_profile") {
@@ -1280,7 +1289,7 @@ export class MiftahServer {
       const profile = requiredString(args, "profile");
       const info = this.profiles.info(profile);
       audit.update({ name: profile, profile });
-      return textResult(JSON.stringify(info));
+      return textResult(JSON.stringify({ ...info, identity: this.identityStatuses(profile) }));
     }
     if (name === "miftah_health") {
       return textResult(
@@ -1386,10 +1395,15 @@ export class MiftahServer {
           });
         })
       );
+      await Promise.all(
+        statuses.map((status) =>
+          this.oauth?.recordIdentityState(profile, status.upstream, oauthIdentityState(status))
+        )
+      );
       const identity = statuses
         .map((status) => this.redactor.redactForAudit(status))
         .sort((left, right) => left.upstream.localeCompare(right.upstream));
-      audit.update({ identity });
+      audit.update({ identity: identity.map(identityStatusForAudit) });
       const failure = identity.find((status) => status.status !== "verified");
       if (failure) {
         audit.setResult({ status: "failure", errorCode: identityAuditErrorCode(failure) });
@@ -3035,4 +3049,23 @@ function redactSensitiveUri(uri: string): string {
     return uri;
   }
   return redactUri(uri);
+}
+
+function oauthIdentityState(status: IdentityStatus): OAuthIdentityState {
+  if (status.bindingState !== undefined) return status.bindingState;
+  switch (status.status) {
+    case "verified":
+      return "verified";
+    case "not-verified":
+      return "unverified";
+    case "mismatch":
+      return "changed";
+    case "expired":
+      return "expired";
+    case "unsupported":
+    case "unconfigured":
+      return "unsupported";
+    case "failed":
+      return "unavailable";
+  }
 }

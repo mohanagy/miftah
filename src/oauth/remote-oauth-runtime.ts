@@ -19,7 +19,8 @@ import {
 import {
   createOAuthConfigIdentity,
   createOAuthConnectionBinding,
-  type OAuthConnectionBinding
+  type OAuthConnectionBinding,
+  type OAuthIdentityState
 } from "./connection-types.js";
 import { createLoopbackOAuthAuthorizationHandoff } from "./loopback-authorization-handoff.js";
 import {
@@ -110,6 +111,14 @@ export class RemoteOAuthRuntime {
       await handoff.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Persists only the bounded identity lifecycle state for an exact configured OAuth target. */
+  async recordIdentityState(profile: string, upstream: string, state: OAuthIdentityState): Promise<void> {
+    const binding = this.bindings.get(targetKey(profile, upstream));
+    if (binding === undefined) return;
+    await this.lifecycle.register(binding);
+    await this.lifecycle.setIdentityState(binding, state);
   }
 }
 
