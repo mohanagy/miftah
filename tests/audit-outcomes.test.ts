@@ -119,12 +119,25 @@ describe("audit outcomes", () => {
   it("records wrapper and lazy upstream lifecycle outcomes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-lifecycle-"));
     const auditPath = join(directory, "audit.jsonl");
+    const initializedPath = join(directory, "upstream-initialized");
+    const listToolsStartedPath = join(directory, "upstream-list-tools-started");
+    const startCountPath = join(directory, "upstream-start-count");
+    await writeFile(startCountPath, "");
     const config = validateConfig({
       version: "1",
       name: "accounts",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
-      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
+            TEST_LIST_TOOLS_STARTED_PATH: listToolsStartedPath,
+            TEST_START_COUNT_PATH: startCountPath
+          }
+        }
+      },
       audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 1_000 });
@@ -134,7 +147,44 @@ describe("audit outcomes", () => {
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
-      await client.listTools();
+      const countStarts = async (): Promise<number> => {
+        const contents = await readFile(startCountPath, "utf8");
+        return contents.split("\n").filter(Boolean).length;
+      };
+      const startsBeforeDiscovery = await countStarts();
+      await Promise.all([
+        writeFile(initializedPath, "before-discovery"),
+        writeFile(listToolsStartedPath, "before-discovery")
+      ]);
+      try {
+        await client.listTools();
+      } catch {
+        const [starts, initialized, listToolsStarted] = await Promise.all([
+          countStarts(),
+          readFile(initializedPath, "utf8"),
+          readFile(listToolsStartedPath, "utf8")
+        ]);
+        const health = manager.listHealth().map((entry) => ({
+          profile: entry.profile,
+          upstreamName: entry.upstreamName,
+          state: entry.state,
+          processState: entry.processState,
+          restartCount: entry.restartCount,
+          lastStopReason: entry.lastStopReason,
+          restartLimitReached: entry.restartLimitReached,
+          capabilities: Object.fromEntries(
+            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
+          )
+        }));
+        throw new Error(
+          `Lazy upstream discovery failed: ${JSON.stringify({
+            startDelta: starts - startsBeforeDiscovery,
+            initialized,
+            listToolsStarted,
+            health
+          })}`
+        );
+      }
       await client.close();
       await wrapper.close();
 
