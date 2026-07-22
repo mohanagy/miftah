@@ -810,4 +810,140 @@ describe("identity verifier", () => {
     expect(result).toMatchObject({ status: "verified", actual: { login: "mona" } });
     expect(JSON.stringify(result)).not.toContain("must-not-be-retained");
   });
+
+  it("persists bounded identity evidence without treating it as a live-session verification", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({
+              provider: "github",
+              login: "mona",
+              organization: "lubab",
+              ignored: "must-not-be-persisted"
+            })
+          },
+          identity: {
+            expected: { provider: "github", login: "mona", organization: "lubab" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    let stored: readonly unknown[] = [];
+    const bindingStore = {
+      load: async () => structuredClone(stored),
+      save: async (records: readonly unknown[]) => {
+        stored = structuredClone(records);
+      }
+    };
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config, { bindingStore });
+    await verifier.initialize();
+
+    await expect(verifier.verify("work", undefined, await upstreams.get("work"))).resolves.toMatchObject({
+      status: "verified",
+      bindingState: "verified",
+      bound: { provider: "github", login: "mona", organization: "lubab" },
+      boundAt: expect.any(String)
+    });
+
+    const restarted = new IdentityManager(config, { bindingStore });
+    await restarted.initialize();
+    expect(restarted.status("work", undefined)).toMatchObject({
+      status: "not-verified",
+      bindingState: "verified",
+      bound: { provider: "github", login: "mona", organization: "lubab" },
+      boundAt: expect.any(String)
+    });
+    expect(JSON.stringify(stored)).not.toContain("must-not-be-persisted");
+  });
+
+  it("fails a required verification closed when binding persistence is unavailable", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "mona" },
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"]
+          }
+        }
+      }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config, {
+      bindingStore: {
+        load: async () => [],
+        save: async () => {
+          throw new Error("sensitive filesystem failure");
+        }
+      }
+    });
+    const session = await upstreams.get("work");
+
+    await expect(verifier.requireVerified("work", undefined, session)).rejects.toMatchObject({
+      code: "IDENTITY_BINDING_UNAVAILABLE",
+      message: expect.not.stringContaining("sensitive filesystem failure")
+    });
+    expect(verifier.status("work", undefined)).toMatchObject({
+      status: "failed",
+      bindingState: "unavailable",
+      errorCode: "IDENTITY_BINDING_UNAVAILABLE"
+    });
+  });
+
+  it("reports persisted evidence as expired without using it as a live result", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "mona" },
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 1
+          }
+        }
+      }
+    });
+    let stored: readonly unknown[] = [];
+    const bindingStore = {
+      load: async () => structuredClone(stored),
+      save: async (records: readonly unknown[]) => {
+        stored = structuredClone(records);
+      }
+    };
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config, { bindingStore });
+    await verifier.verify("work", undefined, await upstreams.get("work"));
+    await delay(20);
+
+    const restarted = new IdentityManager(config, { bindingStore });
+    await restarted.initialize();
+    expect(restarted.status("work", undefined)).toMatchObject({
+      status: "not-verified",
+      bindingState: "expired",
+      bound: { login: "mona" }
+    });
+  });
 });

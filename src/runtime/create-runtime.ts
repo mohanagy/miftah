@@ -10,6 +10,11 @@ import {
   createRemoteOAuthRuntime,
   type RemoteOAuthRuntimeOptions
 } from "../oauth/remote-oauth-runtime.js";
+import { IdentityManager, type IdentityManagerOptions } from "../identity/identity-manager.js";
+import {
+  defaultIdentityBindingPath,
+  FileIdentityBindingStore
+} from "../identity/identity-binding-store.js";
 
 /** Internal runtime construction overrides for hosts with a narrower lifecycle boundary. */
 export interface RuntimeCreationOptions {
@@ -17,6 +22,8 @@ export interface RuntimeCreationOptions {
   profileState?: StateConfig;
   /** Internal protocol dependencies used by deterministic OAuth fixtures and native runtime wiring. */
   oauth?: RemoteOAuthRuntimeOptions;
+  /** Internal persistence seam for deterministic identity-binding tests. */
+  identity?: IdentityManagerOptions;
 }
 
 /**
@@ -35,6 +42,12 @@ export async function createRuntime(
   const { config, upstream, secretValues, redactor, plugins } = await resolveRuntimeConfig(runtimeConfigPath, scope);
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
   const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
+  const identities = new IdentityManager(config, {
+    bindingStore:
+      options.identity?.bindingStore ??
+      new FileIdentityBindingStore(defaultIdentityBindingPath(runtimeConfigPath))
+  });
+  await identities.initialize();
   const managerOptions = {
     ...config.process,
     secretValues: [...secretValues],
@@ -57,5 +70,5 @@ export async function createRuntime(
     profileState === undefined ? undefined : { ...profileState, configPath: runtimeConfigPath }
   );
   await profileManager.initialize();
-  return { config, manager, profileManager, redactor, plugins, oauth };
+  return { config, manager, profileManager, redactor, plugins, oauth, identities };
 }

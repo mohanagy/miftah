@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AuditTrail } from "../src/audit/audit-trail.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { IdentityManager } from "../src/identity/identity-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { OperationPipeline } from "../src/mcp/server/operation-pipeline.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
@@ -273,7 +274,13 @@ describe("profile leases in the operation pipeline", () => {
       upstreams: { get: async () => ({}) } as unknown as UpstreamProcessManager,
       redactor: new SecretRedactor(),
       routingContext: async () => ({ context: {}, evidence: { cwd: "", fileRoots: [] }, profileHints: [] }),
-      identities: { requiresVerification: () => false } as never,
+      identities: new IdentityManager({
+        version: "1",
+        name: "profile-lease",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: process.execPath },
+        profiles: { work: { policy: "confirm", lease: { ttlMs: 1_000, requiredForRisk: ["write"] } } }
+      }),
       approvals: {
         requireApproval: async () => {
           now = new Date("2026-07-12T00:00:01.000Z");

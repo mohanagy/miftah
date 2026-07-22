@@ -1,10 +1,11 @@
-import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { runDoctor } from "../src/cli/doctor.js";
 import { DOCTOR_CODES, type DoctorCheck, type DoctorCode } from "../src/cli/doctor-report.js";
+import { defaultIdentityBindingPath } from "../src/identity/identity-binding-store.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const fixtureDirectory = resolve(`.doctor-integration-${process.pid}`);
@@ -187,6 +188,43 @@ describe("doctor readiness runner", () => {
       ])
     );
     expect(JSON.stringify(report)).not.toContain("ready-account");
+  });
+
+  it("uses the canonical config identity for bindings when invoked through a symlink", async () => {
+    if (process.platform === "win32") return;
+    const { directory, configPath } = await writeConfig(
+      "identity-symlink",
+      baseConfig(
+        stdioUpstream({ TEST_ACCOUNT_NAME: "ready-account" }),
+        {
+          default: {
+            identity: {
+              expected: { login: "ready-account" },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write"]
+            }
+          }
+        }
+      )
+    );
+    const symlinkPath = join(directory, "linked-miftah.json");
+    const canonicalBindingPath = defaultIdentityBindingPath(configPath);
+    const linkedBindingPath = defaultIdentityBindingPath(symlinkPath);
+    await symlink(configPath, symlinkPath);
+
+    try {
+      const report = await runDoctor(symlinkPath);
+
+      expect(check(report, DOCTOR_CODES.IDENTITY).status).toBe("pass");
+      await expect(access(canonicalBindingPath)).resolves.toBeUndefined();
+      await expect(access(linkedBindingPath)).rejects.toThrow();
+    } finally {
+      await Promise.all([
+        rm(canonicalBindingPath, { force: true }),
+        rm(linkedBindingPath, { force: true })
+      ]);
+    }
   });
 
   it("fails required identity verification on a real mismatching probe without exposing identity details", async () => {

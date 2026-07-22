@@ -49,7 +49,7 @@ const localMutation: ToolAnnotations = {
 const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] = [
   {
     name: "miftah_list_profiles",
-    description: "List configured profiles without exposing secrets.",
+    description: "List configured profiles and bounded account-binding state without exposing secrets.",
     inputs: [],
     interaction: "observational",
     availability: "always",
@@ -103,7 +103,7 @@ const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] 
   },
   {
     name: "miftah_profile_info",
-    description: "Show non-secret metadata for a profile.",
+    description: "Show non-secret metadata and bounded account-binding state for a profile.",
     inputs: [stringInput("profile", true)],
     interaction: "observational",
     availability: "always",

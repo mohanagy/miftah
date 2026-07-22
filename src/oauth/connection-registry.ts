@@ -40,7 +40,15 @@ const credentialStates = new Set<OAuthCredentialState>([
   "disconnected",
   "unsupported"
 ]);
-const identityStates = new Set<OAuthIdentityState>(["verified", "unverified", "unknown", "unsupported"]);
+const identityStates = new Set<OAuthIdentityState>([
+  "verified",
+  "unverified",
+  "changed",
+  "expired",
+  "unavailable",
+  "unknown",
+  "unsupported"
+]);
 const maximumMetadataBytes = 1_024 * 1_024;
 const metadataLockWaitMilliseconds = 5_000;
 

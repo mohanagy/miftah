@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -7,6 +7,10 @@ import { loadConfig } from "../config/load-config.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, ProfileConfig, ToolingConfig, UpstreamConfig } from "../config/types.js";
 import { IdentityManager } from "../identity/identity-manager.js";
+import {
+  defaultIdentityBindingPath,
+  FileIdentityBindingStore
+} from "../identity/identity-binding-store.js";
 import { canonicalJson } from "../mcp/server/tool-registry.js";
 import { resolveClientVisibleToolName } from "../mcp/server/miftah-server.js";
 import {
@@ -399,6 +403,7 @@ async function addAuditChecks(
 export async function runDoctor(configPath: string): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   const resolvedConfigPath = resolvePath(configPath);
+  const canonicalConfigPath = await realpath(resolvedConfigPath).catch(() => resolvedConfigPath);
   try {
     checks.push(await diagnosePathPermissions("config", resolvedConfigPath));
   } catch {
@@ -415,7 +420,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
 
   let config: MiftahConfig;
   try {
-    config = await loadConfig(configPath);
+    config = await loadConfig(canonicalConfigPath);
   } catch (error) {
     checks.push(configurationFailure(error));
     return normalizeDoctorReport(checks);
@@ -462,7 +467,10 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     const visibleTools = new Map<string, Map<string, string>>();
     const incompleteProfiles = new Set<string>();
     const targets = configuredTargets(config);
-    const identities = new IdentityManager(config);
+    const identities = new IdentityManager(config, {
+      bindingStore: new FileIdentityBindingStore(defaultIdentityBindingPath(canonicalConfigPath))
+    });
+    await identities.initialize();
     const discoveryFailureStatus = config.tooling?.toolDiscoveryMode === "strict" ? "error" : "warning";
     const identityRequired = (target: DoctorTarget): boolean =>
       identities.requiresVerification(target.profile, target.upstreamName, "write") ||
@@ -520,7 +528,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       }
 
       try {
-        runtime = await createRuntime(configPath, {
+        runtime = await createRuntime(canonicalConfigPath, {
           profile: target.profile,
           upstreamName: target.upstreamName
         });

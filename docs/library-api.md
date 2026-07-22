@@ -49,7 +49,7 @@ The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `Au
 
 `@lubab/miftah/plugin-api` is the separate stable plugin-authoring surface. It exports `MIFTAH_PLUGIN_API_VERSION`, `MiftahPlugin`, `SecretProviderPlugin`, `SecretProviderPluginRequest`, `SecretProviderPluginResult`, `RoutingMatcherPlugin`, `RoutingMatcherPluginRequest`, `RoutingMatcherPluginResult`, and the canonical routing-signal types. It intentionally does not export Miftah's internal secret resolver, runner, redactor, routing engine, configuration, or process-management types. See [local plugins](plugins.md) for behavior and trust boundaries.
 
-For identity configurations, format-dependent structural constraints and unique `requiredForRisk` tuples are static. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
+For identity configurations, format-dependent structural constraints, unique `requiredForRisk` tuples, and `selectionMode: "explicit" | "confirmed"` are static. A selection mode requires `requiredForRisk`. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 
 Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. `MiftahErrorCode` includes the stable resource-template and resource-subscription protocol error categories. The wrapper factory exposes `MiftahRuntime`.
 

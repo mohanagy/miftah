@@ -259,7 +259,8 @@ An identity configuration is strict and contains:
 - `expected`: a nonempty fingerprint with only optional `provider`, `login`, `organization`, and `host` string fields. Each identity fingerprint string, `probe.tool`, and any `probe.provider` is trimmed and must be nonempty, with a maximum 256 JavaScript characters;
 - `probe`: `{ "tool": "<discovered-tool>", "resultFormat": "text" | "json" }`, with optional `provider` only for `"text"`;
 - positive integer `maxAgeMs`, with a maximum 86,400,000 ms (24 hours); and
-- optional nonempty, unique `requiredForRisk`, containing only `"write"` and/or `"destructive"`. `"read"` is not accepted.
+- optional nonempty, unique `requiredForRisk`, containing only `"write"` and/or `"destructive"`. `"read"` is not accepted; and
+- optional `selectionMode: "explicit" | "confirmed"`. It requires `requiredForRisk` and applies only when multiple profiles are configured.
 
 The expected fingerprint has exactly these fields:
 
@@ -287,7 +288,8 @@ For example, this profile identity requires a GitHub login fingerprint before co
           "provider": "github"
         },
         "maxAgeMs": 300000,
-        "requiredForRisk": ["write", "destructive"]
+        "requiredForRisk": ["write", "destructive"],
+        "selectionMode": "confirmed"
       }
     }
   }
@@ -301,6 +303,12 @@ Before parsing or normalization, a probe response must contain exactly one MCP t
 For a `"text"` response, Miftah uses the response as `login` and adds the configured static `provider` when supplied. Text probes require `expected.login`, cannot verify `organization` or `host`, and their static provider must equal `expected.provider` when an expected provider is configured. For a `"json"` response, Miftah retains only allowed string `provider`, `login`, `organization`, and `host` fields; provider must come from that response, so a static probe provider is prohibited. Matching uses exact equality for every configured expected field. Miftah retains only actual fields that were configured in `expected`.
 
 Identity gating is applied only after routing, policy, and target resolution and before the protected operation executes. It applies only when `requiredForRisk` explicitly names the selected write or destructive risk. Read discovery, resource reads, and prompt retrieval are not gated. Mismatch, unsupported, or failed required checks block the protected operation; an identity configuration without `requiredForRisk` never gates an operation.
+
+For a multi-profile configuration, `selectionMode: "explicit"` additionally requires the routed profile to be the configured static lock or a current-client `miftah_use_profile`/`miftah_reset_profile` selection. `"confirmed"` requires that same explicit selection plus a successful profile-switch confirmation; configure `security.requireProfileSwitchConfirmation: true` and use a form-capable client, or use a configured static lock. A runtime lock does not convert an implicit default or persisted choice into explicit account selection. These checks use the profile snapshot captured by the requesting client and cannot be satisfied by another process changing the durable default.
+
+When Miftah starts from a configuration file, a successful probe persists only the configured allowlisted fingerprint fields, profile, exact upstream, verification time, and non-reversible configuration fingerprints in the platform user-state directory under `Miftah/identity-bindings` (macOS/Windows) or `miftah/identity-bindings` (Linux). Files are written atomically and use owner-only modes where the platform supports them. Raw responses, unconfigured response fields, credentials, tokens, errors, and the raw configuration path are never stored. A changed expected account reports `bindingState: "changed"`; unreadable or unwritable storage reports `"unavailable"` and a required check fails closed.
+
+Durable binding evidence and live verification are deliberately separate. `bindingState` is one of `verified`, `unverified`, `changed`, `expired`, or `unavailable`, and management responses may include bounded `bound` evidence plus `boundAt`. The existing live `status` remains `unconfigured`, `not-verified`, `verified`, `expired`, `mismatch`, `unsupported`, or `failed`. A new process or replacement upstream must still run the probe before a protected operation; persisted evidence never authorizes a live session by itself. `miftah_list_profiles`, `miftah_profile_info`, `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose cached/persisted state without probing. Changes written by another process affect a newly started client only; they do not silently replace an active client's in-memory profile selection.
 
 ## Operation routing and policy
 

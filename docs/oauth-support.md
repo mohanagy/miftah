@@ -80,7 +80,7 @@ The same rule applies when Sentry or another upstream MCP server owns consent, r
 
 ## Identity boundary
 
-Miftah's optional identity verifier is independent of OAuth. Its meaningful lifecycle states include `not-verified`, `verified`, `expired`, and `unsupported`; the identity evidence comes from an explicitly configured bounded upstream-tool probe, not an OAuth callback. **OAuth success, token validity, and granted scopes are not account authorization.** A valid provider token can still belong to the wrong human, organization, or profile, so protected write/destructive operations still need the configured routing, policy, approval, and identity controls.
+Miftah's optional identity verifier is independent of OAuth. Its durable binding states are `verified`, `unverified`, `changed`, `expired`, and `unavailable`; live probe statuses include `not-verified`, `verified`, `expired`, and `unsupported`. This safe identity evidence comes from an explicitly configured bounded upstream-tool probe, not an OAuth callback. Miftah mirrors only a coarse state onto the exact OAuth connection record and never stores the fingerprint in OAuth credential metadata. **OAuth success, token validity, and granted scopes are not account authorization.** A valid provider token can still belong to the wrong human, organization, or profile, so protected write/destructive operations still need the configured routing, policy, approval, selection, and identity controls.
 
 ## Configuration and public API boundary
 
