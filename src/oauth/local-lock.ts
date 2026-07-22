@@ -118,18 +118,40 @@ async function acquireLocalLock(scope: string, value: string, waitMilliseconds: 
   const key = localLockKey(scope, value);
   const ports = localLockPorts(key);
   while (true) {
+    let availablePort: number | undefined;
+    let mustWait = false;
     for (const port of ports) {
       if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
       const state = await inspectLocalLockPort(port, key);
-      if (state === "held" || state === "unknown") break;
-      if (state === "available") {
-        try {
-          const lock = await tryAcquireLocalLock(port, key);
-          if (lock !== undefined) return async () => releaseLocalLock(lock);
-        } catch {
-          throw new OAuthLocalLockUnavailableError();
-        }
+      if (state === "held" || state === "unknown") {
+        mustWait = true;
         break;
+      }
+      if (state === "available" && availablePort === undefined) availablePort = port;
+    }
+    if (!mustWait && availablePort !== undefined) {
+      let lock: LocalLock | undefined;
+      try {
+        lock = await tryAcquireLocalLock(availablePort, key);
+      } catch {
+        throw new OAuthLocalLockUnavailableError();
+      }
+      if (lock !== undefined) {
+        let competingHolder = false;
+        for (const port of ports) {
+          if (port === availablePort) continue;
+          if (Date.now() - startedAt >= waitMilliseconds) {
+            await releaseLocalLock(lock);
+            throw new OAuthLocalLockUnavailableError();
+          }
+          const state = await inspectLocalLockPort(port, key);
+          if (state === "held" || state === "unknown") {
+            competingHolder = true;
+            break;
+          }
+        }
+        if (!competingHolder) return async () => releaseLocalLock(lock);
+        await releaseLocalLock(lock);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));

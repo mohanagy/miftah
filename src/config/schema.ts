@@ -1205,7 +1205,7 @@ function validateOAuthConnections(
       addConfigIssue(
         context,
         "CONFIG_SCHEMA_INVALID",
-        [...path, "resource"],
+        [...path],
         "OAuth connections cannot coexist with an effective Authorization header",
         "Remove the static Authorization header before configuring native OAuth for this profile and upstream."
       );

@@ -129,11 +129,8 @@ export function planConfigMigration(input: unknown): ConfigMigrationPlan {
   if (version === "2") {
     return migrateV2(config, "2", []);
   }
-  if (version !== "1" && version !== "2") {
-    throw new MiftahError(
-      "UNSUPPORTED_CONFIG_VERSION",
-      "UNSUPPORTED_CONFIG_VERSION: migrate-config supports versions 1 and 2 input and version 3 output only"
-    );
-  }
-  throw new MiftahError("UNSUPPORTED_CONFIG_VERSION", "UNSUPPORTED_CONFIG_VERSION: config version is unsupported");
+  throw new MiftahError(
+    "UNSUPPORTED_CONFIG_VERSION",
+    "UNSUPPORTED_CONFIG_VERSION: migrate-config supports versions 1 and 2 input and version 3 output only"
+  );
 }

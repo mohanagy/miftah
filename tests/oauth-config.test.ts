@@ -80,6 +80,9 @@ describe("OAuth v3 connection configuration", () => {
     expect(error.message).toContain("oauth.connections");
     expect(error.message).toContain("Authorization");
     expect(error.message).not.toContain("Bearer static");
+    expect(error.details?.diagnostics).toContainEqual(
+      expect.objectContaining({ path: `oauth.connections.${connectionRef}` })
+    );
   });
 
   it("rejects a named-upstream override Authorization source and an OAuth binding to an alias", () => {
