@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { encodedWindowsSecretJobAssembly } from "../src/secrets/windows-secret-job-assembly.js";
 
 describe("Windows secret command contract", () => {
   it("verifies the trusted PowerShell launcher with asynchronous filesystem access", () => {
@@ -11,10 +13,15 @@ describe("Windows secret command contract", () => {
     expect(source).not.toContain("existsSync(");
   });
 
-  it("preserves C# escape sequences in the embedded helper", () => {
-    const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
+  it("keeps the Job Object helper source canonical and the generated assembly bounded", () => {
+    const source = readFileSync(new URL("../src/secrets/windows-secret-job.cs", import.meta.url), "utf8");
+    const assembly = gunzipSync(Buffer.from(encodedWindowsSecretJobAssembly, "base64"));
 
-    expect(source).toContain("const windowsJobHelper = String.raw`");
+    expect(source).toContain("public static class MiftahSecretJob");
+    expect(source).toContain("JobObjectLimitKillOnJobClose");
+    expect(source).toContain("AssignProcessToJobObject(createdJob, GetCurrentProcess())");
+    expect(assembly.byteLength).toBeLessThanOrEqual(16 * 1024);
+    expect(assembly.subarray(0, 2).toString("ascii")).toBe("MZ");
   });
 
   it("loads a precompiled Job Object helper without runtime C# compilation", () => {
@@ -23,6 +30,8 @@ describe("Windows secret command contract", () => {
     expect(source).not.toContain("Add-Type -TypeDefinition");
     expect(source).toContain("[Reflection.Assembly]::Load");
     expect(source).toContain("encodedWindowsSecretJobAssembly");
+    expect(source).toContain("$assemblyOutput.Length + $assemblyCount");
+    expect(source).toContain("SetEnvironmentVariable($assemblyName, $null");
   });
 
   it("runs the multiline helper through a fixed encoded bootstrap", () => {

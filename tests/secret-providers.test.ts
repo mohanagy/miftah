@@ -15,6 +15,7 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
+import { encodedWindowsSecretJobAssembly } from "../src/secrets/windows-secret-job-assembly.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
@@ -25,8 +26,6 @@ const posixDescendantProviderFixturePath = join(
   "fixtures",
   "posix-descendant-provider.sh"
 );
-const embeddedWindowsJobCSharpPattern =
-  /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/;
 const realSetTimeout = globalThis.setTimeout;
 
 afterAll(async () => {
@@ -398,14 +397,24 @@ try {
   });
 }
 
-async function embeddedWindowsJobCSharp(): Promise<string> {
-  const source = await readFile(
-    new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
-    "utf8"
-  );
-  const match = source.match(embeddedWindowsJobCSharpPattern);
-  if (match?.[1] === undefined) throw new Error("Embedded Windows Job Object C# source is unavailable");
-  return match[1];
+async function runWindowsJobAssemblyProbe(
+  source: string,
+  environment: NodeJS.ProcessEnv = {}
+): ReturnType<typeof runWindowsCompressedBootstrap> {
+  const loadAssembly = String.raw`$encodedAssembly = $env:MIFTAH_TEST_JOB_ASSEMBLY
+$env:MIFTAH_TEST_JOB_ASSEMBLY = $null
+$assemblyInput = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedAssembly), $false)
+$assemblyGzip = [IO.Compression.GzipStream]::new($assemblyInput, [IO.Compression.CompressionMode]::Decompress, $false)
+$assemblyOutput = [IO.MemoryStream]::new()
+$assemblyGzip.CopyTo($assemblyOutput)
+$assemblyGzip.Dispose()
+$assemblyInput.Dispose()
+[Reflection.Assembly]::Load($assemblyOutput.ToArray()) | Out-Null
+$assemblyOutput.Dispose()`;
+  return runWindowsCompressedBootstrap(`${loadAssembly}\n${source}`, {
+    ...environment,
+    MIFTAH_TEST_JOB_ASSEMBLY: encodedWindowsSecretJobAssembly
+  });
 }
 
 describe("built-in secret providers", () => {
@@ -1133,14 +1142,9 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
-    "compiles the embedded Job Object type before starting providers",
+    "loads the precompiled Job Object type before starting providers",
     async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
+      const result = await runWindowsJobAssemblyProbe(`$ErrorActionPreference = 'Stop'
 Write-Output 'native-type-ready'
 exit 0`);
 
@@ -1151,15 +1155,10 @@ exit 0`);
   );
 
   it.runIf(process.platform === "win32")(
-    "runs an immediate cmd.exe child through the embedded Job Object",
+    "runs an immediate cmd.exe child through the precompiled Job Object",
     async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
+      const result = await runWindowsJobAssemblyProbe(
         `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
 if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
 $exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
 Write-Output "native-run-exit=$exitCode"
@@ -1180,15 +1179,10 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
-    "runs an immediate Node child through the embedded Job Object",
+    "runs an immediate Node child through the precompiled Job Object",
     async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
+      const result = await runWindowsJobAssemblyProbe(
         `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
 if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
 $exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', 'process.exit(0)'))
 Write-Output "native-run-exit=$exitCode"
@@ -1203,14 +1197,9 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
-    "initializes the embedded Job Object before starting providers",
+    "initializes the precompiled Job Object before starting providers",
     async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
+      const result = await runWindowsJobAssemblyProbe(`$ErrorActionPreference = 'Stop'
 if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
 Write-Output 'native-job-ready'
 exit 0`);
