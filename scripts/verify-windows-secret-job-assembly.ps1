@@ -15,6 +15,13 @@ try {
   if ($LASTEXITCODE -ne 0 -or -not [IO.File]::Exists($compiledPath)) {
     throw 'Failed to compile the Windows Job Object helper.'
   }
+  # The in-box .NET Framework compiler emits a nondeterministic PE timestamp and MVID, so byte
+  # equality is not a stable provenance check. Validate that canonical source independently
+  # compiles to a bounded PE, then validate the checked runtime artifact and its source fingerprint.
+  $compiled = [IO.File]::ReadAllBytes($compiledPath)
+  if ($compiled.Length -eq 0 -or $compiled.Length -gt 16384 -or $compiled[0] -ne 0x4d -or $compiled[1] -ne 0x5a) {
+    throw 'Canonical Windows Job Object source did not compile to a valid bounded assembly.'
+  }
 
   $generatedSource = [IO.File]::ReadAllText($generatedPath)
   $assemblyMatch = [regex]::Match(
@@ -23,6 +30,9 @@ try {
     [Text.RegularExpressions.RegexOptions]::CultureInvariant
   )
   if (-not $assemblyMatch.Success) { throw 'Generated Windows Job Object assembly is unavailable.' }
+  if ($assemblyMatch.Groups[1].Value.Length -gt 8192) {
+    throw 'Generated Windows Job Object assembly exceeds its encoded runtime bound.'
+  }
   $sourceHashMatch = [regex]::Match(
     $generatedSource,
     'export const windowsSecretJobSourceSha256 = "([a-f0-9]{64})";',
@@ -61,7 +71,7 @@ try {
   if ($null -eq $type.GetMethod('Initialize', [Type[]]@()) -or $type.GetMethods().Where({ $_.Name -eq 'Run' }).Count -ne 2) {
     throw 'Generated Windows Job Object assembly does not expose the required helper contract.'
   }
-  Write-Output 'Verified precompiled Windows secret helper.'
+  Write-Output 'Verified Windows helper source compilation and checked runtime artifact contract.'
 } finally {
   if ([IO.Directory]::Exists($temporaryDirectory)) {
     [IO.Directory]::Delete($temporaryDirectory, $true)
