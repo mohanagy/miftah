@@ -24,7 +24,8 @@ describe("OAuth and Console threat-model documentation contract", () => {
 
     expect(delta).toContain("# OAuth broker and local Console design delta");
     expect(delta).toContain("Version 3 can run the approved standards-compatible remote OAuth flow");
-    expect(delta).toContain("No local Console, provider-specific adapter, revocation command, or hosted broker exists.");
+    expect(delta).toContain("No local Console, provider-specific adapter, provider-revocation client, or hosted broker exists.");
+    expect(delta).toContain("The local CLI can plan bindings, report redacted state, connect, reauthenticate, and delete an exact local credential");
     expect(delta).toContain("The future Console control API is distinct from the MCP /mcp endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");

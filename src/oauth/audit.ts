@@ -1,7 +1,7 @@
 import type { AuditTrail } from "../audit/audit-trail.js";
 import type { OAuthCredentialState, OAuthIdentityState } from "./connection-types.js";
 
-export type OAuthConnectionLifecycleAuditAction = "register" | "connect" | "refresh" | "reauth-required" | "disconnect" | "identity";
+export type OAuthConnectionLifecycleAuditAction = "register" | "connect" | "refresh" | "reauth-required" | "disconnect" | "identity" | "status";
 
 /** Safe lifecycle information that may be recorded in the local audit journal. */
 export interface OAuthConnectionLifecycleAuditEvent {

@@ -8,7 +8,7 @@
 Usage: miftah [command] [options]
 ```
 
-The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
+The root command list includes `serve`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `connection add|list|status|test`, `auth connect|reauth|disconnect`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
 
 Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires the pre-1.0 deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
 
@@ -24,6 +24,13 @@ Documented command names, options, JSON success forms, and exit categories are c
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
 | `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>`, `--interactive`, `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>`, `--credential-env <name>`, `--npm-package <package>`, `--docker-image <image>`, `--url <url>`, `--header-name <name>`, `--header-prefix <prefix>` | Writes a strict catalog configuration with exclusive creation and can print client JSON snippets. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
 | `miftah migrate-config --config <file>` | `--config` | `--config <file>`, `--write` | Plans a supported configuration-format migration and writes a safe JSON report. It is dry-run by default. `--write` validates the candidate, makes an exact exclusive `<file>.bak`, then uses a same-directory non-overwriting publication for a changed regular non-symlink source; it never resolves secrets or starts an upstream. |
+| `miftah connection add --config <file>` | `--config`, `--profile`, `--issuer`, `--client-registration` | `--connection <ref>`, `--upstream <name>`, repeated `--scope <scope>`, `--write` | Plans a v3 OAuth binding by default. `--write` applies the reviewed candidate with a unique recovery backup and configured audit event. It never resolves credentials or starts an upstream. |
+| `miftah connection list --config <file>` | `--config` | `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>` | Lists redacted connection state. Optional snippets are copyable JSON only; Miftah never edits client settings. |
+| `miftah connection status --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or `--profile <name>` with optional `--upstream <name>` | Shows exact non-secret binding, credential expiry/state, and coarse identity state. |
+| `miftah connection test --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream | Tests the existing authenticated upstream and identity probe without allowing browser handoff. |
+| `miftah auth connect --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream, `--non-interactive` | Uses an existing credential or starts the bounded system-browser authorization flow. Headless mode returns a typed diagnostic instead of opening a browser. |
+| `miftah auth reauth --config <file>` | `--config` plus an unambiguous selector | connect options | Forces a fresh flow while retaining the old vault credential until replacement succeeds. |
+| `miftah auth disconnect --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream | Deletes only the exact local vault credential and marks it disconnected; provider-side revocation remains provider-owned. |
 | `miftah list-tools --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts the selected profile, discovers its upstream tools, writes a JSON array, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah test-profile --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts and initializes one profile, writes `{"ok":true,"profile":"…"}`, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah logs --config <file>` | `--config` | `--config <file>`, `--follow` | Reads the configured audit JSONL as normalized, redacted JSONL. `--follow` continues watching it. This command does not construct an upstream manager. |
@@ -57,6 +64,14 @@ miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 `miftah migrate-config --config <file>` accepts only the documented supported formats and writes a JSON report containing source/target versions, safe structural actions, and whether a write occurred. It reads and validates the candidate before it changes anything. It does not emit a raw config, a diff, resolved secret values, or provider output.
 
 `--write` is intentionally required for mutation. For a changed valid-UTF-8 configuration, Miftah refuses symlinks and non-regular sources, captures a source snapshot, moves it into a dedicated same-directory transaction directory, and privately prepares the exact backup and synced candidate. It publishes each only to an absent destination path, so it never overwrites a concurrent file. On Windows, the transaction directory is created with a current-user-only DACL and the source owner/group/DACL is copied and verified before either private file receives source-derived bytes. If publication cannot complete, Miftah restores the verified original when it can do so without overwriting anything; otherwise it exits nonzero and reports the retained recovery transaction directory. A current configuration reports `changed: false`; with `--write` it remains untouched and creates no backup. See [configuration version compatibility](config.md#configuration-version-compatibility-and-migration) for version windows and exactly which aliases can be migrated.
+
+### OAuth connection lifecycle
+
+Connection selectors never guess between accounts. Use `--connection oauthconn:<uuid>`, or provide a profile/upstream tuple that resolves to exactly one configured binding. Omitting a selector is accepted only when the configuration contains one connection. An ambiguous or missing target returns a typed configuration diagnostic.
+
+`connection add` is dry-run by default. Copy the generated reference from the report into `--connection`, review the planned version and structural actions, and add `--write` to commit that exact reference. Every write re-reads and validates an exact source snapshot, creates a unique same-directory recovery backup, and uses the guarded non-overwriting transaction documented for migration. Existing connection references are never replaced.
+
+`connection list`, `connection status`, and client snippets do not resolve unrelated profile secrets or start an upstream. `connection test` may access the OS vault and upstream but disables browser handoff. `auth connect` and `auth reauth` are the only commands that permit the browser flow; `--non-interactive` disables it for CI and headless hosts. Reauth does not delete the usable old credential before a replacement succeeds. Disconnect removes only Miftah's exact local credential and cannot promise provider-side revocation.
 
 ### `doctor`
 

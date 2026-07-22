@@ -1,12 +1,16 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OAuthAuthorizationHandoff } from "../src/oauth/remote-oauth-client-provider.js";
 import type { OAuthConnectionMetadataStore } from "../src/oauth/connection-registry.js";
-import { connectionCredentialKey } from "../src/oauth/connection-types.js";
+import {
+  connectionCredentialKey,
+  createOAuthConfigIdentity,
+  createOAuthConnectionBinding
+} from "../src/oauth/connection-types.js";
 import type { OAuthCredential, OAuthCredentialStore } from "../src/oauth/secure-credential-store.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { createRuntime } from "../src/runtime/create-runtime.js";
@@ -247,6 +251,122 @@ describe("remote OAuth runtime wiring", () => {
         identityState: "changed"
       })
     ]);
+  });
+
+  it("exposes only redacted configured state and disconnects the exact selected connection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-application-state-"));
+    directories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const reference = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "3",
+        name: "oauth-application-state",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+        profiles: { work: {} },
+        oauth: {
+          connections: {
+            [reference]: {
+              profile: "work",
+              upstream: "default",
+              resource: "https://mcp.example.test/mcp",
+              issuer: "https://mcp.example.test",
+              clientRegistration: "dynamic",
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      }),
+      "utf8"
+    );
+    const metadataStore = new MemoryMetadataStore();
+    const credentialStore = new MemoryCredentialStore();
+    const runtime = await createRuntime(configPath, undefined, { oauth: { metadataStore, credentialStore } });
+    closeRuntime.push(() => runtime.manager.close());
+
+    expect(runtime.oauth?.connections()).toEqual([
+      {
+        connectionRef: reference,
+        profile: "work",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://mcp.example.test",
+        clientRegistration: "dynamic",
+        scopes: ["mcp:tools"]
+      }
+    ]);
+    expect(JSON.stringify(runtime.oauth?.connections())).not.toContain("configIdentity");
+    await expect(runtime.oauth?.status("work", "default")).resolves.toMatchObject({
+      connectionRef: reference,
+      credentialState: "disconnected",
+      identityState: "unverified"
+    });
+    await expect(runtime.oauth?.disconnect("work", "default")).resolves.toMatchObject({
+      connectionRef: reference,
+      credentialState: "disconnected"
+    });
+  });
+
+  it("reconciles an expired persisted credential when reporting runtime status", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-expired-status-"));
+    directories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const reference = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "3",
+        name: "oauth-expired-status",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+        profiles: { work: {} },
+        oauth: {
+          connections: {
+            [reference]: {
+              profile: "work",
+              upstream: "default",
+              resource: "https://mcp.example.test/mcp",
+              issuer: "https://mcp.example.test",
+              clientRegistration: "dynamic",
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      }),
+      "utf8"
+    );
+    const metadataStore = new MemoryMetadataStore();
+    metadataStore.records = [{
+      binding: createOAuthConnectionBinding({
+        configIdentity: createOAuthConfigIdentity(await realpath(configPath)),
+        connectionRef: reference,
+        profile: "work",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://mcp.example.test",
+        clientRegistration: "dynamic",
+        scopes: ["mcp:tools"]
+      }),
+      credentialState: "connected",
+      identityState: "verified",
+      expiresAt: "2026-07-22T01:00:00.000Z",
+      updatedAt: "2026-07-22T00:00:00.000Z"
+    }];
+    const runtime = await createRuntime(configPath, undefined, {
+      oauth: {
+        metadataStore,
+        credentialStore: new MemoryCredentialStore(),
+        now: () => new Date("2026-07-22T02:00:00.000Z")
+      }
+    });
+    closeRuntime.push(() => runtime.manager.close());
+
+    await expect(runtime.oauth?.status("work", "default")).resolves.toMatchObject({
+      credentialState: "expired",
+      expiresAt: "2026-07-22T01:00:00.000Z"
+    });
   });
 
   it("records an unconfigured verifier as unsupported for its OAuth connection", async () => {

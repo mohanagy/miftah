@@ -3,6 +3,7 @@ import { homedir, platform } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { MiftahConfig } from "../config/types.js";
 import type { SecretRedactor } from "../secrets/redact.js";
+import { MiftahError } from "../utils/errors.js";
 import { OAuthMetadataFetchGuard } from "./oauth-metadata-fetch-guard.js";
 import type { AuditTrail } from "../audit/audit-trail.js";
 import {
@@ -20,6 +21,7 @@ import {
   createOAuthConfigIdentity,
   createOAuthConnectionBinding,
   type OAuthConnectionBinding,
+  type OAuthCredentialState,
   type OAuthIdentityState
 } from "./connection-types.js";
 import { createLoopbackOAuthAuthorizationHandoff } from "./loopback-authorization-handoff.js";
@@ -39,6 +41,27 @@ export interface RemoteOAuthRuntimeOptions {
   readonly fetch?: FetchLike;
   readonly createHandoff?: () => Promise<OAuthAuthorizationHandoff>;
   readonly now?: () => Date;
+  /** Disables browser handoff for diagnostics while preserving use of an existing credential. */
+  readonly interactiveAuthorization?: boolean;
+  /** Forces one exact target through a fresh flow without deleting its current credential first. */
+  readonly forceAuthorization?: { readonly profile: string; readonly upstream: string };
+}
+
+export interface RedactedOAuthConnection {
+  readonly connectionRef: string;
+  readonly profile: string;
+  readonly upstream: string;
+  readonly resource: string;
+  readonly issuer: string;
+  readonly clientRegistration: string;
+  readonly scopes: readonly string[];
+}
+
+export interface RedactedOAuthConnectionStatus extends RedactedOAuthConnection {
+  readonly credentialState: OAuthCredentialState;
+  readonly identityState: OAuthIdentityState;
+  readonly expiresAt?: string;
+  readonly updatedAt: string;
 }
 
 function targetKey(profile: string, upstream: string): string {
@@ -85,7 +108,9 @@ export class RemoteOAuthRuntime {
     readonly fetch?: FetchLike,
     private readonly now?: () => Date,
     private readonly audit?: DeferredOAuthAuditSink,
-    private readonly issuerResponseSupported?: (issuer: string) => boolean
+    private readonly issuerResponseSupported?: (issuer: string) => boolean,
+    private readonly interactiveAuthorization = true,
+    private readonly forceAuthorization?: { readonly profile: string; readonly upstream: string }
   ) {}
 
   attachAuditTrail(auditTrail: AuditTrail): void {
@@ -105,12 +130,48 @@ export class RemoteOAuthRuntime {
         ...(this.issuerResponseSupported === undefined
           ? {}
           : { issuerResponseSupported: this.issuerResponseSupported }),
-        ...(this.now === undefined ? {} : { now: this.now })
+        ...(this.now === undefined ? {} : { now: this.now }),
+        interactiveAuthorization: this.interactiveAuthorization,
+        forceAuthorization:
+          this.forceAuthorization?.profile === profile && this.forceAuthorization.upstream === upstream
       });
     } catch (error) {
       await handoff.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Returns configured non-secret bindings without the config identity used by secure storage. */
+  connections(): readonly RedactedOAuthConnection[] {
+    return [...this.bindings.values()]
+      .sort((left, right) => left.connectionRef.localeCompare(right.connectionRef))
+      .map((binding) => this.redacted(binding));
+  }
+
+  async status(profile: string, upstream: string): Promise<RedactedOAuthConnectionStatus> {
+    const binding = this.requireBinding(profile, upstream);
+    await this.lifecycle.register(binding);
+    const record = await this.lifecycle.status(binding);
+    return {
+      ...this.redacted(binding),
+      credentialState: record.credentialState,
+      identityState: record.identityState,
+      ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      updatedAt: record.updatedAt
+    };
+  }
+
+  async disconnect(profile: string, upstream: string): Promise<RedactedOAuthConnectionStatus> {
+    const binding = this.requireBinding(profile, upstream);
+    await this.lifecycle.register(binding);
+    const record = await this.lifecycle.disconnect(binding);
+    return {
+      ...this.redacted(binding),
+      credentialState: record.credentialState,
+      identityState: record.identityState,
+      ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      updatedAt: record.updatedAt
+    };
   }
 
   /** Persists only the bounded identity lifecycle state for an exact configured OAuth target. */
@@ -119,6 +180,29 @@ export class RemoteOAuthRuntime {
     if (binding === undefined) return;
     await this.lifecycle.register(binding);
     await this.lifecycle.setIdentityState(binding, state);
+  }
+
+  private requireBinding(profile: string, upstream: string): OAuthConnectionBinding {
+    const binding = this.bindings.get(targetKey(profile, upstream));
+    if (binding === undefined) {
+      throw new MiftahError(
+        "OAUTH_CONNECTION_NOT_FOUND",
+        "OAUTH_CONNECTION_NOT_FOUND: OAuth connection does not exist"
+      );
+    }
+    return binding;
+  }
+
+  private redacted(binding: OAuthConnectionBinding): RedactedOAuthConnection {
+    return {
+      connectionRef: binding.connectionRef,
+      profile: binding.profile,
+      upstream: binding.upstream,
+      resource: binding.canonicalResource,
+      issuer: binding.issuer,
+      clientRegistration: binding.clientRegistration,
+      scopes: [...binding.scopes]
+    };
   }
 }
 
@@ -170,6 +254,8 @@ export async function createRemoteOAuthRuntime(
     metadataGuard.fetch,
     options.now,
     audit,
-    (issuer) => metadataGuard.issuerResponseSupported(issuer)
+    (issuer) => metadataGuard.issuerResponseSupported(issuer),
+    options.interactiveAuthorization ?? true,
+    options.forceAuthorization
   );
 }

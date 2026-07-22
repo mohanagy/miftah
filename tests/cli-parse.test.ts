@@ -67,6 +67,71 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses nested connection and OAuth lifecycle commands", () => {
+    expect(
+      parseCli([
+        "connection",
+        "add",
+        "--config",
+        "wrapper.json",
+        "--profile",
+        "production",
+        "--upstream",
+        "default",
+        "--issuer",
+        "https://auth.example.com",
+        "--client-registration",
+        "dynamic",
+        "--scope",
+        "openid",
+        "--scope=profile",
+        "--write"
+      ])
+    ).toEqual({
+      kind: "run",
+      command: "connection add",
+      options: {
+        config: "wrapper.json",
+        profile: "production",
+        upstream: "default",
+        issuer: "https://auth.example.com",
+        clientRegistration: "dynamic",
+        scopes: ["openid", "profile"],
+        write: true
+      }
+    });
+    expect(parseCli(["connection", "list", "--config=wrapper.json", "--client", "claude-desktop"])).toEqual({
+      kind: "run",
+      command: "connection list",
+      options: { config: "wrapper.json", client: "claude-desktop" }
+    });
+    expect(parseCli(["connection", "status", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "connection status",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+    expect(parseCli(["connection", "test", "--config=wrapper.json", "--profile", "production"])).toEqual({
+      kind: "run",
+      command: "connection test",
+      options: { config: "wrapper.json", profile: "production" }
+    });
+    expect(parseCli(["auth", "connect", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "auth connect",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+    expect(parseCli(["auth", "reauth", "--config=wrapper.json", "--profile", "production", "--non-interactive"])).toEqual({
+      kind: "run",
+      command: "auth reauth",
+      options: { config: "wrapper.json", profile: "production", nonInteractive: true }
+    });
+    expect(parseCli(["auth", "disconnect", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "auth disconnect",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+  });
+
   it("accepts a leading dash in an explicitly assigned option value", () => {
     expect(parseCli(["--config=-leading.json", "validate"])).toEqual({
       kind: "run",
@@ -164,6 +229,9 @@ describe("CLI parser", () => {
     expect(initHelp).toContain("--url <url>");
     expect(initHelp).toContain("--header-name <name>");
     expect(initHelp).toContain("--header-prefix <prefix>");
+    expect(renderCommandHelp("connection add")).toContain("miftah connection add");
+    expect(renderCommandHelp("connection add")).toContain("--scope <scope>");
+    expect(renderCommandHelp("auth reauth")).toContain("--non-interactive");
   });
 
   it("returns help without requiring a command and recognizes help around commands", () => {
@@ -215,6 +283,13 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--header-name=Authorization", "--header-name=Authorization"]);
     expectUsageError(["init", "--header-prefix=Bearer", "--header-prefix=Bearer"]);
     expectUsageError(["validate", "unexpected"]);
+    expectUsageError(["connection"]);
+    expectUsageError(["connection", "unknown"]);
+    expectUsageError(["auth"]);
+    expectUsageError(["auth", "unknown"]);
+    expectUsageError(["connection", "list", "unexpected"]);
+    expectUsageError(["connection", "list", "--issuer", "https://auth.example.com"]);
+    expectUsageError(["auth", "disconnect", "--non-interactive"]);
     expectUsageError(["--version", "validate"]);
     expectUsageError(["version", "--version"]);
     expectUsageError(["--help", "--version"]);
