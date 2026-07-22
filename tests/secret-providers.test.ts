@@ -19,8 +19,15 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
+const posixDescendantProviderFixturePath = join(
+  process.cwd(),
+  "tests",
+  "fixtures",
+  "posix-descendant-provider.sh"
+);
 const embeddedWindowsJobCSharpPattern =
   /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/;
+const realSetTimeout = globalThis.setTimeout;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -64,6 +71,13 @@ function fakeProviderEnvironment(
 async function installFakeProviderExecutable(directory: string, name: string): Promise<string> {
   const executable = join(directory, name);
   await copyFile(fakeProviderPath, executable);
+  await chmod(executable, 0o700);
+  return executable;
+}
+
+async function installPosixDescendantProviderExecutable(directory: string): Promise<string> {
+  const executable = join(directory, "posix-descendant-provider");
+  await copyFile(posixDescendantProviderFixturePath, executable);
   await chmod(executable, 0o700);
   return executable;
 }
@@ -178,8 +192,19 @@ async function createProviderReadinessBarrier(): Promise<{
 }
 
 async function readDescendantPid(directory: string): Promise<number> {
+  return readDescendantPidWithWait(directory, waitForCondition);
+}
+
+async function readDescendantPidWithWait(
+  directory: string,
+  wait: (
+    condition: () => Promise<boolean> | boolean,
+    description: string,
+    timeoutMs?: number
+  ) => Promise<void>
+): Promise<number> {
   let descendantPid: number | undefined;
-  await waitForCondition(async () => {
+  await wait(async () => {
     try {
       const candidate = (await readFakeRecord(directory)).descendantPid;
       if (!Number.isSafeInteger(candidate) || candidate === undefined || candidate <= 0) return false;
@@ -191,6 +216,39 @@ async function readDescendantPid(directory: string): Promise<number> {
     }
   }, "the fake provider to record its descendant PID");
   return descendantPid!;
+}
+
+async function readPosixDescendantPid(directory: string, observed: Promise<unknown>): Promise<number> {
+  let commandSettled = false;
+  void observed.then(() => {
+    commandSettled = true;
+  });
+  for (;;) {
+    try {
+      const candidate = (await readFakeRecord(directory)).descendantPid;
+      if (Number.isSafeInteger(candidate) && candidate !== undefined && candidate > 0) return candidate;
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    if (commandSettled) throw new Error("Provider command settled before recording its descendant PID");
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+  }
+}
+
+async function waitForPosixCondition(
+  condition: () => Promise<boolean> | boolean,
+  observed: Promise<unknown>,
+  description: string
+): Promise<void> {
+  let commandSettled = false;
+  void observed.then(() => {
+    commandSettled = true;
+  });
+  for (;;) {
+    if (await condition()) return;
+    if (commandSettled) throw new Error(`Provider command settled before ${description}`);
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+  }
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -217,6 +275,41 @@ async function terminateTestProcess(pid: number): Promise<void> {
     throw error;
   }
   await waitForProcessExit(pid);
+}
+
+function observeCommand<T>(pending: Promise<T>): Promise<{ value: T } | { error: unknown }> {
+  return pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error })
+  );
+}
+
+/** Test-only gate for the initial runner deadline; later termination timers remain real. */
+function holdNextTimeout(timeoutMs: number): { restore: () => void; trigger: () => void } {
+  const originalSetTimeout = globalThis.setTimeout;
+  let heldCallback: (() => void) | undefined;
+  const heldSetTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    if (heldCallback === undefined && delay === timeoutMs) {
+      heldCallback = () => handler(...args);
+      const inertTimer = originalSetTimeout(() => undefined, 0);
+      globalThis.clearTimeout(inertTimer);
+      return inertTimer;
+    }
+    return originalSetTimeout(handler as (...args: never[]) => void, delay, ...(args as never[]));
+  }) as typeof globalThis.setTimeout;
+  globalThis.setTimeout = heldSetTimeout;
+
+  return {
+    restore: () => {
+      globalThis.setTimeout = originalSetTimeout;
+    },
+    trigger: () => {
+      const callback = heldCallback;
+      heldCallback = undefined;
+      if (callback === undefined) throw new Error("Expected secret command to schedule its timeout");
+      callback();
+    }
+  };
 }
 
 const fakeCommand: SecretCommandDescriptor = {
@@ -1246,33 +1339,54 @@ exit 0`);
       const controller = new AbortController();
       const inheritedSecret = "descendant-secret-that-must-not-leak";
       const mode = termination === "timeout" && process.platform === "win32" ? "slow-descendant" : "descendant";
-      const pending = runSecretCommand(
-        {
-          executable: process.execPath,
-          args: [fakeProviderPath],
-          environment: fakeProviderEnvironment(directory, mode, inheritedSecret)
-        },
-        termination === "timeout"
-          ? { timeoutMs: process.platform === "win32" ? 2_000 : 200 }
-          : { signal: controller.signal }
-      );
-      const descendantPid = await readDescendantPid(directory);
+      const executable =
+        process.platform === "win32" ? process.execPath : await installPosixDescendantProviderExecutable(directory);
+      const args = process.platform === "win32" ? [fakeProviderPath] : [];
+      const timeoutMs = process.platform === "win32" ? 2_000 : 200;
+      const timeoutGate = termination === "timeout" && process.platform !== "win32" ? holdNextTimeout(timeoutMs) : undefined;
+      let timeoutTriggered = false;
+      let pending: Promise<{ stdout: Buffer }>;
+      try {
+        pending = runSecretCommand(
+          {
+            executable,
+            args,
+            environment: fakeProviderEnvironment(directory, mode, inheritedSecret)
+          },
+          termination === "timeout" ? { timeoutMs } : { signal: controller.signal }
+        );
+      } finally {
+        timeoutGate?.restore();
+      }
+      const observed = observeCommand(pending);
+      let descendantPid: number | undefined;
 
       try {
+        descendantPid =
+          process.platform === "win32"
+            ? await readDescendantPid(directory)
+            : await readPosixDescendantPid(directory, observed);
         if (termination === "cancellation") controller.abort();
-        const error = await pending.then(
-          () => {
-            throw new Error("Expected secret command to reject");
-          },
-          (reason: unknown) => reason
-        );
+        if (timeoutGate !== undefined) {
+          timeoutGate.trigger();
+          timeoutTriggered = true;
+        }
+        const outcome = await observed;
+        if ("value" in outcome) throw new Error("Expected secret command to reject");
+        const { error } = outcome;
 
         expect(error).toBeInstanceOf(SecretProcessError);
         expect(error).toMatchObject({ kind: expectedKind });
         expect(`${error}`).not.toContain(inheritedSecret);
         await waitForProcessExit(descendantPid);
       } finally {
-        await terminateTestProcess(descendantPid);
+        if (termination === "cancellation") controller.abort();
+        timeoutGate?.restore();
+        if (!timeoutTriggered) {
+          timeoutGate?.trigger();
+        }
+        await observed;
+        if (descendantPid !== undefined) await terminateTestProcess(descendantPid);
       }
     });
   });
@@ -1328,22 +1442,32 @@ exit 0`);
       await inSandbox(async (directory) => {
         const readyPath = join(directory, "descendant-ready");
         const signalPath = join(directory, "descendant-signal");
-        const pending = runSecretCommand(
-          {
-            executable: process.execPath,
-            args: [fakeProviderPath],
-            environment: {
-              ...fakeProviderEnvironment(directory, "early-exit-stubborn-descendant"),
-              MIFTAH_FAKE_DESCENDANT_READY_PATH: readyPath,
-              MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH: signalPath
-            }
-          },
-          { timeoutMs: 1_000 }
-        );
-        const descendantPid = await readDescendantPid(directory);
+        const executable = await installPosixDescendantProviderExecutable(directory);
+        const timeoutGate = holdNextTimeout(1_000);
+        let timeoutTriggered = false;
+        let pending: Promise<{ stdout: Buffer }>;
+        try {
+          pending = runSecretCommand(
+            {
+              executable,
+              args: [],
+              environment: {
+                ...fakeProviderEnvironment(directory, "early-exit-stubborn-descendant"),
+                MIFTAH_FAKE_DESCENDANT_READY_PATH: readyPath,
+                MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH: signalPath
+              }
+            },
+            { timeoutMs: 1_000 }
+          );
+        } finally {
+          timeoutGate.restore();
+        }
+        const observed = observeCommand(pending);
+        let descendantPid: number | undefined;
 
         try {
-          await waitForCondition(
+          descendantPid = await readPosixDescendantPid(directory, observed);
+          await waitForPosixCondition(
             async () => {
               try {
                 return (await readFile(readyPath, "utf8")) === "ready";
@@ -1352,15 +1476,24 @@ exit 0`);
                 throw error;
               }
             },
-            "stubborn descendant to start",
-            500
+            observed,
+            "the stubborn descendant to start"
           );
 
-          await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+          timeoutGate.trigger();
+          timeoutTriggered = true;
+          const outcome = await observed;
+          if ("value" in outcome) throw new Error("Expected secret command to reject");
+          expect(outcome.error).toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
           await expect(readFile(signalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
           await waitForProcessExit(descendantPid);
         } finally {
-          await terminateTestProcess(descendantPid);
+          timeoutGate.restore();
+          if (!timeoutTriggered) {
+            timeoutGate.trigger();
+          }
+          await observed;
+          if (descendantPid !== undefined) await terminateTestProcess(descendantPid);
         }
       });
     }
