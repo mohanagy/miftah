@@ -78,3 +78,4 @@ try {
     [IO.Directory]::Delete($temporaryDirectory, $true)
   }
 }
+exit 0

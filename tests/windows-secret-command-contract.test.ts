@@ -96,4 +96,13 @@ describe("Windows secret command contract", () => {
     expect(source).not.toContain("MIFTAH_SECRET_RUNNER_HELPER:");
     expect(source).not.toContain("MIFTAH_SECRET_RUNNER_ASSEMBLY:");
   });
+
+  it("returns success after the Windows verifier observes the expected rejection exit code", () => {
+    const source = readFileSync(
+      new URL("../scripts/verify-windows-secret-job-assembly.ps1", import.meta.url),
+      "utf8"
+    );
+
+    expect(source.trimEnd()).toMatch(/\}\nexit 0$/u);
+  });
 });
