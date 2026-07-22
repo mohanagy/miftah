@@ -17,6 +17,14 @@ describe("Windows secret command contract", () => {
     expect(source).toContain("const windowsJobHelper = String.raw`");
   });
 
+  it("loads a precompiled Job Object helper without runtime C# compilation", () => {
+    const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("Add-Type -TypeDefinition");
+    expect(source).toContain("[Reflection.Assembly]::Load");
+    expect(source).toContain("encodedWindowsSecretJobAssembly");
+  });
+
   it("runs the multiline helper through a fixed encoded bootstrap", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
