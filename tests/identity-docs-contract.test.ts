@@ -89,9 +89,7 @@ describe("identity verification documentation contract", () => {
     const bindingStatuses = statusTypes.split("export type IdentityBindingState =")[1]?.split(";")[0] ?? "";
     const verificationStatusValues = Array.from(verificationStatuses.matchAll(identityStatusPattern), (match) => match[1]);
     const bindingStatusValues = Array.from(bindingStatuses.matchAll(identityStatusPattern), (match) => match[1]);
-    const statuses = [verificationStatuses, bindingStatuses].flatMap((statusUnion) =>
-      Array.from(statusUnion.matchAll(identityStatusPattern), (match) => match[1])
-    );
+    const statuses = [...verificationStatusValues, ...bindingStatusValues];
     const identityStatus = statusTypes.split("export interface IdentityStatus {")[1]?.split("\n}")[0] ?? "";
     const identityStatusFields = Array.from(identityStatus.matchAll(identityStatusFieldPattern), (match) => match[1]).sort();
     expect(verificationStatusValues).not.toHaveLength(0);
