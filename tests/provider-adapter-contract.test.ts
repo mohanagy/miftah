@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_ADAPTER_CATALOG } from "../src/config/provider-adapters.js";
 import type {
+  ProviderAdapterDefinition,
   ProviderAdapterOperation,
   ProviderAuthenticationContract
 } from "../src/config/provider-adapters.js";
@@ -19,6 +20,13 @@ const invalidUnnamedMcpTool: ProviderAdapterOperation = {
   mechanism: "mcp-tool"
 };
 void invalidUnnamedMcpTool;
+
+// @ts-expect-error Unavailable identity evidence cannot claim verified assurance.
+const invalidIdentityAssurance: ProviderAdapterDefinition["identity"] = {
+  evidence: "unavailable",
+  assurance: "verified"
+};
+void invalidIdentityAssurance;
 
 describe("provider adapter contract", () => {
   it("describes the GSC pilot as upstream-owned without claiming native OAuth or identity proof", () => {

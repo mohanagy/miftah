@@ -29,6 +29,20 @@ export type ProviderAdapterOperation =
       readonly name?: string;
     };
 
+export type ProviderIdentityContract =
+  | {
+      readonly evidence: "verified-probe";
+      readonly assurance: "verified";
+    }
+  | {
+      readonly evidence: "upstream-reported";
+      readonly assurance: "informational";
+    }
+  | {
+      readonly evidence: "unavailable";
+      readonly assurance: "none";
+    };
+
 export interface ProviderAdapterDefinition {
   readonly displayName: string;
   readonly preset: string;
@@ -44,10 +58,7 @@ export interface ProviderAdapterDefinition {
     readonly reauth: ProviderAdapterOperation;
     readonly disconnect: ProviderAdapterOperation;
   };
-  readonly identity: {
-    readonly evidence: "verified-probe" | "upstream-reported" | "unavailable";
-    readonly assurance: "verified" | "informational" | "none";
-  };
+  readonly identity: ProviderIdentityContract;
   readonly diagnostics: {
     readonly mode: "metadata-only";
     readonly tokenCacheAccess: "forbidden";

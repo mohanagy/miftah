@@ -160,12 +160,13 @@ function requireOAuthClientSecretsFile(value: unknown): string {
     !value ||
     value.trim() !== value ||
     !isAbsolute(value) ||
+    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(value) ||
     Array.from(value).some((character) => {
       const codePoint = character.codePointAt(0);
       return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
     })
   ) {
-    catalogError("Preset 'google-search-console' requires an absolute OAuth client-secrets file path without controls or surrounding whitespace.");
+    catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
   }
   return value;
 }

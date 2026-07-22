@@ -113,7 +113,13 @@ describe("preset catalog", () => {
 
   it("requires one safe absolute OAuth client-secrets file path for the GSC pilot", () => {
     expect(() => buildPresetConfig("gsc", "google-search-console")).toThrow(PresetCatalogError);
-    for (const value of ["client-secrets.json", "", " /tmp/client.json", "/tmp/client.json\nignored"] as const) {
+    for (const value of [
+      "client-secrets.json",
+      "",
+      " /tmp/client.json",
+      "/tmp/client.json\nignored",
+      resolve("fixtures", "${HOME}", "client-secrets.json")
+    ] as const) {
       expect(() => buildPresetConfig("gsc", "google-search-console", { oauthClientSecretsFile: value })).toThrow(
         PresetCatalogError
       );
