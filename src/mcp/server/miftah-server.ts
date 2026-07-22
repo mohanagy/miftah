@@ -2580,13 +2580,15 @@ export class MiftahServer {
       error.code === "PROFILE_LEASE_REQUIRED" ||
       error.code === "PROFILE_LEASE_EXPIRED" ||
       error.code === "PROFILE_SELECTION_REQUIRED" ||
+      error.code === "PROFILE_IDENTITY_SELECTION_REQUIRED" ||
       error.code === "APPROVAL_DELEGATION_DISABLED"
     ) {
       return "denied";
     }
     if (
       error.code === "POLICY_CONFIRMATION_REQUIRED" ||
-      error.code === "PROFILE_SWITCH_CONFIRMATION_REQUIRED"
+      error.code === "PROFILE_SWITCH_CONFIRMATION_REQUIRED" ||
+      error.code === "PROFILE_IDENTITY_CONFIRMATION_REQUIRED"
     ) {
       return "confirmation-required";
     }
@@ -3052,6 +3054,7 @@ function redactSensitiveUri(uri: string): string {
 }
 
 function oauthIdentityState(status: IdentityStatus): OAuthIdentityState {
+  if (status.status === "unconfigured" || status.status === "unsupported") return "unsupported";
   if (status.bindingState !== undefined) return status.bindingState;
   switch (status.status) {
     case "verified":
@@ -3062,9 +3065,6 @@ function oauthIdentityState(status: IdentityStatus): OAuthIdentityState {
       return "changed";
     case "expired":
       return "expired";
-    case "unsupported":
-    case "unconfigured":
-      return "unsupported";
     case "failed":
       return "unavailable";
   }

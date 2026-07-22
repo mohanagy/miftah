@@ -108,6 +108,7 @@ describe("operation pipeline", () => {
   it("requires an explicit current-session profile selection for a protected ambiguous account", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-operation-identity-selection-"));
     const createCountPath = join(directory, "create-count");
+    const auditPath = join(directory, "audit.jsonl");
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -125,7 +126,8 @@ describe("operation pipeline", () => {
           }
         },
         personal: { env: { TEST_ACCOUNT_NAME: "personal" } }
-      }
+      },
+      audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
     const wrapper = new MiftahServer(config, new ProfileManager(config, config.security), manager);
@@ -140,6 +142,19 @@ describe("operation pipeline", () => {
         content: [{ type: "text", text: expect.stringContaining("PROFILE_IDENTITY_SELECTION_REQUIRED") }]
       });
       await expect(access(createCountPath)).rejects.toThrow();
+      const blockedEvents = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(blockedEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            operation: "tools/call",
+            errorCode: "PROFILE_IDENTITY_SELECTION_REQUIRED",
+            status: "denied"
+          })
+        ])
+      );
 
       await expect(client.callTool({ name: "miftah_use_profile", arguments: { profile: "work" } })).resolves.toMatchObject({
         content: [{ type: "text", text: expect.stringContaining("Active profile changed") }]

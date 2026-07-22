@@ -10,7 +10,7 @@ const responseLimitPattern = /const maxIdentityResponseLength = ([\d_]+);/u;
 const maxAgePattern = /maxAgeMs: z\.number\(\)\.int\(\)\.positive\(\)\.max\(([\d_]+)\)/u;
 const digitGroupPattern = /\B(?=(\d{3})+(?!\d))/gu;
 const beforeParsingPattern = /before parsing or normalization/iu;
-const identityStatusPattern = /^\s*\|\s+"([^"]+)"/gmu;
+const identityStatusPattern = /"([^"]+)"/gu;
 const identityStatusFieldPattern = /^\s+(\w+)\??:/gmu;
 const documentedIdentityPattern = /\[#21\][\s\S]*identity/iu;
 
@@ -87,12 +87,15 @@ describe("identity verification documentation contract", () => {
 
     const verificationStatuses = statusTypes.split("export type IdentityVerificationStatus =")[1]?.split(";")[0] ?? "";
     const bindingStatuses = statusTypes.split("export type IdentityBindingState =")[1]?.split(";")[0] ?? "";
+    const verificationStatusValues = Array.from(verificationStatuses.matchAll(identityStatusPattern), (match) => match[1]);
+    const bindingStatusValues = Array.from(bindingStatuses.matchAll(identityStatusPattern), (match) => match[1]);
     const statuses = [verificationStatuses, bindingStatuses].flatMap((statusUnion) =>
       Array.from(statusUnion.matchAll(identityStatusPattern), (match) => match[1])
     );
     const identityStatus = statusTypes.split("export interface IdentityStatus {")[1]?.split("\n}")[0] ?? "";
     const identityStatusFields = Array.from(identityStatus.matchAll(identityStatusFieldPattern), (match) => match[1]).sort();
-    expect(statuses).not.toHaveLength(0);
+    expect(verificationStatusValues).not.toHaveLength(0);
+    expect(bindingStatusValues).not.toHaveLength(0);
     for (const status of statuses) expect(security).toContain(`\`${status}\``);
     expect(identityStatusFields).toEqual([
       "actual",

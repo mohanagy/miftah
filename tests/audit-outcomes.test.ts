@@ -12,6 +12,7 @@ import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { MiftahError } from "../src/utils/errors.js";
 import { countFixtureStarts, diagnosticFailure, summarizeUpstreamHealth } from "./helpers/upstream-diagnostics.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
@@ -45,6 +46,31 @@ async function waitForAuditEvent(
 }
 
 describe("audit outcomes", () => {
+  it("classifies account-identity selection failures as policy audit outcomes", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles);
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const auditStatus = (wrapper as unknown as {
+      auditStatus(error: MiftahError): string;
+    }).auditStatus.bind(wrapper);
+
+    try {
+      expect(auditStatus(new MiftahError("PROFILE_IDENTITY_SELECTION_REQUIRED", "safe"))).toBe("denied");
+      expect(auditStatus(new MiftahError("PROFILE_IDENTITY_CONFIRMATION_REQUIRED", "safe"))).toBe(
+        "confirmation-required"
+      );
+    } finally {
+      await wrapper.close();
+    }
+  });
+
   it("records one terminal operation event for list, management, and unknown-tool requests", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-outcomes-"));
     const auditPath = join(directory, "audit.jsonl");
