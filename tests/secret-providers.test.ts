@@ -985,7 +985,7 @@ it.each([
         it.runIf(process.platform === "win32")("does not use a current-directory 1Password executable", async () => {
           await inSandbox(async (directory) => {
             const shadowedExecutable = join(directory, "op.exe");
-            await copyFile(process.execPath, shadowedExecutable);
+            await writeFile(shadowedExecutable, "", { mode: 0o700 });
             const originalDirectory = process.cwd();
             process.chdir(directory);
             try {
