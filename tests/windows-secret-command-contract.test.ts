@@ -27,9 +27,13 @@ describe("Windows secret command contract", () => {
     expect(source).toContain("JobObjectLimitKillOnJobClose");
     expect(source).toContain("AssignProcessToJobObject(createdJob, GetCurrentProcess())");
     expect(createHash("sha256").update(normalizedSource).digest("hex")).toBe(windowsSecretJobSourceSha256);
+    expect(createHash("sha256").update(windowsCheckoutSource).digest("hex")).not.toBe(
+      windowsSecretJobSourceSha256
+    );
     expect(createHash("sha256").update(windowsCheckoutSource.replace(/\r\n?/g, "\n")).digest("hex")).toBe(
       windowsSecretJobSourceSha256
     );
+    expect(encodedWindowsSecretJobAssembly.length).toBeLessThanOrEqual(8 * 1024);
     expect(assembly.byteLength).toBeLessThanOrEqual(16 * 1024);
     expect(assembly.subarray(0, 2).toString("ascii")).toBe("MZ");
   });

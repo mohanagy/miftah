@@ -1197,6 +1197,31 @@ exit 0`,
   );
 
   it.runIf(process.platform === "win32")(
+    "does not close the parent standard-input handle after a provider exits",
+    async () => {
+      const result = await runWindowsJobAssemblyProbe(
+        `$ErrorActionPreference = 'Stop'
+if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
+$firstExitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
+$secondExitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
+Write-Output "native-run-exits=$firstExitCode,$secondExitCode"
+exit 0`,
+        {
+          MIFTAH_TEST_EXECUTABLE: win32.join(
+            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
+            "System32",
+            "cmd.exe"
+          )
+        }
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("native-run-exits=0,0\r\n");
+    },
+    60_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "initializes the precompiled Job Object before starting providers",
     async () => {
       const result = await runWindowsJobAssemblyProbe(`$ErrorActionPreference = 'Stop'
