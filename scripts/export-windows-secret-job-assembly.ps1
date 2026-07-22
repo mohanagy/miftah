@@ -17,9 +17,9 @@ if ([IO.File]::Exists($OutputPath)) {
   [IO.File]::Delete($OutputPath)
 }
 
-& $compiler /nologo /target:library /platform:anycpu /optimize+ "/out:$OutputPath" $sourcePath
+& $compiler /nologo /target:exe /main:MiftahSecretJob /platform:anycpu /optimize+ "/out:$OutputPath" $sourcePath
 if ($LASTEXITCODE -ne 0 -or -not [IO.File]::Exists($OutputPath)) {
-  throw 'Failed to compile the Windows Job Object helper.'
+  throw 'Failed to compile the Windows Job Object executable.'
 }
 
 $assemblyBytes = [IO.File]::ReadAllBytes($OutputPath)
@@ -41,6 +41,6 @@ try {
 }
 $sourceHash = -join ($sourceHashBytes | ForEach-Object { $_.ToString('x2') })
 Write-Output "MIFTAH_WINDOWS_SECRET_JOB_SOURCE_SHA256=$sourceHash"
-Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_ASSEMBLY_BEGIN'
+Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_EXECUTABLE_BEGIN'
 Write-Output $encodedAssembly
-Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_ASSEMBLY_END'
+Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_EXECUTABLE_END'
