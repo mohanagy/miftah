@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
-  encodedWindowsSecretJobAssembly,
+  windowsSecretJobExecutableSha256,
   windowsSecretJobSourceSha256
-} from "../src/secrets/windows-secret-job-assembly.js";
+} from "../src/secrets/windows-secret-job-artifact.js";
 
 describe("Windows secret command contract", () => {
   it("enters the precompiled Job Object helper without a PowerShell cold-start boundary", () => {
@@ -19,26 +18,36 @@ describe("Windows secret command contract", () => {
     );
 
     expect(helperSource).toContain("public static int Main(string[] arguments)");
-    expect(commandSource).toContain("windows-secret-job.exe");
-    expect(commandSource).not.toContain("powershell.exe");
+    expect(commandSource).toContain('new URL("../../assets/windows-secret-job.exe", import.meta.url)');
+    expect(commandSource).toContain("return spawn(command.launcher, [], {");
     expect(commandSource).not.toContain("-EncodedCommand");
     expect(commandSource).not.toContain("[Reflection.Assembly]::Load");
+    expect(commandSource).not.toContain("[ScriptBlock]::Create");
   });
 
-  it("verifies the trusted PowerShell launcher with asynchronous filesystem access", () => {
+  it("verifies the checked helper before resolving it as the launcher", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
-    expect(source).toContain('import { access, constants } from "node:fs/promises";');
-    expect(source).toContain("const launcher = await trustedPowerShellExecutable();");
-    expect(source).toContain("await access(executable, constants.X_OK);");
+    expect(source).toContain('import { access, constants, readFile } from "node:fs/promises";');
+    expect(source).toContain('createHash("sha256").update(contents).digest("hex")');
+    expect(source).toContain("fingerprint !== windowsSecretJobExecutableSha256");
     expect(source).not.toContain("existsSync(");
   });
 
-  it("keeps the Job Object helper source canonical and the generated assembly bounded", () => {
+  it("resolves trusted System32 PowerShell only when it is the requested provider", () => {
+    const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('executable.toLocaleLowerCase("en-US") === "powershell.exe"');
+    expect(source).toContain("return trustedPowerShellExecutable();");
+    expect(source).not.toContain("const launcher = await trustedPowerShellExecutable();");
+    expect(source).toContain("await access(executable, constants.X_OK);");
+  });
+
+  it("keeps the Job Object helper source and checked executable canonical and bounded", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-job.cs", import.meta.url), "utf8");
+    const executable = readFileSync(new URL("../assets/windows-secret-job.exe", import.meta.url));
     const normalizedSource = source.replace(/\r\n?/g, "\n");
     const windowsCheckoutSource = normalizedSource.replace(/\n/g, "\r\n");
-    const assembly = gunzipSync(Buffer.from(encodedWindowsSecretJobAssembly, "base64"));
 
     expect(source).toContain("public static class MiftahSecretJob");
     expect(source).toContain("JobObjectLimitKillOnJobClose");
@@ -51,32 +60,40 @@ describe("Windows secret command contract", () => {
     expect(createHash("sha256").update(windowsCheckoutSource.replace(/\r\n?/g, "\n")).digest("hex")).toBe(
       windowsSecretJobSourceSha256
     );
-    expect(encodedWindowsSecretJobAssembly.length).toBeLessThanOrEqual(8 * 1024);
-    expect(assembly.byteLength).toBeLessThanOrEqual(16 * 1024);
-    expect(assembly.subarray(0, 2).toString("ascii")).toBe("MZ");
+    expect(createHash("sha256").update(executable).digest("hex")).toBe(windowsSecretJobExecutableSha256);
+    expect(executable.byteLength).toBeLessThanOrEqual(16 * 1024);
+    expect(executable.subarray(0, 2).toString("ascii")).toBe("MZ");
   });
 
-  it("loads a precompiled Job Object helper without runtime C# compilation", () => {
+  it("uses one bounded binary request envelope and clears it before provider launch", () => {
+    const commandSource = readFileSync(
+      new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
+      "utf8"
+    );
+    const helperSource = readFileSync(
+      new URL("../src/secrets/windows-secret-job.cs", import.meta.url),
+      "utf8"
+    );
+
+    expect(commandSource).toContain("request.writeUInt8(1, offset);");
+    expect(commandSource).toContain("request.writeInt32LE(arguments_.length, offset);");
+    expect(commandSource).toContain("if (requestLength > maximumRequestBytes) return undefined;");
+    expect(helperSource).toContain("if (reader.ReadByte() != 1) return null;");
+    expect(helperSource).toContain(
+      "Environment.SetEnvironmentVariable(RequestEnvironmentName, null, EnvironmentVariableTarget.Process);"
+    );
+    expect(helperSource).toContain(
+      "Environment.SetEnvironmentVariable(StandardInputEnvironmentName, null, EnvironmentVariableTarget.Process);"
+    );
+  });
+
+  it("contains no runtime C# compilation, compressed helper, or reflection loader", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
     expect(source).not.toContain("Add-Type -TypeDefinition");
-    expect(source).toContain("[Reflection.Assembly]::Load");
-    expect(source).toContain("encodedWindowsSecretJobAssembly");
-    expect(source).toContain("$assemblyOutput.Length + $assemblyCount");
-    expect(source).toContain("SetEnvironmentVariable($assemblyName, $null");
-  });
-
-  it("runs the multiline helper through a fixed encoded bootstrap", () => {
-    const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
-
-    expect(source).toContain("const windowsJobBootstrap = String.raw`");
-    expect(source).toContain('import { gzipSync } from "node:zlib";');
-    expect(source).toContain('const encodedWindowsJobHelper = gzipSync(windowsJobHelper).toString("base64");');
-    expect(source).toContain("setEnvironmentValue(result, helperSourceEnvironmentName, encodedWindowsJobHelper);");
-    expect(source).toContain(
-      'const encodedWindowsJobBootstrap = Buffer.from(windowsJobBootstrap, "utf16le").toString("base64");'
-    );
-    expect(source).toContain('"-EncodedCommand", encodedWindowsJobBootstrap');
-    expect(source).toContain("[ScriptBlock]::Create($source)");
+    expect(source).not.toContain("encodedWindowsSecretJobAssembly");
+    expect(source).not.toContain("gzipSync");
+    expect(source).not.toContain("MIFTAH_SECRET_RUNNER_HELPER:");
+    expect(source).not.toContain("MIFTAH_SECRET_RUNNER_ASSEMBLY:");
   });
 });

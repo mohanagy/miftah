@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { delimiter, join, win32 } from "node:path";
-import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseExternalSecretReference } from "../src/secrets/external-secret-reference.js";
 import {
@@ -15,7 +14,6 @@ import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-prov
 import { SecretRedactor } from "../src/secrets/redact.js";
 import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
-import { encodedWindowsSecretJobAssembly } from "../src/secrets/windows-secret-job-assembly.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
@@ -332,8 +330,9 @@ function activePipeCount(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === "PipeWrap").length;
 }
 
-async function runWindowsCompressedBootstrap(
-  source: string,
+async function runWindowsJobExecutable(
+  executable: string,
+  args: readonly string[],
   environment: NodeJS.ProcessEnv = {},
   standardInput?: Buffer
 ): Promise<{
@@ -341,44 +340,24 @@ async function runWindowsCompressedBootstrap(
   stdout: string;
   stderr: string;
 }> {
-  const systemRoot = process.env.SystemRoot ?? process.env.windir;
-  if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
-  const launcher = win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const bootstrap = String.raw`$ErrorActionPreference = 'Stop'
-$helperName = 'MIFTAH_SECRET_RUNNER_HELPER'
-try {
-  $encodedHelper = [Environment]::GetEnvironmentVariable($helperName, [EnvironmentVariableTarget]::Process)
-  [Environment]::SetEnvironmentVariable($helperName, $null, [EnvironmentVariableTarget]::Process)
-  if ([string]::IsNullOrEmpty($encodedHelper) -or $encodedHelper.Length -gt 8192) { exit 1 }
-  $input = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedHelper), $false)
-  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress, $false)
-  $reader = [IO.StreamReader]::new($gzip, [Text.Encoding]::UTF8)
-  try {
-    $decoded = $reader.ReadToEnd()
-  } finally {
-    $reader.Dispose()
-  }
-  if ([string]::IsNullOrEmpty($decoded)) { exit 1 }
-  & ([ScriptBlock]::Create($decoded))
-} catch {
-  exit 1
-}`;
-  const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
+  const encodedRequest = encodeWindowsJobRequest(executable, args);
 
   return new Promise((resolve, reject) => {
-    const stdin = standardInput === undefined ? "ignore" : "pipe";
     const child = spawn(
-      launcher,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
+      join(process.cwd(), "assets", "windows-secret-job.exe"),
+      [],
       {
         env: {
           ...process.env,
           ...environment,
-          MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
+          MIFTAH_SECRET_RUNNER_REQUEST: encodedRequest,
+          ...(standardInput === undefined
+            ? {}
+            : { MIFTAH_SECRET_RUNNER_STDIN: standardInput.toString("base64") })
         },
         shell: false,
         windowsHide: true,
-        stdio: [stdin, "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe"]
       }
     );
     const stdout: Buffer[] = [];
@@ -386,7 +365,6 @@ try {
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.once("error", reject);
-    if (standardInput !== undefined) child.stdin?.end(standardInput);
     child.once("close", (code) => {
       resolve({
         code,
@@ -397,24 +375,27 @@ try {
   });
 }
 
-async function runWindowsJobAssemblyProbe(
-  source: string,
-  environment: NodeJS.ProcessEnv = {}
-): ReturnType<typeof runWindowsCompressedBootstrap> {
-  const loadAssembly = String.raw`$encodedAssembly = $env:MIFTAH_TEST_JOB_ASSEMBLY
-$env:MIFTAH_TEST_JOB_ASSEMBLY = $null
-$assemblyInput = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedAssembly), $false)
-$assemblyGzip = [IO.Compression.GzipStream]::new($assemblyInput, [IO.Compression.CompressionMode]::Decompress, $false)
-$assemblyOutput = [IO.MemoryStream]::new()
-$assemblyGzip.CopyTo($assemblyOutput)
-$assemblyGzip.Dispose()
-$assemblyInput.Dispose()
-[Reflection.Assembly]::Load($assemblyOutput.ToArray()) | Out-Null
-$assemblyOutput.Dispose()`;
-  return runWindowsCompressedBootstrap(`${loadAssembly}\n${source}`, {
-    ...environment,
-    MIFTAH_TEST_JOB_ASSEMBLY: encodedWindowsSecretJobAssembly
-  });
+function encodeWindowsJobRequest(executable: string, args: readonly string[]): string {
+  const executableBytes = Buffer.from(executable, "utf8");
+  const argumentBytes = args.map((argument) => Buffer.from(argument, "utf8"));
+  const length =
+    1 + 4 + executableBytes.length + 4 + argumentBytes.reduce((total, argument) => total + 4 + argument.length, 0);
+  const request = Buffer.allocUnsafe(length);
+  let offset = 0;
+  request.writeUInt8(1, offset++);
+  request.writeInt32LE(executableBytes.length, offset);
+  offset += 4;
+  executableBytes.copy(request, offset);
+  offset += executableBytes.length;
+  request.writeInt32LE(argumentBytes.length, offset);
+  offset += 4;
+  for (const argument of argumentBytes) {
+    request.writeInt32LE(argument.length, offset);
+    offset += 4;
+    argument.copy(request, offset);
+    offset += argument.length;
+  }
+  return request.toString("base64");
 }
 
 describe("built-in secret providers", () => {
@@ -1102,13 +1083,16 @@ it.each([
 
 describe("secret command runner", () => {
   it.runIf(process.platform === "win32")(
-    "executes a compressed bootstrap payload before starting providers",
+    "runs an immediate cmd.exe child through the direct Job Object executable",
     async () => {
-      const result = await runWindowsCompressedBootstrap("Write-Output 'bootstrap-ready'\nexit 0");
+      const result = await runWindowsJobExecutable(
+        win32.join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32", "cmd.exe"),
+        ["/d", "/s", "/c", "exit 0"]
+      );
 
       expect(result).toEqual({
         code: 0,
-        stdout: "bootstrap-ready\r\n",
+        stdout: "",
         stderr: expect.any(String)
       });
     },
@@ -1116,123 +1100,28 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "does not expose parent standard input to the encoded PowerShell bootstrap",
+    "runs an immediate Node child through the direct Job Object executable",
     async () => {
-      const input = Buffer.concat([
-        Buffer.from("bootstrap-input", "utf8"),
-        Buffer.from([0]),
-        Buffer.from("with-newline\\n", "utf8")
-      ]);
-      const result = await runWindowsCompressedBootstrap(
-        `$stream = [Console]::OpenStandardInput()
-$output = [IO.MemoryStream]::new()
-$buffer = [byte[]]::new(4096)
-while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-  $output.Write($buffer, 0, $count)
-}
-[Console]::Out.Write([Convert]::ToBase64String($output.ToArray()))
-exit 0`,
-        {},
-        input
+      const result = await runWindowsJobExecutable(
+        process.execPath,
+        ["-e", "process.stdout.write('native-node-ready')"]
       );
 
-      expect(result).toMatchObject({ code: 0, stdout: "" });
+      expect(result).toMatchObject({ code: 0, stdout: "native-node-ready" });
     },
     20_000
   );
 
   it.runIf(process.platform === "win32")(
-    "loads the precompiled Job Object type before starting providers",
+    "keeps the parent standard handles usable across direct helper executions",
     async () => {
-      const result = await runWindowsJobAssemblyProbe(`$ErrorActionPreference = 'Stop'
-Write-Output 'native-type-ready'
-exit 0`);
+      const first = await runWindowsJobExecutable(process.execPath, ["-e", "process.exit(0)"]);
+      const second = await runWindowsJobExecutable(process.execPath, ["-e", "process.exit(0)"]);
 
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-type-ready\r\n");
+      expect(first.code).toBe(0);
+      expect(second.code).toBe(0);
     },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate cmd.exe child through the precompiled Job Object",
-    async () => {
-      const result = await runWindowsJobAssemblyProbe(
-        `$ErrorActionPreference = 'Stop'
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        {
-          MIFTAH_TEST_EXECUTABLE: win32.join(
-            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
-            "System32",
-            "cmd.exe"
-          )
-        }
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-run-exit=0\r\n");
-    },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate Node child through the precompiled Job Object",
-    async () => {
-      const result = await runWindowsJobAssemblyProbe(
-        `$ErrorActionPreference = 'Stop'
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', 'process.exit(0)'))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        { MIFTAH_TEST_EXECUTABLE: process.execPath }
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-run-exit=0\r\n");
-    },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "does not close the parent standard-input handle after a provider exits",
-    async () => {
-      const result = await runWindowsJobAssemblyProbe(
-        `$ErrorActionPreference = 'Stop'
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-$firstExitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
-$secondExitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
-Write-Output "native-run-exits=$firstExitCode,$secondExitCode"
-exit 0`,
-        {
-          MIFTAH_TEST_EXECUTABLE: win32.join(
-            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
-            "System32",
-            "cmd.exe"
-          )
-        }
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-run-exits=0,0\r\n");
-    },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "initializes the precompiled Job Object before starting providers",
-    async () => {
-      const result = await runWindowsJobAssemblyProbe(`$ErrorActionPreference = 'Stop'
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-Write-Output 'native-job-ready'
-exit 0`);
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-job-ready\r\n");
-    },
-    60_000
+    20_000
   );
 
   it.runIf(process.platform === "win32")(

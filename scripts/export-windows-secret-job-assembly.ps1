@@ -22,25 +22,19 @@ if ($LASTEXITCODE -ne 0 -or -not [IO.File]::Exists($OutputPath)) {
   throw 'Failed to compile the Windows Job Object executable.'
 }
 
-$assemblyBytes = [IO.File]::ReadAllBytes($OutputPath)
-$compressed = [IO.MemoryStream]::new()
-$gzip = [IO.Compression.GzipStream]::new($compressed, [IO.Compression.CompressionLevel]::Optimal, $true)
-try {
-  $gzip.Write($assemblyBytes, 0, $assemblyBytes.Length)
-} finally {
-  $gzip.Dispose()
+$artifact = [IO.File]::ReadAllBytes($OutputPath)
+if ($artifact.Length -eq 0 -or $artifact.Length -gt 16384 -or $artifact[0] -ne 0x4d -or $artifact[1] -ne 0x5a) {
+  throw 'Windows Job Object executable is invalid or exceeds its runtime bound.'
 }
-$encodedAssembly = [Convert]::ToBase64String($compressed.ToArray())
-$compressed.Dispose()
 $normalizedSource = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n").Replace("`r", "`n")
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
   $sourceHashBytes = $sha256.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($normalizedSource))
+  $artifactHashBytes = $sha256.ComputeHash($artifact)
 } finally {
   $sha256.Dispose()
 }
 $sourceHash = -join ($sourceHashBytes | ForEach-Object { $_.ToString('x2') })
+$artifactHash = -join ($artifactHashBytes | ForEach-Object { $_.ToString('x2') })
 Write-Output "MIFTAH_WINDOWS_SECRET_JOB_SOURCE_SHA256=$sourceHash"
-Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_EXECUTABLE_BEGIN'
-Write-Output $encodedAssembly
-Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_EXECUTABLE_END'
+Write-Output "MIFTAH_WINDOWS_SECRET_JOB_EXECUTABLE_SHA256=$artifactHash"

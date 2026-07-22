@@ -11,6 +11,7 @@ export default defineConfig({
   format: ["esm"],
   dts: true,
   clean: true,
+  publicDir: "assets",
   sourcemap: true,
   define: {
     __MIFTAH_VERSION__: JSON.stringify(packageVersion)
