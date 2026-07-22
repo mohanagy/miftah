@@ -22,6 +22,7 @@ import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { countFixtureStarts, diagnosticFailure, summarizeUpstreamHealth } from "./helpers/upstream-diagnostics.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const promptCollisionPattern = /PROMPT_COLLISION/;
@@ -1412,9 +1413,12 @@ describe("multi-upstream wrapper", () => {
   it("waits for every bundled restart to settle before returning a restart failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-bundle-restart-settle-"));
     const githubFailurePath = join(directory, "github-restart-failure");
+    const githubStartCountPath = join(directory, "github-start-count");
     const sentryBlockPath = join(directory, "sentry-restart-block");
     const sentryReadyPath = join(directory, "sentry-restart-ready");
     const sentryReleasePath = join(directory, "sentry-restart-release");
+    const sentryStartCountPath = join(directory, "sentry-start-count");
+    await Promise.all([writeFile(githubStartCountPath, ""), writeFile(sentryStartCountPath, "")]);
     const config = validateConfig({
       version: "1",
       name: "bundle",
@@ -1429,7 +1433,8 @@ describe("multi-upstream wrapper", () => {
             github: {
               env: {
                 TEST_ACCOUNT_NAME: "github-work",
-                TEST_FAIL_ON_RESTART_PATH: githubFailurePath
+                TEST_FAIL_ON_RESTART_PATH: githubFailurePath,
+                TEST_START_COUNT_PATH: githubStartCountPath
               }
             },
             sentry: {
@@ -1437,7 +1442,8 @@ describe("multi-upstream wrapper", () => {
                 TEST_ACCOUNT_NAME: "sentry-work",
                 TEST_BLOCK_ON_RESTART_PATH: sentryBlockPath,
                 TEST_BLOCK_ON_RESTART_READY_PATH: sentryReadyPath,
-                TEST_BLOCK_ON_RESTART_RELEASE_PATH: sentryReleasePath
+                TEST_BLOCK_ON_RESTART_RELEASE_PATH: sentryReleasePath,
+                TEST_START_COUNT_PATH: sentryStartCountPath
               }
             }
           }
@@ -1457,20 +1463,42 @@ describe("multi-upstream wrapper", () => {
       await Promise.all([unlink(githubFailurePath), unlink(sentryBlockPath)]);
 
       await client.listTools();
+      const [githubStartsBeforeRestart, sentryStartsBeforeRestart] = await Promise.all([
+        countFixtureStarts(githubStartCountPath),
+        countFixtureStarts(sentryStartCountPath)
+      ]);
       const restart = client.callTool(
         { name: "miftah_restart_profile", arguments: { profile: "work" } },
         CallToolResultSchema
       );
-      await expect
-        .poll(async () => {
-          try {
-            await access(sentryReadyPath);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-        .toBe(true);
+      try {
+        await expect
+          .poll(async () => {
+            try {
+              await access(sentryReadyPath);
+              return true;
+            } catch {
+              return false;
+            }
+          })
+          .toBe(true);
+      } catch (error) {
+        const [githubStarts, sentryStarts] = await Promise.all([
+          countFixtureStarts(githubStartCountPath),
+          countFixtureStarts(sentryStartCountPath)
+        ]);
+        throw diagnosticFailure(
+          "Restart readiness poll failed",
+          {
+            markerDeltas: {
+              github: githubStarts - githubStartsBeforeRestart,
+              sentry: sentryStarts - sentryStartsBeforeRestart
+            },
+            health: summarizeUpstreamHealth(manager.listHealth())
+          },
+          error
+        );
+      }
 
       const restartState = await Promise.race([
         restart.then(() => "settled"),
