@@ -71,6 +71,7 @@ const requiredPackPaths = [
   "dist/plugin-api.d.ts",
   "dist/plugin-api.js",
   "dist/plugin-host.js",
+  "dist/windows-secret-job.exe",
   "docs/cli.md",
   "docs/library-api.md",
   "docs/provider-adapters.md",

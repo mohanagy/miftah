@@ -7,6 +7,7 @@ const REQUIRED_PATHS = [
   "dist/plugin-api.d.ts",
   "dist/plugin-api.js",
   "dist/plugin-host.js",
+  "dist/windows-secret-job.exe",
   "docs/cli.md",
   "docs/library-api.md",
   "docs/plugins.md",
@@ -19,6 +20,7 @@ const REQUIRED_PATHS = [
 
 const ALLOWED_ROOT_PATHS = new Set(["LICENSE", "README.md", "package.json"]);
 const ALLOWED_PATH_PATTERNS = [
+  /^dist\/windows-secret-job\.exe$/u,
   /^dist\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:d\.ts|d\.ts\.map|js|js\.map)$/u,
   /^docs\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md$/u,
   /^examples\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:miftah\.json|mjs)$/u

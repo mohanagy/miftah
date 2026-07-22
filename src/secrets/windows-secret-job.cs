@@ -5,6 +5,10 @@ using System.Text;
 
 public static class MiftahSecretJob
 {
+    private const int MaximumRequestBytes = 16 * 1024;
+    private const int MaximumArgumentCount = 128;
+    private const string RequestEnvironmentName = "MIFTAH_SECRET_RUNNER_REQUEST";
+    private const string StandardInputEnvironmentName = "MIFTAH_SECRET_RUNNER_STDIN";
     private const uint JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint CreateNoWindow = 0x08000000;
@@ -13,6 +17,18 @@ public static class MiftahSecretJob
     private const uint HandleFlagInherit = 0x00000001;
     private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
     private static IntPtr job;
+
+    private sealed class SecretRequest
+    {
+        public readonly string Executable;
+        public readonly string[] Arguments;
+
+        public SecretRequest(string executable, string[] arguments)
+        {
+            Executable = executable;
+            Arguments = arguments;
+        }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JobObjectBasicLimitInformation
@@ -173,6 +189,75 @@ public static class MiftahSecretJob
 
     [DllImport("kernel32.dll")]
     private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
+
+    public static int Main(string[] arguments)
+    {
+        if (arguments == null || arguments.Length != 0) return 1;
+        try
+        {
+            string encodedRequest = Environment.GetEnvironmentVariable(
+                RequestEnvironmentName,
+                EnvironmentVariableTarget.Process
+            );
+            string encodedStandardInput = Environment.GetEnvironmentVariable(
+                StandardInputEnvironmentName,
+                EnvironmentVariableTarget.Process
+            );
+            Environment.SetEnvironmentVariable(RequestEnvironmentName, null, EnvironmentVariableTarget.Process);
+            Environment.SetEnvironmentVariable(StandardInputEnvironmentName, null, EnvironmentVariableTarget.Process);
+
+            SecretRequest request = DecodeRequest(encodedRequest);
+            if (request == null) return 1;
+            byte[] standardInput = DecodeStandardInput(encodedStandardInput);
+            if (encodedStandardInput != null && standardInput == null) return 1;
+            if (!Initialize()) return 1;
+            return Run(request.Executable, request.Arguments, standardInput);
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private static SecretRequest DecodeRequest(string encodedRequest)
+    {
+        if (String.IsNullOrEmpty(encodedRequest)) return null;
+        byte[] payload = Convert.FromBase64String(encodedRequest);
+        if (payload.Length == 0 || payload.Length > MaximumRequestBytes) return null;
+        UTF8Encoding utf8 = new UTF8Encoding(false, true);
+        using (MemoryStream input = new MemoryStream(payload, false))
+        using (BinaryReader reader = new BinaryReader(input, utf8))
+        {
+            if (reader.ReadByte() != 1) return null;
+            string executable = ReadString(reader, input, utf8);
+            if (executable == null || executable.Length == 0 || executable.IndexOf('\0') >= 0) return null;
+            int argumentCount = reader.ReadInt32();
+            if (argumentCount < 0 || argumentCount > MaximumArgumentCount) return null;
+            string[] requestArguments = new string[argumentCount];
+            for (int index = 0; index < argumentCount; index++)
+            {
+                string argument = ReadString(reader, input, utf8);
+                if (argument == null || argument.IndexOf('\0') >= 0) return null;
+                requestArguments[index] = argument;
+            }
+            if (input.Position != input.Length) return null;
+            return new SecretRequest(executable, requestArguments);
+        }
+    }
+
+    private static string ReadString(BinaryReader reader, MemoryStream input, UTF8Encoding utf8)
+    {
+        int length = reader.ReadInt32();
+        if (length < 0 || length > MaximumRequestBytes || input.Length - input.Position < length) return null;
+        return utf8.GetString(reader.ReadBytes(length));
+    }
+
+    private static byte[] DecodeStandardInput(string encodedStandardInput)
+    {
+        if (encodedStandardInput == null) return null;
+        byte[] standardInput = Convert.FromBase64String(encodedStandardInput);
+        return standardInput.Length <= MaximumRequestBytes ? standardInput : null;
+    }
 
     public static bool Initialize()
     {
