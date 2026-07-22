@@ -22,6 +22,7 @@ import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { countFixtureStarts, diagnosticFailure, summarizeUpstreamHealth } from "./helpers/upstream-diagnostics.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const promptCollisionPattern = /PROMPT_COLLISION/;
@@ -1462,13 +1463,9 @@ describe("multi-upstream wrapper", () => {
       await Promise.all([unlink(githubFailurePath), unlink(sentryBlockPath)]);
 
       await client.listTools();
-      const countStarts = async (path: string): Promise<number> => {
-        const contents = await readFile(path, "utf8");
-        return contents.split("\n").filter(Boolean).length;
-      };
       const [githubStartsBeforeRestart, sentryStartsBeforeRestart] = await Promise.all([
-        countStarts(githubStartCountPath),
-        countStarts(sentryStartCountPath)
+        countFixtureStarts(githubStartCountPath),
+        countFixtureStarts(sentryStartCountPath)
       ]);
       const restart = client.callTool(
         { name: "miftah_restart_profile", arguments: { profile: "work" } },
@@ -1485,31 +1482,21 @@ describe("multi-upstream wrapper", () => {
             }
           })
           .toBe(true);
-      } catch {
+      } catch (error) {
         const [githubStarts, sentryStarts] = await Promise.all([
-          countStarts(githubStartCountPath),
-          countStarts(sentryStartCountPath)
+          countFixtureStarts(githubStartCountPath),
+          countFixtureStarts(sentryStartCountPath)
         ]);
-        const health = manager.listHealth().map((entry) => ({
-          profile: entry.profile,
-          upstreamName: entry.upstreamName,
-          state: entry.state,
-          processState: entry.processState,
-          restartCount: entry.restartCount,
-          lastStopReason: entry.lastStopReason,
-          restartLimitReached: entry.restartLimitReached,
-          capabilities: Object.fromEntries(
-            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
-          )
-        }));
-        throw new Error(
-          `Restart readiness poll failed: ${JSON.stringify({
+        throw diagnosticFailure(
+          "Restart readiness poll failed",
+          {
             markerDeltas: {
               github: githubStarts - githubStartsBeforeRestart,
               sentry: sentryStarts - sentryStartsBeforeRestart
             },
-            health
-          })}`
+            health: summarizeUpstreamHealth(manager.listHealth())
+          },
+          error
         );
       }
 

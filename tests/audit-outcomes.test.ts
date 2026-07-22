@@ -12,6 +12,7 @@ import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { countFixtureStarts, diagnosticFailure, summarizeUpstreamHealth } from "./helpers/upstream-diagnostics.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
@@ -147,42 +148,28 @@ describe("audit outcomes", () => {
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
-      const countStarts = async (): Promise<number> => {
-        const contents = await readFile(startCountPath, "utf8");
-        return contents.split("\n").filter(Boolean).length;
-      };
-      const startsBeforeDiscovery = await countStarts();
+      const startsBeforeDiscovery = await countFixtureStarts(startCountPath);
       await Promise.all([
         writeFile(initializedPath, "before-discovery"),
         writeFile(listToolsStartedPath, "before-discovery")
       ]);
       try {
         await client.listTools();
-      } catch {
+      } catch (error) {
         const [starts, initialized, listToolsStarted] = await Promise.all([
-          countStarts(),
+          countFixtureStarts(startCountPath),
           readFile(initializedPath, "utf8"),
           readFile(listToolsStartedPath, "utf8")
         ]);
-        const health = manager.listHealth().map((entry) => ({
-          profile: entry.profile,
-          upstreamName: entry.upstreamName,
-          state: entry.state,
-          processState: entry.processState,
-          restartCount: entry.restartCount,
-          lastStopReason: entry.lastStopReason,
-          restartLimitReached: entry.restartLimitReached,
-          capabilities: Object.fromEntries(
-            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
-          )
-        }));
-        throw new Error(
-          `Lazy upstream discovery failed: ${JSON.stringify({
+        throw diagnosticFailure(
+          "Lazy upstream discovery failed",
+          {
             startDelta: starts - startsBeforeDiscovery,
             initialized,
             listToolsStarted,
-            health
-          })}`
+            health: summarizeUpstreamHealth(manager.listHealth())
+          },
+          error
         );
       }
       await client.close();
