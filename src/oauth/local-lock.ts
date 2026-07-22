@@ -4,7 +4,10 @@ import type { Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
-const localLockPortAttempts = 256;
+// One canonical candidate avoids scan amplification and preserves coordination with older
+// Miftah versions, whose first candidate is identical. If that port is occupied, failing closed
+// also prevents a new process from splitting away from an older holder on a fallback candidate.
+const localLockPortAttempts = 1;
 const localLockProbeMilliseconds = 100;
 const localLockProtocol = "miftah-oauth-local-lock-v1";
 
