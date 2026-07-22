@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file. The format 
 - [#85](https://github.com/mohanagy/miftah/issues/85) Added the explicitly launched, literal-loopback Console control API with a separate `/api/v1` listener, one-use terminal bootstrap, bounded HttpOnly browser sessions, strict Host/Origin and CSRF enforcement, metadata-only configuration/profile/connection health, atomic audited connection changes, redacted Console audit queries, credential rotation, and clean shutdown. The browser UI remains a separate roadmap layer.
 - [#87](https://github.com/mohanagy/miftah/issues/87) Added a typed built-in provider-adapter contract and a bounded Google Search Console pilot with exact `mcp-search-console@0.3.2` launch pinning, explicit upstream-owned OAuth/browser/cache lifecycle, safe health metadata, read-only defaults, manual service-account guidance, and no token-cache access or native-OAuth claims.
 
+### Fixed
+
+- [#178](https://github.com/mohanagy/miftah/issues/178) Locked `fast-uri` 3.1.4, removing the high-severity URI host-confusion advisory, and added a package contract that rejects stale vulnerable nested resolutions. The separate moderate `@hono/node-server` advisory affects only its unused `serve-static` path; Miftah's MCP transport uses `getRequestListener`, and the current MCP SDK has no compatible patched Hono 1.x release.
+
 ## [0.3.3] - 2026-07-22
 
 ### Fixed

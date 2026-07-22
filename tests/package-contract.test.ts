@@ -97,6 +97,18 @@ function assertPatchedEsbuildLockEntries(lock: PackageLock): void {
   }
 }
 
+function assertPatchedFastUriLockEntries(lock: PackageLock): void {
+  const suffix = "node_modules/fast-uri";
+  const entries = Object.entries(lock.packages ?? {}).filter(
+    ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
+  );
+
+  expect(entries, "fast-uri must exist in the package lock").not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of entries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.4");
+  }
+}
+
 async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
   const manifest = readPackageManifest();
   if (!manifest.name) throw new Error("Package manifest is missing a name.");
@@ -502,6 +514,12 @@ describe("package metadata contract", () => {
     assertPatchedEsbuildLockEntries(lock);
   });
 
+  it("locks the patched fast-uri release for GHSA-v2hh-gcrm-f6hx", () => {
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    assertPatchedFastUriLockEntries(lock);
+  });
+
   it("rejects stale nested esbuild lock entries", () => {
     const lock: PackageLock = {
       packages: {
@@ -511,6 +529,17 @@ describe("package metadata contract", () => {
     };
 
     expect(() => assertPatchedEsbuildLockEntries(lock)).toThrow(/node_modules\/vite\/node_modules\/esbuild/);
+  });
+
+  it("rejects stale nested fast-uri lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/fast-uri": { version: "3.1.4" },
+        "node_modules/ajv/node_modules/fast-uri": { version: "3.1.3" }
+      }
+    };
+
+    expect(() => assertPatchedFastUriLockEntries(lock)).toThrow(/node_modules\/ajv\/node_modules\/fast-uri/);
   });
 });
 
