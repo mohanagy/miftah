@@ -6,7 +6,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
-- [#81](https://github.com/mohanagy/miftah/issues/81) Added configuration format v3 and a strict, non-secret OAuth connection core: opaque profile/upstream/resource/issuer bindings, canonical HTTPS Streamable HTTP validation, static-Authorization collision refusal, OS-vault credential isolation, crash-released binding-scoped transaction coordination, redacted lifecycle primitives, and v1/v2-to-v3 migration with no credential synthesis. Native OAuth remains intentionally disabled until the separate discovery, browser, callback, exchange, and header-injection work is complete; v3 OAuth declarations fail closed with `OAUTH_AUTHORIZATION_NOT_ENABLED`.
+- [#81](https://github.com/mohanagy/miftah/issues/81) Added configuration format v3 and a strict, non-secret OAuth connection core: opaque profile/upstream/resource/issuer bindings, canonical HTTPS Streamable HTTP validation, static-Authorization collision refusal, OS-vault credential isolation, crash-released binding-scoped transaction coordination, redacted lifecycle primitives, and v1/v2-to-v3 migration with no credential synthesis.
+- [#82](https://github.com/mohanagy/miftah/issues/82) Enabled standards-compatible OAuth for exact v3 HTTPS Streamable HTTP connections: protected-resource plus authorization-server/OpenID discovery, explicit pre-registered, Client ID Metadata, or Dynamic Client Registration, system-browser PKCE authorization through a single-use literal-loopback callback, RFC 9207 issuer validation, profile-bound OS-vault credentials, refresh and reconnect, typed redacted failures, and unchanged non-OAuth transport behavior. Provider-specific/local OAuth, revocation, and operator lifecycle commands remain outside this release surface.
 
 ## [0.3.3] - 2026-07-22
 

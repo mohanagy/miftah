@@ -91,7 +91,7 @@ When you need the other product, select its profile deliberately. When a tool ca
 - **Other compatible MCP servers:** configure a generic STDIO, Streamable HTTP, or legacy SSE upstream, then add profiles around it.
 - **Multiple upstreams in one wrapper:** use an account bundle when related upstreams belong behind one controlled connection.
 
-Miftah does not run provider OAuth browser, callback, refresh, or revocation flows. If an upstream owns its OAuth flow, complete that flow with the upstream or provider and then configure Miftah around the resulting supported connection. Read [OAuth support](docs/oauth-support.md) before assuming a provider OAuth model is compatible.
+Miftah can authorize a standards-compatible remote HTTPS Streamable HTTP MCP server through discovery, PKCE, a bounded loopback browser callback, OS-vault storage, and refresh. Provider-specific or local STDIO OAuth remains owned by that upstream, and revocation/lifecycle commands are not available yet. Read [OAuth support](docs/oauth-support.md) for the exact compatibility and configuration boundary.
 
 ## Trust and control boundaries
 

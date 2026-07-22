@@ -66,6 +66,27 @@ const oauthClientRegistrationSchema = z
   .max(512)
   .refine((value) => value.trim() === value && !hasWhitespaceOrControl(value), {
     message: "OAuth identifiers must not contain whitespace or control characters"
+  })
+  .refine((value) => {
+    if (value === "dynamic") return true;
+    if (value.startsWith("pre-registered:")) return value.length > "pre-registered:".length;
+    if (!value.startsWith("client-id-metadata:")) return false;
+    try {
+      const url = new URL(value.slice("client-id-metadata:".length));
+      return (
+        url.protocol === "https:" &&
+        url.hostname.length > 0 &&
+        url.pathname !== "/" &&
+        url.username.length === 0 &&
+        url.password.length === 0 &&
+        url.search.length === 0 &&
+        url.hash.length === 0
+      );
+    } catch {
+      return false;
+    }
+  }, {
+    message: "OAuth client registration must use an approved explicit mode"
   });
 const oauthScopeSchema = z.string().min(1).max(256).regex(/^[\x21-\x7e]+$/u);
 const oauthConnectionSchema = z

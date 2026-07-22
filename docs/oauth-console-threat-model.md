@@ -1,14 +1,14 @@
 # OAuth broker and local Console design delta
 
-> **Status:** Design-only security decision for [#80](https://github.com/mohanagy/miftah/issues/80). It is a forward-looking delta to the maintainer-authored [threat model](threat-model.md) published for [#37](https://github.com/mohanagy/miftah/issues/37), not evidence that the independent review is complete.
+> **Status:** Approved security decision from [#80](https://github.com/mohanagy/miftah/issues/80), with the standards-compatible remote-OAuth portion implemented under [#82](https://github.com/mohanagy/miftah/issues/82). It remains a maintainer-authored delta to the [threat model](threat-model.md), not evidence that the independent review in [#37](https://github.com/mohanagy/miftah/issues/37) is complete.
 
-No production OAuth broker, Console, callback listener, or enabled token-store integration exists in this release. Version 3 adds a tested internal OS-vault connection contract with binding-scoped, crash-released local transaction coordination, but it cannot be configured into a running authorization flow: no browser, discovery, exchange, or remote Authorization-header injection is enabled. The current wrapper still supports active authentication only through explicit static headers or provider-owned/upstream-owned authentication as described in [OAuth support](oauth-support.md). This document sets the conditions that must be met before an OAuth or Console implementation can be enabled.
+Version 3 can run the approved standards-compatible remote OAuth flow for an exact HTTPS Streamable HTTP connection: protected-resource and authorization-server discovery, reviewed client registration, system-browser authorization, a single-use literal-loopback callback, PKCE exchange, OS-vault credential storage, refresh, and profile-bound bearer injection. No local Console, provider-specific adapter, revocation command, or hosted broker exists. Static headers and provider-owned/upstream-owned authentication remain supported as described in [OAuth support](oauth-support.md). This document records both the enforced OAuth controls and the gates that still apply to future Console and lifecycle surfaces.
 
 The design follows the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [RFC 8707 resource indicators](https://www.rfc-editor.org/rfc/rfc8707), [RFC 9728 protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8414 authorization-server metadata](https://www.rfc-editor.org/rfc/rfc8414), [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) for native-app browser flows, [RFC 9207 `iss`](https://www.rfc-editor.org/rfc/rfc9207) authorization-response issuer identification, and [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700) for OAuth security practice. If a provider or SDK cannot meet the required properties below, Miftah must not approximate them with a provider-specific shortcut.
 
 ## Scope and hard boundaries
 
-- Native OAuth is a future profile-bound connection capability for standards-compatible remote HTTPS Streamable HTTP MCP resources only.
+- Native OAuth is a profile-bound connection capability for standards-compatible remote HTTPS Streamable HTTP MCP resources only.
 - An optional local Console is a future operator experience over the same connection and configuration services. It is not a hosted service, cloud token sync system, embedded login browser, or background daemon.
 - The future Console control API is distinct from the MCP /mcp endpoint. It cannot share a listener, session model, bearer, or authorization decision with a client-facing MCP transport without a separately reviewed design.
 - A Console cannot mutate an already-running Claude Desktop or other STDIO client session. Changes apply to new or explicitly restarted sessions until a separately designed broker or IPC capability exists.
@@ -16,9 +16,9 @@ The design follows the [MCP Authorization specification](https://modelcontextpro
 
 ## Canonical resource comparison
 
-Before discovery begins, a future native-OAuth connection must derive one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection. That value is the only resource identifier used for the initial unauthenticated MCP request, protected-resource metadata validation, the OAuth `resource` parameter in authorization and token requests, transaction state, the connection record, and the secure-store key. Metadata, redirects, provider display names, DNS, and an active-profile lookup must never replace or retarget it.
+Before discovery begins, a native-OAuth connection derives one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection. That value is the only resource identifier used for the initial unauthenticated MCP request, protected-resource metadata validation, the OAuth `resource` parameter in authorization and token requests, transaction state, the connection record, and the secure-store key. Metadata, redirects, provider display names, DNS, and an active-profile lookup must never replace or retarget it.
 
-For Miftah's future native-OAuth profile, a canonical resource is an absolute `https` URI with an authority and no userinfo, fragment, or query component. The serializer must:
+For Miftah's native-OAuth profile, a canonical resource is an absolute `https` URI with an authority and no userinfo, fragment, or query component. The serializer must:
 
 - lowercase the scheme and ASCII/IDNA A-label host;
 - omit the default HTTPS port `:443`, and retain another valid port only in unambiguous decimal form;
@@ -49,17 +49,17 @@ OAuth access tokens and refresh tokens must not appear in configuration, audit e
 
 An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered. The callback must return a fixed success/failure page with no code, token, scope, issuer, account, or provider response content.
 
-- A future connection record may retain only non-secret identifiers needed for routing and diagnosis: profile, exact upstream, validated issuer identifier, `canonicalResource`, requested/granted scope metadata when safe, lifecycle state, and a bounded identity-verification status. It must not retain raw authorization responses, raw account payloads, browser URLs, authorization codes, token values, client secrets, or unbounded provider errors.
+- A connection record may retain only non-secret identifiers needed for routing and diagnosis: profile, exact upstream, validated issuer identifier, `canonicalResource`, requested/granted scope metadata when safe, lifecycle state, and a bounded identity-verification status. It must not retain raw authorization responses, raw account payloads, browser URLs, authorization codes, token values, client secrets, or unbounded provider errors.
 - Credential material must be held only in a verified operating-system credential vault under a key derived from a versioned, unambiguous encoding of the exact profile/upstream/issuer/canonical-resource tuple. There is no fallback to JSON configuration, dotenv, audit records, browser local/session storage, a Console response, or a generic third-party cache. Missing secure storage is a no-go for native Miftah OAuth rather than a reason to weaken storage.
 - One connection is bound to exactly one profile, upstream, validated issuer identifier, and `canonicalResource`. Reauthentication, refresh, revoke, disconnect, and health operations must use that exact binding; no lookup may select an arbitrary credential based on a provider display name or active profile alone.
 - Redaction must register future secret values before any lifecycle event, error mapping, audit scope, or support export can observe them. Stable error codes and high-level state are the only operator-facing failure evidence.
 
 ## Threats, required controls, and residual risks
 
-| Threat and attacker goal | Required future controls | Residual risk and test evidence |
+| Threat and attacker goal | Required controls | Residual risk and test evidence |
 | --- | --- | --- |
 | **Redirect mix-up or issuer substitution** — cause a valid browser result to be accepted for another authorization server or resource. | Discover protected-resource and authorization-server metadata from the selected HTTPS resource; bind transaction state to the validated issuer identifier, `canonicalResource`, redirect URI, profile, and upstream; require exactly one RFC 9207 `iss` that exactly matches the selected issuer before code exchange; reject changed metadata, issuer, resource, or redirect, and never let a token audience retarget the connection. | A malicious same-user process or trusted provider can still interfere outside Miftah authority. Tests must exercise alternate issuer/resource metadata, a callback where valid `state` accompanies a code from another issuer, a missing or duplicate `iss`, and distinct redirect registrations. |
-| **Authorization-code or token replay** — reuse an intercepted code, callback, access token, or refresh token. | Use PKCE S256; keep a one-time, bounded transaction with single-use state and callback; exchange a code once; keep future credentials in secure storage; rotate/clear a failed or disconnected connection. | PKCE does not protect a compromised host or provider. Tests must prove a mismatched PKCE verifier, duplicate callback, reused code, expired state, and stale token are refused without output leakage. |
+| **Authorization-code or token replay** — reuse an intercepted code, callback, access token, or refresh token. | Use PKCE S256; keep a one-time, bounded transaction with single-use state and callback; exchange a code once; keep credentials in secure storage; rotate/clear a failed or disconnected connection. | PKCE does not protect a compromised host or provider. Tests must prove a mismatched PKCE verifier, duplicate callback, reused code, expired state, and stale token are refused without output leakage. |
 | **Cross-profile or cross-resource credential leakage** — use one account or token for another profile, upstream, issuer, or MCP resource. | Use a versioned, unambiguous key for the exact profile/upstream/issuer/`canonicalResource` tuple; reject ambiguous provider display names; keep refresh/revoke/health operations scoped to that key; require the later identity verifier to make account claims explicit. | A valid token is not account authorization. Tests must cover cross-profile refresh, resource substitution, profile switching during a flow, secure-store key collision attempts, and an identity mismatch after connection. |
 | **Browser CSRF or hostile local origin** — drive a local browser callback or Console mutation from an untrusted page. | Use high-entropy state, exact callback validation, a system browser, strict Host and Origin checks, explicit CSRF protection for every Console mutation, and bounded browser session lifetime. The Console must not use a query-string bearer or browser storage. | A same OS user is not a strong isolation boundary. Tests must reject missing/duplicate/mismatched state, hostile Origin/Host, cross-origin mutation, and stale browser sessions. |
 | **Local network exposure and same-user control** — expose a loopback control service to LAN callers or let a local process reuse its control credential. | No Console listener may start until a separately approved bootstrap protocol can establish an invocation-bound, CSPRNG-backed, one-time browser session without query strings or browser storage. That future protocol must bind literal loopback, a short lifetime, exact Host/Origin validation, CSRF protection, bounded bodies/sessions/callback listeners/concurrency, and a control credential separate from the MCP bearer. | Loopback plus a future random credential does not defend against a hostile process running as the same OS user or a host administrator. Tests must demonstrate refusal of non-loopback binds, absent/forged Host/Origin, bootstrap replay, exhausted capacity, and use after expiry. |
@@ -73,9 +73,9 @@ A future control credential is not an OAuth token and must still never be placed
 
 The Console may create or inspect a future connection record only through a typed local control service. It must not parse upstream-owned token caches, browser cookies, or provider-specific files, and it must not assume that the MCP serving endpoint can act as a control API. The UI can display only redacted connection state, selected profile/upstream, safe scope summaries, and restart-required guidance.
 
-## Focused security test plan before implementation
+## Focused security test plan and implementation evidence
 
-| Test area | Required evidence before a production surface is added |
+| Test area | Required evidence for the production surface |
 | --- | --- |
 | metadata discovery | In-process HTTPS/loopback fixtures prove protected-resource metadata `resource` already exactly matches the original canonical request URL, the selected authorization-server value exactly matches its metadata `issuer`, and discovery fails closed on missing, altered, or conflicting metadata. |
 | canonical resource comparison | Fixtures cover scheme/host case, default and non-default ports, root and non-root trailing slash, literal and percent-encoded dot segments, unreserved and reserved percent encodings, query/fragment/userinfo, aliases, and raw-alias rejection even when normalization would reach the same endpoint. They prove that `canonicalResource` stays unchanged at every discovery, authorization, token, state, and storage boundary, and that an audience never retargets it. |
@@ -96,11 +96,11 @@ All tests must use fixture-only values and local fakes. They must not invoke a l
 
 ## Implementation gates
 
-Issue #80 does not authorize OAuth, credential-store, callback, Console, adapter, or broker implementation. Before any of those production changes begin, maintainers must have:
+Issue #82 carries the explicit maintainer authorization for the standards-compatible remote-OAuth runtime within this design. It does not authorize Console, proprietary provider adapters, a hosted broker, revocation/lifecycle commands, or publication before release gates. Those later production changes still require:
 
 1. the external design-partner evidence required by [#25](https://github.com/mohanagy/miftah/issues/25) and the deliberate Console/TUI/no-UI decision in [#35](https://github.com/mohanagy/miftah/issues/35);
 2. an independent-review process and public status under [#37](https://github.com/mohanagy/miftah/issues/37), with this delta reviewed and linked;
-3. a versioned, profile-bound connection-record and secure-store contract; and
-4. the focused test plan above implemented before each relevant runtime surface is enabled.
+3. the versioned, profile-bound connection-record and secure-store contract to remain intact; and
+4. the focused test plan above to be implemented before each relevant runtime surface is enabled.
 
 The no-go decision is a secure product outcome: users can continue to configure documented static credentials or let an upstream own its local OAuth lifecycle. No dashboard convenience claim overrides those boundaries.

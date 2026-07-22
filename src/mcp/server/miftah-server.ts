@@ -35,6 +35,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { MiftahConfig, ToolingConfig, UpstreamConfig } from "../../config/types.js";
 import type { PluginRegistry } from "../../plugins/plugin-registry.js";
+import type { RemoteOAuthRuntime } from "../../oauth/remote-oauth-runtime.js";
 import {
   ApprovalStore,
   type ApprovalBinding,
@@ -318,7 +319,8 @@ export class MiftahServer {
     private readonly profiles: ProfileManager,
     private readonly upstreams: UpstreamProcessManager | MultiUpstreamProcessManager,
     private readonly routingContextCollector?: RoutingContextCollector,
-    private readonly plugins?: PluginRegistry
+    private readonly plugins?: PluginRegistry,
+    private readonly oauth?: RemoteOAuthRuntime
   ) {
     bindProfileTransitionConfirmationVerifier(profiles, (request) => {
       const binding = this.profileTransitionConfirmations.get(request.proof);
@@ -394,6 +396,7 @@ export class MiftahServer {
       });
     }
     this.auditTrail = new AuditTrail(config.name, this.audit);
+    this.oauth?.attachAuditTrail(this.auditTrail);
     this.upstreams.addLifecycleListener((event) => {
       if (event.type !== "start") {
         this.dropResourceSubscriptions(

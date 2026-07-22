@@ -14,6 +14,7 @@ import {
   McpError,
   ReadResourceRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 interface StreamableSession {
   server: McpServer;
@@ -49,6 +50,7 @@ export interface FakeRemoteUpstream {
 
 export interface OAuthCompatibilityProbe {
   readonly streamableHttpUrl: string;
+  readonly fetch: FetchLike;
   discoveryRequests(): readonly string[];
   registrationRequests(): readonly {
     readonly clientName: string;
@@ -67,6 +69,12 @@ export interface OAuthCompatibilityProbe {
   authenticatedMcpRequests(): number;
   unauthenticatedMcpRequests(): number;
   close(): Promise<void>;
+}
+
+export interface OAuthCompatibilityProbeOptions {
+  /** Public HTTPS identity used by strict OAuth tests while requests remain loopback-only. */
+  readonly publicBaseUrl?: string;
+  readonly discoveryKind?: "oauth" | "oidc";
 }
 
 export interface FakeRemoteUpstreamOptions {
@@ -258,7 +266,9 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
  * Starts a deterministic loopback-only protected MCP resource for OAuth SDK compatibility tests.
  * It deliberately uses fixture-only opaque values and never reaches a browser or live authorization server.
  */
-export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibilityProbe> {
+export async function startOAuthCompatibilityProbe(
+  options: OAuthCompatibilityProbeOptions = {}
+): Promise<OAuthCompatibilityProbe> {
   const discoveryRequests: string[] = [];
   const registrationRequests: Array<{ clientName: string; redirectUri: string; scope: string }> = [];
   const authorizationCodes = new Map<string, { codeChallenge: string; redirectUri: string }>();
@@ -276,6 +286,7 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
   let authenticatedMcpRequests = 0;
   let unauthenticatedMcpRequests = 0;
   let baseUrl = "";
+  let loopbackBaseUrl = "";
 
   const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const requestUrl = new URL(request.url ?? "/", baseUrl);
@@ -291,6 +302,11 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
 
     if (requestUrl.pathname === "/.well-known/oauth-authorization-server" && request.method === "GET") {
       discoveryRequests.push(requestUrl.pathname);
+      if (options.discoveryKind === "oidc") {
+        response.statusCode = 404;
+        response.end("not found");
+        return;
+      }
       sendJson(response, 200, {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
@@ -299,7 +315,32 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
-        code_challenge_methods_supported: ["S256"]
+        code_challenge_methods_supported: ["S256"],
+        authorization_response_iss_parameter_supported: true
+      });
+      return;
+    }
+
+    if (requestUrl.pathname === "/.well-known/openid-configuration" && request.method === "GET") {
+      discoveryRequests.push(requestUrl.pathname);
+      if (options.discoveryKind !== "oidc") {
+        response.statusCode = 404;
+        response.end("not found");
+        return;
+      }
+      sendJson(response, 200, {
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/oauth/authorize`,
+        token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/oauth/register`,
+        jwks_uri: `${baseUrl}/oauth/jwks`,
+        response_types_supported: ["code"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        token_endpoint_auth_methods_supported: ["none"],
+        code_challenge_methods_supported: ["S256"],
+        authorization_response_iss_parameter_supported: true
       });
       return;
     }
@@ -336,6 +377,7 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
       callback.searchParams.set("code", authorizationCode);
       const state = requestUrl.searchParams.get("state");
       if (state) callback.searchParams.set("state", state);
+      callback.searchParams.set("iss", baseUrl);
       response.writeHead(302, { location: callback.toString() });
       response.end();
       return;
@@ -343,6 +385,32 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
 
     if (requestUrl.pathname === "/oauth/token" && request.method === "POST") {
       const parameters = new URLSearchParams(await readRequestBody(request));
+      if (parameters.get("grant_type") === "refresh_token") {
+        tokenExchanges.push({
+          clientId: parameters.get("client_id") ?? "",
+          codeWasExpected: false,
+          codeVerifierPresent: false,
+          pkceVerified: false,
+          grantType: "refresh_token",
+          redirectUri: "",
+          resource: parameters.get("resource") ?? ""
+        });
+        if (
+          parameters.get("refresh_token") !== "fixture-refresh-token" ||
+          parameters.get("resource") !== `${baseUrl}/mcp`
+        ) {
+          sendJson(response, 400, { error: "invalid_grant" });
+          return;
+        }
+        sendJson(response, 200, {
+          access_token: "fixture-refreshed-access-token",
+          refresh_token: "fixture-rotated-refresh-token",
+          token_type: "Bearer",
+          expires_in: 3_600,
+          scope: "mcp:tools"
+        });
+        return;
+      }
       const code = parameters.get("code") ?? "";
       const codeVerifier = parameters.get("code_verifier") ?? "";
       const authorization = authorizationCodes.get(code);
@@ -367,6 +435,7 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
       }
       sendJson(response, 200, {
         access_token: "fixture-access-token",
+        refresh_token: "fixture-refresh-token",
         token_type: "Bearer",
         expires_in: 3_600,
         scope: "mcp:tools"
@@ -380,7 +449,10 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
       return;
     }
 
-    if (request.headers.authorization !== "Bearer fixture-access-token") {
+    if (
+      request.headers.authorization !== "Bearer fixture-access-token" &&
+      request.headers.authorization !== "Bearer fixture-refreshed-access-token"
+    ) {
       unauthenticatedMcpRequests += 1;
       response.writeHead(401, {
         "WWW-Authenticate": `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource", scope="mcp:tools"`
@@ -441,10 +513,22 @@ export async function startOAuthCompatibilityProbe(): Promise<OAuthCompatibility
   await listen(httpServer);
   const address = httpServer.address();
   if (!address || typeof address === "string") throw new Error("Expected a TCP address for the OAuth compatibility probe");
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  loopbackBaseUrl = `http://127.0.0.1:${address.port}`;
+  baseUrl = options.publicBaseUrl ?? loopbackBaseUrl;
+
+  const rewriteFetch: FetchLike = (input, init) => {
+    const requested = new URL(input instanceof Request ? input.url : String(input));
+    if (requested.origin === new URL(baseUrl).origin) {
+      const rewritten = new URL(`${requested.pathname}${requested.search}`, loopbackBaseUrl);
+      if (input instanceof Request) return globalThis.fetch(new Request(rewritten, input), init);
+      return globalThis.fetch(rewritten, init);
+    }
+    return globalThis.fetch(input, init);
+  };
 
   return {
     streamableHttpUrl: `${baseUrl}/mcp`,
+    fetch: rewriteFetch,
     discoveryRequests: () => [...discoveryRequests],
     registrationRequests: () => registrationRequests.map((request) => ({ ...request })),
     tokenExchanges: () => tokenExchanges.map((exchange) => ({ ...exchange })),

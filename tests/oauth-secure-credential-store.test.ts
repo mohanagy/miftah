@@ -51,11 +51,14 @@ describe("OAuth secure credential store", () => {
     const store = new PlatformOAuthCredentialStore(adapter, redactor);
     const accessToken = "fixture-access-token-never-log";
     const refreshToken = "fixture-refresh-token-never-log";
+    const clientSecret = "fixture-client-secret-never-log";
 
     await store.save(binding(), {
       accessToken,
       refreshToken,
-      expiresAt: "2030-01-02T03:04:05.000Z"
+      expiresAt: "2030-01-02T03:04:05.000Z",
+      clientId: "fixture-client-id",
+      clientSecret
     });
 
     expect([...adapter.entries]).toHaveLength(1);
@@ -66,8 +69,16 @@ describe("OAuth secure credential store", () => {
     expect(address).not.toContain("work");
     expect(address).not.toContain("mcp.example.test");
     expect(serialized).toContain(accessToken);
-    expect(redactor.redactText(`access=${accessToken}; refresh=${refreshToken}`)).toBe("access=[REDACTED]; refresh=[REDACTED]");
-    await expect(store.load(binding())).resolves.toEqual({ accessToken, refreshToken, expiresAt: "2030-01-02T03:04:05.000Z" });
+    expect(redactor.redactText(`access=${accessToken}; refresh=${refreshToken}; client=${clientSecret}`)).toBe(
+      "access=[REDACTED]; refresh=[REDACTED]; client=[REDACTED]"
+    );
+    await expect(store.load(binding())).resolves.toEqual({
+      accessToken,
+      refreshToken,
+      expiresAt: "2030-01-02T03:04:05.000Z",
+      clientId: "fixture-client-id",
+      clientSecret
+    });
     await expect(store.load(binding({ profile: "personal" }))).resolves.toBeUndefined();
   });
 
@@ -91,7 +102,8 @@ describe("OAuth secure credential store", () => {
   it.each([
     ["non-string refresh token", { refreshToken: 7 }],
     ["non-string expiry", { expiresAt: null }],
-    ["unexpected field", { clientSecret: "fixture-unexpected-secret" }]
+    ["client secret without a client id", { clientSecret: "fixture-unexpected-secret" }],
+    ["unexpected field", { authorizationCode: "fixture-code" }]
   ])("fails closed on a vault envelope with a %s", async (_description, tampering) => {
     const adapter = new MemoryKeyringAdapter();
     const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());
