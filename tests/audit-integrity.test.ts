@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { copyFile, link, mkdtemp, open, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -58,6 +60,47 @@ function transactionWithHash(payload: Record<string, unknown>): Record<string, u
 }
 
 describe("audit journal integrity", () => {
+  it("skips a Windows-reserved local lock port before writing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-reserved-lock-port-"));
+    const path = join(directory, "audit.jsonl");
+    const serverPrototype = Object.getPrototypeOf(createServer()) as {
+      listen: (
+        this: Server,
+        options: { host: string; port: number; exclusive: boolean },
+        callback?: () => void
+      ) => Server;
+    };
+    const originalListen = serverPrototype.listen;
+    let listenAttempts = 0;
+    const listenSpy = vi.spyOn(serverPrototype, "listen").mockImplementation(function (
+      this: Server,
+      options: { host: string; port: number; exclusive: boolean },
+      callback?: () => void
+    ) {
+      listenAttempts += 1;
+      if (listenAttempts === 1) {
+        queueMicrotask(() => this.emit("error", Object.assign(new Error("reserved port"), { code: "EACCES" })));
+        return this;
+      }
+      return originalListen.call(this, options, callback);
+    });
+
+    try {
+      const logger = new AuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
+      await expect(logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "writes-after-reserved-lock-port",
+        status: "success",
+        durationMs: 1
+      })).resolves.toBeUndefined();
+      expect(listenAttempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      listenSpy.mockRestore();
+    }
+  });
+
   it("identifies the first tampered chained record without returning record content", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-"));
     const path = join(directory, "audit.jsonl");
