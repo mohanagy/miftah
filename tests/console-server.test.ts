@@ -237,9 +237,14 @@ describe("local Console control server", () => {
         headers: { origin: server.url.origin, cookie: session.cookie }
       });
       expect(snippets.status).toBe(200);
-      const snippetBody = await snippets.json();
+      const snippetBody = await snippets.json() as {
+        data: Array<{ client: string; json: string }>;
+      };
       expect(snippetBody).toMatchObject({ data: [{ client: "claude-desktop" }] });
-      expect(JSON.stringify(snippetBody)).toContain(configPath);
+      const snippetConfig = JSON.parse(snippetBody.data[0]?.json ?? "") as {
+        mcpServers: Record<string, { args: string[] }>;
+      };
+      expect(snippetConfig.mcpServers["posthog-work"]?.args).toContain(configPath);
       expect(JSON.stringify(snippetBody)).not.toContain("auth.example.test");
     } finally {
       await server.close();
