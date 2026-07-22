@@ -240,7 +240,7 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
 .connection { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; border: 1px solid var(--line); background: var(--panel); }
-.connection p { margin: .25rem 0 0; font: .77rem/1.5 ui-monospace, monospace; }
+.connection p { margin: .25rem 0 0; overflow-wrap: anywhere; font: .77rem/1.5 ui-monospace, monospace; }
 .connection-actions { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
 .connection-actions button { min-height: 2.35rem; font-size: .76rem; }
 details { border: 1px solid var(--line); padding: 1rem; }
@@ -361,8 +361,16 @@ const script = `(() => {
       const state = document.createElement("p");
       const credential = typeof connection.credentialState === "string" ? connection.credentialState : "unknown";
       const identity = typeof connection.identityState === "string" ? connection.identityState : "not verified";
-      state.textContent = "credential: " + credential + " · identity: " + identity;
-      details.append(title, state);
+      const statusErrorCode = typeof connection.statusErrorCode === "string" ? connection.statusErrorCode : "";
+      state.textContent = statusErrorCode
+        ? "status unavailable: " + statusErrorCode
+        : "credential: " + credential + " · identity: " + identity;
+      const binding = document.createElement("p");
+      const resource = typeof connection.resource === "string" ? connection.resource : "unknown resource";
+      const issuer = typeof connection.issuer === "string" ? connection.issuer : "unknown issuer";
+      const grantedScopes = Array.isArray(connection.scopes) ? connection.scopes.map(String).join(" ") : "none";
+      binding.textContent = "resource: " + resource + " · issuer: " + issuer + " · scopes: " + (grantedScopes || "none");
+      details.append(title, binding, state);
       const actions = document.createElement("div");
       actions.className = "connection-actions";
       [

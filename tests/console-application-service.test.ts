@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const temporaryDirectories: string[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
@@ -172,6 +173,69 @@ describe("Console application service", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain(connectionRef);
     expect(JSON.stringify(records)).not.toContain("auth.example.test");
+  });
+
+  it("returns live redacted connection state for dashboard connection cards", async () => {
+    const configPath = await writeConfig();
+    const status = {
+      connectionRef,
+      profile: "personal",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["read"],
+      credentialState: "disconnected",
+      identityState: "unavailable"
+    };
+    let listCalls = 0;
+    const service = new ConsoleApplicationService(configPath, {
+      commandService: {
+        list: async () => {
+          listCalls += 1;
+          return [status];
+        },
+        status: async () => status,
+        connect: async () => status,
+        reauth: async () => status,
+        test: async () => ({ ok: true }),
+        disconnect: async () => status
+      }
+    });
+
+    await expect(service.listConnections()).resolves.toEqual([status]);
+    expect(listCalls).toBe(1);
+  });
+
+  it("surfaces a stable diagnostic when live connection state is unavailable", async () => {
+    const configPath = await writeConfig();
+    const unavailable = new MiftahError(
+      "OAUTH_CONNECTION_STORE_UNAVAILABLE",
+      "sensitive provider detail that must not cross the Console boundary"
+    );
+    const service = new ConsoleApplicationService(configPath, {
+      commandService: {
+        list: async () => Promise.reject(unavailable),
+        status: async () => Promise.reject(unavailable),
+        connect: async () => Promise.reject(unavailable),
+        reauth: async () => Promise.reject(unavailable),
+        test: async () => Promise.reject(unavailable),
+        disconnect: async () => Promise.reject(unavailable)
+      }
+    });
+
+    const connections = await service.listConnections();
+    expect(connections).toEqual([
+      expect.objectContaining({
+        connectionRef,
+        profile: "personal",
+        upstream: "default",
+        credentialState: "unsupported",
+        identityState: "unavailable",
+        statusErrorCode: "OAUTH_CONNECTION_STORE_UNAVAILABLE"
+      })
+    ]);
+    expect(JSON.stringify(connections)).not.toContain("sensitive provider detail");
   });
 
   it("refuses a configuration mutation before side effects when the required Console audit is unavailable", async () => {

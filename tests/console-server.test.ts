@@ -128,6 +128,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/onboarding/native-oauth");
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
+      expect(javascript).toContain("statusErrorCode");
       expect(javascript).toContain("restoreUnlock");
       expect(javascript).not.toMatch(/innerHTML|localStorage|sessionStorage|\beval\s*\(/u);
 

@@ -311,8 +311,19 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     });
   }
 
-  listConnections(): Promise<unknown> {
-    return new NativeOAuthCommandRuntimeFactory().connections(this.configPath);
+  async listConnections(): Promise<unknown> {
+    try {
+      return await this.commandService.list();
+    } catch (error) {
+      if (!(error instanceof MiftahError)) throw error;
+      const configured = await new NativeOAuthCommandRuntimeFactory().connections(this.configPath);
+      return configured.map((connection) => ({
+        ...connection,
+        credentialState: "unsupported",
+        identityState: "unavailable",
+        statusErrorCode: error.code
+      }));
+    }
   }
 
   connectionStatus(connectionRef: string): Promise<unknown> {
