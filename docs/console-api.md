@@ -25,6 +25,8 @@ Browser sessions have a 15-minute idle limit and a one-hour absolute limit. Rest
 
 Every request must use the exact listener `Host` and `Origin`. Except for the bootstrap exchange, every endpoint requires the session cookie. JSON request bodies are capped at 64 KiB and must use `Content-Type: application/json`. Headers are capped at 16 KiB. The process admits at most 240 trusted-origin requests per minute and only eight bootstrap attempts per minute; excess requests receive `429` plus `Retry-After`.
 
+`POST /api/v1/sessions`, `POST /api/v1/connections/:ref/connect`, `POST /api/v1/connections/:ref/reauth`, and `DELETE /api/v1/connections/:ref/credential` must send `Content-Type: application/json` with the JSON body `{}`. `POST /api/v1/connections` instead accepts a strict JSON object with required `profile`, `issuer`, `clientRegistration`, and `scopes` fields plus optional `connectionRef` and `upstream` fields; unknown fields are rejected.
+
 | Method and path | Purpose |
 | --- | --- |
 | `POST /api/v1/sessions` | Exchange the one-use bootstrap code for one browser session. |

@@ -33,6 +33,11 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");
     expect(consoleApi).toContain("# Local Console control API");
     expect(consoleApi).toContain("There is no host option, LAN mode, background daemon, or automatic startup.");
+    expect(consoleApi).toContain("`POST /api/v1/sessions`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/connect`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/reauth`");
+    expect(consoleApi).toContain("`DELETE /api/v1/connections/:ref/credential`");
+    expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
     expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
   });
 
