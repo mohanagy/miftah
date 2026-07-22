@@ -29,7 +29,14 @@ try {
     [Text.RegularExpressions.RegexOptions]::CultureInvariant
   )
   if (-not $sourceHashMatch.Success) { throw 'Windows Job Object source fingerprint is unavailable.' }
-  $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $normalizedSource = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n").Replace("`r", "`n")
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    $sourceHashBytes = $sha256.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($normalizedSource))
+  } finally {
+    $sha256.Dispose()
+  }
+  $sourceHash = -join ($sourceHashBytes | ForEach-Object { $_.ToString('x2') })
   if ($sourceHash -cne $sourceHashMatch.Groups[1].Value) {
     throw 'Generated Windows Job Object assembly is stale relative to its canonical C# source.'
   }

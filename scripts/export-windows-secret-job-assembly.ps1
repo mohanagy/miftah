@@ -32,7 +32,14 @@ try {
 }
 $encodedAssembly = [Convert]::ToBase64String($compressed.ToArray())
 $compressed.Dispose()
-$sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$normalizedSource = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n").Replace("`r", "`n")
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+  $sourceHashBytes = $sha256.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($normalizedSource))
+} finally {
+  $sha256.Dispose()
+}
+$sourceHash = -join ($sourceHashBytes | ForEach-Object { $_.ToString('x2') })
 Write-Output "MIFTAH_WINDOWS_SECRET_JOB_SOURCE_SHA256=$sourceHash"
 Write-Output 'MIFTAH_WINDOWS_SECRET_JOB_ASSEMBLY_BEGIN'
 Write-Output $encodedAssembly
