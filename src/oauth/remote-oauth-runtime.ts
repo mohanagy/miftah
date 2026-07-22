@@ -150,7 +150,8 @@ export class RemoteOAuthRuntime {
 
   async status(profile: string, upstream: string): Promise<RedactedOAuthConnectionStatus> {
     const binding = this.requireBinding(profile, upstream);
-    const record = await this.lifecycle.register(binding);
+    await this.lifecycle.register(binding);
+    const record = await this.lifecycle.status(binding);
     return {
       ...this.redacted(binding),
       credentialState: record.credentialState,
