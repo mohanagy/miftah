@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { encodedWindowsSecretJobAssembly } from "../src/secrets/windows-secret-job-assembly.js";
+import {
+  encodedWindowsSecretJobAssembly,
+  windowsSecretJobSourceSha256
+} from "../src/secrets/windows-secret-job-assembly.js";
 
 describe("Windows secret command contract", () => {
   it("verifies the trusted PowerShell launcher with asynchronous filesystem access", () => {
@@ -20,6 +24,7 @@ describe("Windows secret command contract", () => {
     expect(source).toContain("public static class MiftahSecretJob");
     expect(source).toContain("JobObjectLimitKillOnJobClose");
     expect(source).toContain("AssignProcessToJobObject(createdJob, GetCurrentProcess())");
+    expect(createHash("sha256").update(source).digest("hex")).toBe(windowsSecretJobSourceSha256);
     expect(assembly.byteLength).toBeLessThanOrEqual(16 * 1024);
     expect(assembly.subarray(0, 2).toString("ascii")).toBe("MZ");
   });
