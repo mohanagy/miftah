@@ -44,6 +44,21 @@ describe("CLI parser", () => {
     expectUsageError(["serve", "--port", "43127"]);
   });
 
+  it("parses the optional browser dashboard without requiring a configuration path", () => {
+    expect(parseCli(["dashboard"])).toEqual({
+      kind: "run",
+      command: "dashboard",
+      options: {}
+    });
+    expect(parseCli(["dashboard", "--config", "wrapper.json", "--port", "43127", "--no-open"])).toEqual({
+      kind: "run",
+      command: "dashboard",
+      options: { config: "wrapper.json", port: "43127", noOpen: true }
+    });
+    expect(renderCommandHelp("dashboard")).toContain("--no-open");
+    expectUsageError(["console", "--no-open"]);
+  });
+
   it("accepts command options before and after commands, including equals values", () => {
     expect(parseCli(["--config=wrapper.json", "doctor", "--json"])).toEqual({
       kind: "run",

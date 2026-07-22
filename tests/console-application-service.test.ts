@@ -47,6 +47,77 @@ async function writeConfig(): Promise<string> {
 }
 
 describe("Console application service", () => {
+  it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const service = new ConsoleApplicationService(configPath, {
+      generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
+      launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+    });
+
+    await expect(service.configMetadata()).resolves.toEqual({
+      initialized: false,
+      restartRequiredForExistingClients: true
+    });
+
+    const created = await service.onboardNativeOAuth({
+      name: "posthog-work",
+      profile: "production",
+      description: "Production account",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid", "analytics:read"]
+    });
+    expect(created).toMatchObject({
+      connectionRef,
+      profile: "production",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp"
+    });
+
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    expect(config).toEqual({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "production",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { production: { description: "Production account" } },
+      oauth: {
+        connections: {
+          [connectionRef]: {
+            profile: "production",
+            upstream: "default",
+            resource: "https://mcp.example.test/mcp",
+            issuer: "https://auth.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["openid", "analytics:read"]
+          }
+        }
+      }
+    });
+    expect(JSON.stringify(config)).not.toMatch(/token|secret|password/iu);
+
+    const snippets = await service.clientSnippets("claude-desktop");
+    expect(snippets).toEqual([
+      expect.objectContaining({
+        client: "claude-desktop",
+        json: expect.stringContaining(configPath)
+      })
+    ]);
+    expect(JSON.stringify(snippets)).not.toContain("auth.example.test");
+
+    await expect(service.onboardNativeOAuth({
+      name: "replacement",
+      profile: "other",
+      resource: "https://other.example.test/mcp",
+      issuer: "https://auth.other.example.test",
+      clientRegistration: "dynamic",
+      scopes: []
+    })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();
@@ -62,6 +133,7 @@ describe("Console application service", () => {
           calls.push(`reauth:${selected}`);
           return { ok: true };
         },
+        test: async ({ connectionRef: selected }) => ({ connectionRef: selected, ok: true }),
         disconnect: async ({ connectionRef: selected }) => {
           calls.push(`disconnect:${selected}`);
           return { credentialState: "missing" };

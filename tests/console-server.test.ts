@@ -7,6 +7,7 @@ import {
   startConsoleServer,
   type ConsoleControlApplication
 } from "../src/console/console-server.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -93,6 +94,157 @@ async function bootstrapSession(server: Awaited<ReturnType<typeof startConsoleSe
 }
 
 describe("local Console control server", () => {
+  it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(page.headers.get("cache-control")).toBe("no-store");
+      expect(page.headers.get("content-security-policy")).toBe(
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
+        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      );
+      const html = await page.text();
+      expect(html).toContain("Miftah Console");
+      expect(html).toContain('src="/app.js"');
+      expect(html).toContain('href="/app.css"');
+      expect(html).toContain("Remote native OAuth");
+      expect(html).toContain("Provider adapter");
+      expect(html).toContain("Upstream-owned auth");
+      expect(html).toContain("Unsupported state");
+      expect(html).toContain("Active vs durable:");
+      expect(html).not.toContain("test-only-bootstrap-credential");
+      expect(html).not.toContain("localStorage");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+      const javascript = await script.text();
+      expect(javascript).toContain("/api/v1/sessions");
+      expect(javascript).toContain("/api/v1/onboarding/native-oauth");
+      expect(javascript).toContain("/api/v1/client-snippets");
+      expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
+      expect(javascript).toContain("restoreUnlock");
+      expect(javascript).not.toMatch(/innerHTML|localStorage|sessionStorage|\beval\s*\(/u);
+
+      const stylesheet = await fetch(new URL("/app.css", server.url));
+      expect(stylesheet.status).toBe(200);
+      expect(stylesheet.headers.get("content-type")).toBe("text/css; charset=utf-8");
+      expect(await stylesheet.text()).toContain("prefers-reduced-motion");
+
+      const hostileHost = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: server.url.hostname,
+            port: server.url.port,
+            path: "/",
+            method: "GET",
+            headers: { host: "attacker.example.test" }
+          },
+          (response) => {
+            response.resume();
+            response.once("end", () => resolve(response.statusCode ?? 0));
+          }
+        );
+        request.once("error", reject);
+        request.end();
+      });
+      expect(hostileHost).toBe(403);
+
+      const mutation = await fetch(server.url, { method: "POST" });
+      expect(mutation.status).toBe(405);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      allowMissingConfig: true,
+      launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const metadata = await fetch(new URL("/api/v1/config", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(metadata.status).toBe(200);
+      expect(await metadata.json()).toEqual({
+        data: { initialized: false, restartRequiredForExistingClients: true }
+      });
+
+      const endpoint = new URL("/api/v1/onboarding/native-oauth", server.url);
+      const request = {
+        name: "posthog-work",
+        profile: "production",
+        description: "Production account",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://auth.example.test",
+        clientRegistration: "dynamic",
+        scopes: ["openid", "analytics:read"]
+      };
+      const missingCsrf = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(missingCsrf.status).toBe(403);
+      await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      const secretBearing = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
+      });
+      expect(secretBearing.status).toBe(422);
+      await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(created.status).toBe(201);
+      expect(await created.json()).toMatchObject({
+        data: { profile: "production", upstream: "default", resource: "https://mcp.example.test/mcp" }
+      });
+
+      const snippets = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(snippets.status).toBe(200);
+      const snippetBody = await snippets.json();
+      expect(snippetBody).toMatchObject({ data: [{ client: "claude-desktop" }] });
+      expect(JSON.stringify(snippetBody)).toContain(configPath);
+      expect(JSON.stringify(snippetBody)).not.toContain("auth.example.test");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires an invocation-bound bootstrap before returning redacted control metadata", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
@@ -108,7 +260,7 @@ describe("local Console control server", () => {
       expect(unauthenticated.status).toBe(401);
 
       const missingOrigin = await fetch(new URL("/api/v1/health", server.url));
-      expect(missingOrigin.status).toBe(403);
+      expect(missingOrigin.status).toBe(401);
 
       const bootstrapUrl = new URL("/api/v1/sessions", server.url);
       const hostileHost = await rawPost(
@@ -164,7 +316,7 @@ describe("local Console control server", () => {
       expect(bootstrap.headers.get("x-frame-options")).toBe("DENY");
 
       const health = await fetch(new URL("/api/v1/health", server.url), {
-        headers: { origin: server.url.origin, cookie: cookie!.split(";", 1)[0]! }
+        headers: { cookie: cookie!.split(";", 1)[0]! }
       });
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({
@@ -310,6 +462,7 @@ describe("local Console control server", () => {
         restartRequiredForExistingClients: true
       }),
       configMetadata: async () => ({
+        initialized: true,
         name: "console-test",
         version: "1",
         defaultProfile: "personal",
@@ -319,6 +472,10 @@ describe("local Console control server", () => {
         restartRequiredForExistingClients: true
       }),
       listConnections: async () => [],
+      onboardNativeOAuth: async () => {
+        throw new MiftahError("CONFIG_CREATE_FAILED", "CONFIG_CREATE_FAILED: test fixture");
+      },
+      clientSnippets: async () => [],
       connectionStatus: async (connectionRef) => ({ connectionRef, credentialState: "missing" }),
       addConnection: async () => { throw new Error("not used"); },
       connect: async (connectionRef) => {
@@ -333,6 +490,10 @@ describe("local Console control server", () => {
         calls.push(`disconnect:${connectionRef}`);
         return { connectionRef, credentialState: "missing" };
       },
+      testConnection: async (connectionRef) => {
+        calls.push(`test:${connectionRef}`);
+        return { ok: true, connectionRef };
+      },
       auditRecords: async () => []
     };
     const server = await startConsoleServer(await writeConfig(), {
@@ -342,6 +503,31 @@ describe("local Console control server", () => {
 
     try {
       const session = await bootstrapSession(server);
+      const createFailure = await fetch(new URL("/api/v1/onboarding/native-oauth", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "service",
+          profile: "work",
+          resource: "https://mcp.example.test/mcp",
+          issuer: "https://auth.example.test",
+          clientRegistration: "dynamic",
+          scopes: []
+        })
+      });
+      expect(createFailure.status).toBe(503);
+      expect(await createFailure.json()).toEqual({
+        error: {
+          code: "config_create_failed",
+          message: "The initial configuration could not be created."
+        }
+      });
+
       const reference = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
       const status = await fetch(
         new URL(`/api/v1/connections/${encodeURIComponent(reference)}`, server.url),
@@ -358,7 +544,12 @@ describe("local Console control server", () => {
       expect(rejected.status).toBe(403);
       expect(calls).toEqual([]);
 
-      for (const [action, method] of [["connect", "POST"], ["reauth", "POST"], ["credential", "DELETE"]] as const) {
+      for (const [action, method] of [
+        ["connect", "POST"],
+        ["reauth", "POST"],
+        ["test", "POST"],
+        ["credential", "DELETE"]
+      ] as const) {
         const response = await fetch(
           new URL(`/api/v1/connections/${encodeURIComponent(reference)}/${action}`, server.url),
           {
@@ -374,7 +565,12 @@ describe("local Console control server", () => {
         );
         expect(response.status).toBe(200);
       }
-      expect(calls).toEqual([`connect:${reference}`, `reauth:${reference}`, `disconnect:${reference}`]);
+      expect(calls).toEqual([
+        `connect:${reference}`,
+        `reauth:${reference}`,
+        `test:${reference}`,
+        `disconnect:${reference}`
+      ]);
     } finally {
       await server.close();
     }

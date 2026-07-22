@@ -6,7 +6,7 @@ Miftah performs protected-resource and authorization-server discovery, browser a
 
 Miftah does not support OAuth for every MCP server or provider. It does not guess private endpoints, scrape provider caches, automate local STDIO providers' custom login flows, accept passwords or browser cookies as OAuth state, or treat a valid token as proof that the correct account was selected. Operator lifecycle commands manage only Miftah's exact local binding and vault credential; `auth disconnect` does not claim provider-side token revocation.
 
-The [OAuth and local Console design delta](oauth-console-threat-model.md) records the enforced OAuth security controls, residual risks, and the separately launched local Console control-plane boundary. The API is available through `miftah console`; the browser UI remains a separate layer.
+The [OAuth and local Console design delta](oauth-console-threat-model.md) records the enforced OAuth security controls, residual risks, and the separately launched local Console control-plane boundary. Run `miftah dashboard` for the optional browser-local UI, or `miftah console --config <file>` for the API-only compatibility surface.
 
 ## Support matrix
 
