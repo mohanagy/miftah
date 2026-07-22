@@ -101,12 +101,12 @@ describe("Console application service", () => {
     expect(JSON.stringify(config)).not.toMatch(/token|secret|password/iu);
 
     const snippets = await service.clientSnippets("claude-desktop");
-    expect(snippets).toEqual([
-      expect.objectContaining({
-        client: "claude-desktop",
-        json: expect.stringContaining(configPath)
-      })
-    ]);
+    expect(snippets).toHaveLength(1);
+    expect(snippets[0]).toMatchObject({ client: "claude-desktop" });
+    const snippetConfig = JSON.parse(snippets[0]?.json ?? "") as {
+      mcpServers: Record<string, { args: string[] }>;
+    };
+    expect(snippetConfig.mcpServers["posthog-work"]?.args).toContain(configPath);
     expect(JSON.stringify(snippets)).not.toContain("auth.example.test");
 
     await expect(service.onboardNativeOAuth({
