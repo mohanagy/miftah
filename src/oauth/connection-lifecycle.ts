@@ -213,12 +213,7 @@ export class OAuthConnectionLifecycle {
       if (isTerminalCredentialState(record.credentialState) || record.expiresAt === undefined) return record;
       const expiresAt = Date.parse(record.expiresAt);
       if (!Number.isFinite(expiresAt)) invalidLifecycle();
-      const now = this.currentTime();
-      const state = expiresAt <= now
-        ? "expired"
-        : expiresAt <= now + this.refreshSkewMs
-          ? "expiring"
-          : "connected";
+      const state = this.deriveExpiryState(expiresAt, this.currentTime());
       if (state === record.credentialState) return record;
       const updated = await this.options.registry.setCredentialState(
         binding.connectionRef,
@@ -246,10 +241,16 @@ export class OAuthConnectionLifecycle {
   }
 
   private credentialState(credential: OAuthCredential): "connected" | "expiring" | "expired" {
-    const expiresAt = expiryTime(credential);
+    return this.deriveExpiryState(expiryTime(credential), this.currentTime());
+  }
+
+  private deriveExpiryState(
+    expiresAt: number | undefined,
+    now: number
+  ): "connected" | "expiring" | "expired" {
     if (expiresAt === undefined) return "connected";
-    if (expiresAt <= this.currentTime()) return "expired";
-    if (expiresAt <= this.currentTime() + this.refreshSkewMs) return "expiring";
+    if (expiresAt <= now) return "expired";
+    if (expiresAt <= now + this.refreshSkewMs) return "expiring";
     return "connected";
   }
 
