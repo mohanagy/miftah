@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import { canonicalizeOAuthResource } from "../oauth/canonical-resource.js";
 import { parseOAuthConnectionRef, validateOAuthIssuer } from "../oauth/connection-types.js";
+import { isSafeOAuthHttpsUrl } from "../oauth/url-safety.js";
 import { hasMergedHeader } from "../upstream/headers.js";
 import { SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
 
@@ -66,6 +67,17 @@ const oauthClientRegistrationSchema = z
   .max(512)
   .refine((value) => value.trim() === value && !hasWhitespaceOrControl(value), {
     message: "OAuth identifiers must not contain whitespace or control characters"
+  })
+  .refine((value) => {
+    if (value === "dynamic") return true;
+    if (value.startsWith("pre-registered:")) return value.length > "pre-registered:".length;
+    if (!value.startsWith("client-id-metadata:")) return false;
+    return isSafeOAuthHttpsUrl(value.slice("client-id-metadata:".length), {
+      requirePath: true,
+      allowSearch: false
+    });
+  }, {
+    message: "OAuth client registration must use an approved explicit mode"
   });
 const oauthScopeSchema = z.string().min(1).max(256).regex(/^[\x21-\x7e]+$/u);
 const oauthConnectionSchema = z

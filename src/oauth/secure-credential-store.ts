@@ -4,14 +4,29 @@ import { MiftahError } from "../utils/errors.js";
 
 const keyringService = "miftah.oauth.v1";
 const maximumCredentialBytes = 32 * 1_024;
+/** Complete envelope bound; save enforces it before the keyring write and load enforces the same bound. */
 const maximumSerializedCredentialBytes = maximumCredentialBytes * 2;
-const credentialEnvelopeKeys = new Set(["version", "bindingKey", "accessToken", "refreshToken", "expiresAt"]);
+const credentialEnvelopeKeys = new Set([
+  "version",
+  "bindingKey",
+  "accessToken",
+  "refreshToken",
+  "expiresAt",
+  "scopes",
+  "clientId",
+  "clientSecret"
+]);
 
 /** Secret material that may exist only in the operating-system credential vault. */
 export interface OAuthCredential {
   readonly accessToken: string;
   readonly refreshToken?: string;
   readonly expiresAt?: string;
+  /** Granted scope set, retained separately from the configured request set. */
+  readonly scopes?: readonly string[];
+  /** Dynamic registration state is vault-bound so refresh never registers a different client. */
+  readonly clientId?: string;
+  readonly clientSecret?: string;
 }
 
 /** The minimal adapter required to bind credentials to an operating-system credential vault. */
@@ -55,6 +70,34 @@ function validateCredential(value: OAuthCredential): OAuthCredential {
   if (value.expiresAt !== undefined && (typeof value.expiresAt !== "string" || !validExpiry(value.expiresAt))) {
     invalidCredential();
   }
+  if (
+    value.scopes !== undefined &&
+    (!Array.isArray(value.scopes) ||
+      value.scopes.length > 256 ||
+      value.scopes.some((scope) =>
+        typeof scope !== "string" ||
+        scope.length === 0 ||
+        Buffer.byteLength(scope, "utf8") > 512 ||
+        /\s/u.test(scope)
+      ))
+  ) {
+    invalidCredential();
+  }
+  if (
+    value.clientId !== undefined &&
+    (typeof value.clientId !== "string" || value.clientId.length === 0 || Buffer.byteLength(value.clientId, "utf8") > maximumCredentialBytes)
+  ) {
+    invalidCredential();
+  }
+  if (
+    value.clientSecret !== undefined &&
+    (value.clientId === undefined ||
+      typeof value.clientSecret !== "string" ||
+      value.clientSecret.length === 0 ||
+      Buffer.byteLength(value.clientSecret, "utf8") > maximumCredentialBytes)
+  ) {
+    invalidCredential();
+  }
   return value;
 }
 
@@ -77,7 +120,11 @@ function parseEnvelope(serialized: string, redactor: SecretRedactor): StoredOAut
     !Object.hasOwn(value, "accessToken") ||
     Object.keys(value).some((key) => !credentialEnvelopeKeys.has(key)) ||
     (Object.hasOwn(value, "refreshToken") && typeof value.refreshToken !== "string") ||
-    (Object.hasOwn(value, "expiresAt") && typeof value.expiresAt !== "string")
+    (Object.hasOwn(value, "expiresAt") && typeof value.expiresAt !== "string") ||
+    (Object.hasOwn(value, "scopes") &&
+      (!Array.isArray(value.scopes) || value.scopes.some((scope) => typeof scope !== "string"))) ||
+    (Object.hasOwn(value, "clientId") && typeof value.clientId !== "string") ||
+    (Object.hasOwn(value, "clientSecret") && typeof value.clientSecret !== "string")
   ) {
     invalidCredential();
   }
@@ -85,10 +132,14 @@ function parseEnvelope(serialized: string, redactor: SecretRedactor): StoredOAut
   // Register any parsed values before a later binding or expiry check can emit an error.
   if (typeof value.accessToken === "string") redactor.add(value.accessToken);
   if (typeof value.refreshToken === "string") redactor.add(value.refreshToken);
+  if (typeof value.clientSecret === "string") redactor.add(value.clientSecret);
   const credential = validateCredential({
     accessToken: value.accessToken as string,
     ...(typeof value.refreshToken === "string" ? { refreshToken: value.refreshToken } : {}),
-    ...(typeof value.expiresAt === "string" ? { expiresAt: value.expiresAt } : {})
+    ...(typeof value.expiresAt === "string" ? { expiresAt: value.expiresAt } : {}),
+    ...(Array.isArray(value.scopes) ? { scopes: value.scopes as string[] } : {}),
+    ...(typeof value.clientId === "string" ? { clientId: value.clientId } : {}),
+    ...(typeof value.clientSecret === "string" ? { clientSecret: value.clientSecret } : {})
   });
   return { version: 1, bindingKey: value.bindingKey, ...credential };
 }
@@ -115,7 +166,10 @@ export class PlatformOAuthCredentialStore implements OAuthCredentialStore {
     return {
       accessToken: envelope.accessToken,
       ...(envelope.refreshToken === undefined ? {} : { refreshToken: envelope.refreshToken }),
-      ...(envelope.expiresAt === undefined ? {} : { expiresAt: envelope.expiresAt })
+      ...(envelope.expiresAt === undefined ? {} : { expiresAt: envelope.expiresAt }),
+      ...(envelope.scopes === undefined ? {} : { scopes: [...envelope.scopes] }),
+      ...(envelope.clientId === undefined ? {} : { clientId: envelope.clientId }),
+      ...(envelope.clientSecret === undefined ? {} : { clientSecret: envelope.clientSecret })
     };
   }
 
@@ -139,6 +193,7 @@ export class PlatformOAuthCredentialStore implements OAuthCredentialStore {
   private registerSecrets(credential: OAuthCredential): void {
     this.redactor.add(credential.accessToken);
     if (credential.refreshToken !== undefined) this.redactor.add(credential.refreshToken);
+    if (credential.clientSecret !== undefined) this.redactor.add(credential.clientSecret);
   }
 
   private async vault<Value>(operation: () => Promise<Value>): Promise<Value> {

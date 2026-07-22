@@ -181,12 +181,29 @@ describe("OAuth v3 connection configuration", () => {
     expect(error.message).not.toContain(oversizedProfile);
   });
 
-  it("fails closed at runtime until the authorization engine can inject an exact vault-bound credential", async () => {
+  it.each([
+    "provider-owned",
+    "pre-registered:",
+    "client-id-metadata:http://client.example.test/metadata",
+    "client-id-metadata:https://client.example.test/",
+    "client-id-metadata:https://client.example.test/metadata?tenant=work"
+  ])("rejects an unsupported OAuth client registration mode", (clientRegistration) => {
+    const error = validationFailure(
+      config({ oauth: { connections: { [connectionRef]: oauthConnection({ clientRegistration }) } } })
+    );
+    expect(error.code).toBe("CONFIG_SCHEMA_INVALID");
+    expect(error.message).toContain("oauth.connections");
+    expect(error.message).not.toContain(clientRegistration);
+  });
+
+  it("enables the runtime only after constructing an exact vault-backed authorization engine", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-config-"));
     directories.push(directory);
     const path = join(directory, "miftah.json");
     await writeFile(path, JSON.stringify(config()), "utf8");
 
-    await expect(createRuntime(path)).rejects.toMatchObject({ code: "OAUTH_AUTHORIZATION_NOT_ENABLED" });
+    const runtime = await createRuntime(path);
+    expect(runtime.config.version).toBe("3");
+    await runtime.manager.close();
   });
 });

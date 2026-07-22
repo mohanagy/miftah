@@ -215,7 +215,7 @@ describe("OAuth connection lifecycle", () => {
     expect(observedAbort).toBe(false);
   });
 
-  it("retains the existing refresh token when a successful refresh omits a replacement", async () => {
+  it("retains refresh, registration, and scope state when a successful refresh omits replacements", async () => {
     const refresher: OAuthCredentialRefresher = {
       async refresh() {
         return { accessToken: "rotated-access-token", expiresAt: "2030-01-02T04:04:05.000Z" };
@@ -226,14 +226,20 @@ describe("OAuth connection lifecycle", () => {
     await service.connect(expected, {
       accessToken: "expired-access-token",
       refreshToken: "original-refresh-token",
-      expiresAt: "2030-01-02T03:04:04.000Z"
+      expiresAt: "2030-01-02T03:04:04.000Z",
+      scopes: ["mcp:tools"],
+      clientId: "fixture-client-id",
+      clientSecret: "fixture-client-secret"
     });
 
     await expect(service.credential(expected)).resolves.toMatchObject({ accessToken: "rotated-access-token" });
     await expect(store.load(expected)).resolves.toEqual({
       accessToken: "rotated-access-token",
       refreshToken: "original-refresh-token",
-      expiresAt: "2030-01-02T04:04:05.000Z"
+      expiresAt: "2030-01-02T04:04:05.000Z",
+      scopes: ["mcp:tools"],
+      clientId: "fixture-client-id",
+      clientSecret: "fixture-client-secret"
     });
   });
 

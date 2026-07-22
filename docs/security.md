@@ -1,6 +1,6 @@
 # Security model
 
-For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records future-only security gates; this page is the detailed operating-security reference for implemented controls.
+For the public mapping of assets, trust boundaries, threats, controls, and residual risks, see the [threat model](threat-model.md). The [OAuth and Console security design delta](oauth-console-threat-model.md) records the implemented remote-OAuth gates and the future Console gates; this page is the detailed operating-security reference for implemented controls.
 
 Miftah is a credential broker, so safe defaults are part of the product contract:
 
@@ -61,7 +61,7 @@ The STDIO transport is the default because it avoids a network listener. Remote 
 
 For remote HTTP diagnostics, Miftah retains only a stable HTTP status or MCP protocol code. It deliberately omits server response bodies and remote protocol messages, because they can contain credentials or sensitive provider context. Streamable HTTP is preferred and sends DELETE on intentional local session cleanup; legacy SSE is deprecated and has no equivalent remote-session deletion. The local HTTP server follows the same lifecycle rule for each isolated session and adds loopback-first binding, explicit nonloopback authentication, Host validation, Origin denial by default, and bounded cleanup.
 
-Miftah does not currently run an end-to-end OAuth broker. Version 3 has an internal OS-vault connection core for exact non-secret bindings, but no browser, callback, discovery, exchange, or remote-header injection path is enabled. It can still pass explicit secret-backed headers or launch an upstream that manages its own authentication under the ordinary configuration contract, and it does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. OAuth authorization codes, callback parameters, and tokens must never enter configuration, audit records, or diagnostics. See [OAuth support](oauth-support.md) for the supported classes and the planned standards-compatible remote boundary.
+Miftah runs a narrow standards-compatible OAuth client only for exact version-3 HTTPS Streamable HTTP bindings. It validates protected-resource and authorization-server metadata, requires authorization code plus PKCE `S256` and RFC 9207 issuer response support, uses a single-use literal-loopback callback, stores credentials through the OS vault, and refreshes within the same configuration/profile/upstream/resource/issuer binding. It can also pass explicit secret-backed headers or launch an upstream that manages its own authentication under the ordinary configuration contract, but it does not own, parse, scrape, import, replay, or lifecycle-manage provider passwords, browser cookies, or arbitrary third-party token caches as OAuth artifacts. OAuth authorization URLs, codes, callback parameters, tokens, client secrets, and raw provider errors must never enter configuration, audit records, or diagnostics. See [OAuth support](oauth-support.md) for supported classes and remaining lifecycle boundaries.
 
 ## Identity verification boundary
 

@@ -90,6 +90,22 @@ function addAuditRotationConstraints(schema: SchemaObject): void {
   rotation.anyOf = [{ required: ["maxBytes"] }, { required: ["maxAgeMs"] }];
 }
 
+/** Zod URL refinements need an explicit editor-facing registration-mode constraint. */
+function addOAuthClientRegistrationConstraints(schema: SchemaObject): void {
+  const rootProperties = requireSchemaObject(schema.properties, "root properties");
+  const oauth = requireSchemaObject(rootProperties.oauth, "OAuth schema");
+  const oauthProperties = requireSchemaObject(oauth.properties, "OAuth schema properties");
+  const connections = requireSchemaObject(oauthProperties.connections, "OAuth connections schema");
+  const connection = requireSchemaObject(connections.additionalProperties, "OAuth connection schema");
+  const connectionProperties = requireSchemaObject(connection.properties, "OAuth connection properties");
+  const registration = requireSchemaObject(connectionProperties.clientRegistration, "OAuth client registration");
+  registration.anyOf = [
+    { pattern: "^pre-registered:.+$" },
+    { pattern: "^client-id-metadata:https://[^?#]+/[^?#]+$" },
+    { const: "dynamic" }
+  ];
+}
+
 /** Mirrors canonical-version runtime alias rejection for editor JSON Schema consumers. */
 function canonicalVersionCompatibilityConstraint(version: "2" | "3"): SchemaObject {
   const forbiddenProperty = (section: string, property: string): SchemaObject => ({
@@ -151,6 +167,7 @@ export function generateConfigSchema(): Record<string, unknown> {
   addProfileIsolationArrayConstraints(schema);
   addProfileRoutingMatcherArrayConstraints(schema);
   addAuditRotationConstraints(schema);
+  addOAuthClientRegistrationConstraints(schema);
   return {
     ...schema,
     allOf: [

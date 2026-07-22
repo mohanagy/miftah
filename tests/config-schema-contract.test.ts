@@ -430,7 +430,13 @@ describe("published config schema", () => {
       }
     });
     expect(connection.properties).toHaveProperty("upstream");
-    expect(connection.properties).toHaveProperty("clientRegistration");
+    expect(connection.properties?.clientRegistration).toMatchObject({
+      anyOf: [
+        { pattern: "^pre-registered:.+$" },
+        { pattern: "^client-id-metadata:https://[^?#]+/[^?#]+$" },
+        { const: "dynamic" }
+      ]
+    });
     expect(connection.properties).not.toHaveProperty("accessToken");
     expect(connection.properties).not.toHaveProperty("refreshToken");
     expect(connection.properties).not.toHaveProperty("authorization");

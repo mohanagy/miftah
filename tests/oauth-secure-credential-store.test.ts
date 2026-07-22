@@ -51,11 +51,15 @@ describe("OAuth secure credential store", () => {
     const store = new PlatformOAuthCredentialStore(adapter, redactor);
     const accessToken = "fixture-access-token-never-log";
     const refreshToken = "fixture-refresh-token-never-log";
+    const clientSecret = "fixture-client-secret-never-log";
 
     await store.save(binding(), {
       accessToken,
       refreshToken,
-      expiresAt: "2030-01-02T03:04:05.000Z"
+      expiresAt: "2030-01-02T03:04:05.000Z",
+      scopes: ["mcp:tools"],
+      clientId: "fixture-client-id",
+      clientSecret
     });
 
     expect([...adapter.entries]).toHaveLength(1);
@@ -66,8 +70,17 @@ describe("OAuth secure credential store", () => {
     expect(address).not.toContain("work");
     expect(address).not.toContain("mcp.example.test");
     expect(serialized).toContain(accessToken);
-    expect(redactor.redactText(`access=${accessToken}; refresh=${refreshToken}`)).toBe("access=[REDACTED]; refresh=[REDACTED]");
-    await expect(store.load(binding())).resolves.toEqual({ accessToken, refreshToken, expiresAt: "2030-01-02T03:04:05.000Z" });
+    expect(redactor.redactText(`access=${accessToken}; refresh=${refreshToken}; client=${clientSecret}`)).toBe(
+      "access=[REDACTED]; refresh=[REDACTED]; client=[REDACTED]"
+    );
+    await expect(store.load(binding())).resolves.toEqual({
+      accessToken,
+      refreshToken,
+      expiresAt: "2030-01-02T03:04:05.000Z",
+      scopes: ["mcp:tools"],
+      clientId: "fixture-client-id",
+      clientSecret
+    });
     await expect(store.load(binding({ profile: "personal" }))).resolves.toBeUndefined();
   });
 
@@ -91,7 +104,10 @@ describe("OAuth secure credential store", () => {
   it.each([
     ["non-string refresh token", { refreshToken: 7 }],
     ["non-string expiry", { expiresAt: null }],
-    ["unexpected field", { clientSecret: "fixture-unexpected-secret" }]
+    ["non-array scopes", { scopes: "mcp:tools" }],
+    ["invalid scope entry", { scopes: ["mcp:tools", ""] }],
+    ["client secret without a client id", { clientSecret: "fixture-unexpected-secret" }],
+    ["unexpected field", { authorizationCode: "fixture-code" }]
   ])("fails closed on a vault envelope with a %s", async (_description, tampering) => {
     const adapter = new MemoryKeyringAdapter();
     const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());
@@ -128,6 +144,22 @@ describe("OAuth secure credential store", () => {
     const accessToken = String.fromCharCode(0).repeat(12_000);
 
     await expect(store.save(binding(), { accessToken })).rejects.toMatchObject({ code: "OAUTH_CREDENTIAL_INVALID" });
+    expect(adapter.entries).toHaveLength(0);
+  });
+
+  it("rejects combined bounded fields before writing when the complete envelope exceeds its limit", async () => {
+    const adapter = new MemoryKeyringAdapter();
+    const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());
+    const boundedField = "x".repeat(20 * 1_024);
+
+    await expect(
+      store.save(binding(), {
+        accessToken: boundedField,
+        refreshToken: boundedField,
+        clientId: boundedField,
+        clientSecret: boundedField
+      })
+    ).rejects.toMatchObject({ code: "OAUTH_CREDENTIAL_INVALID" });
     expect(adapter.entries).toHaveLength(0);
   });
 

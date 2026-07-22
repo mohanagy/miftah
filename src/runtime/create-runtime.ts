@@ -6,11 +6,17 @@ import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
 import { resolveRuntimeConfig, type RuntimeResolutionScope } from "./resolve-runtime-config.js";
 import type { StateConfig } from "../config/types.js";
+import {
+  createRemoteOAuthRuntime,
+  type RemoteOAuthRuntimeOptions
+} from "../oauth/remote-oauth-runtime.js";
 
 /** Internal runtime construction overrides for hosts with a narrower lifecycle boundary. */
 export interface RuntimeCreationOptions {
   /** Overrides profile-state persistence without changing the resolved public configuration. */
   profileState?: StateConfig;
+  /** Internal protocol dependencies used by deterministic OAuth fixtures and native runtime wiring. */
+  oauth?: RemoteOAuthRuntimeOptions;
 }
 
 /**
@@ -28,7 +34,19 @@ export async function createRuntime(
   const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
   const { config, upstream, secretValues, redactor, plugins } = await resolveRuntimeConfig(runtimeConfigPath, scope);
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
-  const managerOptions = { ...config.process, secretValues: [...secretValues], redactor, isolation };
+  const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
+  const managerOptions = {
+    ...config.process,
+    secretValues: [...secretValues],
+    redactor,
+    isolation,
+    ...(oauth === undefined
+      ? {}
+      : {
+          oauthProvider: (profile: string, upstreamName: string) => oauth.provider(profile, upstreamName),
+          ...(oauth.fetch === undefined ? {} : { remoteFetch: oauth.fetch })
+        })
+  };
   const manager = config.upstreams
     ? new MultiUpstreamProcessManager(config, managerOptions)
     : new UpstreamProcessManager(upstream!, config.profiles, managerOptions);
@@ -39,5 +57,5 @@ export async function createRuntime(
     profileState === undefined ? undefined : { ...profileState, configPath: runtimeConfigPath }
   );
   await profileManager.initialize();
-  return { config, manager, profileManager, redactor, plugins };
+  return { config, manager, profileManager, redactor, plugins, oauth };
 }

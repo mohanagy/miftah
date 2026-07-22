@@ -6,7 +6,7 @@ async function document(path: string): Promise<string> {
 }
 
 describe("OAuth and Console threat-model documentation contract", () => {
-  it("publishes the future security delta without implying that OAuth or a Console exists today", async () => {
+  it("publishes implemented remote OAuth and the future Console boundary without overstating either", async () => {
     const [delta, threatModel, oauthSupport, security, architecture, readme] = await Promise.all([
       document("docs/oauth-console-threat-model.md"),
       document("docs/threat-model.md"),
@@ -23,13 +23,14 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(readme).toContain("[OAuth and Console security design](docs/oauth-console-threat-model.md)");
 
     expect(delta).toContain("# OAuth broker and local Console design delta");
-    expect(delta).toContain("No production OAuth broker, Console, callback listener, or enabled token-store integration exists in this release.");
+    expect(delta).toContain("Version 3 can run the approved standards-compatible remote OAuth flow");
+    expect(delta).toContain("No local Console, provider-specific adapter, revocation command, or hosted broker exists.");
     expect(delta).toContain("The future Console control API is distinct from the MCP /mcp endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");
   });
 
-  it("defines protocol go/no-go, abuse cases, residual risks, and a pre-implementation security test plan", async () => {
+  it("defines protocol go/no-go, abuse cases, residual risks, and implementation evidence", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("## Protocol go/no-go decision");
@@ -50,8 +51,8 @@ describe("OAuth and Console threat-model documentation contract", () => {
       expect(delta).toContain(threat);
     }
 
-    expect(delta).toContain("## Focused security test plan before implementation");
-    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    expect(delta).toContain("## Focused security test plan and implementation evidence");
+    const testPlanStart = delta.indexOf("## Focused security test plan and implementation evidence");
     const testPlanEnd = delta.indexOf("## Implementation gates");
     expect(testPlanStart).toBeGreaterThanOrEqual(0);
     expect(testPlanEnd).toBeGreaterThan(testPlanStart);
@@ -101,11 +102,11 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("Configuration validation must form that effective header set from profile and upstream headers using case-insensitive header names.");
   });
 
-  it("defines a single canonical resource and secure-store tuple for every future OAuth flow", async () => {
+  it("defines a single canonical resource and secure-store tuple for every native OAuth flow", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("## Canonical resource comparison");
-    expect(delta).toContain("Before discovery begins, a future native-OAuth connection must derive one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection.");
+    expect(delta).toContain("Before discovery begins, a native-OAuth connection derives one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection.");
     expect(delta).toContain("That value is the only resource identifier used for the initial unauthenticated MCP request, protected-resource metadata validation, the OAuth `resource` parameter in authorization and token requests, transaction state, the connection record, and the secure-store key.");
     expect(delta).toContain("a canonical resource is an absolute `https` URI with an authority and no userinfo, fragment, or query component");
     expect(delta).toContain("- lowercase the scheme and ASCII/IDNA A-label host;");
@@ -119,9 +120,9 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("a key derived from a versioned, unambiguous encoding of the exact profile/upstream/issuer/canonical-resource tuple");
   });
 
-  it("keeps selected client-registration requirements in the focused pre-implementation test plan", async () => {
+  it("keeps selected client-registration requirements in the focused security test plan", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
-    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    const testPlanStart = delta.indexOf("## Focused security test plan and implementation evidence");
     const testPlanEnd = delta.indexOf("## Implementation gates", testPlanStart);
     const testPlan = delta.slice(testPlanStart, testPlanEnd);
 

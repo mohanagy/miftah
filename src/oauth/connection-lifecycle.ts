@@ -455,7 +455,22 @@ export class OAuthConnectionLifecycle {
         : refreshed.refreshToken === undefined
           ? {}
           : { refreshToken: refreshed.refreshToken }),
-      ...(refreshed.expiresAt === undefined ? {} : { expiresAt: refreshed.expiresAt })
+      ...(refreshed.expiresAt === undefined ? {} : { expiresAt: refreshed.expiresAt }),
+      ...(refreshed.scopes === undefined && previous.scopes !== undefined
+        ? { scopes: previous.scopes }
+        : refreshed.scopes === undefined
+          ? {}
+          : { scopes: refreshed.scopes }),
+      ...(refreshed.clientId === undefined && previous.clientId !== undefined
+        ? { clientId: previous.clientId }
+        : refreshed.clientId === undefined
+          ? {}
+          : { clientId: refreshed.clientId }),
+      ...(refreshed.clientSecret === undefined && previous.clientSecret !== undefined
+        ? { clientSecret: previous.clientSecret }
+        : refreshed.clientSecret === undefined
+          ? {}
+          : { clientSecret: refreshed.clientSecret })
     };
   }
 

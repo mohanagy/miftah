@@ -37,12 +37,6 @@ export async function resolveRuntimeConfig(
   const requestedConfigPath = resolvePath(configPath);
   const canonicalConfigPath = await realpath(requestedConfigPath).catch(() => requestedConfigPath);
   const config = await loadConfig(canonicalConfigPath);
-  if (config.version === "3" && Object.keys(config.oauth?.connections ?? {}).length > 0) {
-    throw new MiftahError(
-      "OAUTH_AUTHORIZATION_NOT_ENABLED",
-      "OAUTH_AUTHORIZATION_NOT_ENABLED: OAuth authorization is not enabled in this Miftah release"
-    );
-  }
   validateResolutionScope(config, scope);
   const plugins = await loadPluginRegistry(config.plugins, { rootDirectory: dirname(canonicalConfigPath) });
   const redactor = new SecretRedactor();

@@ -1,8 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
@@ -49,6 +50,16 @@ export interface UpstreamManagerOptions {
   redactor?: SecretRedactor;
   isolation?: ProfileRuntimeIsolation;
   onStderr?: (profile: string, message: string) => void;
+  /** Internal exact-binding OAuth provider factory for remote Streamable HTTP sessions. */
+  oauthProvider?: (profile: string, upstreamName: string) => Promise<ManagedOAuthClientProvider | undefined>;
+  /** Internal fetch boundary used by remote transports and deterministic loopback fixtures. */
+  remoteFetch?: FetchLike;
+}
+
+/** OAuth provider capabilities the upstream manager needs to finish an interactive SDK flow. */
+export interface ManagedOAuthClientProvider extends OAuthClientProvider {
+  waitForAuthorizationCode(): Promise<string>;
+  close(): Promise<void>;
 }
 
 export type UpstreamCapability = "tools" | "resources" | "prompts";
@@ -103,6 +114,7 @@ interface ManagedSession {
   readonly pid: number | null;
   readonly token: number;
   readonly generation: number;
+  readonly oauthProvider?: ManagedOAuthClientProvider;
   inFlight: number;
   closing: boolean;
 }
@@ -110,6 +122,7 @@ interface ManagedSession {
 interface StartingAttempt {
   readonly transport: Transport;
   readonly generation: number;
+  readonly oauthProvider?: ManagedOAuthClientProvider;
   pid: number | null;
 }
 
@@ -329,7 +342,9 @@ export class UpstreamProcessManager {
     this.incrementStartEpoch(profile);
     const token = ++this.nextToken;
     let transport: Transport | undefined;
+    let streamableTransport: StreamableHTTPClientTransport | undefined;
     let stdioTransport: StdioClientTransport | undefined;
+    let oauthProvider: ManagedOAuthClientProvider | undefined;
     let startingAttempt: StartingAttempt | undefined;
     let reserved = false;
 
@@ -341,6 +356,17 @@ export class UpstreamProcessManager {
         profileConfig,
         profileConfig.args ?? this.upstream.args ?? []
       );
+      try {
+        oauthProvider = await this.options.oauthProvider?.(profile, this.upstreamName);
+      } catch (error) {
+        throw this.oauthAuthorizationFailure(error);
+      }
+      if (oauthProvider !== undefined && this.upstream.transport !== "streamable-http") {
+        throw new MiftahError(
+          "OAUTH_CONNECTION_INVALID",
+          "OAUTH_CONNECTION_INVALID: OAuth requires a Streamable HTTP upstream"
+        );
+      }
 
       if (this.upstream.transport === "stdio") {
         stdioTransport = new StdioClientTransport({
@@ -359,30 +385,73 @@ export class UpstreamProcessManager {
         if (this.upstream.transport === "sse") {
           const options = {
             ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
-            fetch: fetchSsePostWithStatusOnly
+            fetch: this.options.remoteFetch ?? fetchSsePostWithStatusOnly
           };
           transport = new SSEClientTransport(new URL(this.upstream.url), options);
         } else {
-          const options = Object.keys(headers).length > 0 ? { requestInit: { headers } } : undefined;
-          transport = new StreamableHTTPClientTransport(new URL(this.upstream.url), options);
+          const options = {
+            ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
+            ...(oauthProvider === undefined ? {} : { authProvider: oauthProvider }),
+            ...(this.options.remoteFetch === undefined ? {} : { fetch: this.options.remoteFetch })
+          };
+          streamableTransport = new StreamableHTTPClientTransport(new URL(this.upstream.url), options);
+          transport = streamableTransport;
         }
       }
 
       transport = new ProgressPreservingTransport(transport);
       transport.onclose = () => this.handleTransportClosed(profile, token, generation);
-      const client = new Client({ name: "miftah", version: MIFTAH_VERSION });
-      startingAttempt = { transport, generation, pid: null };
+      let client = new Client({ name: "miftah", version: MIFTAH_VERSION });
+      startingAttempt = { transport, generation, pid: null, ...(oauthProvider === undefined ? {} : { oauthProvider }) };
       this.startingAttempts.set(profile, startingAttempt);
-      const connection = client.connect(transport);
+      let connection = client.connect(transport);
       startingAttempt.pid = stdioTransport?.pid ?? null;
       void connection.catch(() => undefined);
-      await withTimeout(
-        connection,
-        this.options.startupTimeoutMs,
-        "UPSTREAM_START_FAILED",
-        `UPSTREAM_START_FAILED: startup timed out after ${this.options.startupTimeoutMs}ms`
-      );
+      try {
+        await this.awaitConnection(connection);
+      } catch (error) {
+        if (!(error instanceof UnauthorizedError) || oauthProvider === undefined || streamableTransport === undefined) {
+          throw oauthProvider === undefined ? error : this.oauthAuthorizationFailure(error);
+        }
+        try {
+          const authorizationCode = await oauthProvider.waitForAuthorizationCode();
+          await withTimeout(
+            streamableTransport.finishAuth(authorizationCode),
+            this.options.startupTimeoutMs,
+            "OAUTH_AUTHORIZATION_FAILED",
+            `OAUTH_AUTHORIZATION_FAILED: OAuth authorization could not be completed`
+          );
+        } catch (authorizationError) {
+          throw this.oauthAuthorizationFailure(authorizationError);
+        }
+        await this.forceCloseTransport(transport, null);
 
+        streamableTransport = new StreamableHTTPClientTransport(new URL(this.upstream.url!), {
+          ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
+          authProvider: oauthProvider,
+          ...(this.options.remoteFetch === undefined ? {} : { fetch: this.options.remoteFetch })
+        });
+        transport = new ProgressPreservingTransport(streamableTransport);
+        transport.onclose = () => this.handleTransportClosed(profile, token, generation);
+        client = new Client({ name: "miftah", version: MIFTAH_VERSION });
+        startingAttempt = { transport, generation, pid: null, oauthProvider };
+        this.startingAttempts.set(profile, startingAttempt);
+        connection = client.connect(transport);
+        void connection.catch(() => undefined);
+        try {
+          await this.awaitConnection(connection);
+        } catch (connectionError) {
+          throw this.oauthAuthorizationFailure(connectionError);
+        }
+      }
+
+      if (oauthProvider !== undefined) {
+        try {
+          await oauthProvider.close();
+        } catch (error) {
+          throw this.oauthAuthorizationFailure(error);
+        }
+      }
       const pid = stdioTransport?.pid ?? null;
       if (!this.isCurrent(profile, generation)) {
         await this.terminateTransport(transport, pid);
@@ -409,6 +478,7 @@ export class UpstreamProcessManager {
         pid,
         token,
         generation,
+        ...(oauthProvider === undefined ? {} : { oauthProvider }),
         inFlight: 0,
         closing: false
       };
@@ -427,6 +497,7 @@ export class UpstreamProcessManager {
     } catch (error) {
       const pid = stdioTransport?.pid ?? null;
       if (transport) await this.terminateTransport(transport, pid);
+      await oauthProvider?.close().catch(() => undefined);
       if (this.startingAttempts.get(profile) === startingAttempt) this.startingAttempts.delete(profile);
       const current = this.isCurrent(profile, generation);
       const failure = current
@@ -449,6 +520,23 @@ export class UpstreamProcessManager {
       }
       throw failure;
     }
+  }
+
+  private awaitConnection(connection: Promise<void>): Promise<void> {
+    return withTimeout(
+      connection,
+      this.options.startupTimeoutMs,
+      "UPSTREAM_START_FAILED",
+      `UPSTREAM_START_FAILED: startup timed out after ${this.options.startupTimeoutMs}ms`
+    );
+  }
+
+  private oauthAuthorizationFailure(error: unknown): MiftahError {
+    if (error instanceof MiftahError) return error;
+    return new MiftahError(
+      "OAUTH_AUTHORIZATION_FAILED",
+      "OAUTH_AUTHORIZATION_FAILED: OAuth authorization could not be completed"
+    );
   }
 
   /** Resolves per-profile process settings and retains credential values for later diagnostic redaction. */
@@ -544,6 +632,7 @@ export class UpstreamProcessManager {
     if (!entry || entry.token !== token || entry.generation !== generation || entry.closing) return;
 
     this.sessions.delete(profile);
+    void entry.oauthProvider?.close().catch(() => undefined);
     this.clearIdleTimer(profile);
     this.clearStabilityTimer(profile);
     if (!this.isCurrent(profile, generation)) return;
@@ -707,6 +796,7 @@ export class UpstreamProcessManager {
     }
     if (startingAttempt) {
       await this.terminateTransport(startingAttempt.transport, startingAttempt.pid);
+      await startingAttempt.oauthProvider?.close().catch(() => undefined);
     }
     if (this.startEpoch(profile) !== startEpoch) return;
     if (releaseReservation) this.limiter.release(profile, this.upstreamName);
@@ -800,6 +890,8 @@ export class UpstreamProcessManager {
       await entry.session.close();
     } catch (error) {
       if (terminationError === undefined) throw error;
+    } finally {
+      await entry.oauthProvider?.close().catch(() => undefined);
     }
     if (terminationError !== undefined) throw terminationError;
   }
@@ -1020,7 +1112,7 @@ export class UpstreamProcessManager {
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  code: "UPSTREAM_START_FAILED" | "UPSTREAM_SHUTDOWN_TIMEOUT",
+  code: "UPSTREAM_START_FAILED" | "UPSTREAM_SHUTDOWN_TIMEOUT" | "OAUTH_AUTHORIZATION_FAILED",
   message: string
 ): Promise<T> {
   let timer: NodeJS.Timeout | undefined;

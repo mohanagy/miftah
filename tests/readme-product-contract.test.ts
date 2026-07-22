@@ -20,7 +20,7 @@ describe("product README", () => {
   it("explains what Miftah changes and what it deliberately does not replace", () => {
     expect(readme).toContain("one Miftah connector per service");
     expect(readme).toContain("Miftah wraps an existing upstream MCP server. It does not replace it.");
-    expect(readme).toContain("Miftah does not run provider OAuth");
+    expect(readme).toContain("Provider-specific or local STDIO OAuth remains owned by that upstream");
   });
 
   it("keeps a practical Claude Desktop path and routes detailed material to the docs", () => {
