@@ -17,11 +17,17 @@ export type ProviderAuthenticationContract =
       readonly tokenStore: "external";
     };
 
-export interface ProviderAdapterOperation {
-  readonly owner: ProviderAdapterOwner;
-  readonly mechanism: "native" | "mcp-tool" | "provider-console" | "operator";
-  readonly name?: string;
-}
+export type ProviderAdapterOperation =
+  | {
+      readonly owner: ProviderAdapterOwner;
+      readonly mechanism: "mcp-tool";
+      readonly name: string;
+    }
+  | {
+      readonly owner: ProviderAdapterOwner;
+      readonly mechanism: "native" | "provider-console" | "operator";
+      readonly name?: string;
+    };
 
 export interface ProviderAdapterDefinition {
   readonly displayName: string;

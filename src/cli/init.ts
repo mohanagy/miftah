@@ -304,7 +304,7 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
 function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapterDefinition | undefined): void {
   if (adapter === undefined) return;
   const reauth = adapter.lifecycle.reauth;
-  const reauthDescription = reauth.mechanism === "mcp-tool" && reauth.name !== undefined
+  const reauthDescription = reauth.mechanism === "mcp-tool"
     ? `${reauth.owner} MCP tool '${reauth.name}'`
     : reauth.owner;
   const tokenCacheBoundary = adapter.authentication.tokenStore === "upstream-private"

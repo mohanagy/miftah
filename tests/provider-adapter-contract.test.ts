@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_ADAPTER_CATALOG } from "../src/config/provider-adapters.js";
-import type { ProviderAuthenticationContract } from "../src/config/provider-adapters.js";
+import type {
+  ProviderAdapterOperation,
+  ProviderAuthenticationContract
+} from "../src/config/provider-adapters.js";
 
 // @ts-expect-error Upstream-owned credentials cannot claim Miftah's browser or vault.
 const invalidMixedOwnership: ProviderAuthenticationContract = {
@@ -9,6 +12,13 @@ const invalidMixedOwnership: ProviderAuthenticationContract = {
   tokenStore: "miftah-vault"
 };
 void invalidMixedOwnership;
+
+// @ts-expect-error MCP-tool operations must name the upstream tool to invoke.
+const invalidUnnamedMcpTool: ProviderAdapterOperation = {
+  owner: "upstream",
+  mechanism: "mcp-tool"
+};
+void invalidUnnamedMcpTool;
 
 describe("provider adapter contract", () => {
   it("describes the GSC pilot as upstream-owned without claiming native OAuth or identity proof", () => {
