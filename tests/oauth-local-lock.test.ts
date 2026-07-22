@@ -1,8 +1,24 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import type { Server } from "node:net";
-import { describe, expect, it } from "vitest";
-import { withOAuthLocalLock } from "../src/oauth/local-lock.js";
+import { describe, expect, it, vi } from "vitest";
+import { OAuthLocalLockUnavailableError, withOAuthLocalLock } from "../src/oauth/local-lock.js";
+
+const connectPorts = vi.hoisted(() => [] as number[]);
+
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  return {
+    ...actual,
+    connect: (...args: Parameters<typeof actual.connect>) => {
+      const options = args[0] as unknown;
+      if (typeof options === "object" && options !== null && "port" in options) {
+        connectPorts.push(Number((options as { port: unknown }).port));
+      }
+      return Reflect.apply(actual.connect, undefined, args);
+    }
+  };
+});
 
 const protocol = "miftah-oauth-local-lock-v1";
 const portStart = 49_152;
@@ -32,8 +48,18 @@ async function close(server: Server): Promise<void> {
 }
 
 describe("OAuth local lock", () => {
-  it("keeps one key serialized when an earlier occupied candidate becomes available", async () => {
-    const scope = "split-port-regression";
+  it("uses one canonical coordination probe", async () => {
+    connectPorts.length = 0;
+    const scope = "bounded-probe-regression";
+    const value = "connection";
+
+    await withOAuthLocalLock(scope, value, 2_000, async () => undefined);
+
+    expect(connectPorts).toEqual([firstCandidatePort(scope, value)]);
+  });
+
+  it("fails closed while the canonical candidate is occupied", async () => {
+    const scope = "occupied-candidate-regression";
     let value = "";
     let blocker: Server | undefined;
     for (let index = 0; index < 256 && blocker === undefined; index += 1) {
@@ -41,6 +67,19 @@ describe("OAuth local lock", () => {
       blocker = await tryOccupy(firstCandidatePort(scope, value));
     }
     if (blocker === undefined) throw new Error("Could not reserve a deterministic OAuth lock candidate for the regression test");
+
+    try {
+      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined)).rejects.toBeInstanceOf(
+        OAuthLocalLockUnavailableError
+      );
+    } finally {
+      await close(blocker);
+    }
+  });
+
+  it("keeps one key serialized", async () => {
+    const scope = "same-key-regression";
+    const value = "connection";
 
     let releaseFirst!: () => void;
     const holdFirst = new Promise<void>((resolve) => {
@@ -56,7 +95,6 @@ describe("OAuth local lock", () => {
     });
 
     await firstEntered;
-    await close(blocker);
 
     let markSecondEntered!: () => void;
     const secondEntered = new Promise<void>((resolve) => {
