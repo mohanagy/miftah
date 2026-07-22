@@ -8,6 +8,23 @@ import {
 } from "../src/secrets/windows-secret-job-assembly.js";
 
 describe("Windows secret command contract", () => {
+  it("enters the precompiled Job Object helper without a PowerShell cold-start boundary", () => {
+    const commandSource = readFileSync(
+      new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
+      "utf8"
+    );
+    const helperSource = readFileSync(
+      new URL("../src/secrets/windows-secret-job.cs", import.meta.url),
+      "utf8"
+    );
+
+    expect(helperSource).toContain("public static int Main(string[] arguments)");
+    expect(commandSource).toContain("windows-secret-job.exe");
+    expect(commandSource).not.toContain("powershell.exe");
+    expect(commandSource).not.toContain("-EncodedCommand");
+    expect(commandSource).not.toContain("[Reflection.Assembly]::Load");
+  });
+
   it("verifies the trusted PowerShell launcher with asynchronous filesystem access", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
