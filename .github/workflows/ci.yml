@@ -75,6 +75,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      - name: Verify Windows helper source and artifact
+        if: ${{ runner.os == 'Windows' && matrix.node == '22' }}
+        shell: powershell
+        run: ./scripts/verify-windows-secret-job-assembly.ps1
+
       - name: Install dependencies
         run: npm ci
 
