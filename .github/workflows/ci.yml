@@ -86,6 +86,9 @@ jobs:
       - name: Test core contracts
         run: npm run test:core
 
+      - name: Test OAuth and Console compatibility
+        run: npm run test:oauth-console
+
       - name: Test CLI compatibility
         run: npm run test:cli
 
