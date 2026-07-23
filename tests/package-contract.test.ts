@@ -242,15 +242,16 @@ async function runNpm(
     let timedOut = false;
     let settled = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let inactivityTimeout: ReturnType<typeof setTimeout>;
     const timeoutError = () => new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
     const settle = (result: () => void): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearTimeout(inactivityTimeout);
       if (forceKill !== undefined) clearTimeout(forceKill);
       result();
     };
-    const timeout = setTimeout(() => {
+    const handleInactivityTimeout = (): void => {
       timedOut = true;
       child.kill("SIGTERM");
       forceKill = setTimeout(() => {
@@ -260,15 +261,23 @@ async function runNpm(
           reject(timeoutError());
         });
       }, npmTerminationGraceMs);
-    }, timeoutMs);
+    };
+    const recordProgress = (): void => {
+      if (settled || timedOut) return;
+      clearTimeout(inactivityTimeout);
+      inactivityTimeout = setTimeout(handleInactivityTimeout, timeoutMs);
+    };
+    inactivityTimeout = setTimeout(handleInactivityTimeout, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
+      recordProgress();
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
+      recordProgress();
     });
     child.once("error", (error) => {
       settle(() => {
@@ -310,6 +319,21 @@ class DelayedNpmProcess extends EventEmitter implements NpmProcess {
   constructor(delayMs: number) {
     super();
     setTimeout(() => this.emit("close", 0, null), delayMs);
+  }
+
+  kill(): boolean {
+    return true;
+  }
+}
+
+class ProgressingNpmProcess extends EventEmitter implements NpmProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+
+  constructor(progressAfterMs: number, closeAfterMs: number) {
+    super();
+    setTimeout(() => this.stdout.write("still-building"), progressAfterMs);
+    setTimeout(() => this.emit("close", 0, null), closeAfterMs);
   }
 
   kill(): boolean {
@@ -572,6 +596,16 @@ describe("packed artifact contract", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
     expect(completed).toBe(false);
     await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("keeps an active npm command alive when output proves forward progress", async () => {
+    const child = new ProgressingNpmProcess(15, 25);
+    const spawnProgressingChild: NpmSpawner = () => child;
+
+    await expect(runNpm(["build"], repositoryRoot, 20, spawnProgressingChild)).resolves.toMatchObject({
+      status: 0,
+      stdout: "still-building"
+    });
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
