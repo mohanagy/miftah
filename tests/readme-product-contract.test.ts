@@ -1,7 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CLI_COMMANDS, renderCommandHelp, type CliCommand } from "../src/cli/parse.js";
+import { buildPresetConfig, PRESET_CATALOG } from "../src/config/presets.js";
+import { CURRENT_CONFIG_VERSION, SUPPORTED_CONFIG_VERSIONS } from "../src/config/versions.js";
+import { MANAGEMENT_TOOL_NAMES } from "../src/mcp/server/management-tools.js";
 
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
 
 function headingSlugs(markdown: string): Set<string> {
   const slugs = new Set<string>();
@@ -9,11 +14,10 @@ function headingSlugs(markdown: string): Set<string> {
   for (const match of markdown.matchAll(/^#{1,6}\s+(.+?)\s*$/gmu)) {
     const base = match[1]!
       .toLowerCase()
-      .replace(/[`*_~]/gu, "")
-      .replace(/[^\p{Letter}\p{Number}\s-]/gu, "")
+      .replace(/[`*~]/gu, "")
+      .replace(/[^\p{Letter}\p{Number}\s_-]/gu, "")
       .trim()
-      .replace(/\s+/gu, "-")
-      .replace(/-+/gu, "-");
+      .replace(/\s+/gu, "-");
     const count = duplicates.get(base) ?? 0;
     duplicates.set(base, count + 1);
     slugs.add(count === 0 ? base : `${base}-${count}`);
@@ -59,6 +63,11 @@ describe("product README", () => {
     expect(readme).toContain("`miftah_current_profile`");
     expect(readme).toContain("`miftah_use_profile`");
     expect(readme).toContain("`miftah_reset_profile`");
+    expect(readme).toContain("through `github`");
+    expect(readme).not.toContain("through miftah-github");
+    expect(readme).toContain("The generated GitHub preset requires confirmation for every profile switch");
+    expect(readme).toContain("form elicitation");
+    expect(readme).toContain("`command` as a string and `args` as an array");
   });
 
   it("separates generic MCP, native OAuth, and upstream-owned OAuth onboarding", () => {
@@ -71,6 +80,18 @@ describe("product README", () => {
     expect(readme).toContain("miftah connection add --config");
     expect(readme).toContain("miftah auth connect --config");
     expect(readme).toContain("--preset google-search-console");
+    expect(readme).toContain(
+      "miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json"
+    );
+    expect(readme).toMatch(
+      /miftah connection add --config ~\/\.config\/miftah\/remote-service\.json \\\n\s+--profile default/gu
+    );
+    expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
+  });
+
+  it("describes the Claude Desktop guide without promising missing screenshots", () => {
+    expect(readme).toContain("For host-specific notes, use the [Claude Desktop setup]");
+    expect(readme).not.toContain("For screenshots and host-specific notes");
   });
 
   it("makes everyday safety and operational features discoverable", () => {
@@ -83,6 +104,7 @@ describe("product README", () => {
     expect(readme).toContain("`secretref:env://ENV_NAME`");
     expect(readme).toContain("`miftah_route_preview`");
     expect(readme).toContain("`miftah_verify_identity`");
+    expect(readme).toContain("Shell examples below use POSIX syntax");
   });
 
   it("keeps every local README link and heading anchor resolvable", () => {
@@ -92,6 +114,7 @@ describe("product README", () => {
       const [path, fragment] = link.split("#", 2);
       const target = new URL(path === "" ? "../README.md" : `../${path}`, import.meta.url);
       expect(existsSync(target), `missing README link target: ${link}`).toBe(true);
+      expect(statSync(target).isFile(), `README link target is not a file: ${link}`).toBe(true);
       if (fragment !== undefined && fragment.length > 0) {
         const targetMarkdown = readFileSync(target, "utf8");
         expect(headingSlugs(targetMarkdown), `missing README anchor: ${link}`).toContain(fragment);
@@ -99,10 +122,89 @@ describe("product README", () => {
     }
   });
 
+  it("models GitHub heading anchors with underscores", () => {
+    expect(headingSlugs("### `DEFAULT_PROFILE_NOT_FOUND`")).toContain("default_profile_not_found");
+  });
+
+  it("models GitHub heading anchors without collapsing repeated hyphens", () => {
+    expect(headingSlugs("## Foo - Bar")).toContain("foo---bar");
+  });
+
+  it("binds documented preset and management-tool names to production catalogs", () => {
+    const presetNames = [...readme.matchAll(/--preset\s+([a-z0-9-]+)/gu)].map((match) => match[1]!);
+    for (const preset of presetNames) {
+      expect(Object.keys(PRESET_CATALOG.presets), `unknown README preset: ${preset}`).toContain(preset);
+    }
+
+    const managementNames = new Set(readme.match(/\bmiftah_[a-z0-9_]+\b/gu) ?? []);
+    for (const managementName of managementNames) {
+      expect(MANAGEMENT_TOOL_NAMES, `unknown README management tool: ${managementName}`).toContain(managementName);
+    }
+  });
+
+  it("binds fenced and inline shell commands and flags to the production CLI contract", () => {
+    const bashBlocks = [...readme.matchAll(/```bash\n([\s\S]*?)```/gu)].map((match) => match[1]!);
+    const fencedLines = bashBlocks.flatMap((block) =>
+      block
+        .replace(/\\\n\s*/gu, " ")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("miftah "))
+    );
+    const inlineLines = [...readme.matchAll(/`(miftah [^`\n]+)`/gu)]
+      .map((match) => match[1]!)
+      .filter((line) => !line.includes("<command>") && line !== "miftah --help");
+    const logicalLines = [...new Set([...fencedLines, ...inlineLines])];
+
+    for (const line of logicalLines) {
+      const match = /^miftah\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/u.exec(line);
+      expect(match, `could not parse README command: ${line}`).not.toBeNull();
+      const primary = match![1]!;
+      const command = (primary === "connection" || primary === "auth" ? `${primary} ${match![2]}` : primary) as CliCommand;
+      expect(Object.keys(CLI_COMMANDS), `unknown README command: ${command}`).toContain(command);
+      const help = renderCommandHelp(command);
+      const supportedFlags = new Set(help.match(/--[a-z][a-z-]*/gu) ?? []);
+      for (const flag of line.match(/--[a-z][a-z-]*/gu) ?? []) {
+        expect(supportedFlags, `unsupported README flag for ${command}: ${flag}`).toContain(flag);
+      }
+    }
+  });
+
+  it("uses a profile created by the documented native OAuth preset", () => {
+    const profile = /miftah connection add --config ~\/\.config\/miftah\/remote-service\.json \\\n\s+--profile ([a-z0-9-]+)/u.exec(
+      readme
+    )?.[1];
+    expect(profile, "missing native OAuth profile").toBeDefined();
+    const config = buildPresetConfig("remote-service", "streamable-http", {
+      url: "https://mcp.example.com"
+    });
+    expect(Object.keys(config.profiles), `unknown native OAuth profile: ${profile}`).toContain(profile);
+  });
+
   it("routes readers to a configuration guide that identifies v3 as the current format", () => {
     const config = readFileSync(new URL("../docs/config.md", import.meta.url), "utf8");
-    expect(config).toContain('Version `"3"` is the canonical format written by current presets and examples.');
-    expect(config).toContain('Miftah accepts versions `"1"`, `"2"`, and `"3"`');
+    const supportedVersions = SUPPORTED_CONFIG_VERSIONS.map((version) => `\`"${version}"\``);
+    const supportedVersionList =
+      supportedVersions.length === 1
+        ? supportedVersions[0]
+        : `${supportedVersions.slice(0, -1).join(", ")}, and ${supportedVersions.at(-1)}`;
+    expect(config).toContain(
+      `Version \`"${CURRENT_CONFIG_VERSION}"\` is the canonical format written by current presets and examples.`
+    );
+    expect(config).toContain(`Miftah accepts versions ${supportedVersionList}`);
     expect(config).toContain("`migrate-config` supports v1/v2 input and v3 output");
+  });
+
+  it("documents the complete built-in secret grammar at the linked target", () => {
+    const config = readFileSync(new URL("../docs/config.md", import.meta.url), "utf8");
+    expect(config).toContain("| Process environment | `${ENV_NAME}` or `secretref:env://ENV_NAME`");
+    expect(config).toContain("| Dotenv | `secretref:dotenv://<name>` with `secrets.envFiles`");
+    expect(config).toContain("| Explicit plaintext opt-in | `secretref:plain://<value>`");
+    expect(config).toContain("For keychain and 1Password references, each path component");
+  });
+
+  it("records both the onboarding rewrite and corrected version guidance", () => {
+    expect(changelog).toContain("Reworked the README into a task-oriented first-use guide");
+    expect(changelog).toContain("corrected stale configuration-version guidance");
   });
 });

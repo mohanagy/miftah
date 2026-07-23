@@ -20,7 +20,7 @@ Version `"2"` is the prior canonical non-OAuth format. Version `"3"` keeps its e
 
 For version 1, the migrator changes only aliases with proven equivalent behavior: `"http"` becomes `"streamable-http"`, the plaintext opt-in moves to `secrets.allowPlaintextSecrets`, and redundant force-on redaction declarations are removed. It fails closed for conflicting plaintext options or unrelated unsupported fields rather than discarding them. A version-2 input preserves the existing configuration while changing only the format version; it never infers native OAuth from a static `Authorization` header. A version-3 input is validated and reported as unchanged; `--write` then creates no backup and performs no write.
 
-Removing version 1 or 2 support requires a later minor release, an **Unreleased** changelog entry, and a documented explicit migration path. Keep a byte-for-byte historical fixture for every supported released format in release CI.
+Versions 1 and 2 will remain accepted through at least the first published pre-1.0 minor release after version 3 ships. Removing either version requires a later minor release, an **Unreleased** changelog entry, and a documented explicit migration path. Keep a byte-for-byte historical fixture for every supported released format in release CI.
 
 For strict starter configurations, use the versioned `init` catalog rather than treating generic command examples as trusted upstream recommendations. The [preset and client compatibility matrix](presets-and-clients.md) records exact pins, required inputs, upstream provenance, and the validation boundary for every catalog entry.
 
@@ -61,14 +61,17 @@ Profile `env` values can reference `${ENV_NAME}` or `secretref:env://ENV_NAME`. 
 
 `providerTimeoutMs` is an optional deadline for one external provider command. It is an integer from **100 ms** through **120,000 ms** and defaults to **10 seconds**. The deadline includes provider launcher startup, lookup, and cleanup. Cancellation returns a stable secret-provider cancellation error; a deadline returns a timeout error. Miftah never retries an external lookup automatically.
 
-The supported external reference forms are exactly:
+The built-in secret sources and reference forms are:
 
-| Provider | Reference | Lookup |
+| Provider | Reference or configuration | Lookup |
 | --- | --- | --- |
+| Process environment | `${ENV_NAME}` or `secretref:env://ENV_NAME` | Exact inherited environment variable |
+| Dotenv | `secretref:dotenv://<name>` with `secrets.envFiles` | Exact name from ordered configuration-relative dotenv files |
 | OS keychain | `secretref:keychain://<service>/<account>` | macOS Keychain, Linux Secret Service, or Windows Credential Manager |
 | 1Password CLI | `secretref:op://<vault>/<item>/<field>` | `op read --no-newline op://<vault>/<item>/<field>` |
+| Explicit plaintext opt-in | `secretref:plain://<value>` | Literal value only when `secrets.allowPlaintextSecrets` is `true` |
 
-Each component is percent-decoded exactly once and must be nonempty, at most 255 characters, well-formed Unicode, and free of controls, dot segments, `@`, `?`, `#`, `/`, and `\\`. Use percent encoding for spaces or literal percent signs. Plaintext references remain opt-in only and never place their payload in a diagnostic.
+For keychain and 1Password references, each path component is percent-decoded exactly once and must be nonempty, at most 255 characters, well-formed Unicode, and free of controls, dot segments, `@`, `?`, `#`, `/`, and `\\`. Use percent encoding for spaces or literal percent signs. Environment and dotenv references use exact variable names. Plaintext references remain opt-in only and never place their payload in a diagnostic.
 
 On macOS Miftah runs the fixed `/usr/bin/security find-generic-password -s <service> -a <account> -w` form. On Linux it resolves `secret-tool` from an absolute `PATH` entry and runs `secret-tool lookup service <service> account <account>`. On Windows it reads the generic credential named `miftah:keychain:<percent-encoded-service>:<percent-encoded-account>` through a fixed Credential Manager helper. Miftah never executes these commands through a shell.
 

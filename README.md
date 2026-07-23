@@ -52,6 +52,8 @@ Start with the row that describes how your upstream MCP authenticates.
 
 Miftah requires Node.js 20 or newer. Each upstream keeps its own runtime and installation requirements; for example, the GitHub preset requires Docker and the Google Search Console adapter requires Python 3.11 or newer plus `uvx`.
 
+Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line continuations. On Windows, run the same Miftah options from PowerShell with Windows paths and PowerShell line continuation, or put the command on one line.
+
 ## First setup: GitHub with Claude Desktop
 
 This path creates one Claude connector backed by two GitHub profiles: `work` and `personal`.
@@ -120,11 +122,11 @@ Open Claude Desktop and use **Developer → Edit Config**. The normal locations 
 
 Merge the generated top-level `mcpServers` property into the host file. If the file already has an `mcpServers` object, add only the generated server entry inside it; do not nest a second `mcpServers` object.
 
-Keep the generated `command` and `args` as JSON arrays with their absolute paths. Do not turn them into a shell command.
+Keep the generated `command` as a string and `args` as an array, with the absolute paths exactly as printed. Do not turn them into a shell command.
 
 Save the file and restart Claude Desktop. Miftah cannot replace an already-running client's in-memory MCP session after a configuration, dashboard, or durable profile change.
 
-For screenshots and host-specific notes, use the step-by-step [Claude Desktop setup](docs/claude-desktop.md). The same generator also supports Claude Code, Cursor, and VS Code; see [Preset and client compatibility](docs/presets-and-clients.md).
+For host-specific notes, use the [Claude Desktop setup](docs/claude-desktop.md). The same generator also supports Claude Code, Cursor, and VS Code; see [Preset and client compatibility](docs/presets-and-clients.md).
 
 ### 6. Select and verify the account in Claude
 
@@ -144,12 +146,12 @@ Miftah exposes profile management as MCP tools. The user or agent can call:
 For example, ask Claude:
 
 ```text
-List the profiles available through miftah-github.
-Switch miftah-github to the personal profile.
+List the profiles available through `github`.
+Switch `github` to the personal profile.
 Confirm the current profile before reading my repositories.
 ```
 
-The underlying calls are `miftah_list_profiles`, `miftah_use_profile`, and `miftah_current_profile`. If profile-switch confirmation is enabled, the client must complete that confirmation; Miftah fails closed when it cannot.
+The underlying calls are `miftah_list_profiles`, `miftah_use_profile`, and `miftah_current_profile`. The generated GitHub preset requires confirmation for every profile switch. With the default human approval mode, the client must support MCP form elicitation; a client without it cannot switch and Miftah fails closed. Use a form-capable client, or explicitly configure delegated-agent approval only after reviewing the [profile confirmation trade-off](docs/config.md#profile-confirmation-locks-and-leases).
 
 ## Add another MCP
 
@@ -226,11 +228,13 @@ The easiest first run is:
 miftah dashboard
 ```
 
+`miftah dashboard` uses `~/.config/miftah/miftah.json` by default. That is separate from the `github.json` created earlier. Pass `--config` when you intend to open another Miftah configuration. First-run onboarding is available only when the selected target file does not exist; the dashboard never overwrites an existing file.
+
 The optional dashboard:
 
 1. starts a foreground-only service on literal `127.0.0.1`;
 2. opens the system browser and asks for the one-time bootstrap code printed in the terminal;
-3. creates a first validated Native remote OAuth profile and connection when the default config does not exist;
+3. creates a first validated Native remote OAuth profile and connection when the selected config path does not exist;
 4. offers a separate **Connect** action that starts the reviewed system-browser authorization;
 5. shows redacted connection and audit state; and
 6. generates client JSON for you to review and copy.
@@ -247,16 +251,18 @@ miftah dashboard --config ~/.config/miftah/remote-service.json --no-open
 The equivalent CLI path is plan-first:
 
 ```bash
-miftah connection add --config remote-service.json \
-  --profile work \
+miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json
+
+miftah connection add --config ~/.config/miftah/remote-service.json \
+  --profile default \
   --upstream default \
   --issuer https://auth.example.com \
   --client-registration dynamic \
   --scope mcp:read
 
 # Review the generated oauthconn:<uuid>, then repeat with:
-miftah connection add --config remote-service.json \
-  --profile work \
+miftah connection add --config ~/.config/miftah/remote-service.json \
+  --profile default \
   --upstream default \
   --issuer https://auth.example.com \
   --client-registration dynamic \
@@ -264,9 +270,9 @@ miftah connection add --config remote-service.json \
   --connection oauthconn:<uuid> \
   --write
 
-miftah auth connect --config remote-service.json --connection oauthconn:<uuid>
-miftah connection test --config remote-service.json --connection oauthconn:<uuid>
-miftah connection list --config remote-service.json --client claude-desktop
+miftah auth connect --config ~/.config/miftah/remote-service.json --connection oauthconn:<uuid>
+miftah connection test --config ~/.config/miftah/remote-service.json --connection oauthconn:<uuid>
+miftah connection list --config ~/.config/miftah/remote-service.json --client claude-desktop
 ```
 
 Read [OAuth support](docs/oauth-support.md) before using this path. Miftah does not support OAuth for every MCP, and OAuth success alone does not prove that the token belongs to the intended account or organization.
