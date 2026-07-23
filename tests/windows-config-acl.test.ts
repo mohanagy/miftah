@@ -117,6 +117,7 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("FileSystemRights]::FullControl");
     expect(command).toContain("File]::SetAccessControl");
     expect(command).toContain("AreAccessRulesProtected");
+    expect(command).toContain("Test-MiftahPrivatePath $path 'file'");
   });
 
   it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {

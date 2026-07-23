@@ -174,6 +174,77 @@ $requestName = '${requestEnvironmentName}'
 $accessSections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
 $directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 $verifySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+function Test-MiftahPrivatePath {
+  param(
+    [string]$path,
+    [string]$kind
+  )
+
+  if ($kind -ne 'file' -and $kind -ne 'directory') { return $false }
+  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  if ($null -eq $identity) { return $false }
+  $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
+  if ($kind -eq 'file') {
+    $entry = [System.IO.FileInfo]::new($path)
+    if (-not $entry.Exists) { return $false }
+    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+    $acl = [System.IO.File]::GetAccessControl($path, $verifySections)
+  } else {
+    $entry = [System.IO.DirectoryInfo]::new($path)
+    if (-not $entry.Exists) { return $false }
+    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+    $acl = [System.IO.Directory]::GetAccessControl($path, $verifySections)
+  }
+  $entry.Refresh()
+  $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+  if ($null -eq $owner -or $owner.Value -cne $identity.Value) { return $false }
+  $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+  if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { return $false }
+  if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+  # OWNER RIGHTS applies only to the owner. CREATOR OWNER/GROUP are safe only
+  # on inherit-only ACEs, where they have no access to this entry itself.
+  $trustedSids = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
+  $creatorOwnerSid = 'S-1-3-0'
+  $creatorGroupSid = 'S-1-3-1'
+  $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
+  $restrictedRights = if ($kind -eq 'file') {
+    [int](
+      [System.Security.AccessControl.FileSystemRights]::ReadData -bor
+      [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::ReadAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+      [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+      [System.Security.AccessControl.FileSystemRights]::Delete -bor
+      [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+      [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+    )
+  } else {
+    [int](
+      [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+      [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+      [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+      [System.Security.AccessControl.FileSystemRights]::Delete -bor
+      [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+      [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+      [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+    )
+  }
+  $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+  if ($rules.Count -eq 0) { return $false }
+  foreach ($rule in $rules) {
+    if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+    if ($trustedSids -ccontains $rule.IdentityReference.Value) { continue }
+    if (
+      ($rule.IdentityReference.Value -ceq $creatorOwnerSid -or $rule.IdentityReference.Value -ceq $creatorGroupSid) -and
+      (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
+    ) { continue }
+    if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { return $false }
+  }
+  return $true
+}
 try {
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
@@ -211,69 +282,7 @@ try {
   if ($fields.Count -eq 3 -and $fields[0] -eq 'verify-private-path') {
     $kind = $fields[1]
     $path = $fields[2]
-    if ($kind -ne 'file' -and $kind -ne 'directory') { exit 1 }
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    if ($null -eq $identity) { exit 1 }
-    $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
-    if ($kind -eq 'file') {
-      $entry = [System.IO.FileInfo]::new($path)
-      if (-not $entry.Exists) { exit 1 }
-      if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
-      $acl = [System.IO.File]::GetAccessControl($path, $verifySections)
-    } else {
-      $entry = [System.IO.DirectoryInfo]::new($path)
-      if (-not $entry.Exists) { exit 1 }
-      if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
-      $acl = [System.IO.Directory]::GetAccessControl($path, $verifySections)
-    }
-    $entry.Refresh()
-    $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-    if ($null -eq $owner -or $owner.Value -cne $identity.Value) { exit 1 }
-    $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
-    if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { exit 1 }
-    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
-    # OWNER RIGHTS applies only to the owner. CREATOR OWNER/GROUP are safe only
-    # on inherit-only ACEs, where they have no access to this entry itself.
-    $trustedSids = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
-    $creatorOwnerSid = 'S-1-3-0'
-    $creatorGroupSid = 'S-1-3-1'
-    $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
-    $restrictedRights = if ($kind -eq 'file') {
-      [int](
-        [System.Security.AccessControl.FileSystemRights]::ReadData -bor
-        [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::ReadAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::WriteData -bor
-        [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-        [System.Security.AccessControl.FileSystemRights]::Delete -bor
-        [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-        [System.Security.AccessControl.FileSystemRights]::TakeOwnership
-      )
-    } else {
-      [int](
-        [System.Security.AccessControl.FileSystemRights]::WriteData -bor
-        [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-        [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-        [System.Security.AccessControl.FileSystemRights]::Delete -bor
-        [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-        [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-        [System.Security.AccessControl.FileSystemRights]::TakeOwnership
-      )
-    }
-    $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-    if ($rules.Count -eq 0) { exit 1 }
-    foreach ($rule in $rules) {
-      if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-      if ($trustedSids -ccontains $rule.IdentityReference.Value) { continue }
-      if (
-        ($rule.IdentityReference.Value -ceq $creatorOwnerSid -or $rule.IdentityReference.Value -ceq $creatorGroupSid) -and
-        (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
-      ) { continue }
-      if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { exit 1 }
-    }
+    if (-not (Test-MiftahPrivatePath $path $kind)) { exit 1 }
     exit 0
   }
 
@@ -294,13 +303,12 @@ try {
       [System.Security.AccessControl.AccessControlType]::Allow
     )
     $security.SetAccessRule($rule)
-    $expected = $security.GetSecurityDescriptorSddlForm($verifySections)
     [System.IO.File]::SetAccessControl($path, $security)
     $entry.Refresh()
     if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
     $actual = [System.IO.File]::GetAccessControl($path, $verifySections)
     if (-not $actual.AreAccessRulesProtected) { exit 1 }
-    if ($actual.GetSecurityDescriptorSddlForm($verifySections) -ne $expected) { exit 1 }
+    if (-not (Test-MiftahPrivatePath $path 'file')) { exit 1 }
     exit 0
   }
 
