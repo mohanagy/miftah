@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { connect, createServer } from "node:net";
-import type { Server, Socket } from "node:net";
+import type { ListenOptions, Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
 // POSIX retains one canonical candidate to preserve coordination with older Miftah versions.
-// Windows uses a named pipe instead because this entire TCP range is also its default ephemeral
-// range, so an unrelated connection can otherwise make an OAuth store unavailable.
-const localLockPortAttempts = 1;
+// Windows probes that legacy candidate for rolling upgrades, but acquires a named pipe because
+// this entire TCP range is also its default ephemeral range. Miftah never connects to the named
+// pipe: exclusive creation is the lock boundary, so an untrusted squatter can only cause the same
+// fail-closed denial of service that was already possible against the TCP listener.
 const localLockProbeMilliseconds = 100;
 const localLockProtocol = "miftah-oauth-local-lock-v1";
 
@@ -23,27 +24,51 @@ function localLockKey(scope: string, value: string): string {
   return createHash("sha256").update(`${localLockProtocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
 }
 
-function localLockPorts(key: string): readonly number[] {
-  const start = Number.parseInt(key.slice(0, 8), 16) % localLockPortCount;
-  return Array.from(
-    { length: localLockPortAttempts },
-    (_, offset) => localLockPortStart + ((start + offset) % localLockPortCount)
-  );
+function localLockPort(key: string): number {
+  return localLockPortStart + (Number.parseInt(key.slice(0, 8), 16) % localLockPortCount);
 }
 
 function localLockGreeting(key: string): string {
   return `${localLockProtocol} ${key}\n`;
 }
 
-type LocalLockEndpoint =
+export type OAuthLocalLockEndpoint =
   | { readonly kind: "tcp"; readonly port: number }
   | { readonly kind: "pipe"; readonly path: string };
+type OAuthLocalLockProbeEndpoint = Extract<OAuthLocalLockEndpoint, { kind: "tcp" }>;
 
-function localLockEndpoints(key: string, platform: NodeJS.Platform): readonly LocalLockEndpoint[] {
+export interface OAuthLocalLockStrategy {
+  readonly key: string;
+  readonly probeEndpoints: readonly OAuthLocalLockProbeEndpoint[];
+  readonly acquisitionEndpoint: OAuthLocalLockEndpoint;
+}
+
+export function createOAuthLocalLockStrategy(
+  scope: string,
+  value: string,
+  platform: NodeJS.Platform = process.platform
+): OAuthLocalLockStrategy {
+  const key = localLockKey(scope, value);
+  const legacyEndpoint: OAuthLocalLockProbeEndpoint = { kind: "tcp", port: localLockPort(key) };
   if (platform === "win32") {
-    return [{ kind: "pipe", path: `\\\\.\\pipe\\${localLockProtocol}-${key}` }];
+    const acquisitionEndpoint: OAuthLocalLockEndpoint = {
+      kind: "pipe",
+      path: `\\\\.\\pipe\\${localLockProtocol}-${key}`
+    };
+    return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint };
   }
-  return localLockPorts(key).map((port) => ({ kind: "tcp", port }));
+  return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint: legacyEndpoint };
+}
+
+function sameLocalLockEndpoint(left: OAuthLocalLockEndpoint, right: OAuthLocalLockEndpoint): boolean {
+  if (left.kind === "tcp") return right.kind === "tcp" && left.port === right.port;
+  return right.kind === "pipe" && left.path === right.path;
+}
+
+export function createOAuthLocalLockListenOptions(endpoint: OAuthLocalLockEndpoint): ListenOptions {
+  return endpoint.kind === "pipe"
+    ? { path: endpoint.path, exclusive: true }
+    : { host: "127.0.0.1", port: endpoint.port, exclusive: true };
 }
 
 type LocalLockEndpointState = "available" | "held" | "occupied" | "unknown";
@@ -53,11 +78,9 @@ interface LocalLock {
   readonly clients: Set<Socket>;
 }
 
-async function inspectLocalLockEndpoint(endpoint: LocalLockEndpoint, key: string): Promise<LocalLockEndpointState> {
+async function inspectLocalLockEndpoint(endpoint: OAuthLocalLockProbeEndpoint, key: string): Promise<LocalLockEndpointState> {
   return new Promise((resolve) => {
-    const socket = endpoint.kind === "pipe"
-      ? connect(endpoint.path)
-      : connect({ host: "127.0.0.1", port: endpoint.port });
+    const socket = connect({ host: "127.0.0.1", port: endpoint.port });
     let settled = false;
     let response = "";
     const settle = (state: LocalLockEndpointState): void => {
@@ -87,13 +110,12 @@ async function inspectLocalLockEndpoint(endpoint: LocalLockEndpoint, key: string
       settle(response.includes("\n") ? "occupied" : "unknown");
     });
     socket.once("error", (error: NodeJS.ErrnoException) => {
-      const unavailable = error.code === "ECONNREFUSED" || (endpoint.kind === "pipe" && error.code === "ENOENT");
-      settle(unavailable ? "available" : "unknown");
+      settle(error.code === "ECONNREFUSED" ? "available" : "unknown");
     });
   });
 }
 
-async function tryAcquireLocalLock(endpoint: LocalLockEndpoint, key: string): Promise<LocalLock | undefined> {
+async function tryAcquireLocalLock(endpoint: OAuthLocalLockEndpoint, key: string): Promise<LocalLock | undefined> {
   return new Promise((resolve, reject) => {
     const clients = new Set<Socket>();
     const server = createServer((socket) => {
@@ -116,11 +138,7 @@ async function tryAcquireLocalLock(endpoint: LocalLockEndpoint, key: string): Pr
       });
       resolve({ server, clients });
     };
-    if (endpoint.kind === "pipe") {
-      server.listen(endpoint.path, listening);
-    } else {
-      server.listen({ host: "127.0.0.1", port: endpoint.port, exclusive: true }, listening);
-    }
+    server.listen(createOAuthLocalLockListenOptions(endpoint), listening);
   });
 }
 
@@ -142,37 +160,34 @@ async function acquireLocalLock(
 ): Promise<() => Promise<void>> {
   if (!Number.isSafeInteger(waitMilliseconds) || waitMilliseconds <= 0) throw new OAuthLocalLockUnavailableError();
   const startedAt = Date.now();
-  const key = localLockKey(scope, value);
-  const endpoints = localLockEndpoints(key, platform);
+  const strategy = createOAuthLocalLockStrategy(scope, value, platform);
   while (true) {
-    let availableEndpoint: LocalLockEndpoint | undefined;
     let mustWait = false;
-    for (const endpoint of endpoints) {
+    for (const endpoint of strategy.probeEndpoints) {
       if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
-      const state = await inspectLocalLockEndpoint(endpoint, key);
-      if (state === "held" || state === "unknown") {
+      const state = await inspectLocalLockEndpoint(endpoint, strategy.key);
+      if (state !== "available") {
         mustWait = true;
         break;
       }
-      if (state === "available" && availableEndpoint === undefined) availableEndpoint = endpoint;
     }
-    if (!mustWait && availableEndpoint !== undefined) {
+    if (!mustWait) {
       let lock: LocalLock | undefined;
       try {
-        lock = await tryAcquireLocalLock(availableEndpoint, key);
+        lock = await tryAcquireLocalLock(strategy.acquisitionEndpoint, strategy.key);
       } catch {
         throw new OAuthLocalLockUnavailableError();
       }
       if (lock !== undefined) {
         let competingHolder = false;
-        for (const endpoint of endpoints) {
-          if (endpoint === availableEndpoint) continue;
+        for (const endpoint of strategy.probeEndpoints) {
+          if (sameLocalLockEndpoint(endpoint, strategy.acquisitionEndpoint)) continue;
           if (Date.now() - startedAt >= waitMilliseconds) {
             await releaseLocalLock(lock);
             throw new OAuthLocalLockUnavailableError();
           }
-          const state = await inspectLocalLockEndpoint(endpoint, key);
-          if (state === "held" || state === "unknown") {
+          const state = await inspectLocalLockEndpoint(endpoint, strategy.key);
+          if (state !== "available") {
             competingHolder = true;
             break;
           }

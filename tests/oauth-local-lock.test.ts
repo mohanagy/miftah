@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import type { Server } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { OAuthLocalLockUnavailableError, withOAuthLocalLock } from "../src/oauth/local-lock.js";
+import {
+  createOAuthLocalLockListenOptions,
+  createOAuthLocalLockStrategy,
+  OAuthLocalLockUnavailableError,
+  withOAuthLocalLock
+} from "../src/oauth/local-lock.js";
 
 const connectTargets = vi.hoisted(() => ({ ports: [] as number[], paths: [] as string[] }));
 
@@ -30,8 +35,25 @@ function firstCandidatePort(scope: string, value: string): number {
   return portStart + (Number.parseInt(key.slice(0, 8), 16) % portCount);
 }
 
+function lockGreeting(scope: string, value: string): string {
+  const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
+  return `${protocol} ${key}\n`;
+}
+
 async function tryOccupy(port: number): Promise<Server | undefined> {
   const server = createServer((socket) => socket.end("unrelated-listener\n"));
+  return new Promise((resolve) => {
+    const onError = (): void => resolve(undefined);
+    server.once("error", onError);
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.off("error", onError);
+      resolve(server);
+    });
+  });
+}
+
+async function tryHoldLegacyLock(port: number, greeting: string): Promise<Server | undefined> {
+  const server = createServer((socket) => socket.end(greeting));
   return new Promise((resolve) => {
     const onError = (): void => resolve(undefined);
     server.once("error", onError);
@@ -61,17 +83,40 @@ describe("OAuth local lock", () => {
     expect(connectTargets.paths).toEqual([]);
   });
 
-  it("uses a kernel-released named pipe instead of the ephemeral TCP range on Windows", async () => {
-    connectTargets.ports.length = 0;
-    connectTargets.paths.length = 0;
+  it("uses an exclusive kernel-released named pipe while retaining the legacy Windows probe", () => {
     const scope = "windows-pipe-regression";
     const value = "connection";
     const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
+    const path = `\\\\.\\pipe\\${protocol}-${key}`;
 
-    await withOAuthLocalLock(scope, value, 2_000, async () => undefined, "win32");
+    const strategy = createOAuthLocalLockStrategy(scope, value, "win32");
 
-    expect(connectTargets.ports).toEqual([]);
-    expect(connectTargets.paths).toEqual([`\\\\.\\pipe\\${protocol}-${key}`]);
+    expect(strategy.probeEndpoints).toEqual([{ kind: "tcp", port: firstCandidatePort(scope, value) }]);
+    expect(strategy.acquisitionEndpoint).toEqual({ kind: "pipe", path });
+    expect(createOAuthLocalLockListenOptions(strategy.acquisitionEndpoint)).toEqual({ path, exclusive: true });
+  });
+
+  it("waits for an older Windows process holding the canonical TCP lock", async () => {
+    connectTargets.paths.length = 0;
+    const scope = "windows-legacy-holder-regression";
+    let value = "";
+    let holder: Server | undefined;
+    for (let index = 0; index < 256 && holder === undefined; index += 1) {
+      value = `connection-${index}`;
+      holder = await tryHoldLegacyLock(firstCandidatePort(scope, value), lockGreeting(scope, value));
+    }
+    if (holder === undefined) throw new Error("Could not reserve a legacy Windows OAuth lock candidate");
+
+    const operation = vi.fn(async () => undefined);
+    try {
+      await expect(withOAuthLocalLock(scope, value, 100, operation, "win32")).rejects.toBeInstanceOf(
+        OAuthLocalLockUnavailableError
+      );
+      expect(operation).not.toHaveBeenCalled();
+      expect(connectTargets.paths).toEqual([]);
+    } finally {
+      await close(holder);
+    }
   });
 
   it("fails closed while the canonical candidate is occupied", async () => {

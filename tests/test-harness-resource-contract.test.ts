@@ -24,7 +24,8 @@ describe("test harness resource contract", () => {
     expect(source).toContain('await import("./fake-upstream-bundled.mjs")');
     const bundleCheck = spawnSync(process.execPath, ["scripts/build-test-fixture.mjs", "--check"], {
       cwd: process.cwd(),
-      encoding: "utf8"
+      encoding: "utf8",
+      timeout: 10_000
     });
     expect(bundleCheck.status, bundleCheck.stderr).toBe(0);
   });

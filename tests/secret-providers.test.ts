@@ -25,6 +25,7 @@ const posixDescendantProviderFixturePath = join(
   "posix-descendant-provider.sh"
 );
 const realSetTimeout = globalThis.setTimeout;
+const realSetImmediate = globalThis.setImmediate;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -1402,7 +1403,7 @@ describe("secret command runner", () => {
             "the stubborn descendant to start"
           );
           await waitForProcessExit(processIds.providerPid);
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => realSetImmediate(resolve));
 
           timeoutGate.trigger();
           timeoutTriggered = true;
