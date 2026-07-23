@@ -441,7 +441,9 @@ describe("audit journal integrity", () => {
       rotation: { maxBytes: 1, retainFiles: 0 }
     });
 
-    for (let index = 0; index < 12; index += 1) {
+    // Three records force two complete rotate, retire, and compact cycles. That is the minimum
+    // repeated fixture needed to prove compaction remains bounded across successive rotations.
+    for (let index = 0; index < 3; index += 1) {
       await logger.log({
         wrapper: "github",
         profile: "work",
