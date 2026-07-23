@@ -10,12 +10,17 @@ import { SecretRedactor } from "../src/secrets/redact.js";
 import { mergeProfileIsolation } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
+const filesystemCalls = vi.hoisted(() => ({ realpath: 0 }));
 const unsupportedChmod = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    realpath: (...args: Parameters<typeof actual.realpath>) => {
+      filesystemCalls.realpath += 1;
+      return actual.realpath(...args);
+    },
     chmod: (path: Parameters<typeof actual.chmod>[0], mode: Parameters<typeof actual.chmod>[1]) => {
       if (unsupportedChmod.enabled) {
         throw Object.assign(new Error("simulated unsupported chmod"), { code: "EOPNOTSUPP" });
@@ -44,6 +49,26 @@ async function readReport(path: string): Promise<IsolationReport> {
 }
 
 describe("profile runtime isolation", () => {
+  it("does not inspect the configuration path when profile isolation is not requested", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-unused-"));
+    const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, "{}", "utf8");
+    filesystemCalls.realpath = 0;
+
+    try {
+      const isolation = new ProfileRuntimeIsolation({ configPath, redactor: new SecretRedactor() });
+
+      await expect(isolation.prepare("work", "default", undefined, "streamable-http")).resolves.toEqual({
+        environment: {},
+        args: [],
+        suppressStderr: false
+      });
+      expect(filesystemCalls.realpath).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!supportsNativeProfileRuntimeIsolation)("namespaces runtime state by canonical config file rather than only its directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-isolation-config-identity-"));
     const workConfigPath = join(directory, "work.miftah.json");

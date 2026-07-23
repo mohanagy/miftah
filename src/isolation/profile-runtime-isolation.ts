@@ -53,15 +53,12 @@ interface MaterializedFile {
 export class ProfileRuntimeIsolation {
   private readonly platform: NodeJS.Platform;
   private readonly ownerUid: number | undefined;
-  private readonly canonicalConfigPath: Promise<string>;
-  private readonly configDirectory: Promise<string>;
+  private configContext: Promise<{ readonly configPath: string; readonly configDirectory: string }> | undefined;
 
   constructor(private readonly options: ProfileRuntimeIsolationOptions) {
     this.platform = options.platform ?? process.platform;
     this.ownerUid =
       this.platform === "win32" || typeof process.getuid !== "function" ? undefined : (options.ownerUid ?? process.getuid());
-    this.canonicalConfigPath = this.resolveCanonicalConfigPath();
-    this.configDirectory = this.canonicalConfigPath.then((configPath) => dirname(configPath));
   }
 
   async prepare(
@@ -80,7 +77,7 @@ export class ProfileRuntimeIsolation {
 
     try {
       assertProfileIsolationBindings(isolation);
-      const [configPath, configDirectory] = await Promise.all([this.canonicalConfigPath, this.configDirectory]);
+      const { configPath, configDirectory } = await this.getConfigContext();
       const root = await this.ensureRuntimeRoot(configDirectory, configPath, profile, upstreamName);
       const directories = await this.ensureRuntimeDirectories(root);
       const files = await this.materializeFiles(configDirectory, root, isolation.files ?? []);
@@ -107,6 +104,14 @@ export class ProfileRuntimeIsolation {
     } catch {
       throw isolationFailure();
     }
+  }
+
+  private getConfigContext(): Promise<{ readonly configPath: string; readonly configDirectory: string }> {
+    this.configContext ??= this.resolveCanonicalConfigPath().then((configPath) => ({
+      configPath,
+      configDirectory: dirname(configPath)
+    }));
+    return this.configContext;
   }
 
   private async resolveCanonicalConfigPath(): Promise<string> {
