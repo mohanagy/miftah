@@ -76,8 +76,7 @@ function migrateTransportAlias(value: unknown, path: string, actions: string[]):
   actions.push(`Replaced the ${path} http transport alias with streamable-http.`);
 }
 
-function migrateV1(config: JsonRecord): ConfigMigrationPlan {
-  const actions: string[] = [];
+function migrateV1(config: JsonRecord, actions: string[]): void {
   migrateTransportAlias(config.upstream, "upstream", actions);
   const upstreams = asRecord(config.upstreams);
   for (const name of Object.keys(upstreams ?? {}).sort()) {
@@ -85,11 +84,16 @@ function migrateV1(config: JsonRecord): ConfigMigrationPlan {
   }
   movePlaintextSecretOptIn(config, actions);
   removeForceOnRedactionDeclarations(config, actions);
+  config.version = "2";
+  actions.unshift("Updated config version from 1 to 2.");
+}
+
+function migrateV2(config: JsonRecord, fromVersion: "1" | "2", actions: string[]): ConfigMigrationPlan {
   config.version = CURRENT_CONFIG_VERSION;
-  actions.unshift(`Updated config version from 1 to ${CURRENT_CONFIG_VERSION}.`);
+  actions.push(`Updated config version from 2 to ${CURRENT_CONFIG_VERSION}.`);
   validateConfig(config);
   return {
-    fromVersion: "1",
+    fromVersion,
     toVersion: CURRENT_CONFIG_VERSION,
     changed: true,
     actions,
@@ -117,11 +121,16 @@ export function planConfigMigration(input: unknown): ConfigMigrationPlan {
       config
     };
   }
-  if (version !== "1") {
-    throw new MiftahError(
-      "UNSUPPORTED_CONFIG_VERSION",
-      "UNSUPPORTED_CONFIG_VERSION: migrate-config supports version 1 input and version 2 output only"
-    );
+  if (version === "1") {
+    const actions: string[] = [];
+    migrateV1(config, actions);
+    return migrateV2(config, "1", actions);
   }
-  return migrateV1(config);
+  if (version === "2") {
+    return migrateV2(config, "2", []);
+  }
+  throw new MiftahError(
+    "UNSUPPORTED_CONFIG_VERSION",
+    "UNSUPPORTED_CONFIG_VERSION: migrate-config supports versions 1 and 2 input and version 3 output only"
+  );
 }

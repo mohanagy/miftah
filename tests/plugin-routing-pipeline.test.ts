@@ -50,7 +50,13 @@ describe("plugin routing pipeline", () => {
       upstreams: { get: async () => ({}) } as unknown as UpstreamProcessManager,
       redactor: new SecretRedactor(),
       routingContext: async () => ({ context: {}, evidence: { cwd: "", fileRoots: [] }, profileHints: [] }),
-      identities: { requiresVerification: () => false } as unknown as IdentityManager,
+      identities: new IdentityManager({
+        version: "1",
+        name: "plugin-routing",
+        defaultProfile: "personal",
+        upstream: { transport: "stdio", command: process.execPath },
+        profiles: { personal: {}, work: {} }
+      }),
       approvals: { requireApproval: async () => undefined }
     });
     const audit = new AuditTrail("test").beginOperation({

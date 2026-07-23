@@ -38,7 +38,9 @@ async function createConfiguredMiftahRuntime(
         runtimeConfigPath,
         mcpRoots
       }),
-    runtime.plugins
+    runtime.plugins,
+    runtime.oauth,
+    runtime.identities
   );
 
   return {

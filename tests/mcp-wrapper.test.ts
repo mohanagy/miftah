@@ -35,6 +35,7 @@ import { createMiftahRuntime } from "../src/runtime/create-miftah-runtime.js";
 import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { IdentityManager } from "../src/identity/identity-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
@@ -778,6 +779,96 @@ describe("Miftah MCP wrapper", () => {
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("lists persisted account evidence and missing bindings for every profile", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "work" },
+          identity: {
+            expected: { provider: "github", login: "work" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000
+          }
+        },
+        personal: {
+          identity: {
+            expected: { provider: "github", login: "personal" },
+            probe: { tool: "whoami", resultFormat: "text", provider: "github" },
+            maxAgeMs: 60_000
+          }
+        }
+      }
+    });
+    let stored: readonly unknown[] = [];
+    const bindingStore = {
+      load: async () => structuredClone(stored),
+      save: async (records: readonly unknown[]) => {
+        stored = structuredClone(records);
+      }
+    };
+    const identities = new IdentityManager(config, { bindingStore });
+    await identities.initialize();
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(
+      config,
+      new ProfileManager(config),
+      manager,
+      undefined,
+      undefined,
+      undefined,
+      identities
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      await client.callTool({ name: "miftah_verify_identity", arguments: { profile: "work" } });
+
+      const profilesResult = await client.callTool(
+        { name: "miftah_list_profiles", arguments: {} },
+        CallToolResultSchema
+      );
+      if (!Array.isArray(profilesResult.content)) throw new Error("Expected profile list content.");
+      const profilesContent = profilesResult.content[0];
+      if (profilesContent?.type !== "text") throw new Error("Expected a text profile list result.");
+      const profiles = JSON.parse(profilesContent.text) as Array<Record<string, unknown>>;
+      expect(profiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "work",
+            identity: [
+              expect.objectContaining({
+                status: "verified",
+                bindingState: "verified",
+                bound: { provider: "github", login: "work" }
+              })
+            ]
+          }),
+          expect.objectContaining({
+            name: "personal",
+            identity: [
+              expect.objectContaining({ status: "not-verified", bindingState: "unverified" })
+            ]
+          })
+        ])
+      );
+      expect(parseJsonToolResult(
+        await client.callTool({ name: "miftah_profile_info", arguments: { profile: "work" } })
+      )).toMatchObject({
+        name: "work",
+        identity: [expect.objectContaining({ bindingState: "verified" })]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
     }
   });
 

@@ -190,4 +190,23 @@ describe("runtime secret resolution scope", () => {
       resolveMapWithSecretValues.mockRestore();
     }
   });
+
+  it("initializes the identity binding store before exposing a configured runtime", async () => {
+    const load = vi.fn(async () => [] as const);
+    const bindingStore = { load, save: vi.fn(async () => undefined) };
+
+    const runtime = await createRuntime(await writeMissingHttpServerAuthConfig(), undefined, {
+      identity: { bindingStore }
+    });
+
+    try {
+      expect(load).toHaveBeenCalledOnce();
+      expect(runtime.identities.status("default", undefined)).toMatchObject({
+        status: "unconfigured",
+        bindingState: "unavailable"
+      });
+    } finally {
+      await runtime.manager.close();
+    }
+  });
 });

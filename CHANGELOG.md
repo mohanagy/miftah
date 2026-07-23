@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-23
+
+### Added
+
+- [#81](https://github.com/mohanagy/miftah/issues/81) Added configuration format v3 and a strict, non-secret OAuth connection core: opaque profile/upstream/resource/issuer bindings, canonical HTTPS Streamable HTTP validation, static-Authorization collision refusal, OS-vault credential isolation, crash-released binding-scoped transaction coordination, redacted lifecycle primitives, and v1/v2-to-v3 migration with no credential synthesis.
+- [#82](https://github.com/mohanagy/miftah/issues/82) Enabled standards-compatible OAuth for exact v3 HTTPS Streamable HTTP connections: protected-resource plus authorization-server/OpenID discovery, explicit pre-registered, Client ID Metadata, or Dynamic Client Registration, system-browser PKCE authorization through a single-use literal-loopback callback, RFC 9207 issuer validation, profile-bound OS-vault credentials, refresh and reconnect, typed redacted failures, and unchanged non-OAuth transport behavior. Provider-specific/local OAuth, revocation, and operator lifecycle commands remain outside this release surface.
+- [#83](https://github.com/mohanagy/miftah/issues/83) Added durable bounded profile/account identity bindings, visible per-profile binding states and evidence, exact OAuth connection identity-state updates, and opt-in explicit or confirmed current-session selection for protected multi-profile operations. Persisted evidence never replaces live verification, and external state changes never silently override an active client's in-memory profile.
+- [#84](https://github.com/mohanagy/miftah/issues/84) Added dry-run-first OAuth connection setup, redacted connection list/status/test reports, safe connect and reauthentication, exact local disconnect, client snippets, and headless diagnostics through shared typed application services.
+- [#85](https://github.com/mohanagy/miftah/issues/85) Added the explicitly launched, literal-loopback Console control API with a separate `/api/v1` listener, one-use terminal bootstrap, bounded HttpOnly browser sessions, strict Host/Origin and CSRF enforcement, metadata-only configuration/profile/connection health, atomic audited connection changes, redacted Console audit queries, credential rotation, and clean shutdown. The browser UI remains a separate roadmap layer.
+- [#86](https://github.com/mohanagy/miftah/issues/86) Added the optional foreground-only `miftah dashboard` experience for first-run configuration, profile and connection management, standards-compatible OAuth onboarding and recovery, connection health, and reviewable client snippets. It uses the system browser, never renders credential material, never silently edits MCP client configuration, and preserves the authenticated loopback control-plane boundary.
+- [#87](https://github.com/mohanagy/miftah/issues/87) Added a typed built-in provider-adapter contract and a bounded Google Search Console pilot with exact `mcp-search-console@0.3.2` launch pinning, explicit upstream-owned OAuth/browser/cache lifecycle, safe health metadata, read-only defaults, manual service-account guidance, and no token-cache access or native-OAuth claims.
+
+### Changed
+
+- [#88](https://github.com/mohanagy/miftah/issues/88) Added a dedicated OAuth/Console compatibility gate across Ubuntu, macOS, and Windows on Node.js 20, 22, and 24, plus published setup, recovery, security, and supported-authentication evidence. External design-partner completion and return-use gates remain open and are not claimed by this release.
+
+### Fixed
+
+- [#178](https://github.com/mohanagy/miftah/issues/178) Locked `fast-uri` 3.1.4, removing the high-severity URI host-confusion advisory, and added a package contract that rejects stale vulnerable nested resolutions. The separate moderate `@hono/node-server` advisory affects only its unused `serve-static` path; Miftah's MCP transport uses `getRequestListener`, and the current MCP SDK has no compatible patched Hono 1.x release.
+- [#115](https://github.com/mohanagy/miftah/issues/115) Removed the Windows secret-provider PowerShell cold-start boundary by launching a SHA-256-verified precompiled helper directly with an empty argument array and `shell: false`. Exact argv forwarding, bounded input/output, cancellation, timeouts, redaction, and kill-on-close Job Object process-tree containment remain enforced.
+- [#122](https://github.com/mohanagy/miftah/issues/122) Windows OAuth transaction locking now acquires an exclusive, crash-released named pipe instead of depending on a bind inside the operating system's default ephemeral TCP range, preventing unrelated connections from making the local credential store unavailable. It recognizes an exact older-version holder and, when the legacy port is available, holds a best-effort compatibility listener so older processes also stay excluded; unrelated legacy listeners degrade that rolling-upgrade bridge without blocking the pipe lock. Unused profile runtime isolation now defers configuration canonicalization until isolation is actually requested, preventing delayed background filesystem failures in remote OAuth runtimes.
+- [#196](https://github.com/mohanagy/miftah/issues/196) Linux OAuth state coordination now acquires a per-key, crash-released abstract Unix socket while retaining the legacy TCP probe and compatibility listener. Independent connection files can no longer block each other when their legacy 16,384-port hashes collide during parallel startup or coverage runs.
+- [#88](https://github.com/mohanagy/miftah/issues/88) Windows audit coordination now skips operating-system-reserved loopback lock candidates while retaining deterministic contention handling and fail-closed behavior for held locks and unknown errors.
+
 ## [0.3.3] - 2026-07-22
 
 ### Fixed

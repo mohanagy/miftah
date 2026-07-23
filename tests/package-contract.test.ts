@@ -71,8 +71,10 @@ const requiredPackPaths = [
   "dist/plugin-api.d.ts",
   "dist/plugin-api.js",
   "dist/plugin-host.js",
+  "dist/windows-secret-job.exe",
   "docs/cli.md",
   "docs/library-api.md",
+  "docs/provider-adapters.md",
   "docs/plugins.md",
   "examples/generic.miftah.json",
   "examples/plugins.miftah.json",
@@ -93,6 +95,18 @@ function assertPatchedEsbuildLockEntries(lock: PackageLock): void {
   expect(esbuildEntries).not.toHaveLength(0);
   for (const [packagePath, packageEntry] of esbuildEntries) {
     expect(packageEntry["version"], `${packagePath} must resolve to the patched esbuild release`).toBe("0.28.1");
+  }
+}
+
+function assertPatchedFastUriLockEntries(lock: PackageLock): void {
+  const suffix = "node_modules/fast-uri";
+  const entries = Object.entries(lock.packages ?? {}).filter(
+    ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
+  );
+
+  expect(entries, "fast-uri must exist in the package lock").not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of entries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.4");
   }
 }
 
@@ -228,15 +242,16 @@ async function runNpm(
     let timedOut = false;
     let settled = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let inactivityTimeout: ReturnType<typeof setTimeout>;
     const timeoutError = () => new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
     const settle = (result: () => void): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearTimeout(inactivityTimeout);
       if (forceKill !== undefined) clearTimeout(forceKill);
       result();
     };
-    const timeout = setTimeout(() => {
+    const handleInactivityTimeout = (): void => {
       timedOut = true;
       child.kill("SIGTERM");
       forceKill = setTimeout(() => {
@@ -246,15 +261,23 @@ async function runNpm(
           reject(timeoutError());
         });
       }, npmTerminationGraceMs);
-    }, timeoutMs);
+    };
+    const recordProgress = (): void => {
+      if (settled || timedOut) return;
+      clearTimeout(inactivityTimeout);
+      inactivityTimeout = setTimeout(handleInactivityTimeout, timeoutMs);
+    };
+    inactivityTimeout = setTimeout(handleInactivityTimeout, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
+      recordProgress();
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
+      recordProgress();
     });
     child.once("error", (error) => {
       settle(() => {
@@ -296,6 +319,21 @@ class DelayedNpmProcess extends EventEmitter implements NpmProcess {
   constructor(delayMs: number) {
     super();
     setTimeout(() => this.emit("close", 0, null), delayMs);
+  }
+
+  kill(): boolean {
+    return true;
+  }
+}
+
+class ProgressingNpmProcess extends EventEmitter implements NpmProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+
+  constructor(progressAfterMs: number, closeAfterMs: number) {
+    super();
+    setTimeout(() => this.stdout.write("still-building"), progressAfterMs);
+    setTimeout(() => this.emit("close", 0, null), closeAfterMs);
   }
 
   kill(): boolean {
@@ -360,7 +398,12 @@ interface StartedInstalledCli {
   stop(): Promise<void>;
 }
 
-async function startInstalledCli(entry: string, args: readonly string[], cwd: string): Promise<StartedInstalledCli> {
+async function startInstalledCli(
+  entry: string,
+  args: readonly string[],
+  cwd: string,
+  startupMarker = "Miftah HTTP server listening on "
+): Promise<StartedInstalledCli> {
   const child = spawn(process.execPath, [entry, ...args], {
     cwd,
     shell: false,
@@ -373,14 +416,14 @@ async function startInstalledCli(entry: string, args: readonly string[], cwd: st
 
   const waitForStartup = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error(`Installed CLI did not report HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+      reject(new Error(`Installed CLI did not report startup.${npmDiagnostics(stdout, stderr)}`));
     }, npmCommandTimeoutMs);
     const settle = (outcome: () => void): void => {
       clearTimeout(timeout);
       outcome();
     };
     const reportStartup = (): void => {
-      if (!stdout.includes("Miftah HTTP server listening on ") && !stderr.includes("Miftah HTTP server listening on ")) return;
+      if (!stdout.includes(startupMarker) && !stderr.includes(startupMarker)) return;
       settle(resolve);
     };
     child.stdout.setEncoding("utf8");
@@ -399,7 +442,7 @@ async function startInstalledCli(entry: string, args: readonly string[], cwd: st
     child.once("close", (status, signal) => {
       settle(() => {
         const outcome = status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`;
-        reject(new Error(`Installed CLI ${outcome} before HTTP startup.${npmDiagnostics(stdout, stderr)}`));
+        reject(new Error(`Installed CLI ${outcome} before startup.${npmDiagnostics(stdout, stderr)}`));
       });
     });
   });
@@ -496,6 +539,12 @@ describe("package metadata contract", () => {
     assertPatchedEsbuildLockEntries(lock);
   });
 
+  it("locks the patched fast-uri release for GHSA-v2hh-gcrm-f6hx", () => {
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    assertPatchedFastUriLockEntries(lock);
+  });
+
   it("rejects stale nested esbuild lock entries", () => {
     const lock: PackageLock = {
       packages: {
@@ -505,6 +554,17 @@ describe("package metadata contract", () => {
     };
 
     expect(() => assertPatchedEsbuildLockEntries(lock)).toThrow(/node_modules\/vite\/node_modules\/esbuild/);
+  });
+
+  it("rejects stale nested fast-uri lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/fast-uri": { version: "3.1.4" },
+        "node_modules/ajv/node_modules/fast-uri": { version: "3.1.3" }
+      }
+    };
+
+    expect(() => assertPatchedFastUriLockEntries(lock)).toThrow(/node_modules\/ajv\/node_modules\/fast-uri/);
   });
 });
 
@@ -536,6 +596,16 @@ describe("packed artifact contract", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
     expect(completed).toBe(false);
     await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("keeps an active npm command alive when output proves forward progress", async () => {
+    const child = new ProgressingNpmProcess(15, 25);
+    const spawnProgressingChild: NpmSpawner = () => child;
+
+    await expect(runNpm(["build"], repositoryRoot, 20, spawnProgressingChild)).resolves.toMatchObject({
+      status: 0,
+      stdout: "still-building"
+    });
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
@@ -728,7 +798,7 @@ describe("packed artifact contract", () => {
             "  ValidatedRoutingConfig, MiftahPlugin, RoutingMatcherPlugin, RoutingMatcherPluginRequest, RoutingMatcherPluginResult, RoutingMatcherPluginSignal, SecretProviderPlugin, SecretProviderPluginRequest, SecretProviderPluginResult",
             "];",
             "declare const types: SupportedTypes;",
-            'const currentConfigVersion: "2" = CURRENT_CONFIG_VERSION;',
+            'const currentConfigVersion: "3" = CURRENT_CONFIG_VERSION;',
             "const version: string = MIFTAH_VERSION;",
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
@@ -977,12 +1047,46 @@ describe("packed artifact contract", () => {
           await httpServe.stop();
         }
 
+        const consoleServe = await startInstalledCli(
+          installedCliEntry,
+          ["console", "--config", httpServeConfigPath],
+          cliContractDirectory,
+          "Miftah Console control API listening on "
+        );
+        try {
+          expect(consoleServe.stdout).toMatch(
+            /^Miftah Console control API listening on http:\/\/127\.0\.0\.1:\d+\/\nOne-time bootstrap code: [A-Za-z0-9_-]{32,}\nEnter this code only in the local Miftah Console\. It expires after first use or shutdown\.\n$/u
+          );
+          expect(consoleServe.stderr).toBe("");
+        } finally {
+          await consoleServe.stop();
+        }
+
+        const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
+        const dashboardServe = await startInstalledCli(
+          installedCliEntry,
+          ["dashboard", "--config", dashboardConfigPath, "--no-open"],
+          cliContractDirectory,
+          "Miftah Console listening on "
+        );
+        try {
+          expect(dashboardServe.stdout).toMatch(
+            /^Miftah Console listening on http:\/\/127\.0\.0\.1:\d+\/\nConfiguration: .+first dashboard config\.json\nOne-time bootstrap code: [A-Za-z0-9_-]{32,}\nEnter this code only in the local Miftah Console\. It expires after first use or shutdown\.\n$/u
+          );
+          expect(dashboardServe.stderr).toBe("");
+          await expect(readFile(dashboardConfigPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          await dashboardServe.stop();
+        }
+
         const rootHelp = runInstalledBinary(binary, ["--help"], cliContractDirectory);
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
         expect(rootHelp.stderr).toBe("");
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
         const commandOptions = {
           serve: ["--config <file>"],
+          console: ["--config <file>", "--port <number>"],
+          dashboard: ["--config <file>", "--port <number>", "--no-open"],
           validate: ["--config <file>"],
           doctor: ["--config <file>", "--json"],
           schema: [],
@@ -1025,7 +1129,7 @@ describe("packed artifact contract", () => {
         expect(migrationDryRun.stderr).toBe("");
         expect(JSON.parse(migrationDryRun.stdout)).toMatchObject({
           fromVersion: "1",
-          toVersion: "2",
+          toVersion: "3",
           changed: true,
           write: false,
           backupCreated: false
@@ -1042,7 +1146,7 @@ describe("packed artifact contract", () => {
         expect(migrationWrite.stderr).toBe("");
         expect(JSON.parse(migrationWrite.stdout)).toMatchObject({ changed: true, write: true, backupCreated: true });
         expect(await readFile(`${migrationConfigPath}.bak`, "utf8")).toBe(migrationOriginal);
-        expect(JSON.parse(await readFile(migrationConfigPath, "utf8"))).toMatchObject({ version: "2" });
+        expect(JSON.parse(await readFile(migrationConfigPath, "utf8"))).toMatchObject({ version: "3" });
 
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
         const initialized = runInstalledBinaryThroughShell(
@@ -1062,6 +1166,37 @@ describe("packed artifact contract", () => {
         expect(validatedInit.status, validatedInit.stderr || validatedInit.stdout).toBe(0);
         expect(validatedInit.stderr).toBe("");
         expect(JSON.parse(validatedInit.stdout)).toMatchObject({ ok: true, name: "starter config with spaces" });
+
+        const gscOutputPath = join(cliContractDirectory, "gsc pilot.json");
+        const gscClientSecretsPath = join(cliContractDirectory, "private client secrets.json");
+        const initializedGsc = runInstalledBinaryThroughShell(
+          binary,
+          [
+            "init",
+            "gsc-pilot",
+            "--preset",
+            "google-search-console",
+            "--oauth-client-secrets-file",
+            gscClientSecretsPath,
+            "--output",
+            gscOutputPath
+          ],
+          cliContractDirectory
+        );
+        expect(initializedGsc.status, initializedGsc.stderr || initializedGsc.stdout).toBe(0);
+        expect(initializedGsc.stderr).toBe("");
+        expect(initializedGsc.stdout).toContain("Credential ownership: upstream");
+        expect(initializedGsc.stdout).not.toContain(gscClientSecretsPath);
+        expect(JSON.parse(await readFile(gscOutputPath, "utf8"))).toMatchObject({
+          name: "gsc-pilot",
+          upstream: { command: "uvx", args: ["mcp-search-console@0.3.2"] },
+          profiles: {
+            default: {
+              env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsPath },
+              policy: "readonly"
+            }
+          }
+        });
 
         const automationConfigPath = await writeCliConfig(
           "automation config with spaces.json",

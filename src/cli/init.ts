@@ -6,6 +6,8 @@ import { validateConfig } from "../config/validate-config.js";
 import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
 import type { PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
+import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
+import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
@@ -34,6 +36,7 @@ export type InitCommandOptions = Pick<
   | "url"
   | "headerName"
   | "headerPrefix"
+  | "oauthClientSecretsFile"
 >;
 
 export interface InitCommandContext {
@@ -55,6 +58,7 @@ interface InitPlan {
   readonly config: MiftahConfig;
   readonly snippets: readonly ClientSnippet[];
   readonly claudeCodePermissionGuidance?: ClaudeCodePermissionGuidance;
+  readonly providerAdapter?: ProviderAdapterDefinition;
 }
 
 interface Cancellation {
@@ -149,6 +153,14 @@ async function collectPresetOptions(
   options: InitCommandOptions
 ): Promise<PresetBuildOptions> {
   switch (preset) {
+    case "google-search-console":
+      return {
+        oauthClientSecretsFile: options.oauthClientSecretsFile ?? (await prompt(
+          line,
+          cancellation,
+          "Google OAuth client-secrets file (absolute path)"
+        ))
+      };
     case "generic-npx":
       return {
         credentialEnv: options.credentialEnv,
@@ -168,7 +180,8 @@ async function collectPresetOptions(
         dockerImage: options.dockerImage,
         url: options.url,
         headerName: options.headerName,
-        headerPrefix: options.headerPrefix
+        headerPrefix: options.headerPrefix,
+        oauthClientSecretsFile: options.oauthClientSecretsFile
       };
   }
 }
@@ -216,7 +229,8 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     dockerImage: options.dockerImage,
     url: options.url,
     headerName: options.headerName,
-    headerPrefix: options.headerPrefix
+    headerPrefix: options.headerPrefix,
+    oauthClientSecretsFile: options.oauthClientSecretsFile
   };
 }
 
@@ -248,7 +262,8 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       dockerImage: values.dockerImage,
       url: values.url,
       headerName: values.headerName,
-      headerPrefix: values.headerPrefix
+      headerPrefix: values.headerPrefix,
+      oauthClientSecretsFile: values.oauthClientSecretsFile
     });
     validateConfig(config);
   } catch (error) {
@@ -277,7 +292,34 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
     }
   }
 
-  return { output, config, snippets, claudeCodePermissionGuidance };
+  return {
+    output,
+    config,
+    snippets,
+    claudeCodePermissionGuidance,
+    providerAdapter: getProviderAdapterForPreset(values.preset)
+  };
+}
+
+function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapterDefinition | undefined): void {
+  if (adapter === undefined) return;
+  const reauth = adapter.lifecycle.reauth;
+  const reauthDescription = reauth.mechanism === "mcp-tool"
+    ? `${reauth.owner} MCP tool '${reauth.name}'`
+    : reauth.owner;
+  const tokenCacheBoundary = adapter.authentication.tokenStore === "upstream-private"
+    ? "Miftah will not read or manage the upstream token cache.\n"
+    : "";
+  output.write(
+    `Provider adapter: ${adapter.displayName}\n` +
+      `Credential ownership: ${adapter.authentication.credentialOwnership}\n` +
+      `Browser handoff: ${adapter.authentication.browserHandoff}\n` +
+      `Token store: ${adapter.authentication.tokenStore}\n` +
+      `Identity evidence: ${adapter.identity.evidence}\n` +
+      `Reauthentication: ${reauthDescription}\n` +
+      `Disconnect/revocation: ${adapter.lifecycle.disconnect.owner}\n` +
+      tokenCacheBoundary
+  );
 }
 
 /** Writes copy-paste client configuration and optional Claude Code review guidance without modifying client settings. */
@@ -317,5 +359,6 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
     throw error;
   }
   context.output.write(`Created ${plan.output}\n`);
+  writeProviderAdapterGuidance(context.output, plan.providerAdapter);
   writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
 }

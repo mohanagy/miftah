@@ -1,3 +1,5 @@
+import type { OAuthConnectionRef } from "../oauth/connection-types.js";
+
 export type TransportType = "stdio" | "http" | "sse" | "streamable-http";
 
 export interface UpstreamConfig {
@@ -13,7 +15,7 @@ export interface UpstreamConfig {
 }
 
 type CurrentUpstreamConfig = Omit<UpstreamConfig, "transport"> & {
-  /** Version 2 replaces the legacy HTTP transport alias with the canonical name. */
+  /** Canonical config versions replace the legacy HTTP transport alias with the canonical name. */
   transport: Exclude<TransportType, "http">;
 };
 
@@ -65,6 +67,8 @@ type IdentityRequiredRisk = ["write"] | ["destructive"] | ["write", "destructive
 type IdentityVerificationConfig = {
   maxAgeMs: number;
   requiredForRisk?: IdentityRequiredRisk;
+  /** Requires an explicit or human-confirmed current-session selection for protected account use. */
+  selectionMode?: "explicit" | "confirmed";
 };
 
 /** Opt-in identity verification for a profile or one named upstream. */
@@ -370,6 +374,27 @@ export type StateConfig =
       scope: "workspace" | "global";
     };
 
+/** A non-secret, versioned attachment of one OAuth connection to an exact remote upstream. */
+export interface OAuthConnectionConfig {
+  /** Selects an existing profile; it is not an account identity claim. */
+  profile: string;
+  /** "default" for a singleton upstream, otherwise the configured named-upstream key. */
+  upstream: string;
+  /** Exact canonical HTTPS Streamable HTTP MCP resource URL. */
+  resource: string;
+  /** Exact issuer identifier selected by a later authorization-server discovery flow. */
+  issuer: string;
+  /** Non-secret identifier for the approved client-registration path. */
+  clientRegistration: string;
+  /** Requested least-privilege OAuth scopes; raw credentials never belong in config. */
+  scopes: string[];
+}
+
+/** Declarative non-secret OAuth connection bindings. Credential state remains outside configuration. */
+export interface OAuthConfig {
+  connections: Record<OAuthConnectionRef, OAuthConnectionConfig>;
+}
+
 interface MiftahConfigBase {
   name: string;
   description?: string;
@@ -403,10 +428,16 @@ interface CurrentMiftahConfig extends Omit<MiftahConfigBase, "upstream" | "upstr
   audit?: CurrentAuditConfig;
 }
 
+/** Version 3 adds opaque OAuth connection bindings without serializing credentials. */
+interface OAuthMiftahConfig extends Omit<CurrentMiftahConfig, "version"> {
+  version: "3";
+  oauth?: OAuthConfig;
+}
+
 /**
  * Supported configuration formats, discriminated by their declared version.
  *
  * Version 1 preserves documented compatibility aliases; version 2 exposes the
- * strict canonical surface that the runtime and generated JSON Schema enforce.
+ * strict canonical surface; version 3 adds non-secret OAuth connection bindings.
  */
-export type MiftahConfig = LegacyMiftahConfig | CurrentMiftahConfig;
+export type MiftahConfig = LegacyMiftahConfig | CurrentMiftahConfig | OAuthMiftahConfig;

@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { delimiter, join, win32 } from "node:path";
-import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseExternalSecretReference } from "../src/secrets/external-secret-reference.js";
 import {
@@ -19,8 +18,14 @@ import { MiftahError } from "../src/utils/errors.js";
 
 const testRoot = join(process.cwd(), ".miftah-secret-provider-tests");
 const fakeProviderPath = join(process.cwd(), "tests", "fixtures", "fake-secret-provider.mjs");
-const embeddedWindowsJobCSharpPattern =
-  /const windowsJobHelper = String\.raw`[\s\S]*?\$source = @'\r?\n([\s\S]*?)\r?\n'@\r?\n {2}Add-Type -TypeDefinition \$source/;
+const posixDescendantProviderFixturePath = join(
+  process.cwd(),
+  "tests",
+  "fixtures",
+  "posix-descendant-provider.sh"
+);
+const realSetTimeout = globalThis.setTimeout;
+const realSetImmediate = globalThis.setImmediate;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -68,12 +73,20 @@ async function installFakeProviderExecutable(directory: string, name: string): P
   return executable;
 }
 
+async function installPosixDescendantProviderExecutable(directory: string): Promise<string> {
+  const executable = join(directory, "posix-descendant-provider");
+  await copyFile(posixDescendantProviderFixturePath, executable);
+  await chmod(executable, 0o700);
+  return executable;
+}
+
 async function readFakeRecord(directory: string): Promise<{
   argv: string[];
   mode: string;
   hasOpServiceAccountToken: boolean;
   keychainEnvironment: Record<string, string>;
   hasPowerShellModulePath: boolean;
+  providerPid?: number;
   descendantPid?: number;
 }> {
   return JSON.parse(await readFile(join(directory, "record.json"), "utf8")) as {
@@ -82,6 +95,7 @@ async function readFakeRecord(directory: string): Promise<{
     hasOpServiceAccountToken: boolean;
     keychainEnvironment: Record<string, string>;
     hasPowerShellModulePath: boolean;
+    providerPid?: number;
     descendantPid?: number;
   };
 }
@@ -178,8 +192,19 @@ async function createProviderReadinessBarrier(): Promise<{
 }
 
 async function readDescendantPid(directory: string): Promise<number> {
+  return readDescendantPidWithWait(directory, waitForCondition);
+}
+
+async function readDescendantPidWithWait(
+  directory: string,
+  wait: (
+    condition: () => Promise<boolean> | boolean,
+    description: string,
+    timeoutMs?: number
+  ) => Promise<void>
+): Promise<number> {
   let descendantPid: number | undefined;
-  await waitForCondition(async () => {
+  await wait(async () => {
     try {
       const candidate = (await readFakeRecord(directory)).descendantPid;
       if (!Number.isSafeInteger(candidate) || candidate === undefined || candidate <= 0) return false;
@@ -191,6 +216,55 @@ async function readDescendantPid(directory: string): Promise<number> {
     }
   }, "the fake provider to record its descendant PID");
   return descendantPid!;
+}
+
+async function readPosixProcessIds(
+  directory: string,
+  observed: Promise<unknown>
+): Promise<{ providerPid: number; descendantPid: number }> {
+  let commandSettled = false;
+  void observed.then(() => {
+    commandSettled = true;
+  });
+  for (;;) {
+    try {
+      const record = await readFakeRecord(directory);
+      if (
+        Number.isSafeInteger(record.providerPid) &&
+        record.providerPid !== undefined &&
+        record.providerPid > 0 &&
+        Number.isSafeInteger(record.descendantPid) &&
+        record.descendantPid !== undefined &&
+        record.descendantPid > 0
+      ) {
+        return { providerPid: record.providerPid, descendantPid: record.descendantPid };
+      }
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    if (commandSettled) throw new Error("Provider command settled before recording its process IDs");
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+  }
+}
+
+async function readPosixDescendantPid(directory: string, observed: Promise<unknown>): Promise<number> {
+  return (await readPosixProcessIds(directory, observed)).descendantPid;
+}
+
+async function waitForPosixCondition(
+  condition: () => Promise<boolean> | boolean,
+  observed: Promise<unknown>,
+  description: string
+): Promise<void> {
+  let commandSettled = false;
+  void observed.then(() => {
+    commandSettled = true;
+  });
+  for (;;) {
+    if (await condition()) return;
+    if (commandSettled) throw new Error(`Provider command settled before ${description}`);
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+  }
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -219,6 +293,41 @@ async function terminateTestProcess(pid: number): Promise<void> {
   await waitForProcessExit(pid);
 }
 
+function observeCommand<T>(pending: Promise<T>): Promise<{ value: T } | { error: unknown }> {
+  return pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error })
+  );
+}
+
+/** Test-only gate for the initial runner deadline; later termination timers remain real. */
+function holdNextTimeout(timeoutMs: number): { restore: () => void; trigger: () => void } {
+  const originalSetTimeout = globalThis.setTimeout;
+  let heldCallback: (() => void) | undefined;
+  const heldSetTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    if (heldCallback === undefined && delay === timeoutMs) {
+      heldCallback = () => handler(...args);
+      const inertTimer = originalSetTimeout(() => undefined, 0);
+      globalThis.clearTimeout(inertTimer);
+      return inertTimer;
+    }
+    return originalSetTimeout(handler as (...args: never[]) => void, delay, ...(args as never[]));
+  }) as typeof globalThis.setTimeout;
+  globalThis.setTimeout = heldSetTimeout;
+
+  return {
+    restore: () => {
+      globalThis.setTimeout = originalSetTimeout;
+    },
+    trigger: () => {
+      const callback = heldCallback;
+      heldCallback = undefined;
+      if (callback === undefined) throw new Error("Expected secret command to schedule its timeout");
+      callback();
+    }
+  };
+}
+
 const fakeCommand: SecretCommandDescriptor = {
   executable: process.execPath,
   prefixArgs: [fakeProviderPath]
@@ -240,8 +349,9 @@ function activePipeCount(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === "PipeWrap").length;
 }
 
-async function runWindowsCompressedBootstrap(
-  source: string,
+async function runWindowsJobExecutable(
+  executable: string,
+  args: readonly string[],
   environment: NodeJS.ProcessEnv = {},
   standardInput?: Buffer
 ): Promise<{
@@ -249,44 +359,24 @@ async function runWindowsCompressedBootstrap(
   stdout: string;
   stderr: string;
 }> {
-  const systemRoot = process.env.SystemRoot ?? process.env.windir;
-  if (systemRoot === undefined) throw new Error("Windows system root is unavailable");
-  const launcher = win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const bootstrap = String.raw`$ErrorActionPreference = 'Stop'
-$helperName = 'MIFTAH_SECRET_RUNNER_HELPER'
-try {
-  $encodedHelper = [Environment]::GetEnvironmentVariable($helperName, [EnvironmentVariableTarget]::Process)
-  [Environment]::SetEnvironmentVariable($helperName, $null, [EnvironmentVariableTarget]::Process)
-  if ([string]::IsNullOrEmpty($encodedHelper) -or $encodedHelper.Length -gt 8192) { exit 1 }
-  $input = [IO.MemoryStream]::new([Convert]::FromBase64String($encodedHelper), $false)
-  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress, $false)
-  $reader = [IO.StreamReader]::new($gzip, [Text.Encoding]::UTF8)
-  try {
-    $decoded = $reader.ReadToEnd()
-  } finally {
-    $reader.Dispose()
-  }
-  if ([string]::IsNullOrEmpty($decoded)) { exit 1 }
-  & ([ScriptBlock]::Create($decoded))
-} catch {
-  exit 1
-}`;
-  const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
+  const encodedRequest = encodeWindowsJobRequest(executable, args);
 
   return new Promise((resolve, reject) => {
-    const stdin = standardInput === undefined ? "ignore" : "pipe";
     const child = spawn(
-      launcher,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedBootstrap],
+      join(process.cwd(), "assets", "windows-secret-job.exe"),
+      [],
       {
         env: {
           ...process.env,
           ...environment,
-          MIFTAH_SECRET_RUNNER_HELPER: gzipSync(source).toString("base64")
+          MIFTAH_SECRET_RUNNER_REQUEST: encodedRequest,
+          ...(standardInput === undefined
+            ? {}
+            : { MIFTAH_SECRET_RUNNER_STDIN: standardInput.toString("base64") })
         },
         shell: false,
         windowsHide: true,
-        stdio: [stdin, "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe"]
       }
     );
     const stdout: Buffer[] = [];
@@ -294,7 +384,6 @@ try {
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.once("error", reject);
-    if (standardInput !== undefined) child.stdin?.end(standardInput);
     child.once("close", (code) => {
       resolve({
         code,
@@ -305,14 +394,27 @@ try {
   });
 }
 
-async function embeddedWindowsJobCSharp(): Promise<string> {
-  const source = await readFile(
-    new URL("../src/secrets/windows-secret-command.ts", import.meta.url),
-    "utf8"
-  );
-  const match = source.match(embeddedWindowsJobCSharpPattern);
-  if (match?.[1] === undefined) throw new Error("Embedded Windows Job Object C# source is unavailable");
-  return match[1];
+function encodeWindowsJobRequest(executable: string, args: readonly string[]): string {
+  const executableBytes = Buffer.from(executable, "utf8");
+  const argumentBytes = args.map((argument) => Buffer.from(argument, "utf8"));
+  const length =
+    1 + 4 + executableBytes.length + 4 + argumentBytes.reduce((total, argument) => total + 4 + argument.length, 0);
+  const request = Buffer.allocUnsafe(length);
+  let offset = 0;
+  request.writeUInt8(1, offset++);
+  request.writeInt32LE(executableBytes.length, offset);
+  offset += 4;
+  executableBytes.copy(request, offset);
+  offset += executableBytes.length;
+  request.writeInt32LE(argumentBytes.length, offset);
+  offset += 4;
+  for (const argument of argumentBytes) {
+    request.writeInt32LE(argument.length, offset);
+    offset += 4;
+    argument.copy(request, offset);
+    offset += argument.length;
+  }
+  return request.toString("base64");
 }
 
 describe("built-in secret providers", () => {
@@ -902,7 +1004,7 @@ it.each([
         it.runIf(process.platform === "win32")("does not use a current-directory 1Password executable", async () => {
           await inSandbox(async (directory) => {
             const shadowedExecutable = join(directory, "op.exe");
-            await copyFile(process.execPath, shadowedExecutable);
+            await writeFile(shadowedExecutable, "", { mode: 0o700 });
             const originalDirectory = process.cwd();
             process.chdir(directory);
             try {
@@ -1000,13 +1102,16 @@ it.each([
 
 describe("secret command runner", () => {
   it.runIf(process.platform === "win32")(
-    "executes a compressed bootstrap payload before starting providers",
+    "runs an immediate cmd.exe child through the direct Job Object executable",
     async () => {
-      const result = await runWindowsCompressedBootstrap("Write-Output 'bootstrap-ready'\nexit 0");
+      const result = await runWindowsJobExecutable(
+        win32.join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32", "cmd.exe"),
+        ["/d", "/s", "/c", "exit 0"]
+      );
 
       expect(result).toEqual({
         code: 0,
-        stdout: "bootstrap-ready\r\n",
+        stdout: "",
         stderr: expect.any(String)
       });
     },
@@ -1014,118 +1119,28 @@ describe("secret command runner", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "does not expose parent standard input to the encoded PowerShell bootstrap",
+    "runs an immediate Node child through the direct Job Object executable",
     async () => {
-      const input = Buffer.concat([
-        Buffer.from("bootstrap-input", "utf8"),
-        Buffer.from([0]),
-        Buffer.from("with-newline\\n", "utf8")
-      ]);
-      const result = await runWindowsCompressedBootstrap(
-        `$stream = [Console]::OpenStandardInput()
-$output = [IO.MemoryStream]::new()
-$buffer = [byte[]]::new(4096)
-while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-  $output.Write($buffer, 0, $count)
-}
-[Console]::Out.Write([Convert]::ToBase64String($output.ToArray()))
-exit 0`,
-        {},
-        input
+      const result = await runWindowsJobExecutable(
+        process.execPath,
+        ["-e", "process.stdout.write('native-node-ready')"]
       );
 
-      expect(result).toMatchObject({ code: 0, stdout: "" });
+      expect(result).toMatchObject({ code: 0, stdout: "native-node-ready" });
     },
     20_000
   );
 
   it.runIf(process.platform === "win32")(
-    "compiles the embedded Job Object type before starting providers",
+    "keeps the parent standard handles usable across direct helper executions",
     async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
-Write-Output 'native-type-ready'
-exit 0`);
+      const first = await runWindowsJobExecutable(process.execPath, ["-e", "process.exit(0)"]);
+      const second = await runWindowsJobExecutable(process.execPath, ["-e", "process.exit(0)"]);
 
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-type-ready\r\n");
+      expect(first.code).toBe(0);
+      expect(second.code).toBe(0);
     },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate cmd.exe child through the embedded Job Object",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('/d', '/s', '/c', 'exit 0'))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        {
-          MIFTAH_TEST_EXECUTABLE: win32.join(
-            process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
-            "System32",
-            "cmd.exe"
-          )
-        }
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-run-exit=0\r\n");
-    },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "runs an immediate Node child through the embedded Job Object",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(
-        `$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-$exitCode = [MiftahSecretJob]::Run($env:MIFTAH_TEST_EXECUTABLE, [string[]]@('-e', 'process.exit(0)'))
-Write-Output "native-run-exit=$exitCode"
-exit 0`,
-        { MIFTAH_TEST_EXECUTABLE: process.execPath }
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-run-exit=0\r\n");
-    },
-    60_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "initializes the embedded Job Object before starting providers",
-    async () => {
-      const csharp = await embeddedWindowsJobCSharp();
-      const result = await runWindowsCompressedBootstrap(`$ErrorActionPreference = 'Stop'
-$source = @'
-${csharp}
-'@
-Add-Type -TypeDefinition $source
-if (-not [MiftahSecretJob]::Initialize()) { exit 1 }
-Write-Output 'native-job-ready'
-exit 0`);
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("native-job-ready\r\n");
-    },
-    60_000
+    20_000
   );
 
   it.runIf(process.platform === "win32")(
@@ -1246,33 +1261,54 @@ exit 0`);
       const controller = new AbortController();
       const inheritedSecret = "descendant-secret-that-must-not-leak";
       const mode = termination === "timeout" && process.platform === "win32" ? "slow-descendant" : "descendant";
-      const pending = runSecretCommand(
-        {
-          executable: process.execPath,
-          args: [fakeProviderPath],
-          environment: fakeProviderEnvironment(directory, mode, inheritedSecret)
-        },
-        termination === "timeout"
-          ? { timeoutMs: process.platform === "win32" ? 2_000 : 200 }
-          : { signal: controller.signal }
-      );
-      const descendantPid = await readDescendantPid(directory);
+      const executable =
+        process.platform === "win32" ? process.execPath : await installPosixDescendantProviderExecutable(directory);
+      const args = process.platform === "win32" ? [fakeProviderPath] : [];
+      const timeoutMs = process.platform === "win32" ? 2_000 : 200;
+      const timeoutGate = termination === "timeout" && process.platform !== "win32" ? holdNextTimeout(timeoutMs) : undefined;
+      let timeoutTriggered = false;
+      let pending: Promise<{ stdout: Buffer }>;
+      try {
+        pending = runSecretCommand(
+          {
+            executable,
+            args,
+            environment: fakeProviderEnvironment(directory, mode, inheritedSecret)
+          },
+          termination === "timeout" ? { timeoutMs } : { signal: controller.signal }
+        );
+      } finally {
+        timeoutGate?.restore();
+      }
+      const observed = observeCommand(pending);
+      let descendantPid: number | undefined;
 
       try {
+        descendantPid =
+          process.platform === "win32"
+            ? await readDescendantPid(directory)
+            : await readPosixDescendantPid(directory, observed);
         if (termination === "cancellation") controller.abort();
-        const error = await pending.then(
-          () => {
-            throw new Error("Expected secret command to reject");
-          },
-          (reason: unknown) => reason
-        );
+        if (timeoutGate !== undefined) {
+          timeoutGate.trigger();
+          timeoutTriggered = true;
+        }
+        const outcome = await observed;
+        if ("value" in outcome) throw new Error("Expected secret command to reject");
+        const { error } = outcome;
 
         expect(error).toBeInstanceOf(SecretProcessError);
         expect(error).toMatchObject({ kind: expectedKind });
         expect(`${error}`).not.toContain(inheritedSecret);
         await waitForProcessExit(descendantPid);
       } finally {
-        await terminateTestProcess(descendantPid);
+        if (termination === "cancellation") controller.abort();
+        timeoutGate?.restore();
+        if (!timeoutTriggered) {
+          timeoutGate?.trigger();
+        }
+        await observed;
+        if (descendantPid !== undefined) await terminateTestProcess(descendantPid);
       }
     });
   });
@@ -1328,22 +1364,33 @@ exit 0`);
       await inSandbox(async (directory) => {
         const readyPath = join(directory, "descendant-ready");
         const signalPath = join(directory, "descendant-signal");
-        const pending = runSecretCommand(
-          {
-            executable: process.execPath,
-            args: [fakeProviderPath],
-            environment: {
-              ...fakeProviderEnvironment(directory, "early-exit-stubborn-descendant"),
-              MIFTAH_FAKE_DESCENDANT_READY_PATH: readyPath,
-              MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH: signalPath
-            }
-          },
-          { timeoutMs: 1_000 }
-        );
-        const descendantPid = await readDescendantPid(directory);
+        const executable = await installPosixDescendantProviderExecutable(directory);
+        const timeoutGate = holdNextTimeout(1_000);
+        let timeoutTriggered = false;
+        let pending: Promise<{ stdout: Buffer }>;
+        try {
+          pending = runSecretCommand(
+            {
+              executable,
+              args: [],
+              environment: {
+                ...fakeProviderEnvironment(directory, "early-exit-stubborn-descendant"),
+                MIFTAH_FAKE_DESCENDANT_READY_PATH: readyPath,
+                MIFTAH_FAKE_DESCENDANT_SIGNAL_PATH: signalPath
+              }
+            },
+            { timeoutMs: 1_000 }
+          );
+        } finally {
+          timeoutGate.restore();
+        }
+        const observed = observeCommand(pending);
+        let descendantPid: number | undefined;
 
         try {
-          await waitForCondition(
+          const processIds = await readPosixProcessIds(directory, observed);
+          descendantPid = processIds.descendantPid;
+          await waitForPosixCondition(
             async () => {
               try {
                 return (await readFile(readyPath, "utf8")) === "ready";
@@ -1352,15 +1399,26 @@ exit 0`);
                 throw error;
               }
             },
-            "stubborn descendant to start",
-            500
+            observed,
+            "the stubborn descendant to start"
           );
+          await waitForProcessExit(processIds.providerPid);
+          await new Promise<void>((resolve) => realSetImmediate(resolve));
 
-          await expect(pending).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
+          timeoutGate.trigger();
+          timeoutTriggered = true;
+          const outcome = await observed;
+          if ("value" in outcome) throw new Error("Expected secret command to reject");
+          expect(outcome.error).toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
           await expect(readFile(signalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
           await waitForProcessExit(descendantPid);
         } finally {
-          await terminateTestProcess(descendantPid);
+          timeoutGate.restore();
+          if (!timeoutTriggered) {
+            timeoutGate.trigger();
+          }
+          await observed;
+          if (descendantPid !== undefined) await terminateTestProcess(descendantPid);
         }
       });
     }

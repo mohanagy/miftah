@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { copyFile, link, mkdtemp, open, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -57,7 +59,104 @@ function transactionWithHash(payload: Record<string, unknown>): Record<string, u
   };
 }
 
+async function createRotatedIntegrityWriteFailureFixture(): Promise<{
+  readonly directory: string;
+  readonly path: string;
+  readonly logger: AuditLogger;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-rotation-rollback-"));
+  const path = join(directory, "audit.jsonl");
+  const logger = new AuditLogger(path, {
+    integrity: { algorithm: "sha256-chain" },
+    rotation: { maxBytes: 1, retainFiles: 0 }
+  });
+  await logger.log({
+    wrapper: "github",
+    profile: "work",
+    operation: "tools/call",
+    name: "durable-before-integrity-rotation-failure",
+    status: "success",
+    durationMs: 1
+  });
+
+  const probe = await open(path, "r");
+  const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
+  const originalWrite = probe.write as BufferWrite;
+  await probe.close();
+  let writes = 0;
+  const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
+    this: FileHandle,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number | null
+  ) {
+    writes += 1;
+    if (writes === 5) {
+      await originalWrite.call(this, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+      throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
+    }
+    return originalWrite.call(this, buffer, offset, length, position);
+  });
+  try {
+    await expect(
+      logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "must-not-commit-after-integrity-rotation-failure",
+        status: "success",
+        durationMs: 2
+      })
+    ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+  } finally {
+    writeSpy.mockRestore();
+  }
+  return { directory, path, logger };
+}
+
 describe("audit journal integrity", () => {
+  it("skips a Windows-reserved local lock port before writing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-reserved-lock-port-"));
+    const path = join(directory, "audit.jsonl");
+    const serverPrototype = Object.getPrototypeOf(createServer()) as {
+      listen: (
+        this: Server,
+        options: { host: string; port: number; exclusive: boolean },
+        callback?: () => void
+      ) => Server;
+    };
+    const originalListen = serverPrototype.listen;
+    let listenAttempts = 0;
+    const listenSpy = vi.spyOn(serverPrototype, "listen").mockImplementation(function (
+      this: Server,
+      options: { host: string; port: number; exclusive: boolean },
+      callback?: () => void
+    ) {
+      listenAttempts += 1;
+      if (listenAttempts === 1) {
+        queueMicrotask(() => this.emit("error", Object.assign(new Error("reserved port"), { code: "EACCES" })));
+        return this;
+      }
+      return originalListen.call(this, options, callback);
+    });
+
+    try {
+      const logger = new AuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
+      await expect(logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "writes-after-reserved-lock-port",
+        status: "success",
+        durationMs: 1
+      })).resolves.toBeUndefined();
+      expect(listenAttempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      listenSpy.mockRestore();
+    }
+  });
+
   it("identifies the first tampered chained record without returning record content", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-"));
     const path = join(directory, "audit.jsonl");
@@ -398,7 +497,9 @@ describe("audit journal integrity", () => {
       rotation: { maxBytes: 1, retainFiles: 0 }
     });
 
-    for (let index = 0; index < 12; index += 1) {
+    // Three records force two complete rotate, retire, and compact cycles. That is the minimum
+    // repeated fixture needed to prove compaction remains bounded across successive rotations.
+    for (let index = 0; index < 3; index += 1) {
       await logger.log({
         wrapper: "github",
         profile: "work",
@@ -416,56 +517,8 @@ describe("audit journal integrity", () => {
     expect(await verifyAuditJournal(path)).toEqual({ ok: true });
   });
 
-  it("recovers after a rotated integrity write fails before the new active record commits", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-rotation-rollback-"));
-    const path = join(directory, "audit.jsonl");
-    const logger = new AuditLogger(path, {
-      integrity: { algorithm: "sha256-chain" },
-      rotation: { maxBytes: 1, retainFiles: 0 }
-    });
-    await logger.log({
-      wrapper: "github",
-      profile: "work",
-      operation: "tools/call",
-      name: "durable-before-integrity-rotation-failure",
-      status: "success",
-      durationMs: 1
-    });
-
-    const probe = await open(path, "r");
-    const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
-    const originalWrite = probe.write as BufferWrite;
-    await probe.close();
-    let writes = 0;
-    const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
-      this: FileHandle,
-      buffer: Uint8Array,
-      offset: number,
-      length: number,
-      position: number | null
-    ) {
-      writes += 1;
-      if (writes === 5) {
-        await originalWrite.call(this, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-        throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
-      }
-      return originalWrite.call(this, buffer, offset, length, position);
-    });
-    try {
-      await expect(
-        logger.log({
-          wrapper: "github",
-          profile: "work",
-          operation: "tools/call",
-          name: "must-not-commit-after-integrity-rotation-failure",
-          status: "success",
-          durationMs: 2
-        })
-      ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
-    } finally {
-      writeSpy.mockRestore();
-    }
-
+  it("rolls back after a rotated integrity write fails before the new active record commits", async () => {
+    const { directory, path } = await createRotatedIntegrityWriteFailureFixture();
     const retainedSegments = (await readdir(directory)).filter(
       (name) => name === "audit.jsonl" || name.startsWith("audit.jsonl.miftah-")
     );
@@ -476,7 +529,11 @@ describe("audit journal integrity", () => {
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as { name: string });
     expect(retainedRecords).toEqual([expect.objectContaining({ name: "durable-before-integrity-rotation-failure" })]);
+    expect(await verifyAuditJournal(path)).toEqual({ ok: true });
+  });
 
+  it("accepts new writes after rolling back a rotated integrity write failure", async () => {
+    const { path, logger } = await createRotatedIntegrityWriteFailureFixture();
     await expect(
       logger.log({
         wrapper: "github",
@@ -491,64 +548,85 @@ describe("audit journal integrity", () => {
   });
 
   it("restores the prior integrity ledger when checkpoint replacement fails during compaction", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-compaction-rollback-"));
-    const path = join(directory, "audit.jsonl");
-    const logger = new AuditLogger(path, {
-      integrity: { algorithm: "sha256-chain" },
-      rotation: { maxBytes: 1, retainFiles: 2 }
-    });
-    await logger.log({
-      wrapper: "github",
-      profile: "work",
-      operation: "tools/call",
-      name: "durable-before-compaction-checkpoint-failure",
-      status: "success",
-      durationMs: 1
-    });
-
-    const probe = await open(path, "r");
-    const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
-    const originalWrite = probe.write as BufferWrite;
-    await probe.close();
+    let stage = "creating fixture";
     let writes = 0;
-    const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
-      this: FileHandle,
-      buffer: Uint8Array,
-      offset: number,
-      length: number,
-      position: number | null
-    ) {
-      writes += 1;
-      if (writes === 2) throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
-      return originalWrite.call(this, buffer, offset, length, position);
-    });
+    const timeoutDiagnostic = setTimeout(() => {
+      process.stderr.write(
+        `MIFTAH_AUDIT_INTEGRITY_TIMEOUT_DIAGNOSTIC: stage=${stage}; interceptedWrites=${writes}\n`
+      );
+    }, 4_500);
+    timeoutDiagnostic.unref();
+
     try {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-compaction-rollback-"));
+      const path = join(directory, "audit.jsonl");
+      const logger = new AuditLogger(path, {
+        integrity: { algorithm: "sha256-chain" },
+        rotation: { maxBytes: 1, retainFiles: 2 }
+      });
+      stage = "writing initial record";
+      await logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "durable-before-compaction-checkpoint-failure",
+        status: "success",
+        durationMs: 1
+      });
+
+      stage = "opening write probe";
+      const probe = await open(path, "r");
+      const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
+      const originalWrite = probe.write as BufferWrite;
+      stage = "closing write probe";
+      await probe.close();
+      stage = "installing write spy";
+      const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
+        this: FileHandle,
+        buffer: Uint8Array,
+        offset: number,
+        length: number,
+        position: number | null
+      ) {
+        writes += 1;
+        if (writes === 2) throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
+        return originalWrite.call(this, buffer, offset, length, position);
+      });
+      try {
+        stage = "writing replacement checkpoint";
+        await expect(
+          logger.log({
+            wrapper: "github",
+            profile: "work",
+            operation: "tools/call",
+            name: "must-not-leave-a-new-ledger-with-an-old-checkpoint",
+            status: "success",
+            durationMs: 2
+          })
+        ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+      } finally {
+        stage = "restoring write spy";
+        writeSpy.mockRestore();
+      }
+
+      stage = "verifying rollback";
+      expect(await verifyAuditJournal(path)).toEqual({ ok: true });
+      stage = "writing recovery record";
       await expect(
         logger.log({
           wrapper: "github",
           profile: "work",
           operation: "tools/call",
-          name: "must-not-leave-a-new-ledger-with-an-old-checkpoint",
+          name: "succeeds-after-compaction-checkpoint-rollback",
           status: "success",
-          durationMs: 2
+          durationMs: 3
         })
-      ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+      ).resolves.toBeUndefined();
+      stage = "verifying recovery";
+      expect(await verifyAuditJournal(path)).toEqual({ ok: true });
     } finally {
-      writeSpy.mockRestore();
+      clearTimeout(timeoutDiagnostic);
     }
-
-    expect(await verifyAuditJournal(path)).toEqual({ ok: true });
-    await expect(
-      logger.log({
-        wrapper: "github",
-        profile: "work",
-        operation: "tools/call",
-        name: "succeeds-after-compaction-checkpoint-rollback",
-        status: "success",
-        durationMs: 3
-      })
-    ).resolves.toBeUndefined();
-    expect(await verifyAuditJournal(path)).toEqual({ ok: true });
   });
 
   it("rejects an oversized integrity record before changing the retained journal", async () => {

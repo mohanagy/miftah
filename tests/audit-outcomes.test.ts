@@ -12,6 +12,8 @@ import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
+import { MiftahError } from "../src/utils/errors.js";
+import { countFixtureStarts, diagnosticFailure, summarizeUpstreamHealth } from "./helpers/upstream-diagnostics.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
@@ -44,6 +46,31 @@ async function waitForAuditEvent(
 }
 
 describe("audit outcomes", () => {
+  it("classifies account-identity selection failures as policy audit outcomes", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} },
+      audit: { enabled: false }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles);
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const auditStatus = (wrapper as unknown as {
+      auditStatus(error: MiftahError): string;
+    }).auditStatus.bind(wrapper);
+
+    try {
+      expect(auditStatus(new MiftahError("PROFILE_IDENTITY_SELECTION_REQUIRED", "safe"))).toBe("denied");
+      expect(auditStatus(new MiftahError("PROFILE_IDENTITY_CONFIRMATION_REQUIRED", "safe"))).toBe(
+        "confirmation-required"
+      );
+    } finally {
+      await wrapper.close();
+    }
+  });
+
   it("records one terminal operation event for list, management, and unknown-tool requests", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-outcomes-"));
     const auditPath = join(directory, "audit.jsonl");
@@ -119,12 +146,25 @@ describe("audit outcomes", () => {
   it("records wrapper and lazy upstream lifecycle outcomes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-lifecycle-"));
     const auditPath = join(directory, "audit.jsonl");
+    const initializedPath = join(directory, "upstream-initialized");
+    const listToolsStartedPath = join(directory, "upstream-list-tools-started");
+    const startCountPath = join(directory, "upstream-start-count");
+    await writeFile(startCountPath, "");
     const config = validateConfig({
       version: "1",
       name: "accounts",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
-      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
+            TEST_LIST_TOOLS_STARTED_PATH: listToolsStartedPath,
+            TEST_START_COUNT_PATH: startCountPath
+          }
+        }
+      },
       audit: { path: auditPath }
     });
     const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 1_000 });
@@ -134,7 +174,30 @@ describe("audit outcomes", () => {
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
-      await client.listTools();
+      const startsBeforeDiscovery = await countFixtureStarts(startCountPath);
+      await Promise.all([
+        writeFile(initializedPath, "before-discovery"),
+        writeFile(listToolsStartedPath, "before-discovery")
+      ]);
+      try {
+        await client.listTools();
+      } catch (error) {
+        const [starts, initialized, listToolsStarted] = await Promise.all([
+          countFixtureStarts(startCountPath),
+          readFile(initializedPath, "utf8"),
+          readFile(listToolsStartedPath, "utf8")
+        ]);
+        throw diagnosticFailure(
+          "Lazy upstream discovery failed",
+          {
+            startDelta: starts - startsBeforeDiscovery,
+            initialized,
+            listToolsStarted,
+            health: summarizeUpstreamHealth(manager.listHealth())
+          },
+          error
+        );
+      }
       await client.close();
       await wrapper.close();
 

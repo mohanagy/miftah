@@ -34,6 +34,31 @@ describe("CLI parser", () => {
     expectUsageError(["serve", "--transport", "websocket"]);
   });
 
+  it("parses only an explicit loopback Console launch with an optional port", () => {
+    expect(parseCli(["console", "--config", "wrapper.json", "--port", "43127"])).toEqual({
+      kind: "run",
+      command: "console",
+      options: { config: "wrapper.json", port: "43127" }
+    });
+    expect(renderCommandHelp("console")).toContain("--port <number>");
+    expectUsageError(["serve", "--port", "43127"]);
+  });
+
+  it("parses the optional browser dashboard without requiring a configuration path", () => {
+    expect(parseCli(["dashboard"])).toEqual({
+      kind: "run",
+      command: "dashboard",
+      options: {}
+    });
+    expect(parseCli(["dashboard", "--config", "wrapper.json", "--port", "43127", "--no-open"])).toEqual({
+      kind: "run",
+      command: "dashboard",
+      options: { config: "wrapper.json", port: "43127", noOpen: true }
+    });
+    expect(renderCommandHelp("dashboard")).toContain("--no-open");
+    expectUsageError(["console", "--no-open"]);
+  });
+
   it("accepts command options before and after commands, including equals values", () => {
     expect(parseCli(["--config=wrapper.json", "doctor", "--json"])).toEqual({
       kind: "run",
@@ -67,6 +92,71 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses nested connection and OAuth lifecycle commands", () => {
+    expect(
+      parseCli([
+        "connection",
+        "add",
+        "--config",
+        "wrapper.json",
+        "--profile",
+        "production",
+        "--upstream",
+        "default",
+        "--issuer",
+        "https://auth.example.com",
+        "--client-registration",
+        "dynamic",
+        "--scope",
+        "openid",
+        "--scope=profile",
+        "--write"
+      ])
+    ).toEqual({
+      kind: "run",
+      command: "connection add",
+      options: {
+        config: "wrapper.json",
+        profile: "production",
+        upstream: "default",
+        issuer: "https://auth.example.com",
+        clientRegistration: "dynamic",
+        scopes: ["openid", "profile"],
+        write: true
+      }
+    });
+    expect(parseCli(["connection", "list", "--config=wrapper.json", "--client", "claude-desktop"])).toEqual({
+      kind: "run",
+      command: "connection list",
+      options: { config: "wrapper.json", client: "claude-desktop" }
+    });
+    expect(parseCli(["connection", "status", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "connection status",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+    expect(parseCli(["connection", "test", "--config=wrapper.json", "--profile", "production"])).toEqual({
+      kind: "run",
+      command: "connection test",
+      options: { config: "wrapper.json", profile: "production" }
+    });
+    expect(parseCli(["auth", "connect", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "auth connect",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+    expect(parseCli(["auth", "reauth", "--config=wrapper.json", "--profile", "production", "--non-interactive"])).toEqual({
+      kind: "run",
+      command: "auth reauth",
+      options: { config: "wrapper.json", profile: "production", nonInteractive: true }
+    });
+    expect(parseCli(["auth", "disconnect", "--config=wrapper.json", "--connection", "oauthconn:fixture"])).toEqual({
+      kind: "run",
+      command: "auth disconnect",
+      options: { config: "wrapper.json", connection: "oauthconn:fixture" }
+    });
+  });
+
   it("accepts a leading dash in an explicitly assigned option value", () => {
     expect(parseCli(["--config=-leading.json", "validate"])).toEqual({
       kind: "run",
@@ -90,6 +180,22 @@ describe("CLI parser", () => {
   });
 
   it("parses all init-only onboarding options before or after init, including equals values", () => {
+    expect(
+      parseCli([
+        "init",
+        "gsc",
+        "--preset=google-search-console",
+        "--oauth-client-secrets-file=/Users/example/.config/gsc/client-secrets.json"
+      ])
+    ).toEqual({
+      kind: "run",
+      command: "init",
+      options: {
+        name: "gsc",
+        preset: "google-search-console",
+        oauthClientSecretsFile: "/Users/example/.config/gsc/client-secrets.json"
+      }
+    });
     expect(
       parseCli([
         "--interactive",
@@ -164,6 +270,10 @@ describe("CLI parser", () => {
     expect(initHelp).toContain("--url <url>");
     expect(initHelp).toContain("--header-name <name>");
     expect(initHelp).toContain("--header-prefix <prefix>");
+    expect(initHelp).toContain("--oauth-client-secrets-file <file>");
+    expect(renderCommandHelp("connection add")).toContain("miftah connection add");
+    expect(renderCommandHelp("connection add")).toContain("--scope <scope>");
+    expect(renderCommandHelp("auth reauth")).toContain("--non-interactive");
   });
 
   it("returns help without requiring a command and recognizes help around commands", () => {
@@ -202,6 +312,7 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--url"]);
     expectUsageError(["init", "--header-name"]);
     expectUsageError(["init", "--header-prefix"]);
+    expectUsageError(["init", "--oauth-client-secrets-file"]);
     expectUsageError(["init", "--interactive", "--interactive"]);
     expectUsageError(["init", "--client=cursor", "--client=cursor"]);
     expectUsageError(["init", "--credential-env=MCP_TOKEN", "--credential-env=MCP_TOKEN"]);
@@ -214,7 +325,19 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--url=https://one.example", "--url=https://two.example"]);
     expectUsageError(["init", "--header-name=Authorization", "--header-name=Authorization"]);
     expectUsageError(["init", "--header-prefix=Bearer", "--header-prefix=Bearer"]);
+    expectUsageError([
+      "init",
+      "--oauth-client-secrets-file=/one.json",
+      "--oauth-client-secrets-file=/two.json"
+    ]);
     expectUsageError(["validate", "unexpected"]);
+    expectUsageError(["connection"]);
+    expectUsageError(["connection", "unknown"]);
+    expectUsageError(["auth"]);
+    expectUsageError(["auth", "unknown"]);
+    expectUsageError(["connection", "list", "unexpected"]);
+    expectUsageError(["connection", "list", "--issuer", "https://auth.example.com"]);
+    expectUsageError(["auth", "disconnect", "--non-interactive"]);
     expectUsageError(["--version", "validate"]);
     expectUsageError(["version", "--version"]);
     expectUsageError(["--help", "--version"]);

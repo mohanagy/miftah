@@ -1,6 +1,6 @@
 # CLI reference
 
-`miftah` is an MCP wrapper with STDIO as its default transport and an opt-in local Streamable HTTP server. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
+`miftah` is an MCP wrapper with STDIO as its default transport, an opt-in local Streamable HTTP server, and a separately launched local Console dashboard/control API. Run `miftah --help` for the generated command list, or `miftah <command> --help` for the options accepted by one command. The help text is the authoritative grammar for the installed version.
 
 ## Help
 
@@ -8,7 +8,7 @@
 Usage: miftah [command] [options]
 ```
 
-The root command list is `serve`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
+The root command list includes `serve`, `dashboard`, `console`, `validate`, `doctor`, `schema`, `init`, `migrate-config`, `connection add|list|status|test`, `auth connect|reauth|disconnect`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
 
 Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires the pre-1.0 deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
 
@@ -19,11 +19,20 @@ Documented command names, options, JSON success forms, and exit categories are c
 | Command | Required input | Options | Output and behavior |
 | --- | --- | --- | --- |
 | `miftah serve --config <file>` | `--config` | `--config <file>`, `--transport <stdio\|http>` | Runs the STDIO MCP wrapper by default, or the configured local Streamable HTTP endpoint with `--transport http`. `miftah --config <file>` is the equivalent default-command STDIO form. |
+| `miftah console --config <file>` | `--config` | `--config <file>`, `--port <number>` | Explicitly starts the separate literal-loopback Console control API. It prints the URL and a one-use terminal bootstrap code; no daemon or MCP session is started. |
+| `miftah dashboard` | none | `--config <file>`, `--port <number>`, `--no-open` | Starts the optional foreground browser Console on literal loopback. It defaults to `~/.config/miftah/miftah.json`, permits a missing file for first-run setup, opens the system browser unless `--no-open` is set, and never starts a daemon. |
 | `miftah validate --config <file>` | `--config` | `--config <file>` | Validates the JSON configuration without starting an upstream. Writes a JSON object with `ok`, `name`, and `profiles`. |
 | `miftah doctor --config <file>` | `--config` | `--config <file>`, `--json` | Validates configuration and checks upstream readiness. Default output is a human-readable report; `--json` writes only the JSON report. A healthy or degraded report exits `0`; a failed report exits `1`. |
 | `miftah schema` | none | none | Writes the Miftah JSON Schema as pretty-printed JSON. |
-| `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>`, `--interactive`, `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>`, `--credential-env <name>`, `--npm-package <package>`, `--docker-image <image>`, `--url <url>`, `--header-name <name>`, `--header-prefix <prefix>` | Writes a strict catalog configuration with exclusive creation and can print client JSON snippets. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
+| `miftah init [name]` | none | `--name <name>`, `--preset <name>`, `--output <file>`, `--interactive`, `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>`, `--credential-env <name>`, `--npm-package <package>`, `--docker-image <image>`, `--url <url>`, `--header-name <name>`, `--header-prefix <prefix>`, `--oauth-client-secrets-file <file>` | Writes a strict catalog configuration with exclusive creation and can print client JSON snippets. The positional `name` and `--name` are alternatives; the default name is `miftah-wrapper`. |
 | `miftah migrate-config --config <file>` | `--config` | `--config <file>`, `--write` | Plans a supported configuration-format migration and writes a safe JSON report. It is dry-run by default. `--write` validates the candidate, makes an exact exclusive `<file>.bak`, then uses a same-directory non-overwriting publication for a changed regular non-symlink source; it never resolves secrets or starts an upstream. |
+| `miftah connection add --config <file>` | `--config`, `--profile`, `--issuer`, `--client-registration` | `--connection <ref>`, `--upstream <name>`, repeated `--scope <scope>`, `--write` | Plans a v3 OAuth binding by default. `--write` applies the reviewed candidate with a unique recovery backup and configured audit event. It never resolves credentials or starts an upstream. |
+| `miftah connection list --config <file>` | `--config` | `--client <claude-desktop\|claude-code\|cursor\|vscode\|all>` | Lists redacted connection state. Optional snippets are copyable JSON only; Miftah never edits client settings. |
+| `miftah connection status --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or `--profile <name>` with optional `--upstream <name>` | Shows exact non-secret binding, credential expiry/state, and coarse identity state. |
+| `miftah connection test --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream | Tests the existing authenticated upstream and identity probe without allowing browser handoff. |
+| `miftah auth connect --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream, `--non-interactive` | Uses an existing credential or starts the bounded system-browser authorization flow. Headless mode returns a typed diagnostic instead of opening a browser. |
+| `miftah auth reauth --config <file>` | `--config` plus an unambiguous selector | connect options | Forces a fresh flow while retaining the old vault credential until replacement succeeds. |
+| `miftah auth disconnect --config <file>` | `--config` plus an unambiguous selector | `--connection <ref>` or profile/upstream | Deletes only the exact local vault credential and marks it disconnected; provider-side revocation remains provider-owned. |
 | `miftah list-tools --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts the selected profile, discovers its upstream tools, writes a JSON array, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah test-profile --config <file>` | `--config` | `--config <file>`, `--profile <name>` | Starts and initializes one profile, writes `{"ok":true,"profile":"…"}`, then closes the manager. `--profile` defaults to the configured default profile. |
 | `miftah logs --config <file>` | `--config` | `--config <file>`, `--follow` | Reads the configured audit JSONL as normalized, redacted JSONL. `--follow` continues watching it. This command does not construct an upstream manager. |
@@ -39,16 +48,24 @@ Every command also accepts `--help` and `-h`; those generated per-command help s
 
 HTTP bearer authentication is configured only through `server.http.authToken` as a secret reference. The CLI never accepts a bearer token option and never writes one to its listener or error output. See [HTTP server transport](config.md#http-server-transport) for loopback, non-loopback, Host, Origin, session, and request-limit requirements.
 
+### Local Console dashboard and control API
+
+`miftah dashboard` opens the optional browser-local Console and prints its exact URL, resolved configuration location, and one-use bootstrap code. Without `--config`, it uses `~/.config/miftah/miftah.json`. A missing file is not created until the operator submits a strict first-run native-OAuth profile; an existing file is loaded and is never silently replaced. `--no-open` leaves browser launch to the operator while keeping the same foreground server.
+
+`miftah console --config <file>` binds only literal `127.0.0.1`, uses an ephemeral port unless `--port` is supplied, and prints an invocation-bound one-use bootstrap code to the launching terminal. The code is not an OAuth token or MCP bearer. Enter it only in the local Console bootstrap screen; never paste it into a URL, client configuration, log, or support ticket. Stopping the process closes the listener and invalidates every browser session. Restarting produces a fresh bootstrap credential.
+
+The Console API is versioned under `/api/v1` and uses exact Host checks, exact loopback Origin plus CSRF for every mutation, a short-lived HttpOnly same-site session, bounded JSON, fail-closed mutation audit, and metadata-only responses. Authenticated reads may omit Origin because normal same-origin browser GETs do not consistently send it. It modifies durable configuration and exact local OAuth credentials for future client connections; it cannot take over or silently change another process's active Claude Desktop session. See the [local Console dashboard and control API](console-api.md) for the full endpoint and bootstrap contract.
+
 ### `init` presets and paths
 
-`--preset` defaults to `generic`. The strict catalog accepts `generic`, `github`, `sentry`, `generic-npx`, `generic-docker`, and `streamable-http`; an unrecognized preset is a usage error. `--output` defaults to `<name>.miftah.json`. Miftah resolves the output path from the current working directory, creates missing parent directories, and refuses to overwrite an existing file. Quote shell paths and names containing spaces:
+`--preset` defaults to `generic`. The strict catalog accepts `generic`, `github`, `sentry`, `google-search-console`, `generic-npx`, `generic-docker`, and `streamable-http`; an unrecognized preset is a usage error. `--output` defaults to `<name>.miftah.json`. Miftah resolves the output path from the current working directory, creates missing parent directories, and refuses to overwrite an existing file. Quote shell paths and names containing spaces:
 
 ```sh
 miftah init "work wrapper" --preset github --output "$HOME/Miftah configs/work wrapper.json"
 miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 ```
 
-`generic-npx` requires `--npm-package` with exact package SemVer; `generic-docker` requires a canonical digest in `--docker-image`; and `streamable-http` requires `--url` plus optional credential environment/header metadata. `--credential-env` is optional where supported. See [preset and client compatibility](presets-and-clients.md) for exact inputs, pins, provenance, and client snippets.
+`generic-npx` requires `--npm-package` with exact package SemVer; `generic-docker` requires a canonical digest in `--docker-image`; `streamable-http` requires `--url` plus optional credential environment/header metadata; and `google-search-console` requires `--oauth-client-secrets-file` with an absolute path. `--credential-env` is optional where supported. The GSC adapter prints credential/browser/identity ownership without printing that path. See [preset and client compatibility](presets-and-clients.md) for exact inputs, pins, provenance, and client snippets, and [provider adapters](provider-adapters.md) for the upstream-owned OAuth boundary.
 
 `--interactive` uses a wizard only when both input and output are TTYs. EOF or Ctrl-C cancels without writing a config. It asks for variable names and safe metadata, never secret values. In noninteractive use, `init` creates only the config unless `--client` is supplied. `--client` prints JSON with absolute Node and compiled Miftah paths; it does not write a host config. For `claude-code` or `all`, it also prints a separate, exact management-tool `permissions.ask` fragment for manual merge into Claude Code settings; it never writes or overwrites those settings. Regenerate the snippets after moving or upgrading Miftah or changing the config path.
 
@@ -57,6 +74,14 @@ miftah validate --config "$HOME/Miftah configs/work wrapper.json"
 `miftah migrate-config --config <file>` accepts only the documented supported formats and writes a JSON report containing source/target versions, safe structural actions, and whether a write occurred. It reads and validates the candidate before it changes anything. It does not emit a raw config, a diff, resolved secret values, or provider output.
 
 `--write` is intentionally required for mutation. For a changed valid-UTF-8 configuration, Miftah refuses symlinks and non-regular sources, captures a source snapshot, moves it into a dedicated same-directory transaction directory, and privately prepares the exact backup and synced candidate. It publishes each only to an absent destination path, so it never overwrites a concurrent file. On Windows, the transaction directory is created with a current-user-only DACL and the source owner/group/DACL is copied and verified before either private file receives source-derived bytes. If publication cannot complete, Miftah restores the verified original when it can do so without overwriting anything; otherwise it exits nonzero and reports the retained recovery transaction directory. A current configuration reports `changed: false`; with `--write` it remains untouched and creates no backup. See [configuration version compatibility](config.md#configuration-version-compatibility-and-migration) for version windows and exactly which aliases can be migrated.
+
+### OAuth connection lifecycle
+
+Connection selectors never guess between accounts. Use `--connection oauthconn:<uuid>`, or provide a profile/upstream tuple that resolves to exactly one configured binding. Omitting a selector is accepted only when the configuration contains one connection. An ambiguous or missing target returns a typed configuration diagnostic.
+
+`connection add` is dry-run by default. Copy the generated reference from the report into `--connection`, review the planned version and structural actions, and add `--write` to commit that exact reference. Every write re-reads and validates an exact source snapshot, creates a unique same-directory recovery backup, and uses the guarded non-overwriting transaction documented for migration. Existing connection references are never replaced.
+
+`connection list`, `connection status`, and client snippets do not resolve unrelated profile secrets or start an upstream. `connection test` may access the OS vault and upstream but disables browser handoff. `auth connect` and `auth reauth` are the only commands that permit the browser flow; `--non-interactive` disables it for CI and headless hosts. Reauth does not delete the usable old credential before a replacement succeeds. Disconnect removes only Miftah's exact local credential and cannot promise provider-side revocation.
 
 ### `doctor`
 
@@ -77,7 +102,7 @@ When identity verification is unconfigured, doctor records `DOCTOR_IDENTITY` as 
 
 `miftah_verify_identity` is an MCP management tool, not a shell subcommand. It accepts optional `profile` and `upstream` strings. `profile` defaults to the active profile. Supplying a named `upstream` verifies only that target; `upstream: "default"` is an alias only for a single unnamed upstream. With `upstream` omitted, Miftah verifies every configured target in deterministic upstream order. The response always contains safe structured identity results, including nonverified states, and its audit event contains only safe evidence and a failure outcome when verification did not succeed.
 
-`miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose configured or cached identity status but do not start an upstream or run a probe.
+`miftah_list_profiles` and `miftah_profile_info` show each profile's configured and persisted binding evidence; `miftah_current_profile`, `miftah_health`, and `miftah_route_preview` expose the same configured, persisted, or cached identity status. None starts an upstream or runs a probe. A newly started client reloads persisted evidence and durable profile selection, but another process or Console action cannot silently replace an already active client's in-memory selection; restart that client when applying an external configuration or durable-selection change.
 
 ### MCP profile management
 

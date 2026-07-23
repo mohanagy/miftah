@@ -8,6 +8,7 @@ import type { RoutingContextEvidence, RoutingMatcherEvidence } from "../routing/
 import type { IdentityStatus } from "../identity/identity-types.js";
 import type { ProfileLeaseStatus, ProfileLockStatus, ProfileSelection } from "../profiles/profile-manager.js";
 import type { ApprovalMechanism } from "../approvals/approval-store.js";
+import type { OAuthCredentialState, OAuthIdentityState } from "../oauth/connection-types.js";
 
 export type AuditFailureMode = "fail-open" | "fail-closed";
 
@@ -89,6 +90,10 @@ export interface AuditEvent {
   riskSource?: RiskClassificationSource;
   riskConfidence?: RiskClassificationConfidence;
   identity?: IdentityStatus | readonly IdentityStatus[];
+  /** Redacted OAuth connection state; token material is never an audit field. */
+  oauthConnectionState?: OAuthCredentialState;
+  /** Redacted OAuth connection identity state; identity evidence is never an audit field. */
+  oauthIdentityState?: OAuthIdentityState;
   routingEvidence?: RoutingContextEvidence;
   routingMatcherEvidence?: readonly RoutingMatcherEvidence[];
   arguments?: unknown;

@@ -33,6 +33,7 @@ function isIdentityConfig(value: unknown): value is MiftahConfig["profiles"][str
 }
 
 function isMiftahConfig(value: z.output<typeof miftahPublicConfigSchema>): value is MiftahConfig {
+  if (value.version !== "3" && value.oauth !== undefined) return false;
   return Object.values(value.profiles).every(
     (profile) =>
       (profile.identity === undefined || isIdentityConfig(profile.identity)) &&

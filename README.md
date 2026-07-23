@@ -73,6 +73,14 @@ Claude Desktop is a GUI app and does not inherit terminal startup files such as 
 
 Continue with the step-by-step [Claude Desktop setup](docs/claude-desktop.md), or start from the [GitHub example](docs/examples/github.md) or [Sentry example](docs/examples/sentry.md).
 
+Prefer a browser for OAuth setup? Run:
+
+```bash
+miftah dashboard
+```
+
+The optional local Console opens on `127.0.0.1`, creates a validated first native-OAuth profile without hand-written JSON, shows redacted connection/audit state, and generates client JSON for you to review and copy. It stays in the foreground, never edits Claude or another client configuration, and does not accept provider passwords, browser cookies, or raw tokens. Use `--config <file>` to manage another Miftah configuration or `--no-open` when you only want the local URL.
+
 ## A real multi-account setup
 
 Imagine you use Sentry for two products. Instead of adding two separate Sentry servers to Claude Desktop, configure one `miftah-sentry` connector with two profiles:
@@ -91,7 +99,7 @@ When you need the other product, select its profile deliberately. When a tool ca
 - **Other compatible MCP servers:** configure a generic STDIO, Streamable HTTP, or legacy SSE upstream, then add profiles around it.
 - **Multiple upstreams in one wrapper:** use an account bundle when related upstreams belong behind one controlled connection.
 
-Miftah does not run provider OAuth browser, callback, refresh, or revocation flows. If an upstream owns its OAuth flow, complete that flow with the upstream or provider and then configure Miftah around the resulting supported connection. Read [OAuth support](docs/oauth-support.md) before assuming a provider OAuth model is compatible.
+Miftah can authorize a standards-compatible remote HTTPS Streamable HTTP MCP server through discovery, PKCE, a bounded loopback browser callback, OS-vault storage, and refresh. `miftah connection …` and `miftah auth …` provide reviewed setup, status, noninteractive testing, connect, safe reauth, and local disconnect. Provider-specific or local STDIO OAuth remains owned by that upstream, and local disconnect does not claim provider-side token revocation. A bounded [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot) now generates an exact-pinned upstream-owned setup without reading its token cache or pretending it is native Miftah OAuth. Read [OAuth support](docs/oauth-support.md) for the exact compatibility and configuration boundary.
 
 ## Trust and control boundaries
 
@@ -100,6 +108,8 @@ Miftah supports environment and dotenv references, plus OS keychain references s
 For credential-file workflows, see [profile credential isolation](docs/config.md#profile-credential-isolation). Where provider/account signals are stable, opt-in [provider routing matchers](docs/config.md#provider-routing-matchers) and [routing context](docs/config.md#routing-context) can inform profile selection; ambiguous context never selects an account by guesswork.
 
 When an operator enables profile locking, `miftah_lock_profile` and `miftah_unlock_profile` expose that control to the MCP client. For the complete security scope and future work, read the linked designs below.
+
+The optional local Console is started explicitly with `miftah dashboard`; `miftah console --config <file>` remains the API-only form. It binds only to loopback, uses a one-time terminal bootstrap plus browser session/CSRF protection, and exposes redacted metadata and audited connection operations under `/api/v1`. It is not a daemon and cannot change an already-running MCP client's in-memory session. See the [Console contract](docs/console-api.md).
 
 ## Is Miftah right for you?
 
@@ -115,6 +125,8 @@ If you use one account with one direct MCP server and do not need profile, routi
 - [Configuration reference](docs/config.md)
 - [Security boundary](docs/security.md), [Threat model](docs/threat-model.md), and [OAuth and Console security design](docs/oauth-console-threat-model.md)
 - [OAuth support](docs/oauth-support.md)
+- [Provider adapters and Google Search Console pilot](docs/provider-adapters.md)
+- [Local Console dashboard and control API](docs/console-api.md)
 - [CLI reference](docs/cli.md)
 - [Architecture](docs/architecture.md)
 - [Changelog and release policy](CHANGELOG.md)

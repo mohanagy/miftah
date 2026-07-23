@@ -53,6 +53,8 @@ export interface AuditLifecycleInput {
   lockToProfile?: string;
   status: AuditStatus;
   errorCode?: string;
+  oauthConnectionState?: AuditEvent["oauthConnectionState"];
+  oauthIdentityState?: AuditEvent["oauthIdentityState"];
 }
 
 export interface AuditApprovalInput {
@@ -119,7 +121,16 @@ export class AuditTrail {
   }
 
   async writeLifecycle(input: AuditLifecycleInput): Promise<void> {
-    await this.write({
+    await this.write(this.lifecycleEvent(input));
+  }
+
+  /** Writes a stateful lifecycle transition with fail-closed audit semantics. */
+  async writeRequiredLifecycle(input: AuditLifecycleInput): Promise<void> {
+    await this.writeRequired(this.lifecycleEvent(input));
+  }
+
+  private lifecycleEvent(input: AuditLifecycleInput): AuditEvent {
+    return {
       wrapper: this.wrapperName,
       kind: "lifecycle",
       eventId: randomUUID(),
@@ -132,8 +143,10 @@ export class AuditTrail {
       durationMs: 0,
       ...(input.upstream === undefined ? {} : { upstream: input.upstream }),
       ...(input.lockToProfile === undefined ? {} : { lockToProfile: input.lockToProfile }),
-      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode })
-    });
+      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+      ...(input.oauthConnectionState === undefined ? {} : { oauthConnectionState: input.oauthConnectionState }),
+      ...(input.oauthIdentityState === undefined ? {} : { oauthIdentityState: input.oauthIdentityState })
+    };
   }
 
   /** Records a safe state transition for a one-time approval without serializing its bearer or arguments. */

@@ -732,6 +732,10 @@ describe("upstream process manager", () => {
   });
 
   it("records a failed restart teardown before starting a replacement session", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-failed-restart-replacement-"));
+    const startCountPath = join(directory, "upstream-start-count");
+    const initializedPath = join(directory, "upstream-initialized");
+    await writeFile(startCountPath, "");
     const manager = new UpstreamProcessManager(
       {
         transport: "stdio",
@@ -739,7 +743,7 @@ describe("upstream process manager", () => {
         args: [fixture],
         env: { TEST_SHUTDOWN_DELAY_MS: "500" }
       },
-      { work: {} },
+      { work: { env: { TEST_START_COUNT_PATH: startCountPath, TEST_INITIALIZED_PATH: initializedPath } } },
       { startupTimeoutMs: 1_000, shutdownTimeoutMs: 50 }
     );
     const events: Array<{ type: string; status: string; errorCode?: string }> = [];
@@ -747,7 +751,35 @@ describe("upstream process manager", () => {
 
     try {
       await manager.get("work");
-      await manager.restart("work");
+      const startsBeforeRestart = await countStarts(startCountPath);
+      await waitFor(() => existsSync(initializedPath), Boolean);
+      await unlink(initializedPath);
+      try {
+        await manager.restart("work");
+      } catch (error) {
+        const starts = await countStarts(startCountPath);
+        const health = manager.listHealth().map((entry) => ({
+          profile: entry.profile,
+          upstreamName: entry.upstreamName,
+          state: entry.state,
+          processState: entry.processState,
+          restartCount: entry.restartCount,
+          lastStopReason: entry.lastStopReason,
+          restartLimitReached: entry.restartLimitReached,
+          capabilities: Object.fromEntries(
+            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
+          )
+        }));
+        throw new Error(
+          `Failed-restart replacement startup diagnostic: ${JSON.stringify({
+            errorCode: error instanceof MiftahError ? error.code : "unknown",
+            startDelta: starts - startsBeforeRestart,
+            initialized: existsSync(initializedPath),
+            health
+          })}`,
+          { cause: error }
+        );
+      }
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -760,6 +792,7 @@ describe("upstream process manager", () => {
       );
     } finally {
       await manager.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -789,13 +822,20 @@ describe("upstream process manager", () => {
   });
 
   it("finalizes a timed-out close without waiting for its original promise", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-timed-close-replacement-"));
+    const startCountPath = join(directory, "upstream-start-count");
+    const initializedPath = join(directory, "upstream-initialized");
+    await writeFile(startCountPath, "");
     const manager = new UpstreamProcessManager(
       {
         transport: "stdio",
         command: process.execPath,
         args: [fixture]
       },
-      { work: {}, personal: {} },
+      {
+        work: { env: { TEST_START_COUNT_PATH: startCountPath, TEST_INITIALIZED_PATH: initializedPath } },
+        personal: { env: { TEST_START_COUNT_PATH: startCountPath, TEST_INITIALIZED_PATH: initializedPath } }
+      },
       { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25, maxConcurrentProfiles: 1 }
     );
 
@@ -811,9 +851,38 @@ describe("upstream process manager", () => {
       expect(manager.listHealth()).toMatchObject([
         { profile: "work", processState: "stopped", lastStopReason: "shutdown-timeout" }
       ]);
-      await expect(manager.get("personal")).resolves.toBeDefined();
+      const startsBeforeReplacement = await countStarts(startCountPath);
+      await writeFile(initializedPath, "before-replacement");
+      try {
+        await manager.get("personal");
+      } catch {
+        const [starts, initialized] = await Promise.all([
+          countStarts(startCountPath),
+          readFile(initializedPath, "utf8")
+        ]);
+        const health = manager.listHealth().map((entry) => ({
+          profile: entry.profile,
+          upstreamName: entry.upstreamName,
+          state: entry.state,
+          processState: entry.processState,
+          restartCount: entry.restartCount,
+          lastStopReason: entry.lastStopReason,
+          restartLimitReached: entry.restartLimitReached,
+          capabilities: Object.fromEntries(
+            Object.entries(entry.capabilities).map(([capability, capabilityHealth]) => [capability, capabilityHealth.state])
+          )
+        }));
+        throw new Error(
+          `Timed-out close replacement startup failed: ${JSON.stringify({
+            startDelta: starts - startsBeforeReplacement,
+            initialized,
+            health
+          })}`
+        );
+      }
     } finally {
       await manager.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

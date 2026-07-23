@@ -243,7 +243,7 @@ describe("configuration diagnostics", () => {
   });
 
   it("rejects unknown config versions without automatic migration", () => {
-    const error = validationError(baseConfig({ version: "3" }));
+    const error = validationError(baseConfig({ version: "4" }));
 
     expect(error.code).toBe("UNSUPPORTED_CONFIG_VERSION");
     expect(error.details).toEqual({

@@ -127,6 +127,15 @@ describe("continuous integration workflow contract", () => {
       'exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"]'
     );
   });
+
+  it("keeps serial process-backed tests in one isolated fork", () => {
+    const config = readRepositoryFile("vitest.config.ts");
+
+    expect(config).toContain("fileParallelism: false");
+    expect(config).toMatch(
+      /poolOptions:\s*\{\s*forks:\s*\{\s*singleFork:\s*true,\s*isolate:\s*true\s*\}\s*\}/u
+    );
+  });
 });
 
 describe("trusted publishing workflow contract", () => {

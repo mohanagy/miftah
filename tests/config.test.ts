@@ -582,6 +582,52 @@ describe("config foundation", () => {
     });
   });
 
+  it("accepts an explicit account-selection mode on an identity binding", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "github",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write"],
+            selectionMode: "explicit"
+          }
+        },
+        personal: {}
+      }
+    });
+
+    expect(config.profiles.work?.identity?.selectionMode).toBe("explicit");
+  });
+
+  it("rejects a confirmed account-selection mode without a confirmation or static-lock path", () => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected: { login: "mona" },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000,
+              requiredForRisk: ["write"],
+              selectionMode: "confirmed"
+            }
+          },
+          personal: {}
+        }
+      })
+    ).toThrow(/profiles\.work\.identity\.selectionMode/u);
+  });
+
   it("rejects duplicate identity risk requirements", () => {
     expect(() =>
       validateConfig({

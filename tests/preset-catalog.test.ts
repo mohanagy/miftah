@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildPresetConfig,
@@ -11,13 +12,16 @@ function serializedConfig(config: unknown): string {
   return JSON.stringify(config);
 }
 
+const gscClientSecretsFile = resolve("fixtures", "gsc", "client-secrets.json");
+
 describe("preset catalog", () => {
   it("publishes one versioned catalog with inspectable preset requirements", () => {
-    expect(PRESET_CATALOG.version).toBe("1");
+    expect(PRESET_CATALOG.version).toBe("2");
     expect(Object.keys(PRESET_CATALOG.presets)).toEqual([
       "generic",
       "github",
       "sentry",
+      "google-search-console",
       "generic-npx",
       "generic-docker",
       "streamable-http"
@@ -25,6 +29,7 @@ describe("preset catalog", () => {
     expect(PRESET_CATALOG.presets["generic-npx"].requirements.npmPackage).toBe("required");
     expect(PRESET_CATALOG.presets["generic-docker"].requirements.dockerImage).toBe("required");
     expect(PRESET_CATALOG.presets["streamable-http"].requirements.url).toBe("required");
+    expect(PRESET_CATALOG.presets["google-search-console"].requirements.oauthClientSecretsFile).toBe("required");
   });
 
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
@@ -33,6 +38,9 @@ describe("preset catalog", () => {
       buildPresetConfig("generic", "generic", genericOptions),
       buildPresetConfig("github", "github"),
       buildPresetConfig("sentry", "sentry"),
+      buildPresetConfig("gsc", "google-search-console", {
+        oauthClientSecretsFile: gscClientSecretsFile
+      }),
       buildPresetConfig("npx", "generic-npx", {
         npmPackage: "@scope/server@1.2.3",
         credentialEnv: "NPM_SERVER_TOKEN"
@@ -81,6 +89,41 @@ describe("preset catalog", () => {
       env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
       policy: "readonly"
     });
+  });
+
+  it("builds the exact pinned GSC pilot without enabling destructive tools or Miftah native OAuth", () => {
+    const config = buildPresetConfig("gsc", "google-search-console", {
+      oauthClientSecretsFile: gscClientSecretsFile
+    });
+
+    expect(config.upstream).toEqual({
+      transport: "stdio",
+      command: "uvx",
+      args: ["mcp-search-console@0.3.2"]
+    });
+    expect(config.profiles.default).toMatchObject({
+      description: "Google Search Console account (OAuth owned by upstream)",
+      env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
+      policy: "readonly"
+    });
+    expect(config).not.toHaveProperty("oauth");
+    expect(config.profiles.default?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("requires one safe absolute OAuth client-secrets file path for the GSC pilot", () => {
+    expect(() => buildPresetConfig("gsc", "google-search-console")).toThrow(PresetCatalogError);
+    for (const value of [
+      "client-secrets.json",
+      "",
+      " /tmp/client.json",
+      "/tmp/client.json\nignored",
+      resolve("fixtures", "${HOME}", "client-secrets.json")
+    ] as const) {
+      expect(() => buildPresetConfig("gsc", "google-search-console", { oauthClientSecretsFile: value })).toThrow(
+        PresetCatalogError
+      );
+    }
   });
 
   it("requires and validates exact generic preset inputs", () => {
@@ -230,6 +273,11 @@ describe("preset catalog", () => {
     ],
     ["streamable-http", "url", { url: "https://mcp.example.com/v1" }],
     [
+      "google-search-console",
+      "oauthClientSecretsFile",
+      { oauthClientSecretsFile: gscClientSecretsFile }
+    ],
+    [
       "streamable-http",
       "headerName",
       { url: "https://mcp.example.com/v1", credentialEnv: "REMOTE_TOKEN", headerName: "Authorization" }
@@ -271,6 +319,7 @@ describe("preset catalog", () => {
     ["generic", { npmPackage: "server@1.2.3" }],
     ["github", { credentialEnv: "GITHUB_TOKEN" }],
     ["sentry", { credentialEnv: "SENTRY_TOKEN" }],
+    ["google-search-console", { oauthClientSecretsFile: gscClientSecretsFile, credentialEnv: "GSC_TOKEN" }],
     ["generic-npx", { npmPackage: "server@1.2.3", dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }],
     ["generic-docker", { dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", url: "https://mcp.example.com" }],
     ["streamable-http", { url: "https://mcp.example.com", npmPackage: "server@1.2.3" }]

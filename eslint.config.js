@@ -5,7 +5,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ["dist/**", "node_modules/**", "**/*.json"]
+    ignores: ["dist/**", "node_modules/**", "**/*.json", "tests/fixtures/fake-upstream-bundled.mjs"]
   },
   {
     files: ["tests/fixtures/**/*.mjs"],

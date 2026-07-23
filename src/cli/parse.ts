@@ -11,8 +11,15 @@ type ValueOptionName =
   | "url"
   | "headerName"
   | "headerPrefix"
-  | "transport";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write";
+  | "oauthClientSecretsFile"
+  | "transport"
+  | "connection"
+  | "upstream"
+  | "issuer"
+  | "clientRegistration"
+  | "scopes"
+  | "port";
+type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -28,12 +35,21 @@ export interface CliOptions {
   readonly url?: string;
   readonly headerName?: string;
   readonly headerPrefix?: string;
+  readonly oauthClientSecretsFile?: string;
   readonly transport?: "stdio" | "http";
+  readonly connection?: string;
+  readonly upstream?: string;
+  readonly issuer?: string;
+  readonly clientRegistration?: string;
+  readonly scopes?: readonly string[];
+  readonly port?: string;
   readonly follow?: true;
   readonly json?: true;
   readonly interactive?: true;
   readonly includeArguments?: true;
   readonly write?: true;
+  readonly nonInteractive?: true;
+  readonly noOpen?: true;
 }
 
 interface CliCommandMetadata {
@@ -46,6 +62,14 @@ export const CLI_COMMANDS = {
   serve: {
     description: "Start the MCP wrapper server.",
     options: ["config", "transport"]
+  },
+  console: {
+    description: "Start the optional local Console control API.",
+    options: ["config", "port"]
+  },
+  dashboard: {
+    description: "Open the optional local Miftah Console in a browser.",
+    options: ["config", "port", "noOpen"]
   },
   validate: {
     description: "Validate a Miftah configuration.",
@@ -73,7 +97,8 @@ export const CLI_COMMANDS = {
       "dockerImage",
       "url",
       "headerName",
-      "headerPrefix"
+      "headerPrefix",
+      "oauthClientSecretsFile"
     ]
   },
   "list-tools": {
@@ -99,6 +124,34 @@ export const CLI_COMMANDS = {
   "migrate-config": {
     description: "Plan or explicitly apply a safe configuration migration.",
     options: ["config", "write"]
+  },
+  "connection add": {
+    description: "Plan or add an OAuth connection to an existing profile and upstream.",
+    options: ["config", "connection", "profile", "upstream", "issuer", "clientRegistration", "scopes", "write"]
+  },
+  "connection list": {
+    description: "List configured OAuth connections and optional client snippets.",
+    options: ["config", "client"]
+  },
+  "connection status": {
+    description: "Show redacted OAuth credential and verified-identity state.",
+    options: ["config", "connection", "profile", "upstream"]
+  },
+  "connection test": {
+    description: "Test one OAuth-backed upstream without opening a browser.",
+    options: ["config", "connection", "profile", "upstream"]
+  },
+  "auth connect": {
+    description: "Authorize one configured OAuth connection.",
+    options: ["config", "connection", "profile", "upstream", "nonInteractive"]
+  },
+  "auth reauth": {
+    description: "Replace one OAuth credential through a fresh authorization flow.",
+    options: ["config", "connection", "profile", "upstream", "nonInteractive"]
+  },
+  "auth disconnect": {
+    description: "Remove one OAuth credential from the native OS vault.",
+    options: ["config", "connection", "profile", "upstream"]
   },
   version: {
     description: "Print the Miftah version.",
@@ -202,11 +255,53 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--header-prefix <prefix>",
     description: "Credential header prefix for the streamable-http preset."
   },
+  oauthClientSecretsFile: {
+    name: "oauthClientSecretsFile",
+    takesValue: true,
+    usage: "--oauth-client-secrets-file <file>",
+    description: "Absolute Google OAuth client-secrets file for the GSC preset."
+  },
   transport: {
     name: "transport",
     takesValue: true,
     usage: "--transport <stdio|http>",
     description: "MCP transport for serve."
+  },
+  connection: {
+    name: "connection",
+    takesValue: true,
+    usage: "--connection <ref>",
+    description: "Opaque OAuth connection reference."
+  },
+  upstream: {
+    name: "upstream",
+    takesValue: true,
+    usage: "--upstream <name>",
+    description: "Named upstream, or 'default' for a singleton upstream."
+  },
+  issuer: {
+    name: "issuer",
+    takesValue: true,
+    usage: "--issuer <url>",
+    description: "Exact HTTPS OAuth issuer identifier."
+  },
+  clientRegistration: {
+    name: "clientRegistration",
+    takesValue: true,
+    usage: "--client-registration <mode>",
+    description: "Approved client registration mode or identifier."
+  },
+  scopes: {
+    name: "scopes",
+    takesValue: true,
+    usage: "--scope <scope>",
+    description: "Least-privilege OAuth scope; repeat for multiple scopes."
+  },
+  port: {
+    name: "port",
+    takesValue: true,
+    usage: "--port <number>",
+    description: "Literal-loopback Console port; defaults to an ephemeral port."
   },
   follow: {
     name: "follow",
@@ -237,6 +332,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--write",
     description: "Apply the migration after creating a non-overwriteable backup."
+  },
+  nonInteractive: {
+    name: "nonInteractive",
+    takesValue: false,
+    usage: "--non-interactive",
+    description: "Return a typed diagnostic instead of opening a browser."
+  },
+  noOpen: {
+    name: "noOpen",
+    takesValue: false,
+    usage: "--no-open",
+    description: "Print the local dashboard URL without opening a browser."
   }
 };
 
@@ -253,12 +360,21 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--url": OPTION_DEFINITIONS.url,
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
+  "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
   "--transport": OPTION_DEFINITIONS.transport,
+  "--connection": OPTION_DEFINITIONS.connection,
+  "--upstream": OPTION_DEFINITIONS.upstream,
+  "--issuer": OPTION_DEFINITIONS.issuer,
+  "--client-registration": OPTION_DEFINITIONS.clientRegistration,
+  "--scope": OPTION_DEFINITIONS.scopes,
+  "--port": OPTION_DEFINITIONS.port,
   "--follow": OPTION_DEFINITIONS.follow,
   "--include-arguments": OPTION_DEFINITIONS.includeArguments,
   "--json": OPTION_DEFINITIONS.json,
   "--interactive": OPTION_DEFINITIONS.interactive,
   "--write": OPTION_DEFINITIONS.write,
+  "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
+  "--no-open": OPTION_DEFINITIONS.noOpen,
   "--help": "help",
   "-h": "help",
   "--version": "version",
@@ -281,6 +397,11 @@ function isCliCommand(value: string): value is CliCommand {
 }
 
 function setValueOption(options: { [name: string]: unknown }, name: ValueOptionName, value: string): void {
+  if (name === "scopes") {
+    const existing = options.scopes;
+    options.scopes = [...(Array.isArray(existing) ? existing : []), value];
+    return;
+  }
   if (options[name] !== undefined) usageError(`Duplicate option '--${name}'.`);
   options[name] = value;
 }
@@ -363,6 +484,7 @@ function parseFlag(token: string): { readonly flag: string; readonly assignedVal
 export function parseCli(argv: readonly string[]): CliInvocation {
   const options: { [name: string]: unknown } = {};
   let command: CliCommand | undefined;
+  let commandGroup: "connection" | "auth" | undefined;
   let help = false;
   let version = false;
 
@@ -402,8 +524,14 @@ export function parseCli(argv: readonly string[]): CliInvocation {
     }
 
     if (command === undefined) {
-      if (!isCliCommand(token)) usageError(`Unknown command '${token}'.`);
-      command = token;
+      if (commandGroup === undefined && (token === "connection" || token === "auth")) {
+        commandGroup = token;
+        continue;
+      }
+      const candidate = commandGroup === undefined ? token : `${commandGroup} ${token}`;
+      if (!isCliCommand(candidate)) usageError(`Unknown command '${candidate}'.`);
+      command = candidate;
+      commandGroup = undefined;
       continue;
     }
 
@@ -416,6 +544,7 @@ export function parseCli(argv: readonly string[]): CliInvocation {
   }
 
   if (help && version) usageError("Options '--help' and '--version' cannot be combined.");
+  if (commandGroup !== undefined) usageError(`Command '${commandGroup}' requires a subcommand.`);
   if (version) {
     if (command !== undefined) usageError("Option '--version' cannot be combined with a command.");
     for (const name of Object.keys(options) as CliOptionName[]) {

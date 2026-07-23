@@ -6,13 +6,14 @@ async function document(path: string): Promise<string> {
 }
 
 describe("OAuth and Console threat-model documentation contract", () => {
-  it("publishes the future security delta without implying that OAuth or a Console exists today", async () => {
-    const [delta, threatModel, oauthSupport, security, architecture, readme] = await Promise.all([
+  it("publishes implemented remote OAuth and the separate Console control boundary without overstating either", async () => {
+    const [delta, threatModel, oauthSupport, security, architecture, consoleApi, readme] = await Promise.all([
       document("docs/oauth-console-threat-model.md"),
       document("docs/threat-model.md"),
       document("docs/oauth-support.md"),
       document("docs/security.md"),
       document("docs/architecture.md"),
+      document("docs/console-api.md"),
       document("README.md")
     ]);
 
@@ -23,13 +24,36 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(readme).toContain("[OAuth and Console security design](docs/oauth-console-threat-model.md)");
 
     expect(delta).toContain("# OAuth broker and local Console design delta");
-    expect(delta).toContain("No production OAuth broker, Console, callback listener, or token store exists in this release.");
-    expect(delta).toContain("The future Console control API is distinct from the MCP /mcp endpoint.");
+    expect(delta).toContain("Version 3 can run the approved standards-compatible remote OAuth flow");
+    expect(delta).toContain("Issue #85 adds a separately launched local Console control API");
+    expect(delta).toContain("Issue #86 adds the optional browser-local Console UI");
+    expect(delta).toContain("no provider-revocation client, hosted broker, or background daemon exists");
+    expect(delta).toContain("The local CLI can plan bindings, report redacted state, connect, reauthenticate, and delete an exact local credential");
+    expect(delta).toContain("The Console control API is distinct from the MCP `/mcp` endpoint.");
     expect(delta).toContain("OAuth access tokens and refresh tokens must not appear in configuration, audit events, diagnostics, logs, query strings, browser storage, or Console UI responses.");
     expect(delta).toContain("An authorization code can arrive only at the bounded callback and must be exchanged without being persisted, logged, audited, or rendered.");
+    expect(consoleApi).toContain("# Local Console dashboard and control API");
+    expect(consoleApi).toContain("There is no host option, LAN mode, background daemon, or automatic startup.");
+    expect(consoleApi).toContain("`POST /api/v1/sessions`");
+    expect(consoleApi).toContain("`POST /api/v1/onboarding/native-oauth`");
+    expect(consoleApi).toContain("`GET /api/v1/client-snippets?client=<name>`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/test`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/connect`");
+    expect(consoleApi).toContain("`POST /api/v1/connections/:ref/reauth`");
+    expect(consoleApi).toContain("`DELETE /api/v1/connections/:ref/credential`");
+    expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
+    expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
+    expect(consoleApi).toContain("authenticated `GET` and `HEAD` requests may omit `Origin`");
+    expect(consoleApi).toContain("Every request must use the exact listener `Host`");
+    expect(consoleApi).toContain("Browser mutations, including bootstrap, must also use the exact listener `Origin`");
+    expect(consoleApi).toContain("every mutation still requires exact Origin plus CSRF");
+    expect(delta).toContain("requires the exact listener Origin, including scheme, host, and port");
+    expect(security).toContain(
+      "State-changing browser requests require the exact listener Origin, including scheme, host, and port"
+    );
   });
 
-  it("defines protocol go/no-go, abuse cases, residual risks, and a pre-implementation security test plan", async () => {
+  it("defines protocol go/no-go, abuse cases, residual risks, and implementation evidence", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("## Protocol go/no-go decision");
@@ -50,8 +74,8 @@ describe("OAuth and Console threat-model documentation contract", () => {
       expect(delta).toContain(threat);
     }
 
-    expect(delta).toContain("## Focused security test plan before implementation");
-    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    expect(delta).toContain("## Focused security test plan and implementation evidence");
+    const testPlanStart = delta.indexOf("## Focused security test plan and implementation evidence");
     const testPlanEnd = delta.indexOf("## Implementation gates");
     expect(testPlanStart).toBeGreaterThanOrEqual(0);
     expect(testPlanEnd).toBeGreaterThan(testPlanStart);
@@ -77,7 +101,7 @@ describe("OAuth and Console threat-model documentation contract", () => {
     }
   });
 
-  it("fails closed on issuer provenance, unsupported MCP metadata, Console bootstrap, and static bearer collisions", async () => {
+  it("fails closed on issuer provenance and static bearer collisions while specifying the implemented Console bootstrap", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("RFC 9207 `iss`");
@@ -95,17 +119,19 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("The Client ID Metadata path requires `client_id_metadata_document_supported` to be `true`");
     expect(delta).toContain("The Dynamic Client Registration path requires `registration_endpoint` to be advertised");
 
-    expect(delta).toContain("Console implementation is NO-GO until its initial browser bootstrap has a separately approved security design");
+    expect(delta).toContain("The approved control credential is not an OAuth token.");
+    expect(delta).toContain("It expires after five minutes, is consumed once");
+    expect(delta).toContain("Restart or explicit rotation invalidates every session");
     expect(delta).toContain("A profile cannot enable native OAuth while the effective headers for that exact upstream contain an `Authorization` header after profile and upstream headers are merged case-insensitively");
     expect(delta).toContain("Any header whose normalized name is `authorization`, including a profile-level lowercase `authorization` entry or a duplicate case variant, blocks native OAuth until explicitly removed or migrated.");
     expect(delta).toContain("Configuration validation must form that effective header set from profile and upstream headers using case-insensitive header names.");
   });
 
-  it("defines a single canonical resource and secure-store tuple for every future OAuth flow", async () => {
+  it("defines a single canonical resource and secure-store tuple for every native OAuth flow", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
 
     expect(delta).toContain("## Canonical resource comparison");
-    expect(delta).toContain("Before discovery begins, a future native-OAuth connection must derive one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection.");
+    expect(delta).toContain("Before discovery begins, a native-OAuth connection derives one `canonicalResource` from the exact HTTPS Streamable HTTP MCP endpoint selected for that connection.");
     expect(delta).toContain("That value is the only resource identifier used for the initial unauthenticated MCP request, protected-resource metadata validation, the OAuth `resource` parameter in authorization and token requests, transaction state, the connection record, and the secure-store key.");
     expect(delta).toContain("a canonical resource is an absolute `https` URI with an authority and no userinfo, fragment, or query component");
     expect(delta).toContain("- lowercase the scheme and ASCII/IDNA A-label host;");
@@ -119,9 +145,9 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(delta).toContain("a key derived from a versioned, unambiguous encoding of the exact profile/upstream/issuer/canonical-resource tuple");
   });
 
-  it("keeps selected client-registration requirements in the focused pre-implementation test plan", async () => {
+  it("keeps selected client-registration requirements in the focused security test plan", async () => {
     const delta = await document("docs/oauth-console-threat-model.md");
-    const testPlanStart = delta.indexOf("## Focused security test plan before implementation");
+    const testPlanStart = delta.indexOf("## Focused security test plan and implementation evidence");
     const testPlanEnd = delta.indexOf("## Implementation gates", testPlanStart);
     const testPlan = delta.slice(testPlanStart, testPlanEnd);
 
