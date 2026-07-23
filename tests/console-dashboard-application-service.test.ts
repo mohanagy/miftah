@@ -208,6 +208,7 @@ describe("Console dashboard application service", () => {
     expect(catalog.configurations).toHaveLength(2);
     expect(JSON.stringify(catalog.catalog)).not.toContain(directory);
     expect(JSON.stringify(catalog.catalog)).not.toContain("client-secrets.json");
+    expect(JSON.stringify(catalog.configurations)).not.toContain("client-secrets.json");
   });
 
   it.skipIf(process.platform === "win32")("omits symbolic and group-readable candidates without disclosing their paths", async () => {
