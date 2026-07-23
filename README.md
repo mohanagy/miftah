@@ -228,7 +228,7 @@ The easiest first run is:
 miftah dashboard
 ```
 
-`miftah dashboard` uses `~/.config/miftah/miftah.json` by default. That is separate from the `github.json` created earlier. Pass `--config` when you intend to open another Miftah configuration. First-run onboarding is available only when the selected target file does not exist; the dashboard never overwrites an existing file.
+Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
 
 The optional dashboard:
 

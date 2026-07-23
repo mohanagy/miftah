@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import {
   startConsoleServer,
   type ConsoleControlApplication
 } from "../src/console/console-server.js";
+import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const temporaryDirectories: string[] = [];
@@ -117,6 +118,8 @@ describe("local Console control server", () => {
       expect(html).toContain("Upstream-owned auth");
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Active vs durable:");
+      expect(html).toContain('id="configuration-catalog-view"');
+      expect(html).toContain('id="provider-authentication-view"');
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 
@@ -127,6 +130,9 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/sessions");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth");
       expect(javascript).toContain("/api/v1/client-snippets");
+      expect(javascript).toContain("/api/v1/configurations/");
+      expect(javascript).toContain("provider-adapter");
+      expect(javascript).toContain("This provider owns its browser login");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
       expect(javascript).toContain("statusErrorCode");
       expect(javascript).toContain("restoreUnlock");
@@ -246,6 +252,137 @@ describe("local Console control server", () => {
       };
       expect(snippetConfig.mcpServers["posthog-work"]?.args).toContain(configPath);
       expect(JSON.stringify(snippetBody)).not.toContain("auth.example.test");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires a CSRF-protected selection before a no-config dashboard opens a discovered configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-catalog-"));
+    temporaryDirectories.push(directory);
+    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const gscPath = join(directory, "gsc.json");
+    await writeFile(gscPath, JSON.stringify({
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { work: {} }
+    }), { mode: 0o600 });
+    if (process.platform !== "win32") await chmod(gscPath, 0o600);
+
+    const server = await startConsoleServer(join(directory, "miftah.json"), {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      allowMissingConfig: true,
+      launcher: { command: process.execPath, args: ["serve"] },
+      application: new ConsoleDashboardApplicationService({
+        defaultConfigPath: join(directory, "miftah.json"),
+        configDirectory: directory,
+        launcher: { command: process.execPath, args: ["serve"] }
+      })
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const initial = await fetch(new URL("/api/v1/config", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(initial.status).toBe(200);
+      const initialBody = await initial.json() as {
+        data: { initialized: boolean; catalog?: { configurations: Array<{ id: string; name: string }> } };
+      };
+      expect(initialBody.data.initialized).toBe(false);
+      expect(initialBody.data.catalog?.configurations).toHaveLength(1);
+      expect(JSON.stringify(initialBody)).not.toContain(directory);
+      const id = initialBody.data.catalog?.configurations[0]?.id;
+      if (id === undefined) throw new Error("Expected a discovered configuration id.");
+
+      const catalog = await fetch(new URL("/api/v1/configurations", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(catalog.status).toBe(200);
+      expect(await catalog.json()).toMatchObject({ data: { configurations: [{ id, name: "gsc" }] } });
+
+      const selection = new URL(`/api/v1/configurations/${encodeURIComponent(id)}/select`, server.url);
+      const missingCsrf = await fetch(selection, {
+        method: "POST",
+        headers: { origin: server.url.origin, cookie: session.cookie, "content-type": "application/json" },
+        body: "{}"
+      });
+      expect(missingCsrf.status).toBe(403);
+
+      const selected = await fetch(selection, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: "{}"
+      });
+      expect(selected.status).toBe(200);
+      expect(await selected.json()).toMatchObject({
+        data: {
+          initialized: true,
+          name: "gsc",
+          authentication: { mode: "provider-adapter", provider: "Google Search Console" },
+          catalog: { selectedConfigurationId: id }
+        }
+      });
+
+      const explicit = await startConsoleServer(gscPath, { bootstrapCredential: "another-test-bootstrap-credential" });
+      try {
+        const explicitSession = await bootstrapSession(explicit);
+        const noCatalog = await fetch(new URL("/api/v1/configurations", explicit.url), {
+          headers: { origin: explicit.url.origin, cookie: explicitSession.cookie }
+        });
+        expect(noCatalog.status).toBe(404);
+      } finally {
+        await explicit.close();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not let an invalid default path hide another safe discovered configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-invalid-default-"));
+    temporaryDirectories.push(directory);
+    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const defaultPath = join(directory, "miftah.json");
+    await writeFile(defaultPath, "{not valid json", { mode: 0o600 });
+    const gscPath = join(directory, "gsc.json");
+    await writeFile(gscPath, JSON.stringify({
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { work: {} }
+    }), { mode: 0o600 });
+    if (process.platform !== "win32") {
+      await chmod(defaultPath, 0o600);
+      await chmod(gscPath, 0o600);
+    }
+
+    const server = await startConsoleServer(defaultPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      allowMissingConfig: true,
+      deferConfigValidation: true,
+      application: new ConsoleDashboardApplicationService({
+        defaultConfigPath: defaultPath,
+        configDirectory: directory
+      })
+    });
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/config", server.url), {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        data: { initialized: false, catalog: { configurations: [{ name: "gsc" }] } }
+      });
     } finally {
       await server.close();
     }

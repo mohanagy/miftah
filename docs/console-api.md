@@ -6,7 +6,9 @@ Miftah includes an optional, local-only browser Console over its control API. It
 miftah dashboard
 ```
 
-By default this reviews or creates `~/.config/miftah/miftah.json`, opens the system browser, and prints both the exact loopback URL and a one-time code. Use `--config <file>` for another configuration, `--port <number>` for a fixed loopback port, or `--no-open` to print the URL without launching a browser. The API-only compatibility command remains:
+Without `--config`, the dashboard discovers direct, validated Miftah JSON files in `~/.config/miftah` and asks the operator to select one. It does not scan Claude, Cursor, VS Code, process arguments, or arbitrary home directories. Candidate paths must be canonical regular files in that bounded directory; unsafe, malformed, duplicate, and symbolic candidates are omitted without exposing their paths or parser errors. Windows discovery additionally verifies the current-user owner and restrictive DACL; if that proof is unavailable, automatic discovery fails closed. A selection is bound to the verified file content: if the file changes, select it again rather than applying controls to a replacement. If no safe configuration exists, first-run onboarding creates `~/.config/miftah/miftah.json` only after explicit submission.
+
+`miftah dashboard --config <file>` is different: it opens exactly that one configuration and does not show or scan a catalog. Use `--port <number>` for a fixed loopback port, or `--no-open` to print the URL without launching a browser. The API-only compatibility command remains:
 
 ```sh
 miftah console --config ~/.config/miftah/service.json
@@ -39,6 +41,8 @@ Every request must use the exact listener `Host`. Browser mutations, including b
 | `POST /api/v1/onboarding/native-oauth` | Exclusively create the first validated v3 native-OAuth profile, upstream, and connection. Requires CSRF and refuses an existing file. |
 | `GET /api/v1/health` | Return safe config identity, Console audit health, and restart-required guidance. |
 | `GET /api/v1/config` | Return allowlisted configuration metadata only. |
+| `GET /api/v1/configurations` | Return the no-config dashboard's bounded, metadata-only configuration catalog. Not available for an explicit `--config` Console. |
+| `POST /api/v1/configurations/:id/select` | Select one opaque catalog entry for this Console process. Requires CSRF; it never changes MCP client files or live MCP sessions. |
 | `GET /api/v1/profiles` | Return profile names, descriptions, tags, policy names, and named-upstream keys only. |
 | `GET /api/v1/connections` | Return configured non-secret OAuth connection bindings without opening the vault. |
 | `GET /api/v1/connections/:ref` | Return redacted credential and identity status for one exact connection. |
@@ -50,10 +54,10 @@ Every request must use the exact listener `Host`. Browser mutations, including b
 | `GET /api/v1/audit?limit=1..200` | Return allowlisted metadata from the owner-restricted Console mutation journal, never raw JSONL or arguments. |
 | `GET /api/v1/client-snippets?client=<name>` | Generate review-and-copy JSON for Claude Desktop, Claude Code, Cursor, VS Code, or `all`; never edit client files. |
 
-Success responses use `{ "data": ... }`. Errors use `{ "error": { "code": "...", "message": "..." } }` with semantic HTTP status codes. Responses are non-cacheable and carry restrictive content-type, framing, referrer, and content-security headers. Internal paths, raw configuration, secret references, environment maps, command arguments, headers, tokens, authorization URLs, raw provider errors, and raw audit bytes are not part of the browser contract.
+Success responses use `{ "data": ... }`. Errors use `{ "error": { "code": "...", "message": "..." } }` with semantic HTTP status codes. Responses are non-cacheable and carry restrictive content-type, framing, referrer, and content-security headers. Internal paths, raw configuration, secret references, environment maps, command arguments, headers, tokens, authorization URLs, raw provider errors, and raw audit bytes are not part of the browser contract. For a recognized provider adapter, configuration metadata states only the declared authentication ownership; the Console hides the native OAuth editor rather than implying it can take over the adapter's OAuth cache.
 
 ## Mutation and process boundary
 
-Connection creation reuses the same typed application service as the CLI: an existing candidate is schema-validated, applied from an exact source snapshot, backed up uniquely, and published through the guarded atomic replacement. First-run onboarding constructs and validates the complete v3 candidate before an exclusive, non-overwriting create. Console mutations use a separate owner-restricted, fail-closed journal under `.miftah/audit/console.jsonl` beside the configuration. If that journal cannot be prepared, the mutation is refused before its side effect.
+Connection creation reuses the same typed application service as the CLI: an existing candidate is schema-validated, applied from an exact source snapshot, backed up uniquely, and published through the guarded atomic replacement. First-run onboarding constructs and validates the complete v3 candidate before an exclusive, non-overwriting create. Console clears its selection after a configuration write, so choose the configuration again before another control operation; this prevents a concurrent replacement from being silently trusted. Console mutations use a separate owner-restricted, fail-closed journal under `.miftah/audit/console.jsonl` beside the configuration. If that journal cannot be prepared, the mutation is refused before its side effect.
 
 The control API manages durable configuration and the local OAuth vault for future connections. It cannot inspect or take over another Miftah process, replace an active Claude Desktop STDIO session, or change that process's in-memory profile selection. Restart or reconnect the MCP client after a durable Console change. A future broker or IPC design would require a separate authenticated threat-model review.

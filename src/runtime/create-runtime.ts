@@ -4,8 +4,13 @@ import { ProfileRuntimeIsolation } from "../isolation/profile-runtime-isolation.
 import { resolvePath } from "../config/path-resolve.js";
 import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
-import { resolveRuntimeConfig, type RuntimeResolutionScope } from "./resolve-runtime-config.js";
-import type { StateConfig } from "../config/types.js";
+import {
+  resolveRuntimeConfig,
+  resolveRuntimeConfigFromLoadedConfig,
+  type ResolvedRuntimeConfig,
+  type RuntimeResolutionScope
+} from "./resolve-runtime-config.js";
+import type { MiftahConfig, StateConfig } from "../config/types.js";
 import {
   createRemoteOAuthRuntime,
   type RemoteOAuthRuntimeOptions
@@ -39,7 +44,31 @@ export async function createRuntime(
 ) {
   const configuredPath = resolvePath(configPath);
   const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
-  const { config, upstream, secretValues, redactor, plugins } = await resolveRuntimeConfig(runtimeConfigPath, scope);
+  const resolved = await resolveRuntimeConfig(runtimeConfigPath, scope);
+  return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
+}
+
+/**
+ * Constructs a runtime from configuration that a trusted caller has already
+ * opened and validated. It deliberately does not reopen configPath.
+ */
+export async function createRuntimeFromLoadedConfig(
+  configPath: string,
+  config: MiftahConfig,
+  scope?: RuntimeResolutionScope,
+  options: RuntimeCreationOptions = {}
+) {
+  const runtimeConfigPath = resolvePath(configPath);
+  const resolved = await resolveRuntimeConfigFromLoadedConfig(runtimeConfigPath, config, scope);
+  return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
+}
+
+async function createRuntimeFromResolvedConfig(
+  runtimeConfigPath: string,
+  resolved: ResolvedRuntimeConfig,
+  options: RuntimeCreationOptions
+) {
+  const { config, upstream, secretValues, redactor, plugins } = resolved;
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
   const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
   const identities = new IdentityManager(config, {

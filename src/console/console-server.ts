@@ -75,6 +75,8 @@ export interface ConsoleServerOptions {
   readonly now?: () => number;
   /** Allows the dashboard to start before its first configuration is created. */
   readonly allowMissingConfig?: boolean;
+  /** Lets the no-config dashboard application safely inspect its bounded catalog before a default path is valid. */
+  readonly deferConfigValidation?: boolean;
   /** Exact installed CLI launcher used only to generate copyable client snippets. */
   readonly launcher?: ClientLauncher;
   /** Internal embedding/test seam; production CLI uses the native in-process application service. */
@@ -168,6 +170,15 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   }
   if (error.code === "OAUTH_CONNECTION_NOT_FOUND") {
     return new ConsoleHttpError(404, "oauth_connection_not_found", "The OAuth connection does not exist.");
+  }
+  if (error.code === "CONSOLE_CONFIGURATION_NOT_FOUND") {
+    return new ConsoleHttpError(404, "configuration_not_found", "The selected configuration is not available.");
+  }
+  if (error.code === "CONSOLE_CONFIGURATION_SELECTION_REQUIRED") {
+    return new ConsoleHttpError(409, "configuration_selection_required", "Select a configuration before using this Console control.");
+  }
+  if (error.code === "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE") {
+    return new ConsoleHttpError(503, "configuration_discovery_unavailable", "The standard configuration directory is unavailable.");
   }
   if (error.code === "CONFIG_ALREADY_EXISTS") {
     return new ConsoleHttpError(409, "config_already_exists", "A configuration already exists at this location.");
@@ -344,6 +355,43 @@ class LocalConsoleServer implements ConsoleServer {
               : []
             : metadata
         });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/configurations") {
+      if (request.method !== "GET") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET" });
+      }
+      try {
+        const metadata = await this.application.configMetadata();
+        if (metadata.catalog === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: metadata.catalog });
+      } catch (error) {
+        if (error instanceof ConsoleHttpError) throw error;
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    const configurationSelection = /^\/api\/v1\/configurations\/([A-Za-z0-9_-]{16,128})\/select$/u.exec(request.url ?? "");
+    if (configurationSelection !== null) {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = bootstrapSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.selectConfiguration === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const metadata = await this.application.selectConfiguration(configurationSelection[1]!);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: metadata });
       } catch (error) {
         throw publicApplicationError(error);
       }
@@ -635,12 +683,16 @@ export async function startConsoleServer(
   configPath: string,
   options: ConsoleServerOptions = {}
 ): Promise<ConsoleServer> {
-  try {
-    await loadConfig(configPath);
-  } catch (error) {
-    if (!(options.allowMissingConfig === true && error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND")) {
-      throw error;
+  if (options.deferConfigValidation !== true) {
+    try {
+      await loadConfig(configPath);
+    } catch (error) {
+      if (!(options.allowMissingConfig === true && error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND")) {
+        throw error;
+      }
     }
+  } else if (options.application === undefined) {
+    throw new Error("Unable to start the Miftah Console server.");
   }
   const bootstrapCredential = options.bootstrapCredential ?? randomCredential();
   if (bootstrapCredential.length < 16 || bootstrapCredential.length > 4_096) {

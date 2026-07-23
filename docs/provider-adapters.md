@@ -4,6 +4,8 @@ Provider adapters describe a narrow, reviewed integration with an MCP server who
 
 Every adapter declares one credential owner: Miftah, the upstream, or manual-only. The typed ownership union prevents an upstream-owned adapter from claiming Miftah's browser callback or OS vault. Adapter diagnostics are metadata-only. They never inspect arbitrary credential files or token caches, and an adapter cannot turn a provider-specific flow into a native `oauth.connections` binding.
 
+When the local Console opens a recognized adapter configuration, it displays this ownership boundary and removes the native OAuth editor for that configuration. It can show that the provider owns login and reauthentication, but it never reads the adapter's cache, credentials, client-secrets path, or browser state.
+
 ## Google Search Console pilot
 
 The initial pilot wraps the community [`mcp-search-console`](https://github.com/AminForou/mcp-gsc) STDIO server. It is deliberately upstream-owned:

@@ -37,6 +37,21 @@ export async function resolveRuntimeConfig(
   const requestedConfigPath = resolvePath(configPath);
   const canonicalConfigPath = await realpath(requestedConfigPath).catch(() => requestedConfigPath);
   const config = await loadConfig(canonicalConfigPath);
+  return resolveRuntimeConfigFromLoadedConfig(canonicalConfigPath, config, scope, options);
+}
+
+/**
+ * Resolves runtime dependencies from configuration bytes already loaded by a
+ * trusted caller. Unlike resolveRuntimeConfig, this function never reopens the
+ * configuration pathname.
+ */
+export async function resolveRuntimeConfigFromLoadedConfig(
+  configPath: string,
+  config: MiftahConfig,
+  scope?: RuntimeResolutionScope,
+  options: RuntimeResolutionOptions = {}
+): Promise<ResolvedRuntimeConfig> {
+  const canonicalConfigPath = resolvePath(configPath);
   validateResolutionScope(config, scope);
   const plugins = await loadPluginRegistry(config.plugins, { rootDirectory: dirname(canonicalConfigPath) });
   const redactor = new SecretRedactor();

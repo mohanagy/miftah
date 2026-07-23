@@ -1,8 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import {
+  discoverConsoleConfigCatalog,
+  trustedConfigurationFor
+} from "../src/console/console-config-catalog.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const temporaryDirectories: string[] = [];
@@ -48,6 +52,49 @@ async function writeConfig(): Promise<string> {
 }
 
 describe("Console application service", () => {
+  it.skipIf(process.platform === "win32")("binds a trusted dashboard snapshot through a configuration mutation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-trusted-snapshot-"));
+    temporaryDirectories.push(directory);
+    await chmod(directory, 0o700);
+    const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "2",
+      name: "trusted-source",
+      defaultProfile: "personal",
+      upstream: { transport: "streamable-http", url: "https://trusted.example.test/mcp" },
+      profiles: { personal: {} }
+    }), { mode: 0o600 });
+    await chmod(configPath, 0o600);
+
+    const catalog = await discoverConsoleConfigCatalog({ configDirectory: directory });
+    const selected = catalog.configurations[0];
+    if (selected === undefined) throw new Error("Expected a trusted configuration snapshot.");
+    const trustedConfiguration = trustedConfigurationFor(selected);
+    if (trustedConfiguration === undefined) throw new Error("Expected trusted configuration bytes.");
+    const service = new ConsoleApplicationService(selected.path, {
+      trustedConfiguration
+    });
+
+    await writeFile(configPath, JSON.stringify({
+      version: "2",
+      name: "replacement-after-verification",
+      defaultProfile: "personal",
+      upstream: { transport: "streamable-http", url: "https://replacement.example.test/mcp" },
+      profiles: { personal: {} }
+    }), { mode: 0o600 });
+    await chmod(configPath, 0o600);
+
+    await expect(service.health()).resolves.toMatchObject({ config: { name: "trusted-source" } });
+    await expect(service.addConnection({
+      connectionRef,
+      profile: "personal",
+      upstream: "default",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["read"]
+    })).rejects.toMatchObject({ code: "CONFIG_MIGRATION_WRITE_FAILED" });
+  });
+
   it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
     temporaryDirectories.push(directory);

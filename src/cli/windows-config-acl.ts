@@ -21,7 +21,13 @@ interface CreatePrivateDirectoryRequest {
   readonly directory: string;
 }
 
-type WindowsConfigAclRequest = CopyFileSecurityRequest | CreatePrivateDirectoryRequest;
+interface VerifyPrivatePathRequest {
+  readonly operation: "verify-private-path";
+  readonly kind: "file" | "directory";
+  readonly path: string;
+}
+
+type WindowsConfigAclRequest = CopyFileSecurityRequest | CreatePrivateDirectoryRequest | VerifyPrivatePathRequest;
 
 /**
  * Copies the source file's non-null owner, group, and DACL, then verifies its
@@ -31,9 +37,26 @@ export async function copyWindowsConfigSecurityDescriptor(source: string, target
   return runWindowsAclRequest({ operation: "copy-file-security", source, target });
 }
 
-/** Creates a current-user-only transaction directory with its DACL applied at creation time. */
-export async function createWindowsPrivateMigrationDirectory(directory: string): Promise<boolean> {
+/** Creates a current-user-only directory with its DACL applied at creation time. */
+export async function createWindowsPrivateDirectory(directory: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "create-private-directory", directory });
+}
+
+/** Backwards-compatible name for migration transaction directories. */
+export async function createWindowsPrivateMigrationDirectory(directory: string): Promise<boolean> {
+  return createWindowsPrivateDirectory(directory);
+}
+
+/**
+ * Verifies that a current-user-owned configuration path is not a reparse point
+ * and grants no untrusted principal content access (files) or mutation access
+ * (directories). It returns false rather than exposing ACL diagnostics.
+ */
+export async function verifyWindowsConfigPathSecurity(
+  path: string,
+  kind: "file" | "directory"
+): Promise<boolean> {
+  return runWindowsAclRequest({ operation: "verify-private-path", path, kind });
 }
 
 async function runWindowsAclRequest(request: WindowsConfigAclRequest): Promise<boolean> {
@@ -46,15 +69,20 @@ async function runWindowsAclRequest(request: WindowsConfigAclRequest): Promise<b
 }
 
 function requestHasNul(request: WindowsConfigAclRequest): boolean {
-  return request.operation === "copy-file-security"
-    ? request.source.includes("\u0000") || request.target.includes("\u0000")
-    : request.directory.includes("\u0000");
+  if (request.operation === "copy-file-security") {
+    return request.source.includes("\u0000") || request.target.includes("\u0000");
+  }
+  return request.operation === "create-private-directory"
+    ? request.directory.includes("\u0000")
+    : request.path.includes("\u0000");
 }
 
 function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
   const fields = request.operation === "copy-file-security"
     ? [request.operation, request.source, request.target]
-    : [request.operation, request.directory];
+    : request.operation === "create-private-directory"
+      ? [request.operation, request.directory]
+      : [request.operation, request.kind, request.path];
   const payload = fields.join("\u0000");
   const bytes = Buffer.from(payload, "utf8");
   return bytes.byteLength <= maximumRequestBytes && bytes.toString("utf8") === payload
@@ -130,6 +158,7 @@ const aclCommand = String.raw`$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
 $accessSections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
 $directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+$verifySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 try {
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
   if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { exit 1 }
@@ -160,6 +189,75 @@ try {
         ([int]$sourceRule.InheritanceFlags) -ne ([int]$verifiedRule.InheritanceFlags) -or
         ([int]$sourceRule.PropagationFlags) -ne ([int]$verifiedRule.PropagationFlags)
       ) { exit 1 }
+    }
+    exit 0
+  }
+
+  if ($fields.Count -eq 3 -and $fields[0] -eq 'verify-private-path') {
+    $kind = $fields[1]
+    $path = $fields[2]
+    if ($kind -ne 'file' -and $kind -ne 'directory') { exit 1 }
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    if ($null -eq $identity) { exit 1 }
+    $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
+    if ($kind -eq 'file') {
+      $entry = [System.IO.FileInfo]::new($path)
+      if (-not $entry.Exists) { exit 1 }
+      if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
+      $acl = [System.IO.File]::GetAccessControl($path, $verifySections)
+    } else {
+      $entry = [System.IO.DirectoryInfo]::new($path)
+      if (-not $entry.Exists) { exit 1 }
+      if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
+      $acl = [System.IO.Directory]::GetAccessControl($path, $verifySections)
+    }
+    $entry.Refresh()
+    $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+    if ($null -eq $owner -or $owner.Value -cne $identity.Value) { exit 1 }
+    $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+    if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { exit 1 }
+    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
+    # OWNER RIGHTS applies only to the owner. CREATOR OWNER/GROUP are safe only
+    # on inherit-only ACEs, where they have no access to this entry itself.
+    $trustedSids = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
+    $creatorOwnerSid = 'S-1-3-0'
+    $creatorGroupSid = 'S-1-3-1'
+    $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
+    $restrictedRights = if ($kind -eq 'file') {
+      [int](
+        [System.Security.AccessControl.FileSystemRights]::ReadData -bor
+        [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::ReadAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+        [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+        [System.Security.AccessControl.FileSystemRights]::Delete -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+      )
+    } else {
+      [int](
+        [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+        [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+        [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [System.Security.AccessControl.FileSystemRights]::Delete -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+      )
+    }
+    $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -eq 0) { exit 1 }
+    foreach ($rule in $rules) {
+      if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+      if ($trustedSids -ccontains $rule.IdentityReference.Value) { continue }
+      if (
+        ($rule.IdentityReference.Value -ceq $creatorOwnerSid -or $rule.IdentityReference.Value -ceq $creatorGroupSid) -and
+        (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
+      ) { continue }
+      if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { exit 1 }
     }
     exit 0
   }

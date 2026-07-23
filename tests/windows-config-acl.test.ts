@@ -18,7 +18,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 import {
   copyWindowsConfigSecurityDescriptor,
-  createWindowsPrivateMigrationDirectory
+  createWindowsPrivateMigrationDirectory,
+  verifyWindowsConfigPathSecurity
 } from "../src/cli/windows-config-acl.js";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -44,6 +45,46 @@ afterEach(() => {
 });
 
 describe("Windows migration ACL boundary", () => {
+  it("verifies a current-user-owned non-reparse configuration path without exposing ACL details", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(verifyWindowsConfigPathSecurity("C:\\Users\\miftah\\.config\\miftah", "directory")).resolves.toBe(true);
+
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "verify-private-path\u0000directory\u0000C:\\Users\\miftah\\.config\\miftah"
+    );
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("verify-private-path");
+    expect(command).toContain("WindowsIdentity]::GetCurrent().User");
+    expect(command).toContain("FileAttributes]::ReparsePoint");
+    expect(command).toContain("S-1-5-18");
+    expect(command).toContain("S-1-5-32-544");
+    expect(command).toContain("S-1-3-4");
+    expect(command).toContain("S-1-3-0");
+    expect(command).toContain("S-1-3-1");
+    expect(command).toContain("GetAccessRules");
+    expect(command).toContain("AreAccessRulesCanonical");
+    expect(command).toContain("ReadExtendedAttributes");
+    expect(command).toContain("DeleteSubdirectoriesAndFiles");
+    expect(command).not.toContain("Write-Output");
+  });
+
+  it("fails closed when Windows configuration-path verification cannot establish trusted ACLs", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 1));
+      return child;
+    });
+
+    await expect(verifyWindowsConfigPathSecurity("C:\\Users\\miftah\\.config\\miftah\\gsc.json", "file")).resolves.toBe(false);
+  });
+
   it("fails closed when source descriptor verification fails", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();
