@@ -86,6 +86,7 @@ describe("product README", () => {
     expect(readme).toMatch(
       /miftah connection add --config ~\/\.config\/miftah\/remote-service\.json \\\n\s+--profile default/gu
     );
+    expect(readme).toContain("The `streamable-http` preset creates one profile named `default`");
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
   });
 

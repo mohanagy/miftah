@@ -252,7 +252,11 @@ The equivalent CLI path is plan-first:
 
 ```bash
 miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json
+```
 
+The `streamable-http` preset creates one profile named `default`, so use that exact profile when registering the connection:
+
+```bash
 miftah connection add --config ~/.config/miftah/remote-service.json \
   --profile default \
   --upstream default \
