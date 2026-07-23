@@ -264,18 +264,18 @@ miftah connection add --config ~/.config/miftah/remote-service.json \
   --client-registration dynamic \
   --scope mcp:read
 
-# Review the generated oauthconn:<uuid>, then repeat with:
+# Review the generated oauthconn: UUID, then replace UUID_FROM_PLAN below:
 miftah connection add --config ~/.config/miftah/remote-service.json \
   --profile default \
   --upstream default \
   --issuer https://auth.example.com \
   --client-registration dynamic \
   --scope mcp:read \
-  --connection oauthconn:<uuid> \
+  --connection oauthconn:UUID_FROM_PLAN \
   --write
 
-miftah auth connect --config ~/.config/miftah/remote-service.json --connection oauthconn:<uuid>
-miftah connection test --config ~/.config/miftah/remote-service.json --connection oauthconn:<uuid>
+miftah auth connect --config ~/.config/miftah/remote-service.json --connection oauthconn:UUID_FROM_PLAN
+miftah connection test --config ~/.config/miftah/remote-service.json --connection oauthconn:UUID_FROM_PLAN
 miftah connection list --config ~/.config/miftah/remote-service.json --client claude-desktop
 ```
 
@@ -360,7 +360,7 @@ OAuth success and valid credentials do not prove that the intended account is ac
 
 ### `SECRET_ENV_MISSING` even though the variable is in `.zshrc`
 
-Claude Desktop does not inherit your interactive shell startup files. Move the reference to a configured dotenv/keychain/1Password source or launch Claude from an environment that actually contains it. Confirm with `miftah doctor` before restarting Claude.
+Claude Desktop does not inherit your interactive shell startup files. Move the reference to a configured dotenv/keychain/1Password source or launch Claude from an environment that actually contains it. Confirm with `miftah doctor --config ~/.config/miftah/github.json` before restarting Claude.
 
 ### The dashboard changed the config but Claude still uses the old profile
 

@@ -87,6 +87,8 @@ describe("product README", () => {
       /miftah connection add --config ~\/\.config\/miftah\/remote-service\.json \\\n\s+--profile default/gu
     );
     expect(readme).toContain("The `streamable-http` preset creates one profile named `default`");
+    expect(readme).toContain("oauthconn:UUID_FROM_PLAN");
+    expect(readme).not.toContain("oauthconn:<uuid>");
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
   });
 
@@ -106,6 +108,7 @@ describe("product README", () => {
     expect(readme).toContain("`miftah_route_preview`");
     expect(readme).toContain("`miftah_verify_identity`");
     expect(readme).toContain("Shell examples below use POSIX syntax");
+    expect(readme).toContain("Confirm with `miftah doctor --config ~/.config/miftah/github.json`");
   });
 
   it("keeps every local README link and heading anchor resolvable", () => {
