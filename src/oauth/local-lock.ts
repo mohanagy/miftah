@@ -185,20 +185,23 @@ async function acquireLocalLock(
           process.emitWarning("Miftah OAuth legacy lock compatibility listener could not be started.");
         }
         if (legacyLock === undefined) {
-          if (Date.now() - startedAt >= waitMilliseconds) {
-            await releaseLocalLock(primaryLock);
-            throw new OAuthLocalLockUnavailableError();
-          }
-          const postAcquisitionLegacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
-          if (postAcquisitionLegacyState === "held") {
-            await releaseLocalLock(primaryLock);
-            await new Promise((resolve) => setTimeout(resolve, 10));
-            continue;
+          if (Date.now() - startedAt < waitMilliseconds) {
+            const postAcquisitionLegacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
+            if (postAcquisitionLegacyState === "held") {
+              await releaseLocalLock(primaryLock);
+              await new Promise((resolve) => setTimeout(resolve, 10));
+              continue;
+            }
           }
         }
         return async () => {
-          if (legacyLock !== undefined) await releaseLocalLock(legacyLock);
-          await releaseLocalLock(primaryLock);
+          try {
+            if (legacyLock !== undefined) await releaseLocalLock(legacyLock);
+          } catch {
+            process.emitWarning("Miftah OAuth legacy lock compatibility listener could not be closed.");
+          } finally {
+            await releaseLocalLock(primaryLock);
+          }
         };
       }
     }
