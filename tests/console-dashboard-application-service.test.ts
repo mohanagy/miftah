@@ -1,4 +1,4 @@
-import { chmod, link, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,6 +20,10 @@ async function writeConfig(path: string, value: unknown): Promise<void> {
   await writePrivateConsoleFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+async function writeCatalogFixture(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
 describe("Console dashboard application service", () => {
   it.runIf(process.platform === "win32")("creates fixture files that pass the production Windows ACL verifier", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-"));
@@ -37,7 +41,7 @@ describe("Console dashboard application service", () => {
     await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
   });
 
-  it("discovers only validated unique standard-directory configs and requires explicit selection", async () => {
+  it("discovers safe standard-directory configurations without exposing source details", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
     temporaryDirectories.push(root);
     const directory = await createPrivateConsoleDirectory(root);
@@ -60,24 +64,6 @@ describe("Console dashboard application service", () => {
       defaultProfile: "work",
       upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
       profiles: { work: {} }
-    });
-    await writePrivateConsoleFile(join(directory, "invalid.json"), "{not valid json");
-    await writeConfig(join(directory, "oversized.json"), {
-      version: "3",
-      name: "oversized",
-      description: "x".repeat(1024 * 1024),
-      defaultProfile: "default",
-      upstream: { transport: "stdio", command: "node", args: [] },
-      profiles: { default: {} }
-    });
-    await link(gscPath, join(directory, "gsc-duplicate.json"));
-    await mkdir(join(directory, "nested"), { mode: 0o700 });
-    await writeConfig(join(directory, "nested", "ignored.json"), {
-      version: "3",
-      name: "ignored",
-      defaultProfile: "default",
-      upstream: { transport: "stdio", command: "node", args: [] },
-      profiles: { default: {} }
     });
 
     const service = new ConsoleDashboardApplicationService({
@@ -113,11 +99,26 @@ describe("Console dashboard application service", () => {
     });
     expect(initial.initialized).toBe(false);
     expect(initial.catalog?.configurations).toHaveLength(2);
-    expect(initial.catalog?.configurations.map((configuration) => configuration.name)).not.toContain("oversized");
     expect(JSON.stringify(initial)).not.toContain(directory);
     expect(JSON.stringify(initial)).not.toContain("client-secrets.json");
-    const privateCatalog = await discoverConsoleConfigCatalog({ configDirectory: directory });
-    expect(JSON.stringify(privateCatalog.configurations)).not.toContain("client-secrets.json");
+  });
+
+  it("requires explicit selection before native OAuth onboarding when a configuration exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-onboard-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
 
     await expect(service.onboardNativeOAuth({
       name: "must-not-create-a-second-config",
@@ -127,7 +128,24 @@ describe("Console dashboard application service", () => {
       clientRegistration: "dynamic",
       scopes: []
     })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
 
+  it("selects an explicitly discovered configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-selection-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const initial = await service.configMetadata();
     const gsc = initial.catalog?.configurations.find((configuration) => configuration.name === "gsc");
     if (gsc === undefined) throw new Error("Expected discovered GSC configuration.");
     await expect(service.selectConfiguration(gsc.id)).resolves.toMatchObject({
@@ -135,6 +153,61 @@ describe("Console dashboard application service", () => {
       name: "gsc",
       catalog: { selectedConfigurationId: gsc.id }
     });
+  });
+
+  it("omits malformed, oversized, duplicate, and nested candidates from a verified catalog", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-catalog-"));
+    temporaryDirectories.push(directory);
+    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const gscPath = join(directory, "gsc.json");
+    await writeCatalogFixture(gscPath, {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "google-work",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: {
+        "google-work": {
+          env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/client-secrets.json" }
+        }
+      }
+    });
+    await writeCatalogFixture(join(directory, "sentry.json"), {
+      version: "3",
+      name: "sentry",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
+      profiles: { work: {} }
+    });
+    await writeFile(join(directory, "invalid.json"), "{not valid json", { mode: 0o600 });
+    await writeCatalogFixture(join(directory, "oversized.json"), {
+      version: "3",
+      name: "oversized",
+      description: "x".repeat(1024 * 1024),
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+    await link(gscPath, join(directory, "gsc-duplicate.json"));
+    await mkdir(join(directory, "nested"), { mode: 0o700 });
+    await writeCatalogFixture(join(directory, "nested", "ignored.json"), {
+      version: "3",
+      name: "ignored",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+
+    const catalog = await discoverConsoleConfigCatalog({
+      configDirectory: directory,
+      windowsAclVerifier: async () => true
+    });
+    expect(catalog.catalog).toMatchObject({
+      discoveryState: "ready",
+      configurations: [{ name: "gsc" }, { name: "sentry" }]
+    });
+    expect(catalog.configurations).toHaveLength(2);
+    expect(JSON.stringify(catalog.catalog)).not.toContain(directory);
+    expect(JSON.stringify(catalog.catalog)).not.toContain("client-secrets.json");
   });
 
   it.skipIf(process.platform === "win32")("omits symbolic and group-readable candidates without disclosing their paths", async () => {
@@ -200,14 +273,6 @@ describe("Console dashboard application service", () => {
   it("fails closed when Windows ACL verification cannot establish a trusted standard directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-windows-acl-"));
     temporaryDirectories.push(directory);
-    const configPath = join(directory, "gsc.json");
-    await writeConfig(configPath, {
-      version: "3",
-      name: "gsc",
-      defaultProfile: "default",
-      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
-      profiles: { default: {} }
-    });
 
     await expect(discoverConsoleConfigCatalog({
       configDirectory: directory,
