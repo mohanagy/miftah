@@ -7,6 +7,7 @@ import {
   discoverConsoleConfigCatalog,
   trustedConfigurationFor
 } from "../src/console/console-config-catalog.js";
+import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
@@ -148,6 +149,9 @@ describe("Console application service", () => {
       }
     });
     expect(JSON.stringify(config)).not.toMatch(/token|secret|password/iu);
+    if (process.platform === "win32") {
+      await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
+    }
 
     const snippets = await service.clientSnippets("claude-desktop");
     expect(snippets).toHaveLength(1);
