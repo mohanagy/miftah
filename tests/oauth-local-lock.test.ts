@@ -70,6 +70,18 @@ async function close(server: Server): Promise<void> {
   });
 }
 
+function collidingValues(scope: string): readonly [string, string] {
+  const valuesByPort = new Map<number, string>();
+  for (let index = 0; index <= portCount; index += 1) {
+    const value = `connection-${index}`;
+    const port = firstCandidatePort(scope, value);
+    const existing = valuesByPort.get(port);
+    if (existing !== undefined) return [existing, value];
+    valuesByPort.set(port, value);
+  }
+  throw new Error("Could not find deterministic OAuth lock candidates with the same legacy port");
+}
+
 describe("OAuth local lock", () => {
   it("uses one canonical coordination probe", async () => {
     connectTargets.ports.length = 0;
@@ -77,7 +89,7 @@ describe("OAuth local lock", () => {
     const scope = "bounded-probe-regression";
     const value = "connection";
 
-    await withOAuthLocalLock(scope, value, 2_000, async () => undefined, "linux");
+    await withOAuthLocalLock(scope, value, 2_000, async () => undefined);
 
     expect(connectTargets.ports).toEqual([firstCandidatePort(scope, value)]);
     expect(connectTargets.paths).toEqual([]);
@@ -94,6 +106,19 @@ describe("OAuth local lock", () => {
     expect(strategy.probeEndpoints).toEqual([{ kind: "tcp", port: firstCandidatePort(scope, value) }]);
     expect(strategy.acquisitionEndpoint).toEqual({ kind: "pipe", path });
     expect(createOAuthLocalLockListenOptions(strategy.acquisitionEndpoint)).toEqual({ path, exclusive: true });
+  });
+
+  it("uses a kernel-released abstract socket while retaining the legacy Linux probe", () => {
+    const scope = "linux-abstract-socket-regression";
+    const value = "connection";
+    const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
+    const strategy = createOAuthLocalLockStrategy(scope, value, "linux");
+
+    expect(strategy.probeEndpoints).toEqual([{ kind: "tcp", port: firstCandidatePort(scope, value) }]);
+    expect(strategy.acquisitionEndpoint.kind).toBe("pipe");
+    if (strategy.acquisitionEndpoint.kind !== "pipe") throw new Error("Expected a Linux abstract socket endpoint");
+    expect(strategy.acquisitionEndpoint.path.charCodeAt(0)).toBe(0);
+    expect(strategy.acquisitionEndpoint.path.slice(1)).toBe(`${protocol}-${key}`);
   });
 
   it("waits for an older Windows process holding the canonical TCP lock", async () => {
@@ -167,7 +192,35 @@ describe("OAuth local lock", () => {
     }
   });
 
-  it("fails closed while the canonical candidate is occupied", async () => {
+  it.runIf(process.platform === "linux")("keeps distinct Linux locks independent when their legacy TCP candidates collide", async () => {
+    const scope = "linux-collision-regression";
+    const [firstValue, secondValue] = collidingValues(scope);
+    let releaseFirst!: () => void;
+    const holdFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const first = withOAuthLocalLock(scope, firstValue, 2_000, async () => {
+      markFirstEntered();
+      await holdFirst;
+    }, "linux");
+    await firstEntered;
+
+    const secondOperation = vi.fn(async () => undefined);
+    try {
+      await withOAuthLocalLock(scope, secondValue, 200, secondOperation, "linux");
+      expect(secondOperation).toHaveBeenCalledOnce();
+      expect(createOAuthLocalLockStrategy(scope, secondValue, "linux").acquisitionEndpoint).toMatchObject({ kind: "pipe" });
+    } finally {
+      releaseFirst();
+      await first;
+    }
+  });
+
+  it("fails closed while the canonical macOS TCP candidate is occupied", async () => {
     const scope = "occupied-candidate-regression";
     let value = "";
     let blocker: Server | undefined;
@@ -178,7 +231,7 @@ describe("OAuth local lock", () => {
     if (blocker === undefined) throw new Error("Could not reserve a deterministic OAuth lock candidate for the regression test");
 
     try {
-      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined, "linux")).rejects.toBeInstanceOf(
+      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined, "darwin")).rejects.toBeInstanceOf(
         OAuthLocalLockUnavailableError
       );
     } finally {
