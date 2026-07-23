@@ -21,13 +21,22 @@ interface CreatePrivateDirectoryRequest {
   readonly directory: string;
 }
 
+interface SecurePrivateFileRequest {
+  readonly operation: "secure-private-file";
+  readonly path: string;
+}
+
 interface VerifyPrivatePathRequest {
   readonly operation: "verify-private-path";
   readonly kind: "file" | "directory";
   readonly path: string;
 }
 
-type WindowsConfigAclRequest = CopyFileSecurityRequest | CreatePrivateDirectoryRequest | VerifyPrivatePathRequest;
+type WindowsConfigAclRequest =
+  | CopyFileSecurityRequest
+  | CreatePrivateDirectoryRequest
+  | SecurePrivateFileRequest
+  | VerifyPrivatePathRequest;
 
 /**
  * Copies the source file's non-null owner, group, and DACL, then verifies its
@@ -40,6 +49,11 @@ export async function copyWindowsConfigSecurityDescriptor(source: string, target
 /** Creates a current-user-only directory with its DACL applied at creation time. */
 export async function createWindowsPrivateDirectory(directory: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "create-private-directory", directory });
+}
+
+/** Applies and verifies a current-user-only DACL to an already exclusively created file. */
+export async function secureWindowsConfigFile(path: string): Promise<boolean> {
+  return runWindowsAclRequest({ operation: "secure-private-file", path });
 }
 
 /** Backwards-compatible name for migration transaction directories. */
@@ -72,9 +86,8 @@ function requestHasNul(request: WindowsConfigAclRequest): boolean {
   if (request.operation === "copy-file-security") {
     return request.source.includes("\u0000") || request.target.includes("\u0000");
   }
-  return request.operation === "create-private-directory"
-    ? request.directory.includes("\u0000")
-    : request.path.includes("\u0000");
+  if (request.operation === "create-private-directory") return request.directory.includes("\u0000");
+  return request.path.includes("\u0000");
 }
 
 function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
@@ -82,7 +95,9 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
     ? [request.operation, request.source, request.target]
     : request.operation === "create-private-directory"
       ? [request.operation, request.directory]
-      : [request.operation, request.kind, request.path];
+      : request.operation === "secure-private-file"
+        ? [request.operation, request.path]
+        : [request.operation, request.kind, request.path];
   const payload = fields.join("\u0000");
   const bytes = Buffer.from(payload, "utf8");
   return bytes.byteLength <= maximumRequestBytes && bytes.toString("utf8") === payload
@@ -259,6 +274,33 @@ try {
       ) { continue }
       if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { exit 1 }
     }
+    exit 0
+  }
+
+  if ($fields.Count -eq 2 -and $fields[0] -eq 'secure-private-file') {
+    $path = $fields[1]
+    $entry = [System.IO.FileInfo]::new($path)
+    if (-not $entry.Exists) { exit 1 }
+    $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
+    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    if ($null -eq $identity) { exit 1 }
+    $security = [System.Security.AccessControl.FileSecurity]::new()
+    $security.SetAccessRuleProtection($true, $false)
+    $security.SetOwner($identity)
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+      $identity,
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $security.SetAccessRule($rule)
+    $expected = $security.GetSecurityDescriptorSddlForm($verifySections)
+    [System.IO.File]::SetAccessControl($path, $security)
+    $entry.Refresh()
+    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
+    $actual = [System.IO.File]::GetAccessControl($path, $verifySections)
+    if (-not $actual.AreAccessRulesProtected) { exit 1 }
+    if ($actual.GetSecurityDescriptorSddlForm($verifySections) -ne $expected) { exit 1 }
     exit 0
   }
 

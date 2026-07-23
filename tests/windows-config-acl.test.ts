@@ -19,6 +19,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 import {
   copyWindowsConfigSecurityDescriptor,
   createWindowsPrivateMigrationDirectory,
+  secureWindowsConfigFile,
   verifyWindowsConfigPathSecurity
 } from "../src/cli/windows-config-acl.js";
 
@@ -93,6 +94,29 @@ describe("Windows migration ACL boundary", () => {
     });
 
     await expect(copyWindowsConfigSecurityDescriptor("C:\\config\\source.json", "C:\\config\\target.json")).resolves.toBe(false);
+  });
+
+  it("applies and verifies a current-user-only descriptor to an exclusively created configuration file", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(secureWindowsConfigFile("C:\\Users\\miftah\\.config\\miftah\\miftah.json")).resolves.toBe(true);
+
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "secure-private-file\u0000C:\\Users\\miftah\\.config\\miftah\\miftah.json"
+    );
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("secure-private-file");
+    expect(command).toContain("FileSecurity]::new()");
+    expect(command).toContain("SetAccessRuleProtection($true, $false)");
+    expect(command).toContain("FileSystemRights]::FullControl");
+    expect(command).toContain("File]::SetAccessControl");
+    expect(command).toContain("AreAccessRulesProtected");
   });
 
   it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {

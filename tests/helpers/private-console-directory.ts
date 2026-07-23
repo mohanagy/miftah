@@ -1,7 +1,8 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   createWindowsPrivateDirectory,
+  secureWindowsConfigFile,
   verifyWindowsConfigPathSecurity
 } from "../../src/cli/windows-config-acl.js";
 
@@ -25,4 +26,22 @@ export async function createPrivateConsoleDirectory(parent: string, name = "conf
     throw new Error("Windows Console test directory did not pass production ACL verification.");
   }
   return directory;
+}
+
+/** Writes a fresh fixture file only after its Windows ACL is private and verified. */
+export async function writePrivateConsoleFile(path: string, content: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await writeFile(path, content, { mode: 0o600 });
+    await chmod(path, 0o600);
+    return;
+  }
+  const handle = await open(path, "wx", 0o600);
+  try {
+    if (!(await secureWindowsConfigFile(path))) {
+      throw new Error("Unable to apply a private Windows ACL to a Console test fixture file.");
+    }
+    await handle.writeFile(content);
+  } finally {
+    await handle.close();
+  }
 }

@@ -1,11 +1,14 @@
-import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
-import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import {
+  createPrivateConsoleDirectory,
+  writePrivateConsoleFile
+} from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -14,8 +17,7 @@ afterEach(async () => {
 });
 
 async function writeConfig(path: string, value: unknown): Promise<void> {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  if (process.platform !== "win32") await chmod(path, 0o600);
+  await writePrivateConsoleFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 describe("Console dashboard application service", () => {
@@ -59,7 +61,7 @@ describe("Console dashboard application service", () => {
       upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
       profiles: { work: {} }
     });
-    await writeFile(join(directory, "invalid.json"), "{not valid json", { mode: 0o600 });
+    await writePrivateConsoleFile(join(directory, "invalid.json"), "{not valid json");
     await writeConfig(join(directory, "oversized.json"), {
       version: "3",
       name: "oversized",

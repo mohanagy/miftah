@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,10 @@ import {
 } from "../src/console/console-server.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { MiftahError } from "../src/utils/errors.js";
-import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import {
+  createPrivateConsoleDirectory,
+  writePrivateConsoleFile
+} from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -264,14 +267,13 @@ describe("local Console control server", () => {
     temporaryDirectories.push(root);
     const directory = await createPrivateConsoleDirectory(root);
     const gscPath = join(directory, "gsc.json");
-    await writeFile(gscPath, JSON.stringify({
+    await writePrivateConsoleFile(gscPath, `${JSON.stringify({
       version: "3",
       name: "gsc",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
       profiles: { work: {} }
-    }), { mode: 0o600 });
-    if (process.platform !== "win32") await chmod(gscPath, 0o600);
+    })}\n`);
 
     const server = await startConsoleServer(join(directory, "miftah.json"), {
       bootstrapCredential: "test-only-bootstrap-credential",
@@ -353,19 +355,15 @@ describe("local Console control server", () => {
     temporaryDirectories.push(root);
     const directory = await createPrivateConsoleDirectory(root);
     const defaultPath = join(directory, "miftah.json");
-    await writeFile(defaultPath, "{not valid json", { mode: 0o600 });
+    await writePrivateConsoleFile(defaultPath, "{not valid json");
     const gscPath = join(directory, "gsc.json");
-    await writeFile(gscPath, JSON.stringify({
+    await writePrivateConsoleFile(gscPath, `${JSON.stringify({
       version: "3",
       name: "gsc",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
       profiles: { work: {} }
-    }), { mode: 0o600 });
-    if (process.platform !== "win32") {
-      await chmod(defaultPath, 0o600);
-      await chmod(gscPath, 0o600);
-    }
+    })}\n`);
 
     const server = await startConsoleServer(defaultPath, {
       bootstrapCredential: "test-only-bootstrap-credential",

@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const aclMocks = vi.hoisted(() => ({
   createPrivateDirectory: vi.fn<(directory: string) => Promise<boolean>>(),
+  secureFile: vi.fn<(path: string) => Promise<boolean>>(),
   verifyPath: vi.fn<(path: string, kind: "file" | "directory") => Promise<boolean>>()
 }));
 
 vi.mock("../src/cli/windows-config-acl.js", () => ({
   createWindowsPrivateDirectory: aclMocks.createPrivateDirectory,
+  secureWindowsConfigFile: aclMocks.secureFile,
   verifyWindowsConfigPathSecurity: aclMocks.verifyPath
 }));
 
@@ -21,6 +23,7 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 beforeEach(() => {
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   aclMocks.verifyPath.mockResolvedValue(true);
+  aclMocks.secureFile.mockResolvedValue(true);
   aclMocks.createPrivateDirectory.mockImplementation(async (directory) => {
     await mkdir(directory, { recursive: true });
     return true;
@@ -30,6 +33,7 @@ beforeEach(() => {
 afterEach(async () => {
   if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   aclMocks.createPrivateDirectory.mockReset();
+  aclMocks.secureFile.mockReset();
   aclMocks.verifyPath.mockReset();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -53,6 +57,7 @@ describe("Console Windows first-run boundary", () => {
 
     expect(aclMocks.createPrivateDirectory).toHaveBeenCalledWith(configDirectory);
     expect(aclMocks.verifyPath).toHaveBeenCalledWith(configDirectory, "directory");
+    expect(aclMocks.secureFile).toHaveBeenCalledWith(configPath);
     expect(aclMocks.verifyPath).toHaveBeenCalledWith(expect.stringMatching(/[/\\]miftah\.json$/u), "file");
   });
 
