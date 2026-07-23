@@ -4,12 +4,12 @@ import type { ListenOptions, Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
-// POSIX retains one canonical candidate to preserve coordination with older Miftah versions.
-// Windows recognizes an exact holder on that legacy candidate and holds a best-effort companion
-// listener for rolling upgrades, but acquires a named pipe because this entire TCP range is also
-// its default ephemeral range. Miftah never connects to the named pipe: exclusive creation is the
-// lock boundary, so an untrusted squatter can only cause the same fail-closed denial of service
-// that was already possible against the TCP listener.
+// macOS retains one canonical candidate to preserve coordination with older Miftah versions.
+// Windows and Linux recognize an exact holder on that legacy candidate and hold a best-effort
+// companion listener for rolling upgrades, but acquire collision-free kernel endpoints. Windows
+// uses a named pipe because this entire TCP range is also its default ephemeral range; Linux uses
+// an abstract Unix socket because distinct lock keys can hash to the same legacy port. Miftah never
+// connects to the primary endpoint: exclusive creation is the lock boundary.
 const localLockProbeMilliseconds = 100;
 const localLockProtocol = "miftah-oauth-local-lock-v1";
 
@@ -51,6 +51,13 @@ export function createOAuthLocalLockStrategy(
 ): OAuthLocalLockStrategy {
   const key = localLockKey(scope, value);
   const legacyEndpoint: OAuthLocalLockProbeEndpoint = { kind: "tcp", port: localLockPort(key) };
+  if (platform === "linux") {
+    const acquisitionEndpoint: OAuthLocalLockEndpoint = {
+      kind: "pipe",
+      path: `\u0000${localLockProtocol}-${key}`
+    };
+    return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint };
+  }
   if (platform === "win32") {
     const acquisitionEndpoint: OAuthLocalLockEndpoint = {
       kind: "pipe",
