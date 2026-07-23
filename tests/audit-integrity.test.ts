@@ -59,6 +59,62 @@ function transactionWithHash(payload: Record<string, unknown>): Record<string, u
   };
 }
 
+async function createRotatedIntegrityWriteFailureFixture(): Promise<{
+  readonly directory: string;
+  readonly path: string;
+  readonly logger: AuditLogger;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-rotation-rollback-"));
+  const path = join(directory, "audit.jsonl");
+  const logger = new AuditLogger(path, {
+    integrity: { algorithm: "sha256-chain" },
+    rotation: { maxBytes: 1, retainFiles: 0 }
+  });
+  await logger.log({
+    wrapper: "github",
+    profile: "work",
+    operation: "tools/call",
+    name: "durable-before-integrity-rotation-failure",
+    status: "success",
+    durationMs: 1
+  });
+
+  const probe = await open(path, "r");
+  const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
+  const originalWrite = probe.write as BufferWrite;
+  await probe.close();
+  let writes = 0;
+  const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
+    this: FileHandle,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number | null
+  ) {
+    writes += 1;
+    if (writes === 5) {
+      await originalWrite.call(this, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+      throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
+    }
+    return originalWrite.call(this, buffer, offset, length, position);
+  });
+  try {
+    await expect(
+      logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "must-not-commit-after-integrity-rotation-failure",
+        status: "success",
+        durationMs: 2
+      })
+    ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+  } finally {
+    writeSpy.mockRestore();
+  }
+  return { directory, path, logger };
+}
+
 describe("audit journal integrity", () => {
   it("skips a Windows-reserved local lock port before writing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-reserved-lock-port-"));
@@ -461,56 +517,8 @@ describe("audit journal integrity", () => {
     expect(await verifyAuditJournal(path)).toEqual({ ok: true });
   });
 
-  it("recovers after a rotated integrity write fails before the new active record commits", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-rotation-rollback-"));
-    const path = join(directory, "audit.jsonl");
-    const logger = new AuditLogger(path, {
-      integrity: { algorithm: "sha256-chain" },
-      rotation: { maxBytes: 1, retainFiles: 0 }
-    });
-    await logger.log({
-      wrapper: "github",
-      profile: "work",
-      operation: "tools/call",
-      name: "durable-before-integrity-rotation-failure",
-      status: "success",
-      durationMs: 1
-    });
-
-    const probe = await open(path, "r");
-    const fileHandlePrototype = Object.getPrototypeOf(probe) as { write: BufferWrite };
-    const originalWrite = probe.write as BufferWrite;
-    await probe.close();
-    let writes = 0;
-    const writeSpy = vi.spyOn(fileHandlePrototype, "write").mockImplementation(async function (
-      this: FileHandle,
-      buffer: Uint8Array,
-      offset: number,
-      length: number,
-      position: number | null
-    ) {
-      writes += 1;
-      if (writes === 5) {
-        await originalWrite.call(this, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-        throw Object.assign(new Error("simulated full disk"), { code: "ENOSPC" });
-      }
-      return originalWrite.call(this, buffer, offset, length, position);
-    });
-    try {
-      await expect(
-        logger.log({
-          wrapper: "github",
-          profile: "work",
-          operation: "tools/call",
-          name: "must-not-commit-after-integrity-rotation-failure",
-          status: "success",
-          durationMs: 2
-        })
-      ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
-    } finally {
-      writeSpy.mockRestore();
-    }
-
+  it("rolls back after a rotated integrity write fails before the new active record commits", async () => {
+    const { directory, path } = await createRotatedIntegrityWriteFailureFixture();
     const retainedSegments = (await readdir(directory)).filter(
       (name) => name === "audit.jsonl" || name.startsWith("audit.jsonl.miftah-")
     );
@@ -521,7 +529,11 @@ describe("audit journal integrity", () => {
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as { name: string });
     expect(retainedRecords).toEqual([expect.objectContaining({ name: "durable-before-integrity-rotation-failure" })]);
+    expect(await verifyAuditJournal(path)).toEqual({ ok: true });
+  });
 
+  it("accepts new writes after rolling back a rotated integrity write failure", async () => {
+    const { path, logger } = await createRotatedIntegrityWriteFailureFixture();
     await expect(
       logger.log({
         wrapper: "github",
