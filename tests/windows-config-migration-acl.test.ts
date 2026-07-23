@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
+import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
@@ -481,6 +482,21 @@ describe("Windows migration ACL contract", () => {
 
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
+    "accepts a current-user-only file descriptor through the production verifier",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "miftah-windows-private-file-verifier-"));
+      temporaryDirectories.push(directory);
+      const path = join(directory, "miftah.json");
+      await writeFile(path, "source", "utf8");
+
+      await windowsAclSddl(path, "restrict");
+
+      await expect(verifyWindowsConfigPathSecurity(path, "file")).resolves.toBe(true);
     },
     10_000
   );
