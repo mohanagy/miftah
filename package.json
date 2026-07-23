@@ -54,7 +54,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check:pack": "node scripts/check-pack.mjs"
+    "check:pack": "node scripts/check-pack.mjs",
+    "build:test-fixture": "node scripts/build-test-fixture.mjs",
+    "check:test-fixture": "node scripts/build-test-fixture.mjs --check"
   },
   "engines": {
     "node": ">=20"
@@ -70,6 +72,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.15.30",
     "@vitest/coverage-v8": "^3.2.7",
+    "esbuild": "0.28.1",
     "eslint": "^10.6.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",

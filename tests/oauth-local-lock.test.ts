@@ -4,7 +4,7 @@ import type { Server } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { OAuthLocalLockUnavailableError, withOAuthLocalLock } from "../src/oauth/local-lock.js";
 
-const connectPorts = vi.hoisted(() => [] as number[]);
+const connectTargets = vi.hoisted(() => ({ ports: [] as number[], paths: [] as string[] }));
 
 vi.mock("node:net", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:net")>();
@@ -12,8 +12,9 @@ vi.mock("node:net", async (importOriginal) => {
     ...actual,
     connect: (...args: Parameters<typeof actual.connect>) => {
       const options = args[0] as unknown;
+      if (typeof options === "string") connectTargets.paths.push(options);
       if (typeof options === "object" && options !== null && "port" in options) {
-        connectPorts.push(Number((options as { port: unknown }).port));
+        connectTargets.ports.push(Number((options as { port: unknown }).port));
       }
       return Reflect.apply(actual.connect, undefined, args);
     }
@@ -49,13 +50,28 @@ async function close(server: Server): Promise<void> {
 
 describe("OAuth local lock", () => {
   it("uses one canonical coordination probe", async () => {
-    connectPorts.length = 0;
+    connectTargets.ports.length = 0;
+    connectTargets.paths.length = 0;
     const scope = "bounded-probe-regression";
     const value = "connection";
 
-    await withOAuthLocalLock(scope, value, 2_000, async () => undefined);
+    await withOAuthLocalLock(scope, value, 2_000, async () => undefined, "linux");
 
-    expect(connectPorts).toEqual([firstCandidatePort(scope, value)]);
+    expect(connectTargets.ports).toEqual([firstCandidatePort(scope, value)]);
+    expect(connectTargets.paths).toEqual([]);
+  });
+
+  it("uses a kernel-released named pipe instead of the ephemeral TCP range on Windows", async () => {
+    connectTargets.ports.length = 0;
+    connectTargets.paths.length = 0;
+    const scope = "windows-pipe-regression";
+    const value = "connection";
+    const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
+
+    await withOAuthLocalLock(scope, value, 2_000, async () => undefined, "win32");
+
+    expect(connectTargets.ports).toEqual([]);
+    expect(connectTargets.paths).toEqual([`\\\\.\\pipe\\${protocol}-${key}`]);
   });
 
   it("fails closed while the canonical candidate is occupied", async () => {
@@ -69,7 +85,7 @@ describe("OAuth local lock", () => {
     if (blocker === undefined) throw new Error("Could not reserve a deterministic OAuth lock candidate for the regression test");
 
     try {
-      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined)).rejects.toBeInstanceOf(
+      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined, "linux")).rejects.toBeInstanceOf(
         OAuthLocalLockUnavailableError
       );
     } finally {

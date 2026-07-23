@@ -4,7 +4,7 @@
 set -eu
 
 record_descendant() {
-  printf '{"descendantPid":%s}\n' "$1" > "${MIFTAH_FAKE_RECORD_PATH:?}"
+  printf '{"providerPid":%s,"descendantPid":%s}\n' "$$" "$1" > "${MIFTAH_FAKE_RECORD_PATH:?}"
 }
 
 keep_streams_open() {

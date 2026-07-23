@@ -1,6 +1,6 @@
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { runDoctor } from "../src/cli/doctor.js";
@@ -581,7 +581,7 @@ describe("doctor readiness runner", () => {
       }
     );
     const localUpstream = join(directory, "local-upstream.mjs");
-    await writeFile(localUpstream, `#!/usr/bin/env node\n${await readFile(fixture, "utf8")}`);
+    await writeFile(localUpstream, `#!/usr/bin/env node\nawait import(${JSON.stringify(pathToFileURL(fixture).href)});\n`);
     await chmod(localUpstream, 0o700);
 
     const report = await runDoctor(configPath);
