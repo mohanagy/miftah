@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.3.3";
+const releaseVersion = "0.4.0";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,10 +21,10 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.3.3 release artifacts", () => {
+describe("v0.4.0 release artifacts", () => {
   it.each([
-    "## [0.3.3] - 2026-7-22\n\n### Fixed\n",
-    "Release candidate: ## [0.3.3] - 2026-07-22\n\n### Fixed\n"
+    "## [0.4.0] - 2026-7-23\n\n### Added\n",
+    "Release candidate: ## [0.4.0] - 2026-07-23\n\n### Added\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
       `Unable to find the ${releaseVersion} changelog entry.`
@@ -65,15 +65,18 @@ describe("v0.3.3 release artifacts", () => {
     }
   });
 
-  it("documents the PostHog HogQL identifier fix while retaining the experimental package status", () => {
+  it("documents the OAuth and Console release while retaining the experimental package status", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(changelog).toContain("Miftah is experimental and pre-1.0");
+    expect(notes).toContain("### Added");
     expect(notes).toContain("### Fixed");
-    expect(notes).toMatch(/HogQL dollar identifiers/iu);
-    expect(notes).toMatch(/\$pageview/iu);
-    expect(notes).toMatch(/Shell-substitution forms.*remain fail-closed/iu);
+    expect(notes).toMatch(/standards-compatible OAuth/iu);
+    expect(notes).toMatch(/miftah dashboard/iu);
+    expect(notes).toMatch(/Google Search Console/iu);
+    expect(notes).toMatch(/Windows secret-provider/iu);
+    expect(notes).toMatch(/profile runtime isolation/iu);
     const readme = readRepositoryFile("README.md");
     expect(readme).toContain("One MCP connector. Deliberate account selection.");
     expect(readme).toContain("experimental and pre-1.0");
