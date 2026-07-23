@@ -119,6 +119,54 @@ describe("OAuth local lock", () => {
     }
   });
 
+  it("keeps an older Windows process out while the named-pipe holder is active", async () => {
+    const scope = "windows-new-holder-regression";
+    const value = "connection";
+    let releaseNewHolder!: () => void;
+    const holdNewHolder = new Promise<void>((resolve) => {
+      releaseNewHolder = resolve;
+    });
+    let markNewHolderEntered!: () => void;
+    const newHolderEntered = new Promise<void>((resolve) => {
+      markNewHolderEntered = resolve;
+    });
+    const newHolder = withOAuthLocalLock(scope, value, 2_000, async () => {
+      markNewHolderEntered();
+      await holdNewHolder;
+    }, "win32");
+    await newHolderEntered;
+
+    const oldOperation = vi.fn(async () => undefined);
+    try {
+      await expect(withOAuthLocalLock(scope, value, 100, oldOperation, "linux")).rejects.toBeInstanceOf(
+        OAuthLocalLockUnavailableError
+      );
+      expect(oldOperation).not.toHaveBeenCalled();
+    } finally {
+      releaseNewHolder();
+      await newHolder;
+    }
+  });
+
+  it("continues with the Windows pipe when an unrelated listener occupies the legacy port", async () => {
+    const scope = "windows-unrelated-legacy-listener-regression";
+    let value = "";
+    let blocker: Server | undefined;
+    for (let index = 0; index < 256 && blocker === undefined; index += 1) {
+      value = `connection-${index}`;
+      blocker = await tryOccupy(firstCandidatePort(scope, value));
+    }
+    if (blocker === undefined) throw new Error("Could not reserve an unrelated legacy Windows lock candidate");
+
+    const operation = vi.fn(async () => undefined);
+    try {
+      await withOAuthLocalLock(scope, value, 2_000, operation, "win32");
+      expect(operation).toHaveBeenCalledOnce();
+    } finally {
+      await close(blocker);
+    }
+  });
+
   it("fails closed while the canonical candidate is occupied", async () => {
     const scope = "occupied-candidate-regression";
     let value = "";

@@ -27,6 +27,7 @@ describe("test harness resource contract", () => {
       encoding: "utf8",
       timeout: 10_000
     });
+    expect(bundleCheck.error).toBeUndefined();
     expect(bundleCheck.status, bundleCheck.stderr).toBe(0);
   });
 });

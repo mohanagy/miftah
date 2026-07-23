@@ -5,10 +5,11 @@ import type { ListenOptions, Server, Socket } from "node:net";
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
 // POSIX retains one canonical candidate to preserve coordination with older Miftah versions.
-// Windows probes that legacy candidate for rolling upgrades, but acquires a named pipe because
-// this entire TCP range is also its default ephemeral range. Miftah never connects to the named
-// pipe: exclusive creation is the lock boundary, so an untrusted squatter can only cause the same
-// fail-closed denial of service that was already possible against the TCP listener.
+// Windows recognizes an exact holder on that legacy candidate and holds a best-effort companion
+// listener for rolling upgrades, but acquires a named pipe because this entire TCP range is also
+// its default ephemeral range. Miftah never connects to the named pipe: exclusive creation is the
+// lock boundary, so an untrusted squatter can only cause the same fail-closed denial of service
+// that was already possible against the TCP listener.
 const localLockProbeMilliseconds = 100;
 const localLockProtocol = "miftah-oauth-local-lock-v1";
 
@@ -39,7 +40,7 @@ type OAuthLocalLockProbeEndpoint = Extract<OAuthLocalLockEndpoint, { kind: "tcp"
 
 export interface OAuthLocalLockStrategy {
   readonly key: string;
-  readonly probeEndpoints: readonly OAuthLocalLockProbeEndpoint[];
+  readonly probeEndpoints: readonly [OAuthLocalLockProbeEndpoint];
   readonly acquisitionEndpoint: OAuthLocalLockEndpoint;
 }
 
@@ -161,39 +162,44 @@ async function acquireLocalLock(
   if (!Number.isSafeInteger(waitMilliseconds) || waitMilliseconds <= 0) throw new OAuthLocalLockUnavailableError();
   const startedAt = Date.now();
   const strategy = createOAuthLocalLockStrategy(scope, value, platform);
+  const legacyEndpoint = strategy.probeEndpoints[0];
+  const acquiresLegacyEndpoint = sameLocalLockEndpoint(legacyEndpoint, strategy.acquisitionEndpoint);
   while (true) {
-    let mustWait = false;
-    for (const endpoint of strategy.probeEndpoints) {
-      if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
-      const state = await inspectLocalLockEndpoint(endpoint, strategy.key);
-      if (state !== "available") {
-        mustWait = true;
-        break;
-      }
-    }
+    if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
+    const legacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
+    const mustWait = acquiresLegacyEndpoint ? legacyState !== "available" : legacyState === "held";
     if (!mustWait) {
-      let lock: LocalLock | undefined;
+      let primaryLock: LocalLock | undefined;
       try {
-        lock = await tryAcquireLocalLock(strategy.acquisitionEndpoint, strategy.key);
+        primaryLock = await tryAcquireLocalLock(strategy.acquisitionEndpoint, strategy.key);
       } catch {
         throw new OAuthLocalLockUnavailableError();
       }
-      if (lock !== undefined) {
-        let competingHolder = false;
-        for (const endpoint of strategy.probeEndpoints) {
-          if (sameLocalLockEndpoint(endpoint, strategy.acquisitionEndpoint)) continue;
+      if (primaryLock !== undefined) {
+        if (acquiresLegacyEndpoint) return async () => releaseLocalLock(primaryLock);
+
+        let legacyLock: LocalLock | undefined;
+        try {
+          legacyLock = await tryAcquireLocalLock(legacyEndpoint, strategy.key);
+        } catch {
+          process.emitWarning("Miftah OAuth legacy lock compatibility listener could not be started.");
+        }
+        if (legacyLock === undefined) {
           if (Date.now() - startedAt >= waitMilliseconds) {
-            await releaseLocalLock(lock);
+            await releaseLocalLock(primaryLock);
             throw new OAuthLocalLockUnavailableError();
           }
-          const state = await inspectLocalLockEndpoint(endpoint, strategy.key);
-          if (state !== "available") {
-            competingHolder = true;
-            break;
+          const postAcquisitionLegacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
+          if (postAcquisitionLegacyState === "held") {
+            await releaseLocalLock(primaryLock);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            continue;
           }
         }
-        if (!competingHolder) return async () => releaseLocalLock(lock);
-        await releaseLocalLock(lock);
+        return async () => {
+          if (legacyLock !== undefined) await releaseLocalLock(legacyLock);
+          await releaseLocalLock(primaryLock);
+        };
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
