@@ -9,6 +9,7 @@ import {
 } from "../src/console/console-server.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -170,9 +171,10 @@ describe("local Console control server", () => {
   });
 
   it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
-    temporaryDirectories.push(directory);
-    const configPath = join(directory, "miftah.json");
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
     const server = await startConsoleServer(configPath, {
       bootstrapCredential: "test-only-bootstrap-credential",
       allowMissingConfig: true,
@@ -258,9 +260,9 @@ describe("local Console control server", () => {
   });
 
   it("requires a CSRF-protected selection before a no-config dashboard opens a discovered configuration", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-catalog-"));
-    temporaryDirectories.push(directory);
-    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-catalog-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
     const gscPath = join(directory, "gsc.json");
     await writeFile(gscPath, JSON.stringify({
       version: "3",
@@ -347,9 +349,9 @@ describe("local Console control server", () => {
   });
 
   it("does not let an invalid default path hide another safe discovered configuration", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-invalid-default-"));
-    temporaryDirectories.push(directory);
-    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-invalid-default-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
     const defaultPath = join(directory, "miftah.json");
     await writeFile(defaultPath, "{not valid json", { mode: 0o600 });
     const gscPath = join(directory, "gsc.json");

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -18,9 +19,9 @@ async function writeConfig(path: string, value: unknown): Promise<void> {
 
 describe("Console dashboard application service", () => {
   it("discovers only validated unique standard-directory configs and requires explicit selection", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
-    if (process.platform !== "win32") await chmod(directory, 0o700);
-    temporaryDirectories.push(directory);
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
 
     const gscPath = join(directory, "gsc.json");
     await writeConfig(gscPath, {

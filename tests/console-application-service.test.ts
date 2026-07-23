@@ -8,6 +8,7 @@ import {
   trustedConfigurationFor
 } from "../src/console/console-config-catalog.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
@@ -96,9 +97,10 @@ describe("Console application service", () => {
   });
 
   it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
-    temporaryDirectories.push(directory);
-    const configPath = join(directory, "miftah.json");
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
     const service = new ConsoleApplicationService(configPath, {
       generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
       launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
