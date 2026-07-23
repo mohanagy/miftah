@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
@@ -18,6 +19,22 @@ async function writeConfig(path: string, value: unknown): Promise<void> {
 }
 
 describe("Console dashboard application service", () => {
+  it.runIf(process.platform === "win32")("creates fixture files that pass the production Windows ACL verifier", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "fixture.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "fixture",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+
+    await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
+  });
+
   it("discovers only validated unique standard-directory configs and requires explicit selection", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
     temporaryDirectories.push(root);
