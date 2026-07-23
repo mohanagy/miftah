@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -20,13 +20,17 @@ async function inSandbox<T>(run: (directory: string) => Promise<T>): Promise<T> 
   }
 }
 
+async function createExecutableMarker(path: string): Promise<void> {
+  await writeFile(path, "", { mode: 0o700 });
+}
+
 describe("secret executable resolution", () => {
   it("resolves a bare command from an absolute PATH entry", async () => {
     await inSandbox(async (directory) => {
       const binDirectory = join(directory, "bin");
       const executable = join(binDirectory, "provider");
       await mkdir(binDirectory);
-      await copyFile(process.execPath, executable);
+      await createExecutableMarker(executable);
 
       await expect(
         resolveExecutablePath("provider", {
@@ -41,7 +45,7 @@ describe("secret executable resolution", () => {
       const workingDirectory = join(directory, "working-directory");
       const shadowedExecutable = join(workingDirectory, "provider");
       await mkdir(workingDirectory);
-      await copyFile(process.execPath, shadowedExecutable);
+      await createExecutableMarker(shadowedExecutable);
 
       await expect(
         resolveExecutablePath("provider", {
@@ -61,7 +65,7 @@ describe("secret executable resolution", () => {
         const executable = win32.join(firstBinDirectory, "provider");
         await mkdir(firstBinDirectory);
         await mkdir(secondBinDirectory);
-        await copyFile(process.execPath, executable);
+        await createExecutableMarker(executable);
 
         try {
           await expect(
@@ -82,7 +86,7 @@ describe("secret executable resolution", () => {
       const binDirectory = join(directory, "bin");
       const executable = join(binDirectory, "provider");
       await mkdir(binDirectory);
-      await copyFile(process.execPath, executable);
+      await createExecutableMarker(executable);
 
       await expect(
         resolveExecutablePath("./provider", {

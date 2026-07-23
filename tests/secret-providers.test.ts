@@ -25,6 +25,7 @@ const posixDescendantProviderFixturePath = join(
   "posix-descendant-provider.sh"
 );
 const realSetTimeout = globalThis.setTimeout;
+const realSetImmediate = globalThis.setImmediate;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
@@ -85,6 +86,7 @@ async function readFakeRecord(directory: string): Promise<{
   hasOpServiceAccountToken: boolean;
   keychainEnvironment: Record<string, string>;
   hasPowerShellModulePath: boolean;
+  providerPid?: number;
   descendantPid?: number;
 }> {
   return JSON.parse(await readFile(join(directory, "record.json"), "utf8")) as {
@@ -93,6 +95,7 @@ async function readFakeRecord(directory: string): Promise<{
     hasOpServiceAccountToken: boolean;
     keychainEnvironment: Record<string, string>;
     hasPowerShellModulePath: boolean;
+    providerPid?: number;
     descendantPid?: number;
   };
 }
@@ -215,21 +218,37 @@ async function readDescendantPidWithWait(
   return descendantPid!;
 }
 
-async function readPosixDescendantPid(directory: string, observed: Promise<unknown>): Promise<number> {
+async function readPosixProcessIds(
+  directory: string,
+  observed: Promise<unknown>
+): Promise<{ providerPid: number; descendantPid: number }> {
   let commandSettled = false;
   void observed.then(() => {
     commandSettled = true;
   });
   for (;;) {
     try {
-      const candidate = (await readFakeRecord(directory)).descendantPid;
-      if (Number.isSafeInteger(candidate) && candidate !== undefined && candidate > 0) return candidate;
+      const record = await readFakeRecord(directory);
+      if (
+        Number.isSafeInteger(record.providerPid) &&
+        record.providerPid !== undefined &&
+        record.providerPid > 0 &&
+        Number.isSafeInteger(record.descendantPid) &&
+        record.descendantPid !== undefined &&
+        record.descendantPid > 0
+      ) {
+        return { providerPid: record.providerPid, descendantPid: record.descendantPid };
+      }
     } catch (error) {
       if (errorCode(error) !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
     }
-    if (commandSettled) throw new Error("Provider command settled before recording its descendant PID");
+    if (commandSettled) throw new Error("Provider command settled before recording its process IDs");
     await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
   }
+}
+
+async function readPosixDescendantPid(directory: string, observed: Promise<unknown>): Promise<number> {
+  return (await readPosixProcessIds(directory, observed)).descendantPid;
 }
 
 async function waitForPosixCondition(
@@ -985,7 +1004,7 @@ it.each([
         it.runIf(process.platform === "win32")("does not use a current-directory 1Password executable", async () => {
           await inSandbox(async (directory) => {
             const shadowedExecutable = join(directory, "op.exe");
-            await copyFile(process.execPath, shadowedExecutable);
+            await writeFile(shadowedExecutable, "", { mode: 0o700 });
             const originalDirectory = process.cwd();
             process.chdir(directory);
             try {
@@ -1369,7 +1388,8 @@ describe("secret command runner", () => {
         let descendantPid: number | undefined;
 
         try {
-          descendantPid = await readPosixDescendantPid(directory, observed);
+          const processIds = await readPosixProcessIds(directory, observed);
+          descendantPid = processIds.descendantPid;
           await waitForPosixCondition(
             async () => {
               try {
@@ -1382,6 +1402,8 @@ describe("secret command runner", () => {
             observed,
             "the stubborn descendant to start"
           );
+          await waitForProcessExit(processIds.providerPid);
+          await new Promise<void>((resolve) => realSetImmediate(resolve));
 
           timeoutGate.trigger();
           timeoutTriggered = true;

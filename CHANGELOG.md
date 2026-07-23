@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file. The format 
 ### Fixed
 
 - [#178](https://github.com/mohanagy/miftah/issues/178) Locked `fast-uri` 3.1.4, removing the high-severity URI host-confusion advisory, and added a package contract that rejects stale vulnerable nested resolutions. The separate moderate `@hono/node-server` advisory affects only its unused `serve-static` path; Miftah's MCP transport uses `getRequestListener`, and the current MCP SDK has no compatible patched Hono 1.x release.
+- [#122](https://github.com/mohanagy/miftah/issues/122) Windows OAuth transaction locking now acquires an exclusive, crash-released named pipe instead of depending on a bind inside the operating system's default ephemeral TCP range, preventing unrelated connections from making the local credential store unavailable. It recognizes an exact older-version holder and, when the legacy port is available, holds a best-effort compatibility listener so older processes also stay excluded; unrelated legacy listeners degrade that rolling-upgrade bridge without blocking the pipe lock. POSIX coordination remains unchanged.
 
 ## [0.3.3] - 2026-07-22
 
