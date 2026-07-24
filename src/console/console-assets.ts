@@ -145,25 +145,15 @@ const page = `<!doctype html>
             <p class="step">02 / First connection</p>
             <h2 id="onboarding-title">Create a native OAuth profile</h2>
           </div>
-          <p>Miftah will create one validated v3 configuration. No token or client secret belongs here.</p>
+          <p>Miftah checks this exact HTTPS endpoint for standards-based OAuth before it creates the configuration. It uses dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
         </div>
         <form id="onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
           <label>Profile name<input name="profile" required maxlength="256" placeholder="production"></label>
           <label class="wide">Profile description<input name="description" maxlength="1024" placeholder="Production analytics account"></label>
           <label class="wide">Remote MCP resource URL<input name="resource" type="url" required maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
-          <label class="wide">OAuth issuer URL<input name="issuer" type="url" required maxlength="2048" placeholder="https://auth.example.com"></label>
-          <label>Client registration
-            <select name="registrationMode">
-              <option value="dynamic">Dynamic registration</option>
-              <option value="pre-registered">Pre-registered client ID</option>
-              <option value="client-id-metadata">Client ID metadata URL</option>
-            </select>
-          </label>
-          <label>Registration value<input name="registrationValue" maxlength="2048" placeholder="Only for non-dynamic modes"></label>
-          <label class="wide">Least-privilege scopes<input name="scopes" placeholder="openid analytics:read" aria-describedby="scope-help"></label>
-          <p id="scope-help" class="field-note wide">Separate scopes with spaces or commas. Review them before the browser opens.</p>
-          <div class="wide form-action"><button type="submit">Create profile and connection</button></div>
+          <p class="field-note wide">Miftah will stop without writing anything if this endpoint does not publish one supported OAuth authorization server with dynamic client registration. Advanced manual OAuth remains available for provider-specific registrations.</p>
+          <div class="wide form-action"><button type="submit">Discover OAuth and create profile</button></div>
         </form>
       </section>
 
@@ -201,23 +191,44 @@ const page = `<!doctype html>
             <p>Connect and reauthorize may open the provider in your system browser. Disconnect removes only Miftah's local vault credential; revoke provider access separately.</p>
           </div>
           <div id="connection-list" class="connection-list"></div>
+          <details id="native-oauth-account-editor">
+            <summary>Add another native OAuth account</summary>
+            <form id="native-oauth-account-form" class="form-grid compact">
+              <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
+              <label>Configured upstream<select name="upstream" id="native-oauth-account-upstream" required></select></label>
+              <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal analytics account"></label>
+              <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
+              <p class="field-note wide">Miftah uses the exact HTTPS endpoint already configured for this upstream. It creates a separate profile and OAuth binding, while preserving your existing accounts. No browser authorization starts yet.</p>
+              <div class="wide form-action"><button type="submit">Discover OAuth and add account</button></div>
+            </form>
+          </details>
           <details id="native-oauth-editor">
             <summary>Add native OAuth to an existing profile</summary>
             <form id="connection-form" class="form-grid compact">
               <label>Profile<select name="profile" id="connection-profile" required></select></label>
               <label>Upstream<select name="upstream" id="connection-upstream" required></select></label>
-              <label class="wide">OAuth issuer URL<input name="issuer" type="url" required maxlength="2048"></label>
-              <label>Client registration
-                <select name="registrationMode">
-                  <option value="dynamic">Dynamic registration</option>
-                  <option value="pre-registered">Pre-registered client ID</option>
-                  <option value="client-id-metadata">Client ID metadata URL</option>
-                </select>
-              </label>
-              <label>Registration value<input name="registrationValue" maxlength="2048"></label>
-              <label class="wide">Scopes<input name="scopes" placeholder="openid analytics:read"></label>
-              <div class="wide form-action"><button type="submit">Add connection</button></div>
+              <p class="field-note wide">Miftah uses the exact HTTPS endpoint already configured for this upstream. It discovers supported OAuth before it changes the configuration; no browser authorization starts yet.</p>
+              <div class="wide form-action"><button type="submit">Discover OAuth from configured upstream</button></div>
             </form>
+            <details>
+              <summary>Advanced manual OAuth registration</summary>
+              <p class="field-note">Use this only when the provider gives you pre-registered client details or a client-metadata URL. Miftah cannot safely infer those values.</p>
+              <form id="manual-connection-form" class="form-grid compact">
+                <label>Profile<select name="profile" id="manual-connection-profile" required></select></label>
+                <label>Upstream<select name="upstream" id="manual-connection-upstream" required></select></label>
+                <label class="wide">OAuth issuer URL<input name="issuer" type="url" required maxlength="2048"></label>
+                <label>Client registration
+                  <select name="registrationMode">
+                    <option value="dynamic">Dynamic registration</option>
+                    <option value="pre-registered">Pre-registered client ID</option>
+                    <option value="client-id-metadata">Client ID metadata URL</option>
+                  </select>
+                </label>
+                <label>Registration value<input name="registrationValue" maxlength="2048"></label>
+                <label class="wide">Scopes<input name="scopes" placeholder="openid analytics:read"></label>
+                <div class="wide form-action"><button type="submit">Add manual connection</button></div>
+              </form>
+            </details>
           </details>
         </section>
 
@@ -864,8 +875,11 @@ const script = `(() => {
     if (defaultProfile) defaultProfile.textContent = configuredDefaultProfile || "—";
     const profiles = Array.isArray(metadata.profiles) ? metadata.profiles.map((item) => String(record(item).name || "")).filter(Boolean) : [];
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
+    setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);
     setOptions(byId("connection-upstream"), upstreams);
+    setOptions(byId("manual-connection-profile"), profiles);
+    setOptions(byId("manual-connection-upstream"), upstreams);
     renderProfileReadiness(metadata.authentication, configuredDefaultProfile);
     const results = await Promise.all([
       api("/api/v1/health"),
@@ -929,18 +943,15 @@ const script = `(() => {
     onboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = new FormData(onboardingForm);
-      message("Creating the validated profile and OAuth connection…");
+      message("Checking the endpoint's OAuth setup before creating the profile…");
       try {
-        await api("/api/v1/onboarding/native-oauth", {
+        await api("/api/v1/onboarding/native-oauth/discover", {
           method: "POST",
           body: {
             name: String(data.get("name") || "").trim(),
             profile: String(data.get("profile") || "").trim(),
             description: String(data.get("description") || "").trim() || undefined,
-            resource: String(data.get("resource") || "").trim(),
-            issuer: String(data.get("issuer") || "").trim(),
-            clientRegistration: registration(onboardingForm),
-            scopes: scopes(onboardingForm)
+            resource: String(data.get("resource") || "").trim()
           }
         });
         onboardingForm.reset();
@@ -1041,7 +1052,49 @@ const script = `(() => {
     connectionForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = new FormData(connectionForm);
-      message("Adding the reviewed OAuth binding…");
+      message("Checking the configured endpoint's OAuth setup before adding the connection…");
+      try {
+        await api("/api/v1/connections/discover", {
+          method: "POST",
+          body: {
+            profile: String(data.get("profile") || ""),
+            upstream: String(data.get("upstream") || "")
+          }
+        });
+        connectionForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const nativeOAuthAccountForm = byId("native-oauth-account-form");
+  if (nativeOAuthAccountForm instanceof HTMLFormElement) {
+    nativeOAuthAccountForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(nativeOAuthAccountForm);
+      message("Checking the configured endpoint's OAuth setup before adding the account…");
+      try {
+        await api("/api/v1/profiles/native-oauth/discover", {
+          method: "POST",
+          body: {
+            profile: String(data.get("profile") || "").trim(),
+            description: String(data.get("description") || "").trim() || undefined,
+            upstream: String(data.get("upstream") || ""),
+            ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
+          }
+        });
+        nativeOAuthAccountForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const manualConnectionForm = byId("manual-connection-form");
+  if (manualConnectionForm instanceof HTMLFormElement) {
+    manualConnectionForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(manualConnectionForm);
+      message("Adding the reviewed manual OAuth binding…");
       try {
         await api("/api/v1/connections", {
           method: "POST",
@@ -1049,11 +1102,11 @@ const script = `(() => {
             profile: String(data.get("profile") || ""),
             upstream: String(data.get("upstream") || ""),
             issuer: String(data.get("issuer") || "").trim(),
-            clientRegistration: registration(connectionForm),
-            scopes: scopes(connectionForm)
+            clientRegistration: registration(manualConnectionForm),
+            scopes: scopes(manualConnectionForm)
           }
         });
-        connectionForm.reset();
+        manualConnectionForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
     });

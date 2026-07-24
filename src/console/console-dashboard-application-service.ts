@@ -1,5 +1,6 @@
 import type { ClientLauncher, ClientSelection, ClientSnippet } from "../cli/client-snippets.js";
 import { realpath } from "node:fs/promises";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { resolvePath } from "../config/path-resolve.js";
 import { MiftahError } from "../utils/errors.js";
 import {
@@ -9,6 +10,9 @@ import {
   type ConsoleConnectionAddReport,
   type ConsoleConnectionAddRequest,
   type ConsoleControlApplication,
+  type ConsoleDiscoveredNativeOAuthAccountRequest,
+  type ConsoleDiscoveredNativeOAuthConnectionRequest,
+  type ConsoleDiscoveredNativeOAuthOnboardingRequest,
   type ConsoleHealth,
   type ConsoleNativeOAuthOnboardingRequest,
   type ConsoleProfileReadinessRequest,
@@ -31,6 +35,8 @@ export interface ConsoleDashboardApplicationServiceOptions {
   /** Bounded source of known configurations; client settings are never inspected. */
   readonly configDirectory: string;
   readonly launcher?: ClientLauncher;
+  /** Internal test/runtime seam for guarded endpoint-first OAuth discovery. */
+  readonly nativeOAuthFetch?: FetchLike;
 }
 
 interface ActiveConsoleConfiguration {
@@ -122,6 +128,15 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     return result;
   }
 
+  async onboardDiscoveredNativeOAuth(
+    request: ConsoleDiscoveredNativeOAuthOnboardingRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    await this.assertFirstRunAvailable();
+    const result = await this.firstRunApplication.onboardDiscoveredNativeOAuth(request);
+    await this.confirmCreatedFirstRunConfiguration();
+    return result;
+  }
+
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardPreset(request);
@@ -157,6 +172,28 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     return result;
   }
 
+  async addDiscoveredNativeOAuthConnection(
+    request: ConsoleDiscoveredNativeOAuthConnectionRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.addDiscoveredNativeOAuthConnection(request);
+    // The guarded commit changes the file contents; require a fresh explicit
+    // selection instead of retaining a stale trusted snapshot.
+    this.active = undefined;
+    return result;
+  }
+
+  async addDiscoveredNativeOAuthAccount(
+    request: ConsoleDiscoveredNativeOAuthAccountRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.addDiscoveredNativeOAuthAccount(request);
+    // The guarded commit changes the file contents; require a fresh explicit
+    // selection instead of retaining a stale trusted snapshot.
+    this.active = undefined;
+    return result;
+  }
+
   async connect(connectionRef: string): Promise<unknown> {
     return (await this.selectedApplication()).application.connect(connectionRef);
   }
@@ -187,6 +224,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): ConsoleApplicationService {
     return new ConsoleApplicationService(configPath, {
       ...(this.options.launcher === undefined ? {} : { launcher: this.options.launcher }),
+      ...(this.options.nativeOAuthFetch === undefined ? {} : { nativeOAuthFetch: this.options.nativeOAuthFetch }),
       ...(trustedConfiguration === undefined ? {} : { trustedConfiguration })
     });
   }

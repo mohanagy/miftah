@@ -10,6 +10,7 @@ import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
+import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -227,6 +228,98 @@ describe("Console dashboard application service", () => {
       name: "gsc",
       catalog: { selectedConfigurationId: gsc.id }
     });
+  });
+
+  it("adds endpoint-first native OAuth only after an explicit configuration selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-discovered-oauth-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "posthog.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "production",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { production: {} }
+    });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] },
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    try {
+      await expect(service.addDiscoveredNativeOAuthConnection({
+        profile: "production",
+        upstream: "default"
+      })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+      const metadata = await service.configMetadata();
+      const selected = metadata.catalog?.configurations.find((configuration) => configuration.name === "posthog-work");
+      if (selected === undefined) throw new Error("Expected PostHog configuration.");
+      await service.selectConfiguration(selected.id);
+
+      await expect(service.addDiscoveredNativeOAuthConnection({
+        profile: "production",
+        upstream: "default"
+      })).resolves.toMatchObject({ profile: "production", upstream: "default" });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        oauth: { connections: expect.any(Object) }
+      });
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("adds another endpoint-first OAuth account only after selecting its configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-add-account-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "posthog.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: {} }
+    });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory,
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    try {
+      const request = {
+        profile: "personal",
+        description: "Personal analytics",
+        upstream: "default",
+        makeDefault: true
+      };
+      await expect(service.addDiscoveredNativeOAuthAccount(request)).rejects.toMatchObject({
+        code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+      });
+      const metadata = await service.configMetadata();
+      const selected = metadata.catalog?.configurations.find((configuration) => configuration.name === "posthog-work");
+      if (selected === undefined) throw new Error("Expected PostHog configuration.");
+      await service.selectConfiguration(selected.id);
+
+      await expect(service.addDiscoveredNativeOAuthAccount(request)).resolves.toMatchObject({
+        profile: "personal",
+        upstream: "default"
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "personal",
+        profiles: { work: {}, personal: { description: "Personal analytics" } },
+        oauth: { connections: expect.any(Object) }
+      });
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await upstream.close();
+    }
   });
 
   it("omits malformed, oversized, duplicate, and nested candidates from a verified catalog", async () => {
