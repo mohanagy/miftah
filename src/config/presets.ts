@@ -27,7 +27,7 @@ const embeddedCredentialScheme = /(?:^|=|,|:|\{|\[|"|')(?:api[-_ ]?key|basic|bea
 const credentialUrlUserinfo = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s@]+@/u;
 const credentialQueryParameter = /[?&](?:access[-_]?key|access[-_]?token|api[-_]?key|auth(?:orization)?|bearer|client[-_]?secret|cookie|credential(?:s)?|jwt|key|password|passwd|private[-_]?key|secret|sig(?:nature)?|token)=[^&\s]+/iu;
 const uriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
-const shellExecutable = /^(?:bash|cmd(?:\.exe)?|fish|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh|zsh)$/iu;
+const shellExecutable = /^(?:bash|cmd|command|fish|powershell|pwsh|sh|zsh)$/iu;
 const environmentWrapper = /^env(?:\.exe)?$/iu;
 const bareExecutable = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
 const windowsDirectExecutable = /\.(?:com|exe)$/iu;
@@ -35,6 +35,7 @@ const environmentReferenceArgument = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u;
 const maximumLocalArgumentCount = 128;
 const maximumLocalArgumentBytes = 4 * 1024;
 const maximumLocalArgumentTotalBytes = 16 * 1024;
+const windowsUnsupportedNpxPresets = new Set(["generic", "generic-npx", "sentry"]);
 
 type CurrentMiftahConfig = Extract<MiftahConfig, { version: "3" }>;
 type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
@@ -86,6 +87,14 @@ export class PresetCatalogError extends Error {
 
 function catalogError(message: string): never {
   throw new PresetCatalogError(message);
+}
+
+/** True when a catalog preset would require npm's Windows command-shell runner. */
+export function isWindowsNpxPresetUnavailable(
+  preset: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return platform === "win32" && windowsUnsupportedNpxPresets.has(preset);
 }
 
 function environmentReference(name: unknown): string {
@@ -164,10 +173,19 @@ function buildStandardPreset(
   };
 }
 
+/** Builds safe shared defaults for a caller that already owns a validated upstream launch shape. */
+export function buildSafeStandardConfig(
+  name: string,
+  upstream: CurrentUpstreamConfig,
+  credentialEnv?: string
+): MiftahConfig {
+  return buildStandardPreset(name, upstream, credentialEnv);
+}
+
 /** Builds the generic reference MCP server preset. */
 function buildGenericPreset(name: string, options: PresetBuildOptions): MiftahConfig {
   // npm registry metadata for this package does not declare an upstream Node engine floor.
-  return buildStandardPreset(
+  return buildSafeStandardConfig(
     name,
     {
       transport: "stdio",
@@ -444,7 +462,7 @@ function nativeAbsolutePath(value: string): boolean {
 
 function executableStem(command: string): string {
   const executableName = command.replaceAll("\\", "/").split("/").at(-1) ?? command;
-  return executableName.replace(/\.(?:cmd|exe)$/iu, "").toLowerCase();
+  return executableName.replace(/\.(?:cmd|com|exe)$/iu, "").toLowerCase();
 }
 
 function normalizeCredentialText(value: string): string {
@@ -708,6 +726,11 @@ export function buildPresetConfig(
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];
   validatePresetOptions(preset, definition.requirements, options);
+  if (isWindowsNpxPresetUnavailable(preset)) {
+    catalogError(
+      `Preset '${preset}' uses npm's npx package runner, which requires a Windows command shell. Use a direct .exe or .com local-stdio executable, a direct-executable preset, or a remote MCP instead.`
+    );
+  }
   if (preset === "google-search-console") {
     return buildGoogleSearchConsolePreset(name, options, context);
   }

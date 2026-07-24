@@ -67,6 +67,17 @@ function check(report: Awaited<ReturnType<typeof runDoctor>>, code: DoctorCode):
   return found;
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  if (descriptor === undefined) throw new Error("Unable to override the platform for this test.");
+  Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
 afterEach(async () => {
   await rm(fixtureDirectory, { force: true, recursive: true });
 });
@@ -626,6 +637,38 @@ describe("doctor readiness runner", () => {
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain(configPath);
     expect(serialized).not.toContain("miftah-doctor-missing-executable");
+  });
+
+  it("reports a Windows command shim as unavailable before runtime startup", async () => {
+    const commandShim = join(fixtureDirectory, "windows-command-shim", "provider.cmd");
+    await mkdir(dirname(commandShim), { recursive: true });
+    await writeFile(commandShim, "", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-command-shim",
+      baseConfig({ transport: "stdio", command: commandShim, args: [] })
+    );
+
+    const report = await withPlatform("win32", () => runDoctor(configPath));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("error");
+    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
+    expect(JSON.stringify(report)).not.toContain(commandShim);
+  });
+
+  it("reports a Windows command-shell executable as unavailable before runtime startup", async () => {
+    const commandShell = join(fixtureDirectory, "windows-command-shell", "cmd.exe");
+    await mkdir(dirname(commandShell), { recursive: true });
+    await writeFile(commandShell, "", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-command-shell",
+      baseConfig({ transport: "stdio", command: commandShell, args: [] })
+    );
+
+    const report = await withPlatform("win32", () => runDoctor(configPath));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("error");
+    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
+    expect(JSON.stringify(report)).not.toContain(commandShell);
   });
 
   it("does not leak secrets when initialization fails", async () => {

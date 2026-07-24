@@ -19,6 +19,7 @@ import {
   type SecretProviderAvailability
 } from "../secrets/secret-provider-availability.js";
 import type { UpstreamSession } from "../upstream/upstream-session.js";
+import { resolveWindowsStdioCommand } from "../upstream/windows-stdio-command.js";
 import { MiftahError } from "../utils/errors.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
@@ -153,18 +154,26 @@ async function isExecutableAvailable(
   cwd: string | undefined
 ): Promise<boolean> {
   if (!command) return false;
+
+  if (process.platform === "win32") {
+    try {
+      await resolveWindowsStdioCommand(command, [], {
+        environment: pathValue === undefined ? process.env : { ...process.env, PATH: pathValue }
+      });
+      return true;
+    } catch {
+      // Doctor deliberately reports the same bounded unavailable result as the
+      // runtime boundary without exposing the command or resolver diagnostics.
+      return false;
+    }
+  }
+
   const candidates = isAbsolute(command) || command.includes("/") || command.includes("\\")
     ? [isAbsolute(command) ? command : resolve(cwd ?? process.cwd(), command)]
     : (pathValue ?? "")
         .split(delimiter)
         .filter((entry) => entry.length > 0)
-        .flatMap((entry) =>
-          process.platform === "win32"
-            ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")].map((extension) =>
-                join(entry, `${command}${extension}`)
-              )
-            : [join(entry, command)]
-        );
+        .map((entry) => join(entry, command));
   for (const candidate of candidates) {
     try {
       await access(candidate, constants.X_OK);

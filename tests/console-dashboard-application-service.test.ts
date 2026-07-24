@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { buildPresetConfig } from "../src/config/presets.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import {
   createPrivateConsoleDirectory,
@@ -11,6 +12,22 @@ import {
 } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
+
+function supportedKnownConnectorOptions(): {
+  readonly preset: string;
+  readonly npmPackage?: string;
+  readonly dockerImage?: string;
+} {
+  return process.platform === "win32"
+    ? {
+        preset: "generic-docker",
+        dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    : {
+        preset: "generic-npx",
+        npmPackage: "@scope/server@1.2.3"
+      };
+}
 
 function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
   return process.platform === "win32"
@@ -148,15 +165,15 @@ describe("Console dashboard application service", () => {
       launcher: { command: process.execPath, args: ["serve"] }
     });
 
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
     await expect(service.onboardPreset({
       name: "support-tools",
-      preset: "generic-npx",
-      npmPackage: "@scope/server@1.2.3"
+      preset,
+      ...presetOptions
     })).resolves.toMatchObject({ name: "support-tools", defaultProfile: "default" });
-    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
-      name: "support-tools",
-      upstream: { args: ["--yes", "@scope/server@1.2.3"] }
-    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(
+      buildPresetConfig("support-tools", preset, presetOptions)
+    );
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 

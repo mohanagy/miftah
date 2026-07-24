@@ -17,6 +17,7 @@ import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { mergeHeaders } from "./headers.js";
+import { resolveWindowsStdioCommand } from "./windows-stdio-command.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
@@ -357,6 +358,10 @@ export class UpstreamProcessManager {
         profileConfig.args ?? this.upstream.args ?? []
       );
       this.assertCurrentStartup(profile, generation);
+      const stdioCommand = this.upstream.transport === "stdio"
+        ? await resolveWindowsStdioCommand(this.upstream.command!, args, { environment })
+        : undefined;
+      this.assertCurrentStartup(profile, generation);
       try {
         oauthProvider = await this.options.oauthProvider?.(profile, this.upstreamName);
       } catch (error) {
@@ -371,9 +376,12 @@ export class UpstreamProcessManager {
       }
 
       if (this.upstream.transport === "stdio") {
+        if (stdioCommand === undefined) {
+          throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: stdio upstream requires a direct executable");
+        }
         stdioTransport = new StdioClientTransport({
-          command: this.upstream.command!,
-          args,
+          command: stdioCommand.command,
+          args: [...stdioCommand.args],
           env: environment,
           ...(profileConfig.cwd ?? this.upstream.cwd ? { cwd: profileConfig.cwd ?? this.upstream.cwd } : {}),
           stderr: "pipe"

@@ -18,6 +18,25 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+function supportedKnownConnectorOptions(): {
+  readonly preset: string;
+  readonly credentialEnv: string;
+  readonly npmPackage?: string;
+  readonly dockerImage?: string;
+} {
+  return process.platform === "win32"
+    ? {
+        preset: "generic-docker",
+        dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        credentialEnv: "SUPPORT_TOKEN"
+      }
+    : {
+        preset: "generic-npx",
+        npmPackage: "@scope/server@1.2.3",
+        credentialEnv: "SUPPORT_TOKEN"
+      };
+}
+
 function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
   return process.platform === "win32"
     ? { command: process.execPath, args: ["server.mjs"] }
@@ -971,9 +990,7 @@ describe("local Console control server", () => {
         const endpoint = new URL("/api/v1/onboarding/preset", server.url);
         const request = {
           name: "support-tools",
-          preset: "generic-npx",
-          npmPackage: "@scope/server@1.2.3",
-          credentialEnv: "SUPPORT_TOKEN"
+          ...supportedKnownConnectorOptions()
         };
         const missingCsrf = await fetch(endpoint, {
           method: "POST",
@@ -1018,7 +1035,7 @@ describe("local Console control server", () => {
             name: "support-tools",
             defaultProfile: "default",
             profileCount: 1,
-            actions: ["Created Miftah configuration 'support-tools' from preset 'generic-npx'."]
+            actions: [`Created Miftah configuration 'support-tools' from preset '${request.preset}'.`]
           }
         });
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({

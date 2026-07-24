@@ -128,6 +128,32 @@ describe("client entry import", () => {
     }
   });
 
+  it("rejects a legacy Windows command interpreter entry", () => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "legacy-command-shell",
+      document: JSON.stringify({ mcpServers: { example: { command: "COMMAND.COM", args: [] } } }),
+      entry: "example"
+    })).toThrow(ClientEntryImportError);
+  });
+
+  it.runIf(process.platform === "win32")("imports a direct Windows executable without depending on an npx preset baseline", () => {
+    const config = createImportedClientConfiguration({
+      configurationName: "windows-direct",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command: "C:\\tools\\provider.exe", args: ["--readonly"] }
+        }
+      }),
+      entry: "example"
+    });
+
+    expect(config).toMatchObject({
+      upstream: { transport: "stdio", command: "C:\\tools\\provider.exe", args: ["--readonly"] },
+      profiles: { default: { policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+  });
+
   it.each([
     { command: "npx", args: ["--yes", "-y", "@posthog/mcp@1.2.3"] },
     { command: "bunx", args: ["--silent", "--verbose", "@posthog/mcp@1.2.3"] },

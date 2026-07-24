@@ -89,6 +89,20 @@ function usageError(message: string): never {
   throw new CliUsageError(message);
 }
 
+function defaultPresetForPlatform(): string | undefined {
+  return process.platform === "win32" ? undefined : "generic";
+}
+
+function requirePresetSelection(preset: string | undefined): string {
+  if (preset !== undefined) return preset;
+  if (process.platform === "win32") {
+    usageError(
+      "On Windows, specify --preset explicitly. The generic default uses npm's npx package runner, which requires a command shell; choose a direct .exe or .com local-stdio executable, a direct-executable preset, or a remote MCP."
+    );
+  }
+  return "generic";
+}
+
 function isTty(context: InitCommandContext): boolean {
   return context.input.isTTY === true && context.output.isTTY === true;
 }
@@ -361,8 +375,10 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   const cancellation = createCancellation(line);
   try {
     const name = options.name ?? (await prompt(line, cancellation, "Name", "miftah-wrapper"));
-    const preset = options.preset ?? (await prompt(line, cancellation, "Catalog preset", "generic"));
-    const presetOptions = await collectPresetOptions(line, cancellation, preset ?? "generic", options, context.output);
+    const preset = requirePresetSelection(
+      options.preset ?? (await prompt(line, cancellation, "Catalog preset", defaultPresetForPlatform()))
+    );
+    const presetOptions = await collectPresetOptions(line, cancellation, preset, options, context.output);
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
       line,
@@ -370,7 +386,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
       "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
     ));
 
-    if (name === undefined || preset === undefined || output === undefined) {
+    if (name === undefined || output === undefined) {
       usageError("Interactive init requires a name, preset, and output location.");
     }
     return { name, preset, output, client, ...presetOptions };
@@ -387,7 +403,7 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
   const name = options.name ?? "miftah-wrapper";
   return {
     name,
-    preset: options.preset ?? "generic",
+    preset: requirePresetSelection(options.preset ?? defaultPresetForPlatform()),
     output: options.output ?? `${name}.miftah.json`,
     client: options.client,
     credentialEnv: options.credentialEnv,

@@ -14,6 +14,26 @@ import { createPrivateConsoleDirectory } from "./helpers/private-console-directo
 
 const temporaryDirectories: string[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function supportedKnownConnectorOptions(): {
+  readonly preset: string;
+  readonly credentialEnv: string;
+  readonly npmPackage?: string;
+  readonly dockerImage?: string;
+} {
+  return process.platform === "win32"
+    ? {
+        preset: "generic-docker",
+        dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        credentialEnv: "SUPPORT_TOKEN"
+      }
+    : {
+        preset: "generic-npx",
+        npmPackage: "@scope/server@1.2.3",
+        credentialEnv: "SUPPORT_TOKEN"
+      };
+}
 
 function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
   return process.platform === "win32"
@@ -22,6 +42,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 }
 
 afterEach(async () => {
+  if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -201,12 +222,12 @@ describe("Console application service", () => {
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
     const service = new ConsoleApplicationService(configPath);
+    const { preset, ...options } = supportedKnownConnectorOptions();
 
     const created = await service.onboardPreset({
       name: "support-tools",
-      preset: "generic-npx",
-      npmPackage: "@scope/server@1.2.3",
-      credentialEnv: "SUPPORT_TOKEN"
+      preset,
+      ...options
     });
 
     expect(created).toEqual({
@@ -215,18 +236,34 @@ describe("Console application service", () => {
       name: "support-tools",
       defaultProfile: "default",
       profileCount: 1,
-      actions: ["Created Miftah configuration 'support-tools' from preset 'generic-npx'."]
+      actions: [`Created Miftah configuration 'support-tools' from preset '${preset}'.`]
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(
-      buildPresetConfig("support-tools", "generic-npx", {
-        npmPackage: "@scope/server@1.2.3",
-        credentialEnv: "SUPPORT_TOKEN"
-      })
+      buildPresetConfig("support-tools", preset, options)
     );
     await expect(service.onboardPreset({
       name: "replacement",
-      preset: "generic"
+      preset,
+      ...options
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
+  });
+
+  it("refuses a Windows npx preset before it can create a Console configuration", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-windows-npx-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.onboardPreset({
+      name: "unsafe-npx",
+      preset: "generic-npx",
+      npmPackage: "@scope/server@1.2.3"
+    })).rejects.toMatchObject({
+      code: "CONFIG_SCHEMA_INVALID",
+      message: expect.stringContaining("unavailable on Windows")
+    });
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("creates an explicitly acknowledged local stdio configuration through the same preset path", async () => {

@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file. The format 
 
 - [#200](https://github.com/mohanagy/miftah/issues/200) Reworked the README into a task-oriented first-use guide with complete Claude Desktop setup, authentication-path selection, generic MCP onboarding, profile-management tools, native versus upstream-owned OAuth, dashboard lifecycle, everyday diagnostics/audit commands, and focused security-control guidance; corrected stale configuration-version guidance to identify v3 as current while preserving an explicit v1/v2 removal window.
 
+### Fixed
+
+- [#217](https://github.com/mohanagy/miftah/issues/217) Windows STDIO launch now resolves only direct `.exe`/`.com` commands before the MCP SDK, rejects command shims and shell executables, and refuses npx-backed presets on Windows rather than silently falling back to `cmd.exe`.
+
 ## [0.4.0] - 2026-07-23
 
 ### Added
