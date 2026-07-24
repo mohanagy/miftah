@@ -50,6 +50,110 @@ describe("client entry import", () => {
     });
   });
 
+  it("imports an exact-version pnpm dlx launch without treating dlx as the package", () => {
+    const config = createImportedClientConfiguration({
+      configurationName: "posthog-work",
+      document: JSON.stringify({
+        mcpServers: {
+          posthog: {
+            command: "pnpm",
+            args: ["dlx", "@posthog/mcp@1.2.3"]
+          }
+        }
+      }),
+      entry: "posthog"
+    });
+
+    expect(config.upstream).toMatchObject({
+      transport: "stdio",
+      command: "pnpm",
+      args: ["dlx", "@posthog/mcp@1.2.3"]
+    });
+  });
+
+  it.each([
+    { command: "npx", args: ["-y", "@posthog/mcp@1.2.3"] },
+    { command: "bunx", args: ["--bun", "--no-install", "--silent", "@posthog/mcp@1.2.3"] },
+    { command: "pnpx", args: ["@posthog/mcp@1.2.3"] },
+    { command: "uvx", args: ["--isolated", "mcp-search-console@0.3.2"] }
+  ])("imports a known-safe exact package-runner launch: $command $args", ({ command, args }) => {
+    const config = createImportedClientConfiguration({
+      configurationName: "static-runner",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command, args }
+        }
+      }),
+      entry: "example"
+    });
+
+    expect(config.upstream).toMatchObject({ command, args });
+  });
+
+  it.each([
+    { command: "npx", args: ["--yes", "-y", "@posthog/mcp@1.2.3"] },
+    { command: "bunx", args: ["--silent", "--verbose", "@posthog/mcp@1.2.3"] },
+    { command: "bunx", args: ["--bun", "--bun", "@posthog/mcp@1.2.3"] }
+  ])("rejects duplicate or conflicting package-runner flags: $command $args", ({ command, args }) => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "conflicting-runner-flags",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command, args }
+        }
+      }),
+      entry: "example"
+    })).toThrow("static launch");
+  });
+
+  it("keeps non-dlx pnpm subcommands outside the static launch grammar", () => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "unsupported-pnpm",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command: "pnpm", args: ["exec", "unknown-command"] }
+        }
+      }),
+      entry: "example"
+    })).toThrow("static launch");
+  });
+
+  it.each([
+    { command: "npx", args: ["-c", "@posthog/mcp@1.2.3"] },
+    { command: "npx", args: ["--call", "@posthog/mcp@1.2.3"] },
+    { command: "pnpm", args: ["dlx", "-c", "@posthog/mcp@1.2.3"] },
+    { command: "pnpm", args: ["dlx", "--shell-mode", "@posthog/mcp@1.2.3"] },
+    { command: "pnpx", args: ["-c", "@posthog/mcp@1.2.3"] },
+    { command: "pnpx", args: ["--shell-mode", "@posthog/mcp@1.2.3"] }
+  ])("rejects package-runner shell mode: $command $args", ({ command, args }) => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "shell-mode",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command, args }
+        }
+      }),
+      entry: "example"
+    })).toThrow("static launch");
+  });
+
+  it.each([
+    { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3", "--skills"] },
+    { command: "pnpm", args: ["dlx", "@posthog/mcp@1.2.3", "--skills"] },
+    { command: "pnpx", args: ["@posthog/mcp@1.2.3", "--skills"] },
+    { command: "uvx", args: ["mcp-search-console@0.3.2", "--isolated"] }
+  ])("rejects arguments after a selected package: $command $args", ({ command, args }) => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "package-arguments",
+      document: JSON.stringify({
+        mcpServers: {
+          example: { command, args }
+        }
+      }),
+      entry: "example"
+    })).toThrow("static launch");
+  });
+
   it("imports a VS Code stdio entry with its argument boundaries and working directory intact", () => {
     const command = process.platform === "win32" ? "C:\\node.exe" : "/usr/local/bin/node";
     const script = process.platform === "win32" ? "C:\\workspace\\server.mjs" : "/workspace/server.mjs";

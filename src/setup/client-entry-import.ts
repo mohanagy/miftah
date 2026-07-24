@@ -17,7 +17,29 @@ const staticFlag = /^--?[A-Za-z][A-Za-z0-9-]*$/u;
 const staticPackageSpecifier = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@v?\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/u;
 const staticScriptPath = /^[A-Za-z0-9._~@%+\\/-]+$/u;
 const staticScriptExtension = /\.(?:cjs|cts|js|mjs|mts|php|pl|py|rb|ts)$/iu;
-const packageRunners = new Set(["bunx", "npx", "pnpm", "pnpx", "uvx"]);
+interface PackageRunnerGrammar {
+  readonly prefixFlags: ReadonlySet<string>;
+  readonly mutuallyExclusivePrefixFlags?: ReadonlySet<string>;
+}
+
+/**
+ * These run before the package name, so they are package-runner capabilities
+ * rather than arguments for the imported MCP server. Keep this finite: npm
+ * and pnpm expose shell-launch modes through otherwise flag-shaped options.
+ */
+const packageRunnerGrammars = new Map<string, PackageRunnerGrammar>([
+  ["bunx", {
+    prefixFlags: new Set(["--bun", "--no-install", "--silent", "--verbose"]),
+    mutuallyExclusivePrefixFlags: new Set(["--silent", "--verbose"])
+  }],
+  ["npx", {
+    prefixFlags: new Set(["--yes", "-y"]),
+    mutuallyExclusivePrefixFlags: new Set(["--yes", "-y"])
+  }],
+  ["pnpm dlx", { prefixFlags: new Set<string>() }],
+  ["pnpx", { prefixFlags: new Set<string>() }],
+  ["uvx", { prefixFlags: new Set(["--isolated"]) }]
+]);
 const scriptRunners = new Set(["bun", "deno", "node", "perl", "php", "python", "python3", "ruby", "ts-node", "tsx"]);
 const environmentWrappers = new Set(["env"]);
 const staticLaunchError = "The selected MCP entry contains arguments outside Miftah's static launch grammar. Use advanced manual setup and configure secrets with references.";
@@ -134,6 +156,29 @@ function staticPackageArgument(value: string): boolean {
   return staticPackageSpecifier.test(value) && !credentialBearingArgument(value);
 }
 
+function validatePackageRunnerArguments(executable: string, args: readonly string[]): void {
+  const grammar = packageRunnerGrammars.get(executable);
+  if (grammar === undefined) importError(staticLaunchError, "static-launch");
+
+  const seenPrefixFlags = new Set<string>();
+  let packageIndex = 0;
+  while (packageIndex < args.length && grammar.prefixFlags.has(args[packageIndex]!)) {
+    const flag = args[packageIndex]!;
+    const mutuallyExclusive = grammar.mutuallyExclusivePrefixFlags;
+    const conflicts = mutuallyExclusive !== undefined
+      && mutuallyExclusive.has(flag)
+      && Array.from(seenPrefixFlags).some((seenFlag) => mutuallyExclusive.has(seenFlag));
+    if (seenPrefixFlags.has(flag) || conflicts) importError(staticLaunchError, "static-launch");
+    seenPrefixFlags.add(flag);
+    packageIndex += 1;
+  }
+
+  const packageArgument = args[packageIndex];
+  if (packageArgument === undefined || !staticPackageArgument(packageArgument) || args.length !== packageIndex + 1) {
+    importError(staticLaunchError, "static-launch");
+  }
+}
+
 function validateStaticLaunchArguments(executable: string, args: readonly string[]): void {
   if (environmentWrappers.has(executable)) {
     importError(
@@ -150,12 +195,14 @@ function validateStaticLaunchArguments(executable: string, args: readonly string
     return;
   }
 
-  if (packageRunners.has(executable)) {
-    const packageIndex = args.findIndex((argument) => !staticFlagArgument(argument));
-    const packageArgument = packageIndex < 0 ? undefined : args[packageIndex];
-    if (packageArgument === undefined || !staticPackageArgument(packageArgument) || !args.slice(packageIndex + 1).every(staticFlagArgument)) {
-      importError(staticLaunchError, "static-launch");
-    }
+  if (executable === "pnpm") {
+    if (args[0] !== "dlx") importError(staticLaunchError, "static-launch");
+    validatePackageRunnerArguments("pnpm dlx", args.slice(1));
+    return;
+  }
+
+  if (packageRunnerGrammars.has(executable)) {
+    validatePackageRunnerArguments(executable, args);
     return;
   }
 
