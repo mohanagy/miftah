@@ -51,7 +51,7 @@ Use the following upstream materials when assessing a pin or provider configurat
 
 ## First run
 
-`init` and guided `setup` use the strict catalog. The default preset is `generic`; an unknown preset is rejected rather than falling back. On Windows, choose a direct-executable or remote preset explicitly because the `generic`, `sentry`, and `generic-npx` npx-backed presets are refused rather than launched through a command shell. (The legacy library-only `presetConfig` fallback does not describe CLI behavior.)
+`init` and guided `setup` use the strict catalog. On macOS and Linux the default preset is `generic`; on Windows an explicit supported preset is required. An unknown preset is rejected rather than falling back. On Windows, choose a direct-executable or remote preset explicitly because the `generic`, `sentry`, and `generic-npx` npx-backed presets are refused rather than launched through a command shell. (The legacy library-only `presetConfig` fallback does not describe CLI behavior.)
 
 ```sh
 miftah init [name] \

@@ -28,7 +28,11 @@ const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
 const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
 
-function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
+/**
+ * Combines child-process environments with Windows' case-insensitive variable
+ * semantics. Callers that preflight a launch must use this same precedence.
+ */
+export function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
   if (process.platform !== "win32") return Object.assign({}, ...environmentSets);
   const merged = new Map<string, [string, string]>();
   for (const environment of environmentSets) {

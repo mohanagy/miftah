@@ -16,6 +16,7 @@ describe("Windows stdio launch documentation", () => {
     expect(cli).toContain("On Windows, `--preset` is required for noninteractive `init`; there is no implicit generic preset.");
     expect(security).toContain("Windows STDIO upstreams are resolved before the MCP SDK starts a child process.");
     expect(presets).toContain("the `generic`, `sentry`, and `generic-npx` npx-backed presets are refused rather than launched through a command shell");
+    expect(presets).toContain("On macOS and Linux the default preset is `generic`; on Windows an explicit supported preset is required.");
   });
 
   it("records the fail-closed Windows launch boundary under issue #217", () => {

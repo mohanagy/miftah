@@ -1,6 +1,7 @@
 import { access, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { loadConfig } from "../config/load-config.js";
@@ -19,6 +20,7 @@ import {
   type SecretProviderAvailability
 } from "../secrets/secret-provider-availability.js";
 import type { UpstreamSession } from "../upstream/upstream-session.js";
+import { mergeEnvironment } from "../upstream/upstream-process-manager.js";
 import { resolveWindowsStdioCommand } from "../upstream/windows-stdio-command.js";
 import { MiftahError } from "../utils/errors.js";
 import { SecretRedactor } from "../secrets/redact.js";
@@ -127,13 +129,10 @@ function configuredTargets(config: MiftahConfig): DoctorTarget[] {
   return targets;
 }
 
-function pathForTarget(config: MiftahConfig, target: DoctorTarget): string | undefined {
+function environmentForTarget(config: MiftahConfig, target: DoctorTarget): Record<string, string> {
   const profile: ProfileConfig | undefined = config.profiles[target.profile];
-  const profileEnvironment = {
-    ...(profile?.env ?? {}),
-    ...(target.upstreamName ? profile?.upstreams?.[target.upstreamName]?.env ?? {} : {})
-  };
-  return profileEnvironment.PATH ?? target.upstream.env?.PATH ?? process.env.PATH;
+  const override = target.upstreamName ? profile?.upstreams?.[target.upstreamName] : undefined;
+  return mergeEnvironment(getDefaultEnvironment(), target.upstream.env, profile?.env, override?.env);
 }
 
 function effectiveTargetOptions(
@@ -150,16 +149,14 @@ function effectiveTargetOptions(
 
 async function isExecutableAvailable(
   command: string | undefined,
-  pathValue: string | undefined,
+  environment: Record<string, string>,
   cwd: string | undefined
 ): Promise<boolean> {
   if (!command) return false;
 
   if (process.platform === "win32") {
     try {
-      await resolveWindowsStdioCommand(command, [], {
-        environment: pathValue === undefined ? process.env : { ...process.env, PATH: pathValue }
-      });
+      await resolveWindowsStdioCommand(command, [], { environment });
       return true;
     } catch {
       // Doctor deliberately reports the same bounded unavailable result as the
@@ -170,7 +167,7 @@ async function isExecutableAvailable(
 
   const candidates = isAbsolute(command) || command.includes("/") || command.includes("\\")
     ? [isAbsolute(command) ? command : resolve(cwd ?? process.cwd(), command)]
-    : (pathValue ?? "")
+    : (environment.PATH ?? "")
         .split(delimiter)
         .filter((entry) => entry.length > 0)
         .map((entry) => join(entry, command));
@@ -510,7 +507,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
       if (target.upstream.transport === "stdio") {
         const available = await isExecutableAvailable(
           target.upstream.command,
-          pathForTarget(config, target),
+          environmentForTarget(config, target),
           effectiveTargetOptions(config, target).cwd
         );
         checks.push(

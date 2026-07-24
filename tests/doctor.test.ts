@@ -78,6 +78,16 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>)
   }
 }
 
+async function withWorkingDirectory<T>(directory: string, run: () => Promise<T>): Promise<T> {
+  const originalDirectory = process.cwd();
+  process.chdir(directory);
+  try {
+    return await run();
+  } finally {
+    process.chdir(originalDirectory);
+  }
+}
+
 afterEach(async () => {
   await rm(fixtureDirectory, { force: true, recursive: true });
 });
@@ -669,6 +679,33 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("error");
     expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
     expect(JSON.stringify(report)).not.toContain(commandShell);
+  });
+
+  it("uses the effective case-insensitive Windows profile environment for direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-casing", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-casing",
+      {
+        version: "1",
+        name: "windows-path-casing",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            env: { PATH: "C:\\missing" },
+            upstreams: { primary: { env: { Path: "C:\\tools" } } }
+          }
+        },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      }
+    );
+
+    const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
   });
 
   it("does not leak secrets when initialization fails", async () => {
