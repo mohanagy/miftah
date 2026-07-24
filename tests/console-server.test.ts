@@ -100,7 +100,10 @@ async function bootstrapSession(server: Awaited<ReturnType<typeof startConsoleSe
   return { cookie, csrfToken: body.data.csrfToken };
 }
 
-async function submitPresetFormWithStaleValue(javascript: string): Promise<Record<string, unknown>> {
+async function submitPresetFormWithStaleValue(
+  javascript: string,
+  suppliedValues?: Readonly<Record<string, string>>
+): Promise<Record<string, unknown>> {
   type SubmitListener = (event: { readonly preventDefault: () => void }) => void | Promise<void>;
   class FakeForm {
     readonly listeners = new Map<string, SubmitListener>();
@@ -108,7 +111,8 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
       name: "analytics",
       preset: "generic-npx",
       credentialEnv: "ANALYTICS_TOKEN",
-      npmPackage: "@vendor/mcp-server@1.2.3"
+      npmPackage: "@vendor/mcp-server@1.2.3",
+      ...suppliedValues
     };
 
     addEventListener(name: string, listener: SubmitListener): void {
@@ -122,8 +126,9 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
     reset(): void {}
   }
   class FakeSelect {
-    value = "generic-npx";
     readonly listeners = new Map<string, () => void>();
+
+    constructor(public value: string) {}
 
     addEventListener(name: string, listener: () => void): void {
       this.listeners.set(name, listener);
@@ -138,7 +143,7 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
   }
 
   const form = new FakeForm();
-  const selection = new FakeSelect();
+  const selection = new FakeSelect(form.values.preset ?? "generic-npx");
   const requests: Array<{ readonly path: string; readonly body?: string }> = [];
   runInNewContext(javascript, {
     document: {
@@ -173,10 +178,12 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
     }
   });
 
-  // Model a user entering a package for generic-npx, then changing to generic.
-  selection.value = "generic";
-  form.values.preset = "generic";
-  selection.listeners.get("change")?.();
+  if (suppliedValues === undefined) {
+    // Model a user entering a package for generic-npx, then changing to generic.
+    selection.value = "generic";
+    form.values.preset = "generic";
+    selection.listeners.get("change")?.();
+  }
   const submit = form.listeners.get("submit");
   if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
   await submit({ preventDefault: () => undefined });
@@ -610,7 +617,7 @@ function observePresetFieldConstraintState(javascript: string): {
 
     querySelectorAll(selector: string): readonly unknown[] {
       if (selector === "input") return this.controls.filter((control): control is FakeInput => control instanceof FakeInput);
-      if (selector === "input, select") return this.controls;
+      if (selector === "input, select, textarea") return this.controls;
       return [];
     }
   }
@@ -653,7 +660,7 @@ function observePresetFieldConstraintState(javascript: string): {
     HTMLElement: FakeElement,
     HTMLInputElement: FakeInput,
     HTMLButtonElement: FakeElement,
-    HTMLTextAreaElement: FakeElement,
+    HTMLTextAreaElement: class {},
     Element: FakeElement
   });
 
@@ -697,6 +704,9 @@ describe("local Console control server", () => {
       expect(html).toContain("Upstream-owned auth");
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Set up an MCP");
+      expect(html).toContain("Local executable + argument array");
+      expect(html).toContain("Remote HTTPS MCP endpoint");
+      expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-form"');
@@ -722,11 +732,30 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/sessions");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth");
       expect(javascript).toContain("/api/v1/onboarding/preset");
+      expect(javascript).toContain("local-stdio");
+      expect(javascript).toContain("acceptLocalCommand");
       expect(javascript).toContain("/api/v1/onboarding/client-entry");
       await expect(submitPresetFormWithStaleValue(javascript)).resolves.toEqual({
         name: "analytics",
         preset: "generic",
         credentialEnv: "ANALYTICS_TOKEN"
+      });
+      await expect(submitPresetFormWithStaleValue(javascript, {
+        name: "local-tools",
+        preset: "local-stdio",
+        localCommand: "node",
+        args: "server.mjs\n\n--stdio\n$pageview",
+        cwd: "/Users/example/local-tools",
+        credentialEnv: "LOCAL_MCP_TOKEN",
+        acceptLocalCommand: "true"
+      })).resolves.toEqual({
+        name: "local-tools",
+        preset: "local-stdio",
+        localCommand: "node",
+        args: ["server.mjs", "", "--stdio", "$pageview"],
+        cwd: "/Users/example/local-tools",
+        credentialEnv: "LOCAL_MCP_TOKEN",
+        acceptLocalCommand: true
       });
       await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
         request: {
@@ -989,6 +1018,70 @@ describe("local Console control server", () => {
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
           name: "support-tools",
           profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("requires explicit acknowledgement before the first-run API stores a local stdio argument array", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const endpoint = new URL("/api/v1/onboarding/preset", server.url);
+        const localCommand = process.platform === "win32" ? process.execPath : "node";
+        const request = {
+          name: "local-tools",
+          preset: "local-stdio",
+          localCommand,
+          args: ["server.mjs", "--stdio", "$pageview"],
+          cwd: tmpdir(),
+          credentialEnv: "LOCAL_MCP_TOKEN",
+          acceptLocalCommand: true
+        };
+
+        const missingAcknowledgement = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ ...request, acceptLocalCommand: undefined })
+        });
+        expect(missingAcknowledgement.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const created = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(created.status).toBe(201);
+        expect(await created.json()).toEqual({
+          data: {
+            changed: true,
+            write: true,
+            name: "local-tools",
+            defaultProfile: "default",
+            profileCount: 1,
+            actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."]
+          }
+        });
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          upstream: { transport: "stdio", command: localCommand, args: ["server.mjs", "--stdio", "$pageview"] },
+          profiles: { default: { env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" }, policy: "readonly" } },
+          tooling: { unknownToolRisk: "destructive" }
         });
       } finally {
         await server.close();

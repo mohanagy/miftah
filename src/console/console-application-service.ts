@@ -347,6 +347,10 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
         headerName: request.headerName,
         headerPrefix: request.headerPrefix,
         oauthClientSecretsFile: request.oauthClientSecretsFile,
+        localCommand: request.localCommand,
+        args: request.args,
+        cwd: request.cwd,
+        acceptLocalCommand: request.acceptLocalCommand,
         googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
         defaultProfile: request.defaultProfile
       }, {

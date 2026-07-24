@@ -63,6 +63,10 @@ const presetOnboardingSchema = z.object({
   headerName: z.string().min(1).max(256).optional(),
   headerPrefix: z.string().max(256).optional(),
   oauthClientSecretsFile: z.string().min(1).max(4_096).optional(),
+  localCommand: z.string().min(1).max(4_096).optional(),
+  args: z.array(z.string().max(4_096)).max(128).optional(),
+  cwd: z.string().min(1).max(4_096).optional(),
+  acceptLocalCommand: z.literal(true).optional(),
   googleSearchConsoleProfiles: z.array(googleSearchConsoleProfileSchema).min(1).optional(),
   defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional()
 }).strict().superRefine((request, context) => {
@@ -75,6 +79,13 @@ const presetOnboardingSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["defaultProfile"],
       message: "Google Search Console setup requires an explicit default profile when more than one account is configured."
+    });
+  }
+  if (request.preset === "local-stdio" && request.acceptLocalCommand !== true) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["acceptLocalCommand"],
+      message: "Local stdio setup requires explicit acknowledgement before a command is saved."
     });
   }
 });

@@ -223,6 +223,38 @@ describe("Console application service", () => {
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
   });
 
+  it("creates an explicitly acknowledged local stdio configuration through the same preset path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-local-stdio-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+    const localCommand = process.platform === "win32" ? process.execPath : "node";
+
+    await expect(service.onboardPreset({
+      name: "local-tools",
+      preset: "local-stdio",
+      localCommand,
+      args: ["server.mjs", "--stdio", "$pageview"],
+      cwd: root,
+      credentialEnv: "LOCAL_MCP_TOKEN",
+      acceptLocalCommand: true
+    })).resolves.toEqual({
+      changed: true,
+      write: true,
+      name: "local-tools",
+      defaultProfile: "default",
+      profileCount: 1,
+      actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."]
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      upstream: { transport: "stdio", command: localCommand, args: ["server.mjs", "--stdio", "$pageview"], cwd: root },
+      profiles: { default: { env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" }, policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+  });
+
   it("creates a first-run configuration from one explicitly selected local stdio client entry without accepting credentials", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-"));
     temporaryDirectories.push(root);

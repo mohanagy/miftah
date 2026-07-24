@@ -84,7 +84,7 @@ const page = `<!doctype html>
             <p class="step">02 / First connection</p>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
-          <p>Choose a known connector. Miftah writes only validated configuration references; it never asks for a password or token here.</p>
+          <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
@@ -96,11 +96,16 @@ const page = `<!doctype html>
               <option value="google-search-console">Google Search Console</option>
               <option value="generic-npx">Custom npx package</option>
               <option value="generic-docker">Custom Docker image</option>
-              <option value="streamable-http">Remote Streamable HTTP MCP</option>
+              <option value="local-stdio">Local executable + argument array</option>
+              <option value="streamable-http">Remote HTTPS MCP endpoint</option>
             </select>
           </label>
           <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
           <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
+          <label class="wide" data-preset-field="local-stdio" hidden>Local executable<input name="localCommand" maxlength="4096" placeholder="node (macOS/Linux) or C:/tools/server.exe (Windows)"></label>
+          <label class="wide" data-preset-field="local-stdio" hidden>Arguments (one argument per line; a blank line is an empty argument)<textarea name="args" maxlength="16384" rows="5" spellcheck="false" autocomplete="off" placeholder="server.mjs&#10;--stdio"></textarea></label>
+          <label data-preset-field="local-stdio" hidden>Working directory (optional)<input name="cwd" maxlength="4096" placeholder="/absolute/path/to/project"></label>
+          <label class="wide consent" data-preset-field="local-stdio" hidden><input name="acceptLocalCommand" type="checkbox" value="true"> I reviewed this executable and every argument. Miftah will save them as a direct argument array without a shell, will not run them during setup, and no credential is included. On Windows this must be a direct absolute .exe or .com binary, not a .cmd or .bat shim.</label>
           <label class="wide" data-preset-field="streamable-http" hidden>Remote MCP URL<input name="url" type="url" maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
           <fieldset class="wide gsc-accounts" data-preset-field="google-search-console" hidden>
             <legend>Google Search Console accounts</legend>
@@ -109,10 +114,10 @@ const page = `<!doctype html>
             <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
             <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
           </fieldset>
-          <label data-preset-field="generic generic-npx generic-docker streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
+          <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
-          <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache.</p>
+          <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache. For a local executable, use the environment-variable field for a secret reference; never put a token in an argument.</p>
           <div class="wide form-action"><button type="submit">Create configuration</button></div>
         </form>
       </section>
@@ -381,6 +386,7 @@ const script = `(() => {
     "google-search-console": [],
     "generic-npx": ["credentialEnv", "npmPackage"],
     "generic-docker": ["credentialEnv", "dockerImage"],
+    "local-stdio": ["credentialEnv", "localCommand", "args", "cwd", "acceptLocalCommand"],
     "streamable-http": ["credentialEnv", "url", "headerName", "headerPrefix"]
   });
   let csrfToken = "";
@@ -786,13 +792,19 @@ const script = `(() => {
       if (!(field instanceof HTMLElement)) return;
       const visible = (field.dataset.presetField || "").split(" ").includes(preset);
       field.hidden = !visible;
-      field.querySelectorAll("input, select").forEach((control) => {
-        if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLSelectElement)) return;
+      field.querySelectorAll("input, select, textarea").forEach((control) => {
+        if (
+          !(control instanceof HTMLInputElement) &&
+          !(control instanceof HTMLSelectElement) &&
+          !(control instanceof HTMLTextAreaElement)
+        ) return;
         control.disabled = !visible;
-        if (control instanceof HTMLInputElement) {
+        if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
           control.required = visible && (
             (control.name === "npmPackage" && preset === "generic-npx") ||
             (control.name === "dockerImage" && preset === "generic-docker") ||
+            (control.name === "localCommand" && preset === "local-stdio") ||
+            (control.name === "acceptLocalCommand" && preset === "local-stdio") ||
             (control.name === "url" && preset === "streamable-http") ||
             (preset === "google-search-console" && (
               control.dataset.gscProfileName === "true" || control.dataset.gscClientSecretsFile === "true"
@@ -972,6 +984,16 @@ const script = `(() => {
           }
           request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
           request.defaultProfile = defaultProfile;
+        } else if (preset === "local-stdio") {
+          const localCommand = String(data.get("localCommand") || "").trim();
+          const argumentText = String(data.get("args") || "");
+          const cwd = String(data.get("cwd") || "").trim();
+          const credentialEnv = String(data.get("credentialEnv") || "").trim();
+          request.localCommand = localCommand;
+          request.args = argumentText === "" ? [] : argumentText.split(/\\r?\\n/u);
+          request.acceptLocalCommand = data.get("acceptLocalCommand") === "true";
+          if (cwd) request.cwd = cwd;
+          if (credentialEnv) request.credentialEnv = credentialEnv;
         } else {
           ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
             if (!allowedNames.includes(name)) return;

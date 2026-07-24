@@ -76,6 +76,13 @@ describe("product README", () => {
     expect(readme).toContain("## Add another MCP");
     expect(readme).toContain("--preset generic-npx");
     expect(readme).toContain("--npm-package");
+    expect(readme).toContain("### Reviewed local executable template");
+    expect(readme).toContain("--preset local-stdio");
+    expect(readme).toContain("--local-command node");
+    expect(readme).toContain("--arg=--stdio");
+    expect(readme).toContain("--accept-local-command");
+    expect(readme).toContain("Miftah does not run the local executable during setup");
+    expect(readme).toContain("On Windows, provide an absolute `.exe` or `.com` binary");
     expect(readme).toContain("## OAuth and the local dashboard");
     expect(readme).toContain("Native remote OAuth");
     expect(readme).toContain("Upstream-owned OAuth");
@@ -188,7 +195,7 @@ describe("product README", () => {
       expect(Object.keys(CLI_COMMANDS), `unknown README command: ${command}`).toContain(command);
       const help = renderCommandHelp(command);
       const supportedFlags = new Set(help.match(/--[a-z][a-z-]*/gu) ?? []);
-      for (const flag of line.match(/--[a-z][a-z-]*/gu) ?? []) {
+      for (const flag of [...line.matchAll(/(?:^|\s)(--[a-z][a-z-]*)/gu)].map((flagMatch) => flagMatch[1]!)) {
         expect(supportedFlags, `unsupported README flag for ${command}: ${flag}`).toContain(flag);
       }
     }

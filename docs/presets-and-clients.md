@@ -2,7 +2,7 @@
 
 This is the compatibility source of truth for generated `miftah init` configurations and client snippets.
 
-- Catalog version: `2`
+- Catalog version: `3`
 - Miftah package version: `0.4.0`
 - Last tested / validation boundary: the catalog builds strict Miftah configuration that `validateConfig` accepts. The docs contract test checks generated configuration only; it does **not** construct a runtime, start, authenticate to, or smoke-test external providers.
 
@@ -18,6 +18,7 @@ Miftah itself requires Node.js `>=20`. That does not establish an upstream serve
 | `google-search-console` | Noninteractive one-account setup requires `--oauth-client-secrets-file <absolute-path>`; guided `miftah setup` supports one or more named accounts. Generated command: `uvx mcp-search-console@0.3.2`; generated environment: `GSC_OAUTH_CLIENT_SECRETS_FILE` and a distinct `GSC_CONFIG_DIR` per generated configuration file and profile. | Python `>=3.11` and `uvx` are required. OAuth, browser handoff, token cache, reauthentication, and revocation remain upstream/manual-owned. Miftah applies a read-only policy, does not set `GSC_ALLOW_DESTRUCTIVE`, and never reads the upstream cache. See the [provider-adapter contract](provider-adapters.md#google-search-console-pilot). |
 | `generic-npx` | Required: `--npm-package <exact-package@x.y.z>`; optional `--credential-env <name>` | Only an exact npm package SemVer is accepted. The selected external package, not Miftah, declares its own Node requirement. |
 | `generic-docker` | Required: `--docker-image <canonical-image@sha256:...>`; optional `--credential-env <name>` | Docker is required. Only a canonical image reference with a 64-hex-character `@sha256:` digest is accepted. |
+| `local-stdio` | Required: `--local-command <bare-executable-or-native-absolute-path>` and `--accept-local-command`; optional repeated `--arg <value>`, `--cwd <native-absolute-directory>`, and `--credential-env <name>`. Use a bare executable or native absolute path on macOS/Linux, and a direct native absolute `.exe` or `.com` binary on Windows. | Each `--arg` is one literal argv element; use `--arg=--flag` when the value starts with a dash. Miftah never uses a shell, expands no environment references, rejects shell executables/wrappers, URLs, controls, and credential-shaped command or argument values, and never starts this generic local command during setup. Windows rejects bare commands and `.cmd`/`.bat` shims so direct argv execution cannot fall back to a command processor. The generated profile is read-only and unknown tools remain destructive until deliberately configured. Review the executable and its arguments yourself before acknowledging it. |
 | `streamable-http` | Required: `--url <https-url>`; optional credential metadata: `--credential-env`, `--header-name`, and `--header-prefix` | The URL must be HTTPS and must not contain userinfo, a query, or a fragment. Credentials may appear only as `${ENV_NAME}` through validated header metadata; allowed prefixes are empty, `Bearer `, and `Sentry `. Never place a credential in a URL or URL component. |
 
 The three checked-in provider/reference examples are exact catalog output: `examples/generic.miftah.json`, `examples/github.miftah.json`, and `examples/sentry.miftah.json`. They contain secret references only, never credentials.
@@ -59,12 +60,14 @@ miftah init [name] \
   [--credential-env <name>] [--npm-package <package>] \
   [--docker-image <image>] [--url <url>] \
   [--header-name <name>] [--header-prefix <prefix>] \
-  [--oauth-client-secrets-file <absolute-path>]
+  [--oauth-client-secrets-file <absolute-path>] \
+  [--local-command <executable>] [--arg <value>] [--cwd <directory>] \
+  [--accept-local-command]
 ```
 
 Without `--interactive`, `init` creates only a configuration unless `--client` is supplied. With `--client`, it still creates the configuration and prints JSON snippets; it never writes a client file. For `--client claude-code` or `--client all`, it also prints a separately labelled Claude Code `permissions.ask` fragment for the visible Miftah management tools that require explicit client review. It never writes or overwrites Claude Code settings. Creation is exclusive and never overwrites an existing output path.
 
-`--interactive` is available only when both input and output are real TTYs. EOF or Ctrl-C cancels before the configuration write. The wizard asks only for a name, catalog preset, safe preset metadata (variable names, URLs, header metadata, pins), output location, and client selection. It never asks for or echoes a secret value.
+`--interactive` is available only when both input and output are real TTYs. EOF or Ctrl-C cancels before the configuration write. The wizard asks only for a name, catalog preset, safe preset metadata (variable names, URLs, header metadata, pins), output location, and client selection. For `local-stdio`, it asks for one literal argv item at a time and gives a count-only review summary before explicit acknowledgement. It never asks for or echoes a secret value.
 
 `miftah setup [name]` is the dedicated guided command. It uses that same TTY-only wizard and safe preset options, with interactivity required by the command instead of supplied as `--interactive`.
 

@@ -42,6 +42,10 @@ export type InitCommandOptions = Pick<
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "localCommand"
+  | "args"
+  | "cwd"
+  | "acceptLocalCommand"
 > & Pick<PresetBuildOptions, "googleSearchConsoleProfiles" | "defaultProfile">;
 
 export interface InitCommandContext {
@@ -130,6 +134,18 @@ async function prompt(
   return value === "" ? defaultValue : value;
 }
 
+/** Reads one literal argv value without trimming whitespace that belongs to the argument itself. */
+async function rawPrompt(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  label: string,
+  defaultValue?: string
+): Promise<string | undefined> {
+  const suffix = defaultValue === undefined ? ": " : ` [${defaultValue}]: `;
+  const answer = await Promise.race([line.question(`${label}${suffix}`), cancellation.promise]);
+  return answer === "" ? defaultValue : answer;
+}
+
 async function collectStreamableOptions(
   line: PromptInterface,
   cancellation: Cancellation,
@@ -156,6 +172,75 @@ async function collectStreamableOptions(
       undefined,
       true
     ))
+  };
+}
+
+function parseYesNo(value: string | undefined, label: string): boolean {
+  switch (value?.toLowerCase()) {
+    case "y":
+    case "yes":
+      return true;
+    case "n":
+    case "no":
+      return false;
+    default:
+      usageError(`Answer 'yes' or 'no' when asked to ${label}.`);
+  }
+}
+
+async function collectLocalStdioOptions(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  options: InitCommandOptions,
+  output: Writable
+): Promise<PresetBuildOptions> {
+  const localCommand = options.localCommand ?? (await prompt(line, cancellation, "Local executable (no shell)"));
+  if (localCommand === undefined) {
+    usageError("Local stdio setup requires one executable.");
+  }
+
+  const args = options.args === undefined ? [] : [...options.args];
+  if (options.args === undefined) {
+    while (parseYesNo(
+      await prompt(line, cancellation, "Add a local argument? (yes/no)", "no"),
+      "add another local argument"
+    )) {
+      const argument = await rawPrompt(line, cancellation, `Argument ${args.length + 1}`);
+      if (argument === undefined) usageError("Local stdio setup requires an argument value after confirmation.");
+      args.push(argument);
+    }
+  }
+
+  const cwd = options.cwd ?? (await prompt(line, cancellation, "Working directory (absolute path, optional)"));
+  const credentialEnv = options.credentialEnv ?? (await prompt(
+    line,
+    cancellation,
+    "Credential environment variable name (optional)"
+  ));
+  output.write(
+    `Local command review: 1 executable with ${args.length} argument(s); working directory: ${
+      cwd === undefined ? "not set" : "configured"
+    }; credential environment: ${credentialEnv === undefined ? "not set" : "configured"}.\n`
+  );
+  const confirmed = options.acceptLocalCommand === true
+    ? true
+    : parseYesNo(
+      await prompt(
+        line,
+        cancellation,
+        "Miftah will not run this during setup. It will save this executable and argument array without a shell. Continue only if you trust it and entered no credential (yes/no)",
+        "no"
+      ),
+      "confirm the local executable"
+    );
+  if (!confirmed) usageError("Local executable setup was not confirmed.");
+
+  return {
+    localCommand,
+    args,
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(credentialEnv === undefined ? {} : { credentialEnv }),
+    acceptLocalCommand: true
   };
 }
 
@@ -230,7 +315,8 @@ async function collectPresetOptions(
   line: PromptInterface,
   cancellation: Cancellation,
   preset: string,
-  options: InitCommandOptions
+  options: InitCommandOptions,
+  output: Writable
 ): Promise<PresetBuildOptions> {
   switch (preset) {
     case "google-search-console":
@@ -245,6 +331,8 @@ async function collectPresetOptions(
         credentialEnv: options.credentialEnv,
         dockerImage: options.dockerImage ?? (await prompt(line, cancellation, "Docker image (digest-pinned)"))
       };
+    case "local-stdio":
+      return collectLocalStdioOptions(line, cancellation, options, output);
     case "streamable-http":
       return collectStreamableOptions(line, cancellation, options);
     default:
@@ -255,7 +343,11 @@ async function collectPresetOptions(
         url: options.url,
         headerName: options.headerName,
         headerPrefix: options.headerPrefix,
-        oauthClientSecretsFile: options.oauthClientSecretsFile
+        oauthClientSecretsFile: options.oauthClientSecretsFile,
+        localCommand: options.localCommand,
+        args: options.args,
+        cwd: options.cwd,
+        acceptLocalCommand: options.acceptLocalCommand
       };
   }
 }
@@ -270,7 +362,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   try {
     const name = options.name ?? (await prompt(line, cancellation, "Name", "miftah-wrapper"));
     const preset = options.preset ?? (await prompt(line, cancellation, "Catalog preset", "generic"));
-    const presetOptions = await collectPresetOptions(line, cancellation, preset ?? "generic", options);
+    const presetOptions = await collectPresetOptions(line, cancellation, preset ?? "generic", options, context.output);
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
       line,
@@ -305,6 +397,10 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     headerName: options.headerName,
     headerPrefix: options.headerPrefix,
     oauthClientSecretsFile: options.oauthClientSecretsFile,
+    localCommand: options.localCommand,
+    args: options.args,
+    cwd: options.cwd,
+    acceptLocalCommand: options.acceptLocalCommand,
     googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
     defaultProfile: options.defaultProfile
   };
@@ -340,6 +436,10 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       headerName: values.headerName,
       headerPrefix: values.headerPrefix,
       oauthClientSecretsFile: values.oauthClientSecretsFile,
+      localCommand: values.localCommand,
+      args: values.args,
+      cwd: values.cwd,
+      acceptLocalCommand: values.acceptLocalCommand,
       googleSearchConsoleProfiles: values.googleSearchConsoleProfiles,
       defaultProfile: values.defaultProfile
     }, {

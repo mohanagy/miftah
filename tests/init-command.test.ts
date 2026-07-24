@@ -16,12 +16,12 @@ interface TtyStreams {
 
 class StreamTranscript {
   #contents = "";
-  #waiters: Array<{ readonly text: string; readonly resolve: () => void }> = [];
+  #waiters: Array<{ readonly text: string; readonly occurrences: number; readonly resolve: () => void }> = [];
 
   append(chunk: Buffer | string): void {
     this.#contents += chunk.toString();
     this.#waiters = this.#waiters.filter((waiter) => {
-      if (!this.#contents.includes(waiter.text)) return true;
+      if (this.#contents.split(waiter.text).length - 1 < waiter.occurrences) return true;
       waiter.resolve();
       return false;
     });
@@ -31,10 +31,10 @@ class StreamTranscript {
     return this.#contents;
   }
 
-  waitFor(text: string): Promise<void> {
-    if (this.#contents.includes(text)) return Promise.resolve();
+  waitFor(text: string, occurrences = 1): Promise<void> {
+    if (this.#contents.split(text).length - 1 >= occurrences) return Promise.resolve();
     return new Promise((resolve) => {
-      this.#waiters.push({ text, resolve });
+      this.#waiters.push({ text, occurrences, resolve });
     });
   }
 }
@@ -59,8 +59,8 @@ function commandContext(streams: TtyStreams) {
   };
 }
 
-async function answer(streams: TtyStreams, prompt: string, value: string): Promise<void> {
-  await streams.transcript.waitFor(prompt);
+async function answer(streams: TtyStreams, prompt: string, value: string, occurrences = 1): Promise<void> {
+  await streams.transcript.waitFor(prompt, occurrences);
   streams.input.write(`${value}\n`);
 }
 
@@ -198,6 +198,38 @@ describe("init command", () => {
 
     const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
     expect(config.upstream?.args).toEqual(["--yes", "@scope/server@1.2.3"]);
+  });
+
+  it("guides a reviewed local executable through discrete argv prompts without shell parsing", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "wizard-local.json");
+    const localCommand = process.platform === "win32" ? process.execPath : "node";
+    const command = runInitCommand(
+      { interactive: true, name: "wizard-local", preset: "local-stdio", output: "wizard-local.json" },
+      commandContext(streams)
+    );
+
+    await answer(streams, "Local executable (no shell)", localCommand);
+    await answer(streams, "Add a local argument? (yes/no) [no]", "yes");
+    await answer(streams, "Argument 1", "server.mjs");
+    await answer(streams, "Add a local argument? (yes/no) [no]", "yes", 2);
+    await answer(streams, "Argument 2", "$pageview");
+    await answer(streams, "Add a local argument? (yes/no) [no]", "no", 3);
+    await answer(streams, "Working directory (absolute path, optional)", outputRoot);
+    await answer(streams, "Credential environment variable name (optional)", "LOCAL_MCP_TOKEN");
+    await answer(
+      streams,
+      "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
+      "yes"
+    );
+    await answer(streams, "Client", "");
+    await command;
+    streams.input.end();
+
+    expect(JSON.parse(await readFile(output, "utf8"))).toMatchObject({
+      upstream: { transport: "stdio", command: localCommand, args: ["server.mjs", "$pageview"], cwd: outputRoot },
+      profiles: { default: { env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" }, policy: "readonly" } }
+    });
   });
 
   it("preserves a supported streamable HTTP credential header prefix", async () => {

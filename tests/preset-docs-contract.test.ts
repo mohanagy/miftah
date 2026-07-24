@@ -94,10 +94,17 @@ describe("preset documentation contract", () => {
       "--header-name",
       "--header-prefix",
       "--oauth-client-secrets-file",
+      "--local-command",
+      "--arg",
+      "--cwd",
+      "--accept-local-command",
       "--verify"
     ]) {
       expect(cli).toContain(option);
     }
+    expect(compatibility).toContain("Each `--arg` is one literal argv element");
+    expect(compatibility).toContain("never uses a shell");
+    expect(compatibility).toContain("direct native absolute `.exe` or `.com` binary on Windows");
     expect(compatibility).not.toContain("runtime construction");
     expect(compatibility).toContain(
       "Miftah does not generate equivalent per-tool client permission guidance for Claude Desktop, Cursor, or VS Code"
@@ -106,11 +113,13 @@ describe("preset documentation contract", () => {
     const issue19 = changelogIssueEntry(changelog, 19);
     const issue98 = changelogIssueEntry(changelog, 98);
     const issue87 = changelogIssueEntry(changelog, 87);
+    const issue204 = changelogIssueEntry(changelog, 204);
     expect(issue19).toContain("catalog");
     expect(issue19).toContain("onboarding");
     expect(issue98).toContain("permission");
     expect(issue98).not.toContain("runtime construction");
     expect(issue87).toContain("upstream-owned");
+    expect(issue204).toContain("local STDIO");
     expect(providerAdapters).toContain("## Google Search Console pilot");
     expect(providerAdapters).toContain("Credential ownership | Upstream");
     expect(providerAdapters).toContain("Each generated Miftah configuration/profile pair passes a distinct `GSC_CONFIG_DIR`");
