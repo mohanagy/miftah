@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- [#204](https://github.com/mohanagy/miftah/issues/204) Added guided multi-account Google Search Console onboarding through the CLI and local Console. It creates named profiles with an explicit durable default and separate upstream-owned OAuth state directories per generated configuration file and profile, while continuing to keep browser login, token-cache contents, reauthentication, revocation, and account identity verification outside Miftah.
+
 ### Changed
 
 - [#200](https://github.com/mohanagy/miftah/issues/200) Reworked the README into a task-oriented first-use guide with complete Claude Desktop setup, authentication-path selection, generic MCP onboarding, profile-management tools, native versus upstream-owned OAuth, dashboard lifecycle, everyday diagnostics/audit commands, and focused security-control guidance; corrected stale configuration-version guidance to identify v3 as current while preserving an explicit v1/v2 removal window.

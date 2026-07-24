@@ -303,7 +303,15 @@ miftah init gsc \
   --client claude-desktop
 ```
 
-It runs the exact-pinned upstream through `uvx`, applies Miftah's read-only policy, and passes the configured client-secrets path to that upstream. The upstream owns the first-use browser flow and token cache. Miftah never reads, copies, exports, or deletes that cache. See the [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot).
+It runs the exact-pinned upstream through `uvx`, applies Miftah's read-only policy, and passes the configured client-secrets path to that upstream. The upstream owns the first-use browser flow and token cache. Miftah never reads, copies, exports, or deletes that cache.
+
+To configure one or more named Google accounts behind one connector, use the guided path instead:
+
+```bash
+miftah setup gsc --preset google-search-console
+```
+
+The wizard asks for one or more named Google accounts, an optional description and client-secrets path for each, then the default profile. Each generated profile gets a different `GSC_CONFIG_DIR`, and Miftah namespaces that directory by the generated configuration file as well as the profile. The exact-pinned upstream therefore keeps its token cache separate even when two configuration files use the same Miftah name. Complete the upstream browser flow separately for every account, then run `miftah validate` and `miftah doctor` against the generated configuration. Separate caches do not verify Google-account identity or property access; confirm those in the upstream before relying on a profile. See the [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot).
 
 ## Everyday commands
 

@@ -47,7 +47,8 @@ describe("preset documentation contract", () => {
       "@sentry/mcp-server@0.36.0",
       "--skills=inspect",
       "mcp-search-console@0.3.2",
-      "GSC_OAUTH_CLIENT_SECRETS_FILE"
+      "GSC_OAUTH_CLIENT_SECRETS_FILE",
+      "GSC_CONFIG_DIR"
     ]) {
       expect(compatibility).toContain(requiredFact);
     }
@@ -111,7 +112,10 @@ describe("preset documentation contract", () => {
     expect(issue87).toContain("upstream-owned");
     expect(providerAdapters).toContain("## Google Search Console pilot");
     expect(providerAdapters).toContain("Credential ownership | Upstream");
-    expect(providerAdapters).toContain("Miftah never reads, copies, exports, or deletes that cache");
+    expect(providerAdapters).toContain("Each generated Miftah configuration/profile pair passes a distinct `GSC_CONFIG_DIR`");
+    expect(providerAdapters).toContain("The upstream creates and maintains its token cache there");
+    expect(providerAdapters).toContain("Miftah never creates, reads, copies, exports, or deletes that cache");
+    expect(providerAdapters).toContain("This is cache isolation, not Google-account identity verification");
     expect(providerAdapters).toContain("GSC_CREDENTIALS_PATH");
     expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
     expect(providerAdapters).toContain("get_capabilities");

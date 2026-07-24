@@ -1,4 +1,6 @@
-import { isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import type { MiftahConfig, ProfileConfig } from "./types.js";
 import { PROVIDER_ADAPTER_CATALOG } from "./provider-adapters.js";
 import { CURRENT_CONFIG_VERSION } from "./versions.js";
@@ -29,6 +31,21 @@ export interface PresetBuildOptions {
   headerName?: string;
   headerPrefix?: string;
   oauthClientSecretsFile?: string;
+  googleSearchConsoleProfiles?: readonly GoogleSearchConsoleProfileOptions[];
+  defaultProfile?: string;
+}
+
+/** Trusted creation context that is deliberately separate from user-configurable preset options. */
+export interface PresetBuildContext {
+  /** Resolved destination of a configuration being created by Miftah. */
+  readonly configurationPath?: string;
+}
+
+/** One upstream-owned Google account isolated by its own GSC token directory. */
+export interface GoogleSearchConsoleProfileOptions {
+  readonly name: string;
+  readonly description?: string;
+  readonly oauthClientSecretsFile: string;
 }
 
 type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
@@ -171,22 +188,130 @@ function requireOAuthClientSecretsFile(value: unknown): string {
   return value;
 }
 
-function buildGoogleSearchConsolePreset(name: string, options: PresetBuildOptions): MiftahConfig {
+const googleSearchConsoleProfileName = /^[a-z0-9](?:[a-z0-9-]{0,63})$/u;
+
+function requireGoogleSearchConsoleProfileName(value: unknown): string {
+  if (typeof value !== "string" || !googleSearchConsoleProfileName.test(value)) {
+    catalogError("Google Search Console profile names must use 1-64 lowercase letters, digits, or hyphens and start with a letter or digit.");
+  }
+  return value;
+}
+
+function requireGoogleSearchConsoleDescription(value: unknown): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+    })
+  ) {
+    catalogError("Google Search Console profile descriptions must be trimmed text without controls and at most 1024 characters.");
+  }
+  return value;
+}
+
+function googleSearchConsoleStateDirectory(
+  configurationName: string,
+  profile: string,
+  context: PresetBuildContext
+): string {
+  const configurationIdentity = context.configurationPath === undefined
+    ? configurationName
+    : resolve(context.configurationPath);
+  const configurationNamespace = createHash("sha256").update(configurationIdentity).digest("hex");
+  return join(homedir(), ".config", "miftah", "gsc-oauth", configurationNamespace, profile);
+}
+
+function buildGoogleSearchConsoleProfiles(
+  configurationName: string,
+  options: PresetBuildOptions,
+  context: PresetBuildContext
+): {
+  readonly defaultProfile: string;
+  readonly profiles: Record<string, ProfileConfig>;
+} {
+  const configuredProfiles = options.googleSearchConsoleProfiles;
+  if (configuredProfiles === undefined) {
+    if (options.defaultProfile !== undefined) {
+      catalogError("Preset 'google-search-console' accepts defaultProfile only with googleSearchConsoleProfiles.");
+    }
+    const profile = "default";
+    return {
+      defaultProfile: profile,
+      profiles: {
+        [profile]: {
+          description: "Google Search Console account (OAuth owned by upstream)",
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
+            GSC_CONFIG_DIR: googleSearchConsoleStateDirectory(configurationName, profile, context)
+          },
+          policy: "readonly"
+        }
+      }
+    };
+  }
+
+  if (options.oauthClientSecretsFile !== undefined) {
+    catalogError("Preset 'google-search-console' accepts oauthClientSecretsFile or googleSearchConsoleProfiles, not both.");
+  }
+  if (!Array.isArray(configuredProfiles) || configuredProfiles.length === 0) {
+    catalogError("Google Search Console setup requires at least one named profile.");
+  }
+
+  const profiles: Record<string, ProfileConfig> = Object.create(null) as Record<string, ProfileConfig>;
+  for (const configuredProfile of configuredProfiles) {
+    if (typeof configuredProfile !== "object" || configuredProfile === null || Array.isArray(configuredProfile)) {
+      catalogError("Google Search Console profiles must be objects with name and oauthClientSecretsFile.");
+    }
+    const profile = requireGoogleSearchConsoleProfileName(configuredProfile.name);
+    if (Object.hasOwn(profiles, profile)) {
+      catalogError(`Google Search Console profile '${profile}' is duplicated.`);
+    }
+    const description = requireGoogleSearchConsoleDescription(configuredProfile.description);
+    profiles[profile] = {
+      description: description ?? "Google Search Console account (OAuth owned by upstream)",
+      env: {
+        GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
+        GSC_CONFIG_DIR: googleSearchConsoleStateDirectory(configurationName, profile, context)
+      },
+      policy: "readonly"
+    };
+  }
+
+  if (configuredProfiles.length > 1 && options.defaultProfile === undefined) {
+    catalogError("Google Search Console setup requires an explicit default profile when more than one account is configured.");
+  }
+  const defaultProfile = requireGoogleSearchConsoleProfileName(options.defaultProfile ?? configuredProfiles[0]!.name);
+  if (!Object.hasOwn(profiles, defaultProfile)) {
+    catalogError(`Google Search Console default profile '${defaultProfile}' is not configured.`);
+  }
+  return { defaultProfile, profiles };
+}
+
+function buildGoogleSearchConsolePreset(
+  name: string,
+  options: PresetBuildOptions,
+  context: PresetBuildContext
+): MiftahConfig {
   const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
-  const config = buildStandardPreset(name, {
-    transport: adapter.launch.transport,
-    command: adapter.launch.command,
-    args: [...adapter.launch.args]
-  });
-  config.profiles.default = {
-    description: "Google Search Console account (OAuth owned by upstream)",
-    env: {
-      GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(options.oauthClientSecretsFile)
+  const accounts = buildGoogleSearchConsoleProfiles(name, options, context);
+  return {
+    version: CURRENT_CONFIG_VERSION,
+    name,
+    description: `${name} wrapped by Miftah`,
+    defaultProfile: accounts.defaultProfile,
+    upstream: {
+      transport: adapter.launch.transport,
+      command: adapter.launch.command,
+      args: [...adapter.launch.args]
     },
-    policy: "readonly"
+    profiles: accounts.profiles,
+    policies: buildReadonlyPolicies(),
+    ...buildSharedDefaults({ multiProfile: Object.keys(accounts.profiles).length > 1 })
   };
-  config.policies = buildReadonlyPolicies();
-  return config;
 }
 
 /** Builds the multi-profile GitHub preset and its referenced policies. */
@@ -357,8 +482,12 @@ export const PRESET_CATALOG = {
       build: buildSentryPreset
     },
     "google-search-console": {
-      requirements: { oauthClientSecretsFile: "required" },
-      build: buildGoogleSearchConsolePreset
+      requirements: {
+        oauthClientSecretsFile: "required",
+        googleSearchConsoleProfiles: "optional",
+        defaultProfile: "optional"
+      },
+      build: (name, options) => buildGoogleSearchConsolePreset(name, options, {})
     },
     "generic-npx": {
       requirements: { npmPackage: "required", credentialEnv: "optional" },
@@ -407,12 +536,20 @@ function validatePresetOptions(
 }
 
 /** Builds a catalog preset strictly, rejecting unknown names instead of falling back. */
-export function buildPresetConfig(name: string, preset: string, options: PresetBuildOptions = {}): MiftahConfig {
+export function buildPresetConfig(
+  name: string,
+  preset: string,
+  options: PresetBuildOptions = {},
+  context: PresetBuildContext = {}
+): MiftahConfig {
   if (!Object.hasOwn(PRESET_CATALOG.presets, preset)) {
     catalogError(`Unknown preset '${preset}'. Supported presets: ${Object.keys(PRESET_CATALOG.presets).join(", ")}.`);
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];
   validatePresetOptions(preset, definition.requirements, options);
+  if (preset === "google-search-console") {
+    return buildGoogleSearchConsolePreset(name, options, context);
+  }
   return definition.build(name, options);
 }
 

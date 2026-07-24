@@ -319,7 +319,11 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
         url: request.url,
         headerName: request.headerName,
         headerPrefix: request.headerPrefix,
-        oauthClientSecretsFile: request.oauthClientSecretsFile
+        oauthClientSecretsFile: request.oauthClientSecretsFile,
+        googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
+        defaultProfile: request.defaultProfile
+      }, {
+        configurationPath: resolvePath(this.configPath)
       });
       validateConfig(config);
     } catch (error) {

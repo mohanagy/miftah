@@ -45,6 +45,11 @@ const nativeOAuthOnboardingSchema = z.object({
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
 }).strict();
+const googleSearchConsoleProfileSchema = z.object({
+  name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().min(1).max(1_024).optional(),
+  oauthClientSecretsFile: z.string().min(1).max(4_096)
+}).strict();
 const presetOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   preset: z.string().min(1).max(128),
@@ -54,8 +59,22 @@ const presetOnboardingSchema = z.object({
   url: z.string().min(1).max(2_048).optional(),
   headerName: z.string().min(1).max(256).optional(),
   headerPrefix: z.string().max(256).optional(),
-  oauthClientSecretsFile: z.string().min(1).max(4_096).optional()
-}).strict();
+  oauthClientSecretsFile: z.string().min(1).max(4_096).optional(),
+  googleSearchConsoleProfiles: z.array(googleSearchConsoleProfileSchema).min(1).optional(),
+  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional()
+}).strict().superRefine((request, context) => {
+  if (
+    request.preset === "google-search-console" &&
+    (request.googleSearchConsoleProfiles?.length ?? 0) > 1 &&
+    request.defaultProfile === undefined
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["defaultProfile"],
+      message: "Google Search Console setup requires an explicit default profile when more than one account is configured."
+    });
+  }
+});
 
 interface BrowserSession {
   readonly id: string;

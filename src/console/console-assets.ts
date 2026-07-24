@@ -102,7 +102,13 @@ const page = `<!doctype html>
           <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
           <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
           <label class="wide" data-preset-field="streamable-http" hidden>Remote MCP URL<input name="url" type="url" maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
-          <label class="wide" data-preset-field="google-search-console" hidden>Google OAuth client-secrets file<input name="oauthClientSecretsFile" maxlength="4096" placeholder="/Users/you/gsc-client-secrets.json"></label>
+          <fieldset class="wide gsc-accounts" data-preset-field="google-search-console" hidden>
+            <legend>Google Search Console accounts</legend>
+            <p class="field-note">Add one named profile per Google account. Miftah gives each profile an isolated upstream token directory; it never reads that token cache.</p>
+            <div id="gsc-account-list" class="gsc-account-list"></div>
+            <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
+            <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
+          </fieldset>
           <label data-preset-field="generic generic-npx generic-docker streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
@@ -271,6 +277,12 @@ p { color: var(--muted); line-height: 1.6; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: clamp(1.2rem, 3vw, 2rem); border: 1px solid var(--line); background: rgb(21 26 23 / 88%); }
 .form-grid.compact { margin-top: 1.2rem; }
 .wide { grid-column: 1 / -1; }
+fieldset { min-inline-size: 0; margin: 0; }
+.gsc-accounts { border: 1px solid var(--line); padding: 1rem; }
+.gsc-accounts legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
+.gsc-account-list { display: grid; gap: 1rem; margin: 1rem 0; }
+.gsc-account-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1rem; border: 1px solid var(--line); background: var(--ground); }
+.gsc-account-row .form-action { display: flex; align-items: end; }
 label { display: block; color: var(--muted); font-size: .82rem; }
 input, select, textarea, button { border-radius: .28rem; font: inherit; }
 input, select, textarea { width: 100%; margin-top: .55rem; border: 1px solid var(--line); padding: .78rem .85rem; color: var(--ink); background: var(--ground); }
@@ -333,7 +345,7 @@ const script = `(() => {
     generic: ["credentialEnv"],
     "github": [],
     "sentry": [],
-    "google-search-console": ["oauthClientSecretsFile"],
+    "google-search-console": [],
     "generic-npx": ["credentialEnv", "npmPackage"],
     "generic-docker": ["credentialEnv", "dockerImage"],
     "streamable-http": ["credentialEnv", "url", "headerName", "headerPrefix"]
@@ -406,6 +418,113 @@ const script = `(() => {
       option.textContent = value;
       select.append(option);
     });
+  }
+
+  function googleSearchConsoleAccountRows() {
+    const list = byId("gsc-account-list");
+    if (!(list instanceof HTMLElement)) return [];
+    return Array.from(list.querySelectorAll("[data-gsc-profile-row]")).filter((row) => row instanceof HTMLElement);
+  }
+
+  function googleSearchConsoleAccountInput(row, selector) {
+    const input = row.querySelector(selector);
+    return input instanceof HTMLInputElement ? input : undefined;
+  }
+
+  function syncGoogleSearchConsoleDefaultProfile() {
+    const select = byId("gsc-default-profile");
+    if (!(select instanceof HTMLSelectElement)) return;
+    const previous = select.value;
+    const names = googleSearchConsoleAccountRows()
+      .map((row) => googleSearchConsoleAccountInput(row, "[data-gsc-profile-name]")?.value.trim() || "")
+      .filter(Boolean);
+    setOptions(select, [...new Set(names)]);
+    if (names.includes(previous)) select.value = previous;
+  }
+
+  function googleSearchConsoleAccountLabel(text, input) {
+    const label = document.createElement("label");
+    label.textContent = text;
+    label.append(input);
+    return label;
+  }
+
+  function createGoogleSearchConsoleAccountRow(index) {
+    const row = document.createElement("div");
+    row.className = "gsc-account-row";
+    row.dataset.gscProfileRow = "true";
+
+    const profileName = document.createElement("input");
+    profileName.type = "text";
+    profileName.required = true;
+    profileName.maxLength = 64;
+    profileName.placeholder = "google-work";
+    profileName.value = "google-account-" + String(index + 1);
+    profileName.dataset.gscProfileName = "true";
+    profileName.addEventListener("input", syncGoogleSearchConsoleDefaultProfile);
+
+    const description = document.createElement("input");
+    description.type = "text";
+    description.maxLength = 1024;
+    description.placeholder = "Work Google account";
+    description.dataset.gscProfileDescription = "true";
+
+    const clientSecrets = document.createElement("input");
+    clientSecrets.type = "text";
+    clientSecrets.required = true;
+    clientSecrets.maxLength = 4096;
+    clientSecrets.placeholder = "/Users/you/gsc-client-secrets.json";
+    clientSecrets.dataset.gscClientSecretsFile = "true";
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "Remove account";
+    remove.addEventListener("click", () => {
+      row.remove();
+      syncGoogleSearchConsoleDefaultProfile();
+    });
+
+    const action = document.createElement("div");
+    action.className = "form-action";
+    action.append(remove);
+    row.append(
+      googleSearchConsoleAccountLabel("Profile name", profileName),
+      googleSearchConsoleAccountLabel("Description (optional)", description),
+      googleSearchConsoleAccountLabel("Google OAuth client-secrets file", clientSecrets),
+      action
+    );
+    return row;
+  }
+
+  function ensureGoogleSearchConsoleAccountRow() {
+    const list = byId("gsc-account-list");
+    if (!(list instanceof HTMLElement)) return;
+    const rows = googleSearchConsoleAccountRows();
+    if (rows.length === 0) list.append(createGoogleSearchConsoleAccountRow(0));
+    syncGoogleSearchConsoleDefaultProfile();
+  }
+
+  function collectGoogleSearchConsoleProfiles() {
+    const names = new Set();
+    const profiles = googleSearchConsoleAccountRows().map((row) => {
+      const name = googleSearchConsoleAccountInput(row, "[data-gsc-profile-name]")?.value.trim() || "";
+      const description = googleSearchConsoleAccountInput(row, "[data-gsc-profile-description]")?.value.trim() || "";
+      const oauthClientSecretsFile = googleSearchConsoleAccountInput(row, "[data-gsc-client-secrets-file]")?.value.trim() || "";
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,63})$/u.test(name)) {
+        throw new Error("Each Google Search Console profile name must use lowercase letters, digits, or hyphens.");
+      }
+      if (names.has(name)) throw new Error("Each Google Search Console profile needs a unique name.");
+      if (!oauthClientSecretsFile) throw new Error("Choose a Google OAuth client-secrets file for every account.");
+      names.add(name);
+      return {
+        name,
+        ...(description ? { description } : {}),
+        oauthClientSecretsFile
+      };
+    });
+    if (profiles.length === 0) throw new Error("Add at least one Google Search Console account.");
+    return profiles;
   }
 
   function record(value) {
@@ -561,16 +680,24 @@ const script = `(() => {
       if (!(field instanceof HTMLElement)) return;
       const visible = (field.dataset.presetField || "").split(" ").includes(preset);
       field.hidden = !visible;
-      field.querySelectorAll("input").forEach((input) => {
-        if (!(input instanceof HTMLInputElement)) return;
-        input.required = visible && (
-          (input.name === "npmPackage" && preset === "generic-npx") ||
-          (input.name === "dockerImage" && preset === "generic-docker") ||
-          (input.name === "url" && preset === "streamable-http") ||
-          (input.name === "oauthClientSecretsFile" && preset === "google-search-console")
-        );
+      field.querySelectorAll("input, select").forEach((control) => {
+        if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLSelectElement)) return;
+        control.disabled = !visible;
+        if (control instanceof HTMLInputElement) {
+          control.required = visible && (
+            (control.name === "npmPackage" && preset === "generic-npx") ||
+            (control.name === "dockerImage" && preset === "generic-docker") ||
+            (control.name === "url" && preset === "streamable-http") ||
+            (preset === "google-search-console" && (
+              control.dataset.gscProfileName === "true" || control.dataset.gscClientSecretsFile === "true"
+            ))
+          );
+          return;
+        }
+        control.required = visible && preset === "google-search-console" && control.id === "gsc-default-profile";
       });
     });
+    if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
   }
 
   async function refresh() {
@@ -703,25 +830,44 @@ const script = `(() => {
     if (presetSelection instanceof HTMLSelectElement) {
       presetSelection.addEventListener("change", updatePresetFields);
     }
+    const addGoogleSearchConsoleAccount = byId("add-gsc-account");
+    if (addGoogleSearchConsoleAccount instanceof HTMLButtonElement) {
+      addGoogleSearchConsoleAccount.addEventListener("click", () => {
+        const list = byId("gsc-account-list");
+        if (!(list instanceof HTMLElement)) return;
+        list.append(createGoogleSearchConsoleAccountRow(googleSearchConsoleAccountRows().length));
+        syncGoogleSearchConsoleDefaultProfile();
+      });
+    }
     updatePresetFields();
     presetOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const data = new FormData(presetOnboardingForm);
-      const request = {
-        name: String(data.get("name") || "").trim(),
-        preset: String(data.get("preset") || "")
-      };
-      const preset = request.preset;
-      const allowedNames = presetInputNames[preset] || [];
-      ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
-        if (!allowedNames.includes(name)) return;
-        const value = String(data.get(name) || "").trim();
-        if (value) request[name] = value;
-      });
-      const headerPrefix = String(data.get("headerPrefix") || "");
-      if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
       message("Creating the validated Miftah configuration…");
       try {
+        const data = new FormData(presetOnboardingForm);
+        const request = {
+          name: String(data.get("name") || "").trim(),
+          preset: String(data.get("preset") || "")
+        };
+        const preset = request.preset;
+        const allowedNames = presetInputNames[preset] || [];
+        if (preset === "google-search-console") {
+          const googleSearchConsoleProfiles = collectGoogleSearchConsoleProfiles();
+          const defaultProfile = String(data.get("defaultProfile") || "").trim();
+          if (!googleSearchConsoleProfiles.some((profile) => profile.name === defaultProfile)) {
+            throw new Error("Choose one of the configured Google Search Console accounts as the default.");
+          }
+          request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
+          request.defaultProfile = defaultProfile;
+        } else {
+          ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
+            if (!allowedNames.includes(name)) return;
+            const value = String(data.get(name) || "").trim();
+            if (value) request[name] = value;
+          });
+          const headerPrefix = String(data.get("headerPrefix") || "");
+          if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
+        }
         await api("/api/v1/onboarding/preset", { method: "POST", body: request });
         presetOnboardingForm.reset();
         updatePresetFields();
