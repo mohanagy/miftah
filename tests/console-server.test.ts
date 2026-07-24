@@ -180,11 +180,9 @@ describe("local Console control server", () => {
       const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
       temporaryDirectories.push(root);
       const privateParent = await createPrivateConsoleDirectory(root);
-      // The separate Console application test covers creating this directory.
-      // Pre-creating the trusted parent keeps this HTTP flow focused on the
-      // endpoint's first file creation on slower Windows runners.
-      const configDirectory = await createPrivateConsoleDirectory(privateParent, "miftah");
-      configPath = join(configDirectory, "miftah.json");
+      // The endpoint must create this directory itself: the Windows helper
+      // rejects an existing directory rather than inheriting an unknown ACL.
+      configPath = join(privateParent, "miftah", "miftah.json");
     });
 
     it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
