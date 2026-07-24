@@ -25,8 +25,27 @@ interface IntegrityCheckpointFixture {
 }
 
 type HardLinkFixturePhase = "first-append" | "second-append" | "verify" | "post-tamper-append" | "complete";
+type DelayedLocalRefusalBindOutcome = "not-attempted" | "listening" | "error:EADDRINUSE" | "error:EACCES" | "error:other";
+
+interface DelayedLocalRefusalDiagnosticState {
+  readonly probeTimerIntercepted: boolean;
+  readonly probeTimeoutTriggered: boolean;
+  readonly refusalDelivered: boolean;
+  readonly bindOutcome: DelayedLocalRefusalBindOutcome;
+}
+
 // Vitest's current default test timeout is 5 seconds; emit evidence before the runner cuts it off.
 const HARD_LINK_FIXTURE_DIAGNOSTIC_DELAY_MS = 4_500;
+
+function delayedLocalRefusalDiagnostic(state: DelayedLocalRefusalDiagnosticState): string {
+  return [
+    "[miftah test diagnostic] audit-integrity delayed-local-refusal",
+    `probe-timer=${state.probeTimerIntercepted ? "intercepted" : "not-intercepted"}`,
+    `probe-timeout=${state.probeTimeoutTriggered ? "triggered" : "not-triggered"}`,
+    `refusal=${state.refusalDelivered ? "delivered" : "not-delivered"}`,
+    `bind=${state.bindOutcome}`
+  ].join(" ");
+}
 
 async function withHardLinkFixturePhaseDiagnostic<T>(
   run: (setPhase: (phase: HardLinkFixturePhase) => void) => Promise<T>
@@ -142,6 +161,19 @@ async function createRotatedIntegrityWriteFailureFixture(): Promise<{
 }
 
 describe("audit journal integrity", () => {
+  it("formats delayed local refusal diagnostics without retaining an error", () => {
+    expect(
+      delayedLocalRefusalDiagnostic({
+        probeTimerIntercepted: true,
+        probeTimeoutTriggered: true,
+        refusalDelivered: true,
+        bindOutcome: "error:EADDRINUSE"
+      })
+    ).toBe(
+      "[miftah test diagnostic] audit-integrity delayed-local-refusal probe-timer=intercepted probe-timeout=triggered refusal=delivered bind=error:EADDRINUSE"
+    );
+  });
+
   it("skips a Windows-reserved local lock port before writing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-reserved-lock-port-"));
     const path = join(directory, "audit.jsonl");
@@ -197,9 +229,19 @@ describe("audit journal integrity", () => {
     }
 
     const socket = new ProbeSocket();
+    const serverPrototype = Object.getPrototypeOf(createServer()) as {
+      listen: (
+        this: Server,
+        options: { host: string; port: number; exclusive: boolean },
+        callback?: () => void
+      ) => Server;
+    };
+    const originalListen = serverPrototype.listen;
     const originalSetTimeout = global.setTimeout;
     let probeTimedOut = false;
     let probeTimerIntercepted = false;
+    let refusalDelivered = false;
+    let bindOutcome: DelayedLocalRefusalBindOutcome = "not-attempted";
     vi.resetModules();
     vi.doMock("node:net", async () => {
       const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -215,6 +257,7 @@ describe("audit journal integrity", () => {
           queueMicrotask(() => {
             probeTimedOut = true;
             callback(...args);
+            refusalDelivered = true;
             socket.emit("error", Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }));
           });
           return timer;
@@ -222,19 +265,47 @@ describe("audit journal integrity", () => {
         return originalSetTimeout(callback, delay, ...args);
       }) as unknown as typeof setTimeout
     );
+    const listenSpy = vi.spyOn(serverPrototype, "listen").mockImplementation(function (
+      this: Server,
+      options: { host: string; port: number; exclusive: boolean },
+      callback?: () => void
+    ) {
+      this.once("listening", () => {
+        bindOutcome = "listening";
+      });
+      this.once("error", (error: NodeJS.ErrnoException) => {
+        bindOutcome =
+          error.code === "EADDRINUSE"
+            ? "error:EADDRINUSE"
+            : error.code === "EACCES"
+              ? "error:EACCES"
+              : "error:other";
+      });
+      return originalListen.call(this, options, callback);
+    });
 
     try {
       const logger = new IsolatedAuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
-      await expect(logger.log({
+      await logger.log({
         wrapper: "github",
         profile: "work",
         operation: "tools/call",
         name: "writes-after-delayed-local-lock-probe",
         status: "success",
         durationMs: 1
-      })).resolves.toBeUndefined();
+      }).catch(() => {
+        throw new Error(
+          delayedLocalRefusalDiagnostic({
+            probeTimerIntercepted,
+            probeTimeoutTriggered: probeTimedOut,
+            refusalDelivered,
+            bindOutcome
+          })
+        );
+      });
       expect(probeTimerIntercepted).toBe(true);
     } finally {
+      listenSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       nowSpy.mockRestore();
       vi.doUnmock("node:net");
