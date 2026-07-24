@@ -1,7 +1,7 @@
 import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
@@ -13,6 +13,22 @@ import {
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
+const catalogAclDiagnostic = vi.hoisted(() => ({
+  verifier: undefined as undefined | ((path: string, kind: "file" | "directory") => Promise<boolean>)
+}));
+
+vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
+  return {
+    ...actual,
+    discoverConsoleConfigCatalog: (options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) => {
+      const verifier = catalogAclDiagnostic.verifier;
+      return actual.discoverConsoleConfigCatalog(
+        verifier === undefined ? options : { ...options, windowsAclVerifier: verifier }
+      );
+    }
+  };
+});
 
 function supportedKnownConnectorOptions(): {
   readonly preset: string;
@@ -37,6 +53,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 }
 
 afterEach(async () => {
+  catalogAclDiagnostic.verifier = undefined;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -46,6 +63,18 @@ async function writeConfig(path: string, value: unknown): Promise<void> {
 
 async function writeCatalogFixture(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+function catalogFixtureLabel(path: string, kind: "file" | "directory"): "directory" | "gsc" | "sentry" | "other" {
+  if (kind === "directory") return "directory";
+  switch (basename(path).toLocaleLowerCase("en-US")) {
+    case "gsc.json":
+      return "gsc";
+    case "sentry.json":
+      return "sentry";
+    default:
+      return "other";
+  }
 }
 
 describe("Console dashboard application service", () => {
@@ -63,48 +92,6 @@ describe("Console dashboard application service", () => {
     });
 
     await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
-  });
-
-  it.runIf(process.platform === "win32")("reports the production ACL result for every catalog candidate", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-catalog-"));
-    temporaryDirectories.push(root);
-    const directory = await createPrivateConsoleDirectory(root);
-    await writeConfig(join(directory, "gsc.json"), {
-      version: "3",
-      name: "gsc",
-      defaultProfile: "default",
-      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
-      profiles: { default: {} }
-    });
-    await writeConfig(join(directory, "sentry.json"), {
-      version: "3",
-      name: "sentry",
-      defaultProfile: "default",
-      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
-      profiles: { default: {} }
-    });
-
-    const aclProbes: Array<{ candidate: string; kind: "file" | "directory"; trusted: boolean }> = [];
-    const catalog = await discoverConsoleConfigCatalog({
-      configDirectory: directory,
-      windowsAclVerifier: async (path, kind) => {
-        const trusted = await verifyWindowsConfigPathSecurity(path, kind).catch(() => false);
-        aclProbes.push({ candidate: kind === "directory" ? "directory" : basename(path), kind, trusted });
-        return trusted;
-      }
-    });
-
-    expect({
-      aclProbes,
-      configurationNames: catalog.configurations.map((configuration) => configuration.metadata.name)
-    }).toEqual({
-      aclProbes: [
-        { candidate: "directory", kind: "directory", trusted: true },
-        { candidate: "gsc.json", kind: "file", trusted: true },
-        { candidate: "sentry.json", kind: "file", trusted: true }
-      ],
-      configurationNames: ["gsc", "sentry"]
-    });
   });
 
   it("discovers safe standard-directory configurations without exposing source details", async () => {
@@ -133,11 +120,26 @@ describe("Console dashboard application service", () => {
       profiles: { work: {} }
     });
 
-    // Keep the production-only ACL boundary explicit on Windows: catalog
-    // discovery deliberately suppresses individual untrusted candidates.
+    // Instrument the exact dashboard catalog invocation on Windows. The mock
+    // delegates to the real catalog and real verifier; it only records safe
+    // fixture labels so a fail-closed omission identifies its boundary.
+    const aclProbes: Array<{
+      candidate: "directory" | "gsc" | "sentry" | "other";
+      kind: "file" | "directory";
+      outcome: "trusted" | "untrusted" | "error";
+    }> = [];
     if (process.platform === "win32") {
-      await expect(verifyWindowsConfigPathSecurity(gscPath, "file")).resolves.toBe(true);
-      await expect(verifyWindowsConfigPathSecurity(sentryPath, "file")).resolves.toBe(true);
+      catalogAclDiagnostic.verifier = async (path, kind) => {
+        const candidate = catalogFixtureLabel(path, kind);
+        try {
+          const trusted = await verifyWindowsConfigPathSecurity(path, kind);
+          aclProbes.push({ candidate, kind, outcome: trusted ? "trusted" : "untrusted" });
+          return trusted;
+        } catch (error) {
+          aclProbes.push({ candidate, kind, outcome: "error" });
+          throw error;
+        }
+      };
     }
 
     const service = new ConsoleDashboardApplicationService({
@@ -146,7 +148,22 @@ describe("Console dashboard application service", () => {
       launcher: { command: process.execPath, args: ["serve"] }
     });
 
-    const initial = await service.configMetadata();
+    const initial = await service.configMetadata().finally(() => {
+      catalogAclDiagnostic.verifier = undefined;
+    });
+    if (process.platform === "win32") {
+      expect({
+        aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
+        serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
+      }).toEqual({
+        aclProbeSummary: [
+          { candidate: "directory", kind: "directory", outcome: "trusted" },
+          { candidate: "gsc", kind: "file", outcome: "trusted" },
+          { candidate: "sentry", kind: "file", outcome: "trusted" }
+        ],
+        serviceConfigurationNames: ["gsc", "sentry"]
+      });
+    }
     expect(initial).toMatchObject({
       initialized: false,
       restartRequiredForExistingClients: true,
