@@ -683,10 +683,12 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
     const socket = connect({ host: "127.0.0.1", port });
     let settled = false;
     let response = "";
+    let timeoutImmediate: ReturnType<typeof setImmediate> | undefined;
     const settle = (state: LocalLockPortState): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (timeoutImmediate !== undefined) clearImmediate(timeoutImmediate);
       socket.destroy();
       resolve(state);
     };
@@ -694,7 +696,12 @@ async function inspectLocalLockPort(port: number, key: string): Promise<LocalLoc
     // acquiring this journal rather than an unrelated listener. Treat it as
     // unknown so a contender retries this candidate instead of selecting a
     // different port and bypassing the same lock.
-    const timeout = setTimeout(() => settle("unknown"), localLockProbeMilliseconds);
+    const timeout = setTimeout(() => {
+      // Under host scheduling pressure, a local connection result can already
+      // be queued when the timer phase runs. Give that result one check phase
+      // to settle before treating the holder as incomplete and failing closed.
+      timeoutImmediate = setImmediate(() => settle("unknown"));
+    }, localLockProbeMilliseconds);
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
       response += chunk;

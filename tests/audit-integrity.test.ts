@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { copyFile, link, mkdtemp, open, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -154,6 +155,65 @@ describe("audit journal integrity", () => {
       expect(listenAttempts).toBeGreaterThanOrEqual(2);
     } finally {
       listenSpy.mockRestore();
+    }
+  });
+
+  it("does not mistake a queued local refusal for an incomplete lock holder", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-delayed-lock-probe-"));
+    const path = join(directory, "audit.jsonl");
+    class ProbeSocket extends EventEmitter {
+      setEncoding(): this {
+        return this;
+      }
+
+      destroy(): this {
+        return this;
+      }
+    }
+
+    const socket = new ProbeSocket();
+    const originalSetTimeout = global.setTimeout;
+    let probeTimedOut = false;
+    let probeTimerIntercepted = false;
+    vi.resetModules();
+    vi.doMock("node:net", async () => {
+      const actual = await vi.importActual<typeof import("node:net")>("node:net");
+      return { ...actual, connect: () => socket };
+    });
+    const { AuditLogger: IsolatedAuditLogger } = await import("../src/audit/audit-logger.js");
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (probeTimedOut ? 5_000 : 0));
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(
+      ((callback: (...args: never[]) => void, delay?: number, ...args: never[]) => {
+        if (!probeTimerIntercepted && delay === 100) {
+          probeTimerIntercepted = true;
+          const timer = originalSetTimeout(() => undefined, 1_000);
+          queueMicrotask(() => {
+            probeTimedOut = true;
+            callback(...args);
+            socket.emit("error", Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }));
+          });
+          return timer;
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      }) as unknown as typeof setTimeout
+    );
+
+    try {
+      const logger = new IsolatedAuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
+      await expect(logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "writes-after-delayed-local-lock-probe",
+        status: "success",
+        durationMs: 1
+      })).resolves.toBeUndefined();
+      expect(probeTimerIntercepted).toBe(true);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      nowSpy.mockRestore();
+      vi.doUnmock("node:net");
+      vi.resetModules();
     }
   });
 
