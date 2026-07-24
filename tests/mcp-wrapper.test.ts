@@ -41,6 +41,14 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-
 const toolCollisionPattern = /TOOL_COLLISION/;
 const managementToolNames = managementToolDescriptors({ delegatedAgentApproval: false }).map((descriptor) => descriptor.name);
 
+async function fixtureLifecycleState(initializedPath: string, toolListStartedPath: string) {
+  const [initialized, toolListStarted] = await Promise.all([
+    access(initializedPath).then(() => true, () => false),
+    access(toolListStartedPath).then(() => true, () => false)
+  ]);
+  return { initialized, toolListStarted };
+}
+
 function registeredTool(originalName: string): RegisteredTool {
   return {
     exposedName: "trusted__shared_tool",
@@ -1981,6 +1989,7 @@ describe("Miftah MCP wrapper", () => {
 
   it("propagates cancellation through initial tool discovery", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-tool-discovery-"));
+    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -1992,6 +2001,7 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
@@ -2009,7 +2019,10 @@ describe("Miftah MCP wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       const pending = client.listTools(undefined, { signal: controller.signal });
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
+        initialized: true,
+        toolListStarted: true
+      });
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
@@ -2028,6 +2041,7 @@ describe("Miftah MCP wrapper", () => {
 
   it("propagates cancellation through management tool discovery", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-management-discovery-"));
+    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -2039,6 +2053,7 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
@@ -2060,7 +2075,10 @@ describe("Miftah MCP wrapper", () => {
         undefined,
         { signal: controller.signal }
       );
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
+        initialized: true,
+        toolListStarted: true
+      });
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
@@ -2074,6 +2092,7 @@ describe("Miftah MCP wrapper", () => {
 
   it("keeps shared tool discovery alive when one downstream caller cancels", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-shared-tool-discovery-cancellation-"));
+    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -2085,6 +2104,7 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
@@ -2102,7 +2122,10 @@ describe("Miftah MCP wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       const cancelled = client.listTools(undefined, { signal: controller.signal });
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
+        initialized: true,
+        toolListStarted: true
+      });
       const completed = client.listTools();
       // Allow the second downstream request to join the in-flight shared snapshot
       // before cancelling the first caller.
