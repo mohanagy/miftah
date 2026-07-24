@@ -116,6 +116,7 @@ describe("product README", () => {
     expect(readme).toContain("`--verify` is rejected because an imported entry has no reviewed provider adapter");
     expect(readme).toContain("static launch grammar");
     expect(readme).toContain("exact version");
+    expect(readme).toContain("On Windows, the import path accepts only a direct absolute `.exe` or `.com` executable");
     expect(readme).toContain("advanced manual setup");
   });
 

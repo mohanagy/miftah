@@ -15,6 +15,12 @@ import { createPrivateConsoleDirectory } from "./helpers/private-console-directo
 const temporaryDirectories: string[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
 
+function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -261,13 +267,14 @@ describe("Console application service", () => {
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
     const service = new ConsoleApplicationService(configPath);
+    const entry = importableClientEntry();
 
     await expect(service.onboardClientEntry({
       name: "posthog-work",
       entry: "posthog",
       document: JSON.stringify({
         mcpServers: {
-          posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+          posthog: entry
         }
       })
     })).resolves.toEqual({
@@ -281,7 +288,7 @@ describe("Console application service", () => {
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       name: "posthog-work",
-      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+      upstream: { transport: "stdio", command: entry.command, args: entry.args },
       profiles: { default: { policy: "readonly" } },
       tooling: { unknownToolRisk: "destructive" }
     });

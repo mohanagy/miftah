@@ -18,6 +18,12 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -1236,6 +1242,7 @@ describe("local Console control server", () => {
         expect(JSON.stringify(advancedManualBody)).not.toContain("craftmyletter");
         await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
+        const entry = importableClientEntry();
         const created = await fetch(endpoint, {
           method: "POST",
           headers: {
@@ -1249,7 +1256,7 @@ describe("local Console control server", () => {
             entry: "posthog",
             document: JSON.stringify({
               mcpServers: {
-                posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+                posthog: entry
               }
             })
           })
@@ -1283,7 +1290,7 @@ describe("local Console control server", () => {
       try {
         const session = await bootstrapSession(server);
         const endpoint = new URL("/api/v1/onboarding/client-entry", server.url);
-        const entry = JSON.stringify({ mcpServers: { example: { command: "node", args: ["server.mjs"] } } });
+        const entry = JSON.stringify({ mcpServers: { example: importableClientEntry() } });
         const document = `${entry}${" ".repeat(64 * 1024 - Buffer.byteLength(entry, "utf8"))}`;
         const request = {
           name: "maximum-document",

@@ -15,6 +15,12 @@ import { validateConfig } from "../src/config/validate-config.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
 
+function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 class StreamTranscript {
   #contents = "";
   #waiters: Array<{ readonly text: string; readonly occurrences: number; readonly resolve: () => void }> = [];
@@ -145,9 +151,10 @@ describe("setup command", () => {
   it("imports one explicitly selected local stdio entry without modifying the source client file", async () => {
     const source = resolve(outputRoot, "claude-desktop.json");
     const output = resolve(outputRoot, "posthog.json");
+    const entry = importableClientEntry();
     const document = JSON.stringify({
       mcpServers: {
-        posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+        posthog: entry
       }
     });
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
@@ -174,7 +181,7 @@ describe("setup command", () => {
     expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
     expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
       name: "posthog-work",
-      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+      upstream: { transport: "stdio", command: entry.command, args: entry.args },
       profiles: { default: { policy: "readonly" } }
     });
     expect(await readFile(source, "utf8")).toBe(document);
