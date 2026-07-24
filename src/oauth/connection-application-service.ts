@@ -9,7 +9,8 @@ import { validateConfig } from "../config/validate-config.js";
 import type { MiftahConfig, OAuthConnectionConfig } from "../config/types.js";
 import {
   applyConfigReplacement,
-  readConfigMigrationSource
+  readConfigMigrationSource,
+  type ConfigMigrationSource
 } from "../cli/migrate-config.js";
 import { MiftahError } from "../utils/errors.js";
 import { parseOAuthConnectionRef, type OAuthConnectionRef } from "./connection-types.js";
@@ -61,6 +62,8 @@ export interface ConnectionApplicationAuditSink {
 export interface ConnectionApplicationDependencies {
   readonly audit?: ConnectionApplicationAuditSink;
   readonly generateConnectionRef?: () => string;
+  /** Source captured by a caller that already verified and opened the exact config file. */
+  readonly trustedSource?: ConfigMigrationSource;
 }
 
 class ConfiguredConnectionApplicationAuditSink implements ConnectionApplicationAuditSink {
@@ -210,7 +213,7 @@ export async function runConnectionAddCommand(
   const path = resolvePath(options.configPath);
   const connectionRef = options.connectionRef ?? `oauthconn:${dependencies.generateConnectionRef?.() ?? randomUUID()}`;
   if (options.write !== true) {
-    const bytes = await readFile(path).catch((error: unknown) => {
+    const bytes = dependencies.trustedSource?.originalBytes ?? await readFile(path).catch((error: unknown) => {
       throw new MiftahError("CONFIG_NOT_FOUND", `CONFIG_NOT_FOUND: unable to read config '${path}'`, {
         cause: error instanceof Error ? error.message : String(error)
       });
@@ -218,7 +221,7 @@ export async function runConnectionAddCommand(
     return report(planOAuthConnectionAdd(parseBytes(bytes, path), options, connectionRef), false);
   }
 
-  const source = await readConfigMigrationSource(path);
+  const source = dependencies.trustedSource ?? await readConfigMigrationSource(path);
   const plan = planOAuthConnectionAdd(parseBytes(source.originalBytes, path), options, connectionRef);
   const audit = dependencies.audit ?? await configuredAuditSink(path);
   await audit?.ensureWritable();

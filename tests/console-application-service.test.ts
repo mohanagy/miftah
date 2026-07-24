@@ -1,9 +1,15 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import {
+  discoverConsoleConfigCatalog,
+  trustedConfigurationFor
+} from "../src/console/console-config-catalog.js";
+import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 
 const temporaryDirectories: string[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
@@ -48,10 +54,54 @@ async function writeConfig(): Promise<string> {
 }
 
 describe("Console application service", () => {
-  it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
+  it.skipIf(process.platform === "win32")("binds a trusted dashboard snapshot through a configuration mutation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-trusted-snapshot-"));
     temporaryDirectories.push(directory);
+    await chmod(directory, 0o700);
     const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "2",
+      name: "trusted-source",
+      defaultProfile: "personal",
+      upstream: { transport: "streamable-http", url: "https://trusted.example.test/mcp" },
+      profiles: { personal: {} }
+    }), { mode: 0o600 });
+    await chmod(configPath, 0o600);
+
+    const catalog = await discoverConsoleConfigCatalog({ configDirectory: directory });
+    const selected = catalog.configurations[0];
+    if (selected === undefined) throw new Error("Expected a trusted configuration snapshot.");
+    const trustedConfiguration = trustedConfigurationFor(selected);
+    if (trustedConfiguration === undefined) throw new Error("Expected trusted configuration bytes.");
+    const service = new ConsoleApplicationService(selected.path, {
+      trustedConfiguration
+    });
+
+    await writeFile(configPath, JSON.stringify({
+      version: "2",
+      name: "replacement-after-verification",
+      defaultProfile: "personal",
+      upstream: { transport: "streamable-http", url: "https://replacement.example.test/mcp" },
+      profiles: { personal: {} }
+    }), { mode: 0o600 });
+    await chmod(configPath, 0o600);
+
+    await expect(service.health()).resolves.toMatchObject({ config: { name: "trusted-source" } });
+    await expect(service.addConnection({
+      connectionRef,
+      profile: "personal",
+      upstream: "default",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["read"]
+    })).rejects.toMatchObject({ code: "CONFIG_MIGRATION_WRITE_FAILED" });
+  });
+
+  it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
     const service = new ConsoleApplicationService(configPath, {
       generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
       launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
@@ -99,6 +149,9 @@ describe("Console application service", () => {
       }
     });
     expect(JSON.stringify(config)).not.toMatch(/token|secret|password/iu);
+    if (process.platform === "win32") {
+      await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
+    }
 
     const snippets = await service.clientSnippets("claude-desktop");
     expect(snippets).toHaveLength(1);

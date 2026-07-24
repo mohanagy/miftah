@@ -24,11 +24,29 @@ import { MiftahError } from "../utils/errors.js";
 import { parseOAuthConnectionRef } from "../oauth/connection-types.js";
 import { writeNewConfigFile } from "../cli/migrate-config.js";
 import {
+  createWindowsPrivateDirectory,
+  verifyWindowsConfigPathSecurity
+} from "../cli/windows-config-acl.js";
+import {
   renderClientSnippets,
   type ClientLauncher,
   type ClientSelection,
   type ClientSnippet
 } from "../cli/client-snippets.js";
+import {
+  consoleInitializedConfigMetadata,
+  type ConsoleConfigMetadata
+} from "./console-config-metadata.js";
+import type { ConsoleTrustedConfiguration } from "./console-trusted-configuration.js";
+
+export type {
+  ConsoleAuthenticationMetadata,
+  ConsoleConfigCatalog,
+  ConsoleConfigMetadata,
+  ConsoleDiscoveredConfiguration,
+  ConsoleInitializedConfigMetadata,
+  ConsoleUninitializedConfigMetadata
+} from "./console-config-metadata.js";
 
 export interface ConsoleConnectionAddRequest extends OAuthConnectionAddRequest {
   readonly connectionRef?: string;
@@ -57,30 +75,6 @@ export interface ConsoleAuditRecord {
   readonly errorCode?: string;
 }
 
-export interface ConsoleInitializedConfigMetadata {
-  readonly initialized: true;
-  readonly name: string;
-  readonly version: string;
-  readonly defaultProfile: string;
-  readonly profiles: readonly {
-    readonly name: string;
-    readonly description?: string;
-    readonly tags?: readonly string[];
-    readonly policy?: string;
-    readonly upstreams?: readonly string[];
-  }[];
-  readonly upstreams: readonly { readonly name: string; readonly transport: string }[];
-  readonly oauthConnectionCount: number;
-  readonly restartRequiredForExistingClients: true;
-}
-
-export interface ConsoleUninitializedConfigMetadata {
-  readonly initialized: false;
-  readonly restartRequiredForExistingClients: true;
-}
-
-export type ConsoleConfigMetadata = ConsoleInitializedConfigMetadata | ConsoleUninitializedConfigMetadata;
-
 export interface ConsoleHealth {
   readonly status: "ok";
   readonly config: { readonly name: string; readonly version: string };
@@ -95,6 +89,8 @@ export interface ConsoleHealth {
 export interface ConsoleControlApplication {
   health(): Promise<ConsoleHealth>;
   configMetadata(): Promise<ConsoleConfigMetadata>;
+  /** Available only for a dashboard started without an explicit --config path. */
+  selectConfiguration?(configurationId: string): Promise<ConsoleConfigMetadata>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -120,6 +116,8 @@ export interface ConsoleApplicationDependencies {
   readonly commandService?: ConsoleOAuthCommandService;
   readonly generateConnectionRef?: () => string;
   readonly launcher?: ClientLauncher;
+  /** A selected dashboard entry that was read through the catalog's verified file handle. */
+  readonly trustedConfiguration?: ConsoleTrustedConfiguration;
 }
 
 function fileErrorCode(error: unknown): string | undefined {
@@ -130,6 +128,31 @@ function fileErrorCode(error: unknown): string | undefined {
 
 function consoleAuditPath(configPath: string): string {
   return join(dirname(resolvePath(configPath)), ".miftah", "audit", "console.jsonl");
+}
+
+async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> {
+  const directory = dirname(resolvePath(configPath));
+  try {
+    if (process.platform !== "win32") {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      return;
+    }
+    const parent = dirname(directory);
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) {
+      throw new Error("unsafe configuration parent directory");
+    }
+    await createWindowsPrivateDirectory(directory);
+    if (!(await verifyWindowsConfigPathSecurity(directory, "directory"))) {
+      throw new Error("unsafe configuration directory");
+    }
+  } catch (error) {
+    if (error instanceof MiftahError) throw error;
+    throw new MiftahError(
+      "CONFIG_CREATE_FAILED",
+      "CONFIG_CREATE_FAILED: unable to create a safe first-run configuration directory"
+    );
+  }
 }
 
 function safeAuditRecord(value: unknown): ConsoleAuditRecord | undefined {
@@ -168,6 +191,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly commandService: ConsoleOAuthCommandService;
   private readonly generateConnectionRef: () => string;
   private readonly launcher: ClientLauncher | undefined;
+  private readonly trustedConfiguration: ConsoleTrustedConfiguration | undefined;
 
   constructor(
     private readonly configPath: string,
@@ -175,13 +199,17 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   ) {
     this.auditPath = consoleAuditPath(configPath);
     this.audit = new AuditTrail("miftah-console", new AuditLogger(this.auditPath, { failureMode: "fail-closed" }));
-    this.commandService = dependencies.commandService ?? new OAuthConnectionCommandService(configPath);
+    this.trustedConfiguration = dependencies.trustedConfiguration;
+    this.commandService = dependencies.commandService ?? new OAuthConnectionCommandService(
+      configPath,
+      new NativeOAuthCommandRuntimeFactory(this.trustedConfiguration?.config)
+    );
     this.generateConnectionRef = dependencies.generateConnectionRef ?? randomUUID;
     this.launcher = dependencies.launcher;
   }
 
   async health(): Promise<ConsoleHealth> {
-    const config = await loadConfig(this.configPath);
+    const config = await this.config();
     const audit = this.audit.health();
     return {
       status: "ok",
@@ -200,38 +228,14 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   async configMetadata(): Promise<ConsoleConfigMetadata> {
     let config: Awaited<ReturnType<typeof loadConfig>>;
     try {
-      config = await loadConfig(this.configPath);
+      config = await this.config();
     } catch (error) {
       if (error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND") {
         return { initialized: false, restartRequiredForExistingClients: true };
       }
       throw error;
     }
-    const upstreams = config.upstreams === undefined
-      ? config.upstream === undefined
-        ? []
-        : [{ name: "default", transport: config.upstream.transport }]
-      : Object.entries(config.upstreams)
-          .map(([name, upstream]) => ({ name, transport: upstream.transport }))
-          .sort((left, right) => left.name.localeCompare(right.name));
-    return {
-      initialized: true,
-      name: config.name,
-      version: config.version,
-      defaultProfile: config.defaultProfile,
-      profiles: Object.entries(config.profiles)
-        .map(([name, profile]) => ({
-          name,
-          ...(profile.description === undefined ? {} : { description: profile.description }),
-          ...(profile.tags === undefined ? {} : { tags: [...profile.tags] }),
-          ...(profile.policy === undefined ? {} : { policy: profile.policy }),
-          ...(profile.upstreams === undefined ? {} : { upstreams: Object.keys(profile.upstreams).sort() })
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name)),
-      upstreams,
-      oauthConnectionCount: config.version === "3" ? Object.keys(config.oauth?.connections ?? {}).length : 0,
-      restartRequiredForExistingClients: true
-    };
+    return consoleInitializedConfigMetadata(config);
   }
 
   async onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport> {
@@ -261,9 +265,9 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       }
     };
     validateConfig(config);
-    await this.audit.ensureWritable();
     const path = resolvePath(this.configPath);
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await ensureFirstRunConfigDirectory(path);
+    await this.audit.ensureWritable();
     try {
       await writeNewConfigFile(path, `${JSON.stringify(config, null, 2)}\n`);
     } catch (error) {
@@ -303,7 +307,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     if (this.launcher === undefined) {
       throw new MiftahError("CONSOLE_LAUNCHER_UNAVAILABLE", "CONSOLE_LAUNCHER_UNAVAILABLE: client snippets are unavailable");
     }
-    const config = await loadConfig(this.configPath);
+    const config = await this.config();
     return renderClientSnippets(selection, {
       serverName: config.name,
       configPath: resolvePath(this.configPath),
@@ -316,7 +320,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       return await this.commandService.list();
     } catch (error) {
       if (!(error instanceof MiftahError)) throw error;
-      const configured = await new NativeOAuthCommandRuntimeFactory().connections(this.configPath);
+      const configured = await new NativeOAuthCommandRuntimeFactory(this.trustedConfiguration?.config).connections(this.configPath);
       return configured.map((connection) => ({
         ...connection,
         credentialState: "unsupported",
@@ -340,7 +344,10 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       clientRegistration: request.clientRegistration,
       scopes: request.scopes,
       write: true
-    }, { audit: new ConsoleConnectionAuditSink(this.audit) });
+    }, {
+      audit: new ConsoleConnectionAuditSink(this.audit),
+      ...(this.trustedConfiguration === undefined ? {} : { trustedSource: this.trustedConfiguration.migrationSource })
+    });
     return {
       changed: result.changed,
       write: result.write,
@@ -368,13 +375,17 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     return this.runConnectionMutation(connectionRef, "disconnect", (service) => service.disconnect({ connectionRef }));
   }
 
+  private async config(): Promise<MiftahConfig> {
+    return this.trustedConfiguration?.config ?? loadConfig(this.configPath);
+  }
+
   private async runConnectionMutation(
     connectionRef: string,
     action: "connect" | "reauth" | "test" | "disconnect",
     operation: (service: ConsoleOAuthCommandService) => Promise<unknown>
   ): Promise<unknown> {
     const reference = parseOAuthConnectionRef(connectionRef);
-    const config = await loadConfig(this.configPath);
+    const config = await this.config();
     const target = config.version === "3" ? config.oauth?.connections[reference] : undefined;
     if (target === undefined) {
       throw new MiftahError("OAUTH_CONNECTION_NOT_FOUND", "OAUTH_CONNECTION_NOT_FOUND: OAuth connection does not exist");

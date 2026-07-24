@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -24,6 +24,7 @@ import { CLIENT_NAMES, renderClientSnippets, type ClientSelection } from "./clie
 import { resolvePath } from "../config/path-resolve.js";
 import { startConsoleServer } from "../console/console-server.js";
 import { openSystemBrowser } from "../console/open-browser.js";
+import { ConsoleDashboardApplicationService } from "../console/console-dashboard-application-service.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -117,17 +118,33 @@ function defaultDashboardConfigPath(): string {
 async function dashboardServe(
   configPath: string,
   port: string | undefined,
-  openBrowser: boolean
+  openBrowser: boolean,
+  discoverExistingConfigurations: boolean
 ): Promise<void> {
+  const launcher = { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] };
+  const application = discoverExistingConfigurations
+    ? new ConsoleDashboardApplicationService({
+        defaultConfigPath: configPath,
+        configDirectory: dirname(resolvePath(configPath)),
+        launcher
+      })
+    : undefined;
   const server = await startConsoleServer(configPath, {
     port: consolePort(port),
     allowMissingConfig: true,
-    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+    ...(discoverExistingConfigurations ? { deferConfigValidation: true } : {}),
+    launcher,
+    ...(application === undefined ? {} : { application })
   });
   process.stdout.write(
     [
       `Miftah Console listening on ${server.url.toString()}`,
-      `Configuration: ${resolvePath(configPath)}`,
+      ...(discoverExistingConfigurations
+        ? [
+            `Configuration catalog: ${dirname(resolvePath(configPath))} (direct safe JSON files only)`,
+            `First-run configuration location: ${resolvePath(configPath)}`
+          ]
+        : [`Configuration: ${resolvePath(configPath)}`]),
       `One-time bootstrap code: ${server.bootstrapCredential}`,
       "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
     ].join("\n") + "\n"
@@ -166,7 +183,12 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "dashboard") {
-    await dashboardServe(args.config ?? defaultDashboardConfigPath(), args.port, args.noOpen !== true);
+    await dashboardServe(
+      args.config ?? defaultDashboardConfigPath(),
+      args.port,
+      args.noOpen !== true,
+      args.config === undefined
+    );
     return;
   }
   if (!args.config) {

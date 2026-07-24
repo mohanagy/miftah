@@ -67,6 +67,17 @@ const page = `<!doctype html>
         </div>
       </section>
 
+      <section id="configuration-catalog-view" class="work-section" hidden aria-labelledby="configuration-catalog-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">02 / Existing connections</p>
+            <h2 id="configuration-catalog-title">Choose a Miftah configuration</h2>
+          </div>
+          <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
+        </div>
+        <div id="configuration-catalog" class="configuration-catalog"></div>
+      </section>
+
       <section id="onboarding-view" class="work-section" hidden aria-labelledby="onboarding-title">
         <div class="section-heading">
           <div>
@@ -103,13 +114,20 @@ const page = `<!doctype html>
         </section>
         <p class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Restart Claude Desktop or open a new client connection before expecting the new default or connection to be active.</p>
 
+        <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
+          <div class="section-heading">
+            <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Provider-managed connection</h2></div>
+            <p id="provider-authentication-copy"></p>
+          </div>
+        </section>
+
         <section class="work-section" aria-labelledby="connections-title">
           <div class="section-heading">
             <div><p class="step">Connections</p><h2 id="connections-title">OAuth bindings and local state</h2></div>
             <p>Connect and reauthorize may open the provider in your system browser. Disconnect removes only Miftah's local vault credential; revoke provider access separately.</p>
           </div>
           <div id="connection-list" class="connection-list"></div>
-          <details>
+          <details id="native-oauth-editor">
             <summary>Add native OAuth to an existing profile</summary>
             <form id="connection-form" class="form-grid compact">
               <label>Profile<select name="profile" id="connection-profile" required></select></label>
@@ -239,6 +257,13 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .summary span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
+.configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
+.configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
+.configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
+.configuration-card button { min-height: 2.4rem; font-size: .78rem; }
+.provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
+.provider-authentication .section-heading { margin-bottom: 0; }
 .connection { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; border: 1px solid var(--line); background: var(--panel); }
 .connection p { margin: .25rem 0 0; overflow-wrap: anywhere; font: .77rem/1.5 ui-monospace, monospace; }
 .connection-actions { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
@@ -250,8 +275,8 @@ summary { cursor: pointer; font-weight: 700; }
 .audit-list li { display: grid; grid-template-columns: 10rem 1fr auto; gap: 1rem; padding: .8rem 0; border-bottom: 1px solid var(--line); color: var(--muted); font: .76rem/1.45 ui-monospace, monospace; }
 .status { position: sticky; bottom: 1rem; min-height: 1.5rem; width: fit-content; max-width: 100%; margin: 1rem 0 0; padding: .7rem 1rem; color: var(--ink); background: #222923; border: 1px solid var(--line); box-shadow: 0 .7rem 2rem rgb(0 0 0 / 35%); }
 .status:empty { visibility: hidden; }
-@media (max-width: 850px) { .mode-grid, .summary { grid-template-columns: repeat(2, 1fr); } .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; } }
-@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary { grid-template-columns: 1fr; } .wide { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
+@media (max-width: 850px) { .mode-grid, .summary, .configuration-catalog { grid-template-columns: repeat(2, 1fr); } .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; } }
+@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary, .configuration-catalog { grid-template-columns: 1fr; } .wide { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 `;
 
@@ -265,6 +290,11 @@ const script = `(() => {
   const unlockView = byId("unlock-view");
   const onboardingView = byId("onboarding-view");
   const workspaceView = byId("workspace-view");
+  const configurationCatalogView = byId("configuration-catalog-view");
+  const configurationCatalog = byId("configuration-catalog");
+  const providerAuthenticationView = byId("provider-authentication-view");
+  const providerAuthenticationCopy = byId("provider-authentication-copy");
+  const nativeOAuthEditor = byId("native-oauth-editor");
   let csrfToken = "";
 
   function message(text) {
@@ -338,14 +368,76 @@ const script = `(() => {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
 
-  function renderConnections(value) {
+  function catalogConfigurations(metadata) {
+    const catalog = record(metadata.catalog);
+    return {
+      discoveryState: typeof catalog.discoveryState === "string" ? catalog.discoveryState : "",
+      selectedConfigurationId: typeof catalog.selectedConfigurationId === "string" ? catalog.selectedConfigurationId : "",
+      configurations: Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : []
+    };
+  }
+
+  function renderConfigurationCatalog(metadata) {
+    const catalog = catalogConfigurations(metadata);
+    if (configurationCatalogView) configurationCatalogView.hidden = catalog.configurations.length === 0;
+    if (!configurationCatalog) return catalog;
+    configurationCatalog.replaceChildren();
+    catalog.configurations.forEach((configuration) => {
+      const id = typeof configuration.id === "string" ? configuration.id : "";
+      const card = document.createElement("article");
+      card.className = "configuration-card";
+      const details = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = typeof configuration.name === "string" ? configuration.name : "Unnamed configuration";
+      const summary = document.createElement("p");
+      const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : 0;
+      const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "unknown";
+      summary.textContent = profileCount + " profile" + (profileCount === 1 ? "" : "s") + " · default " + defaultProfile;
+      const ownership = document.createElement("p");
+      ownership.className = "configuration-meta";
+      const authentication = record(configuration.authentication);
+      ownership.textContent = authentication.mode === "provider-adapter"
+        ? "provider-owned authentication"
+        : "Miftah-managed native OAuth available";
+      details.append(title, summary, ownership);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.configuration = id;
+      const selected = id.length > 0 && id === catalog.selectedConfigurationId;
+      button.textContent = selected ? "Open now" : "Open configuration";
+      button.className = selected ? "secondary" : "";
+      button.disabled = !id || selected;
+      card.append(details, button);
+      configurationCatalog.append(card);
+    });
+    return catalog;
+  }
+
+  function renderProviderAuthentication(value) {
+    const authentication = record(value);
+    const providerAdapter = authentication.mode === "provider-adapter";
+    if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter;
+    if (nativeOAuthEditor) nativeOAuthEditor.hidden = providerAdapter;
+    if (!providerAdapter || !providerAuthenticationCopy) return;
+    const provider = typeof authentication.provider === "string" ? authentication.provider : "This provider";
+    const reauthOwner = authentication.reauthOwner === "upstream" ? "Use the provider adapter's documented reauthentication tool when needed."
+      : "Use the provider's documented reauthentication flow when needed.";
+    const disconnectOwner = authentication.disconnectOwner === "manual-only"
+      ? " Revoke access from the provider console; Miftah does not remove or inspect the provider cache."
+      : " Miftah only manages the boundaries declared by this adapter.";
+    providerAuthenticationCopy.textContent = "This provider owns its browser login and private token cache. " + provider + " keeps OAuth outside Miftah. " + reauthOwner + disconnectOwner;
+  }
+
+  function renderConnections(value, authentication) {
     const list = byId("connection-list");
     if (!list) return;
     list.replaceChildren();
     const connections = Array.isArray(value) ? value : [];
     if (connections.length === 0) {
       const empty = document.createElement("p");
-      empty.textContent = "No native OAuth connections are configured yet.";
+      empty.textContent = record(authentication).mode === "provider-adapter"
+        ? "This provider manages its OAuth state outside Miftah; no native OAuth binding is configured here."
+        : "No native OAuth connections are configured yet.";
       list.append(empty);
       return;
     }
@@ -420,14 +512,29 @@ const script = `(() => {
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
+    const catalog = renderConfigurationCatalog(metadata);
     if (metadata.initialized !== true) {
+      renderProviderAuthentication(undefined);
+      if (catalog.configurations.length > 0) {
+        if (onboardingView) onboardingView.hidden = true;
+        if (workspaceView) workspaceView.hidden = true;
+        message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
+        return;
+      }
+      if (catalog.discoveryState === "unavailable") {
+        if (onboardingView) onboardingView.hidden = true;
+        if (workspaceView) workspaceView.hidden = true;
+        message("Miftah could not safely inspect its standard configuration directory. Correct its local access or start the Console with --config.");
+        return;
+      }
       if (onboardingView) onboardingView.hidden = false;
       if (workspaceView) workspaceView.hidden = true;
-      message("No configuration exists yet. Create the first native OAuth profile below.");
+      message("No safe Miftah configuration exists yet. Create the first native OAuth profile below.");
       return;
     }
     if (onboardingView) onboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
+    renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
     const configVersion = byId("config-version");
     const defaultProfile = byId("default-profile");
@@ -447,7 +554,7 @@ const script = `(() => {
     const audit = record(health.audit);
     const auditState = byId("audit-state");
     if (auditState) auditState.textContent = String(audit.state || "unknown");
-    renderConnections(results[1]);
+    renderConnections(results[1], metadata.authentication);
     renderAudit(results[2]);
     message("Console data refreshed. Existing MCP clients still need a restart for durable changes.");
   }
@@ -473,6 +580,25 @@ const script = `(() => {
         message(errorMessage(error));
         bootstrapInput.focus();
       }
+    });
+  }
+
+  if (configurationCatalog) {
+    configurationCatalog.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element ? event.target.closest("button[data-configuration]") : null;
+      if (!(button instanceof HTMLButtonElement)) return;
+      const configurationId = button.dataset.configuration || "";
+      if (!configurationId) return;
+      button.disabled = true;
+      message("Opening the selected Miftah configuration…");
+      try {
+        await api("/api/v1/configurations/" + encodeURIComponent(configurationId) + "/select", {
+          method: "POST",
+          body: {}
+        });
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+      finally { button.disabled = false; }
     });
   }
 

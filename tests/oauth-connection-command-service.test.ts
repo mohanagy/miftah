@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  NativeOAuthCommandRuntimeFactory,
   OAuthConnectionCommandService,
   type OAuthCommandRuntime,
   type OAuthCommandRuntimeFactory,
   type OAuthCommandRuntimeOptions
 } from "../src/oauth/connection-command-service.js";
+import type { MiftahConfig } from "../src/config/types.js";
 import type { RedactedOAuthConnection, RedactedOAuthConnectionStatus } from "../src/oauth/remote-oauth-runtime.js";
 
 const work: RedactedOAuthConnection = {
@@ -79,6 +83,24 @@ class FakeFactory implements OAuthCommandRuntimeFactory {
 }
 
 describe("OAuth connection command service", () => {
+  it("uses a verified configuration snapshot without reopening its pathname", async () => {
+    const config: MiftahConfig = {
+      version: "3",
+      name: "snapshot-runtime",
+      defaultProfile: "default",
+      upstream: { transport: "streamable-http", url: "https://snapshot.example.test/mcp" },
+      profiles: { default: {} }
+    };
+    const factory = new NativeOAuthCommandRuntimeFactory(config);
+    const missingPath = join(tmpdir(), "miftah-snapshot-must-not-be-read.json");
+
+    await expect(factory.connections(missingPath)).resolves.toEqual([]);
+    await expect(factory.open(missingPath, {
+      interactiveAuthorization: false,
+      upstreamAccess: true
+    })).rejects.toMatchObject({ code: "OAUTH_CONNECTION_NOT_FOUND" });
+  });
+
   it("preserves legacy configurations by listing no native OAuth connections without opening a runtime", async () => {
     const factory = new FakeFactory();
     factory.connections = async () => [];

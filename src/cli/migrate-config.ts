@@ -8,7 +8,8 @@ import { validateConfig } from "../config/validate-config.js";
 import { MiftahError } from "../utils/errors.js";
 import {
   copyWindowsConfigSecurityDescriptor,
-  createWindowsPrivateMigrationDirectory
+  createWindowsPrivateMigrationDirectory,
+  secureWindowsConfigFile
 } from "./windows-config-acl.js";
 
 export interface MigrateConfigCommandOptions {
@@ -25,7 +26,7 @@ export interface MigrateConfigReport {
   readonly backupCreated: boolean;
 }
 
-interface MigrationSourceFingerprint {
+export interface ConfigMigrationSourceFingerprint {
   readonly dev: number;
   readonly ino: number;
   readonly size: number;
@@ -37,7 +38,7 @@ interface MigrationSourceFingerprint {
 /** A byte-identical regular-file snapshot used only by the explicit migration transaction. */
 export interface ConfigMigrationSource {
   readonly originalBytes: Buffer;
-  readonly fingerprint: MigrationSourceFingerprint;
+  readonly fingerprint: ConfigMigrationSourceFingerprint;
 }
 
 class MigrationSourceChangedError extends Error {
@@ -94,7 +95,9 @@ function isRegularNonSymlink(stats: Stats): boolean {
   return stats.isFile() && !stats.isSymbolicLink();
 }
 
-function fingerprint(stats: Stats): MigrationSourceFingerprint {
+function fingerprint(
+  stats: Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "mode">
+): ConfigMigrationSourceFingerprint {
   return {
     dev: stats.dev,
     ino: stats.ino,
@@ -105,7 +108,18 @@ function fingerprint(stats: Stats): MigrationSourceFingerprint {
   };
 }
 
-function matchesFingerprint(stats: Stats, expected: MigrationSourceFingerprint): boolean {
+/** Creates a guarded mutation source from bytes read through an already verified file handle. */
+export function createConfigMigrationSource(
+  originalBytes: Buffer,
+  stats: Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "mode">
+): ConfigMigrationSource {
+  return {
+    originalBytes: Buffer.from(originalBytes),
+    fingerprint: fingerprint(stats)
+  };
+}
+
+function matchesFingerprint(stats: Stats, expected: ConfigMigrationSourceFingerprint): boolean {
   const current = fingerprint(stats);
   return (
     current.dev === expected.dev &&
@@ -118,7 +132,7 @@ function matchesFingerprint(stats: Stats, expected: MigrationSourceFingerprint):
 }
 
 /** A rename changes ctime without changing the captured source content or permissions. */
-function matchesFingerprintAfterMove(stats: Stats, expected: MigrationSourceFingerprint): boolean {
+function matchesFingerprintAfterMove(stats: Stats, expected: ConfigMigrationSourceFingerprint): boolean {
   const current = fingerprint(stats);
   return (
     current.dev === expected.dev &&
@@ -189,7 +203,11 @@ async function writeSyncedExclusive(
 
 /** Creates one synced owner-only configuration file without replacing any existing path. */
 export async function writeNewConfigFile(path: string, content: string): Promise<void> {
-  await writeSyncedExclusive(path, content, 0o600);
+  await writeSyncedExclusive(path, content, 0o600, async (targetPath) => {
+    if (!(await secureWindowsConfigFile(targetPath))) {
+      throw migrationWriteError("could not apply and verify a private Windows security descriptor");
+    }
+  });
 }
 
 async function writeMigrationFile(
@@ -279,7 +297,7 @@ async function discardUnmovedTransaction(transaction: MigrationTransaction): Pro
 async function restoreHeldSource(
   transaction: MigrationTransaction,
   path: string,
-  expected: MigrationSourceFingerprint
+  expected: ConfigMigrationSourceFingerprint
 ): Promise<boolean> {
   let held: Stats;
   try {
@@ -310,7 +328,7 @@ async function restoreCurrentHeldSource(transaction: MigrationTransaction, path:
 async function matchesHeldSourceSnapshot(
   holdingPath: string,
   expectedBytes: Buffer,
-  expectedFingerprint: MigrationSourceFingerprint
+  expectedFingerprint: ConfigMigrationSourceFingerprint
 ): Promise<boolean> {
   let bytes: Buffer;
   let afterRead: Stats;
@@ -483,7 +501,7 @@ export async function readConfigMigrationSource(path: string): Promise<ConfigMig
     if (!sameRegularFile(opened, afterRead) || !sameRegularFile(afterRead, afterReadPath)) {
       throw new MigrationSourceChangedError();
     }
-    result = { originalBytes, fingerprint: fingerprint(afterRead) };
+    result = createConfigMigrationSource(originalBytes, afterRead);
   } catch (error) {
     failure = error;
   }
