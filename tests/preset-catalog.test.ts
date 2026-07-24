@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildPresetConfig,
@@ -106,9 +106,77 @@ describe("preset catalog", () => {
       env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
       policy: "readonly"
     });
+    expect(config.profiles.default?.env?.GSC_CONFIG_DIR).toSatisfy(
+      (directory: unknown) => typeof directory === "string" && isAbsolute(directory)
+    );
     expect(config).not.toHaveProperty("oauth");
     expect(config.profiles.default?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
     expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("gives every named GSC account a separate upstream-owned OAuth state directory", () => {
+    const config = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        {
+          name: "google-govalidate",
+          description: "GoValidate Google account",
+          oauthClientSecretsFile: gscClientSecretsFile
+        },
+        {
+          name: "google-craftmyletter",
+          description: "CraftMyLetter Google account",
+          oauthClientSecretsFile: gscClientSecretsFile
+        }
+      ],
+      defaultProfile: "google-govalidate"
+    });
+
+    expect(config.defaultProfile).toBe("google-govalidate");
+    expect(config.profiles).toMatchObject({
+      "google-govalidate": {
+        description: "GoValidate Google account",
+        env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
+        policy: "readonly"
+      },
+      "google-craftmyletter": {
+        description: "CraftMyLetter Google account",
+        env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
+        policy: "readonly"
+      }
+    });
+    const stateDirectories = Object.values(config.profiles).map((profile) => profile.env?.GSC_CONFIG_DIR);
+    expect(stateDirectories.every((directory) => typeof directory === "string" && isAbsolute(directory))).toBe(true);
+    expect(new Set(stateDirectories).size).toBe(2);
+    expect(config).not.toHaveProperty("oauth");
+    expect(config.profiles["google-govalidate"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
+    expect(config.profiles["google-craftmyletter"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("namespaces generated GSC OAuth state by configuration as well as profile", () => {
+    const options = {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile }
+      ]
+    } as const;
+
+    const first = buildPresetConfig("gsc", "google-search-console", options, {
+      configurationPath: "/tmp/customer-a/gsc.json"
+    });
+    const second = buildPresetConfig("gsc", "google-search-console", options, {
+      configurationPath: "/tmp/customer-b/gsc.json"
+    });
+
+    expect(first.profiles.work?.env?.GSC_CONFIG_DIR).not.toBe(second.profiles.work?.env?.GSC_CONFIG_DIR);
+  });
+
+  it("requires an explicit durable GSC default when more than one account is configured", () => {
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile },
+        { name: "client", oauthClientSecretsFile: gscClientSecretsFile }
+      ]
+    })).toThrow(PresetCatalogError);
   });
 
   it("requires one safe absolute OAuth client-secrets file path for the GSC pilot", () => {

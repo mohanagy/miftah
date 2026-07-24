@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
 import { validateConfig } from "../config/validate-config.js";
 import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
-import type { PresetBuildOptions } from "../config/presets.js";
+import type { GoogleSearchConsoleProfileOptions, PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
@@ -42,7 +42,7 @@ export type InitCommandOptions = Pick<
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
->;
+> & Pick<PresetBuildOptions, "googleSearchConsoleProfiles" | "defaultProfile">;
 
 export interface InitCommandContext {
   readonly input: Readable & { readonly isTTY?: boolean };
@@ -151,6 +151,73 @@ async function collectStreamableOptions(
   };
 }
 
+function parseAdditionalGoogleSearchConsoleAccount(value: string | undefined): boolean {
+  switch (value?.toLowerCase()) {
+    case "y":
+    case "yes":
+      return true;
+    case "n":
+    case "no":
+      return false;
+    default:
+      usageError("Answer 'yes' or 'no' when asked to add another Google Search Console account.");
+  }
+}
+
+async function collectGoogleSearchConsoleOptions(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  options: InitCommandOptions
+): Promise<PresetBuildOptions> {
+  if (options.googleSearchConsoleProfiles !== undefined) {
+    return {
+      oauthClientSecretsFile: options.oauthClientSecretsFile,
+      googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
+      defaultProfile: options.defaultProfile
+    };
+  }
+
+  const googleSearchConsoleProfiles: GoogleSearchConsoleProfileOptions[] = [];
+  do {
+    const name = await prompt(
+      line,
+      cancellation,
+      "Google account profile name",
+      googleSearchConsoleProfiles.length === 0 ? "google-account-1" : undefined
+    );
+    const description = await prompt(line, cancellation, "Google account description (optional)");
+    const oauthClientSecretsFile = options.oauthClientSecretsFile ?? (await prompt(
+      line,
+      cancellation,
+      "Google OAuth client-secrets file (absolute path)"
+    ));
+    if (name === undefined || oauthClientSecretsFile === undefined) {
+      usageError("Google Search Console setup requires a profile name and OAuth client-secrets file.");
+    }
+    googleSearchConsoleProfiles.push({
+      name,
+      ...(description === undefined ? {} : { description }),
+      oauthClientSecretsFile
+    });
+  } while (parseAdditionalGoogleSearchConsoleAccount(await prompt(
+    line,
+    cancellation,
+    "Add another Google account? (yes/no)",
+    "no"
+  )));
+
+  const defaultProfile = options.defaultProfile ?? (await prompt(
+    line,
+    cancellation,
+    "Default Google account profile",
+    googleSearchConsoleProfiles[0]?.name
+  ));
+  if (defaultProfile === undefined) {
+    usageError("Google Search Console setup requires an explicit default profile.");
+  }
+  return { googleSearchConsoleProfiles, defaultProfile };
+}
+
 async function collectPresetOptions(
   line: PromptInterface,
   cancellation: Cancellation,
@@ -159,13 +226,7 @@ async function collectPresetOptions(
 ): Promise<PresetBuildOptions> {
   switch (preset) {
     case "google-search-console":
-      return {
-        oauthClientSecretsFile: options.oauthClientSecretsFile ?? (await prompt(
-          line,
-          cancellation,
-          "Google OAuth client-secrets file (absolute path)"
-        ))
-      };
+      return collectGoogleSearchConsoleOptions(line, cancellation, options);
     case "generic-npx":
       return {
         credentialEnv: options.credentialEnv,
@@ -235,7 +296,9 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     url: options.url,
     headerName: options.headerName,
     headerPrefix: options.headerPrefix,
-    oauthClientSecretsFile: options.oauthClientSecretsFile
+    oauthClientSecretsFile: options.oauthClientSecretsFile,
+    googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
+    defaultProfile: options.defaultProfile
   };
 }
 
@@ -268,7 +331,11 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       url: values.url,
       headerName: values.headerName,
       headerPrefix: values.headerPrefix,
-      oauthClientSecretsFile: values.oauthClientSecretsFile
+      oauthClientSecretsFile: values.oauthClientSecretsFile,
+      googleSearchConsoleProfiles: values.googleSearchConsoleProfiles,
+      defaultProfile: values.defaultProfile
+    }, {
+      configurationPath: output
     });
     validateConfig(config);
   } catch (error) {

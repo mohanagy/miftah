@@ -1429,7 +1429,18 @@ describe("packed artifact contract", () => {
         expect(initializedGsc.stderr).toBe("");
         expect(initializedGsc.stdout).toContain("Credential ownership: upstream");
         expect(initializedGsc.stdout).not.toContain(gscClientSecretsPath);
-        expect(JSON.parse(await readFile(gscOutputPath, "utf8"))).toMatchObject({
+        const generatedGscConfig = JSON.parse(await readFile(gscOutputPath, "utf8")) as {
+          readonly name: string;
+          readonly upstream: { readonly command: string; readonly args: readonly string[] };
+          readonly profiles: Record<string, {
+            readonly env: {
+              readonly GSC_OAUTH_CLIENT_SECRETS_FILE?: string;
+              readonly GSC_CONFIG_DIR?: string;
+            };
+            readonly policy?: string;
+          }>;
+        };
+        expect(generatedGscConfig).toMatchObject({
           name: "gsc-pilot",
           upstream: { command: "uvx", args: ["mcp-search-console@0.3.2"] },
           profiles: {
@@ -1439,6 +1450,7 @@ describe("packed artifact contract", () => {
             }
           }
         });
+        expect(generatedGscConfig.profiles.default?.env.GSC_CONFIG_DIR).toEqual(expect.any(String));
 
         const automationUpstream = await startFakeRemoteUpstream();
         try {

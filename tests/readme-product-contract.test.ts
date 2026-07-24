@@ -82,6 +82,8 @@ describe("product README", () => {
     expect(readme).toContain("miftah connection add --config");
     expect(readme).toContain("miftah auth connect --config");
     expect(readme).toContain("--preset google-search-console");
+    expect(readme).toContain("miftah setup gsc --preset google-search-console");
+    expect(readme).toContain("one or more named Google accounts");
     expect(readme).toContain(
       "miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json"
     );

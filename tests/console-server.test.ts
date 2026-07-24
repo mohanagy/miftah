@@ -185,6 +185,295 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+async function submitMultiAccountGscPresetForm(
+  javascript: string,
+  options: { readonly firstProfileName?: string } = {}
+): Promise<{ readonly request?: Record<string, unknown>; readonly status: string }> {
+  type SubmitListener = (event: { readonly preventDefault: () => void }) => void | Promise<void>;
+  class FakeElement {
+    readonly dataset: Record<string, string> = {};
+    textContent = "";
+
+    addEventListener(name: string, listener: unknown): void {
+      void name;
+      void listener;
+    }
+
+    append(): void {}
+
+    replaceChildren(): void {}
+
+    querySelectorAll(selector?: string): readonly unknown[] {
+      void selector;
+      return [];
+    }
+  }
+  class FakeInput extends FakeElement {
+    required = false;
+
+    constructor(readonly value: string) {
+      super();
+    }
+  }
+  class FakeProfileRow extends FakeElement {
+    constructor(
+      private readonly name: FakeInput,
+      private readonly description: FakeInput,
+      private readonly clientSecrets: FakeInput
+    ) {
+      super();
+    }
+
+    querySelector(selector: string): unknown {
+      if (selector === "[data-gsc-profile-name]") return this.name;
+      if (selector === "[data-gsc-profile-description]") return this.description;
+      if (selector === "[data-gsc-client-secrets-file]") return this.clientSecrets;
+      return undefined;
+    }
+  }
+  class FakeAccountList extends FakeElement {
+    constructor(readonly rows: readonly FakeProfileRow[]) {
+      super();
+    }
+
+    querySelectorAll(selector: string): readonly unknown[] {
+      return selector === "[data-gsc-profile-row]" ? this.rows : [];
+    }
+  }
+  class FakeForm extends FakeElement {
+    readonly listeners = new Map<string, SubmitListener>();
+    readonly values: Record<string, string> = {
+      name: "gsc",
+      preset: "google-search-console",
+      defaultProfile: "google-craftmyletter"
+    };
+
+    addEventListener(name: string, listener: SubmitListener): void {
+      this.listeners.set(name, listener);
+    }
+
+    reset(): void {}
+  }
+  class FakeSelect extends FakeElement {
+    readonly listeners = new Map<string, () => void>();
+
+    constructor(public value: string) {
+      super();
+    }
+
+    addEventListener(name: string, listener: () => void): void {
+      this.listeners.set(name, listener);
+    }
+  }
+  class FakeFormData {
+    constructor(private readonly form: FakeForm) {}
+
+    get(name: string): string | null {
+      return this.form.values[name] ?? null;
+    }
+  }
+
+  const form = new FakeForm();
+  const selection = new FakeSelect("google-search-console");
+  const defaultProfile = new FakeSelect("google-craftmyletter");
+  const status = new FakeElement();
+  const accounts = new FakeAccountList([
+    new FakeProfileRow(
+      new FakeInput(options.firstProfileName ?? "google-govalidate"),
+      new FakeInput("GoValidate Google account"),
+      new FakeInput("/tmp/govalidate-client-secrets.json")
+    ),
+    new FakeProfileRow(
+      new FakeInput("google-craftmyletter"),
+      new FakeInput("CraftMyLetter Google account"),
+      new FakeInput("/tmp/craftmyletter-client-secrets.json")
+    )
+  ]);
+  const requests: Array<{ readonly path: string; readonly body?: string }> = [];
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "preset-onboarding-form") return form;
+        if (id === "preset-selection") return selection;
+        if (id === "gsc-account-list") return accounts;
+        if (id === "gsc-default-profile") return defaultProfile;
+        return undefined;
+      },
+      createElement: () => new FakeElement()
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: class {},
+    HTMLTextAreaElement: class {},
+    Element: class {},
+    FormData: FakeFormData,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown, options?: { readonly body?: unknown }) => {
+      const requestPath = String(path);
+      requests.push({
+        path: requestPath,
+        ...(typeof options?.body === "string" ? { body: options.body } : {})
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => requestPath === "/api/v1/config"
+          ? { data: { initialized: false } }
+          : { data: {} }
+      };
+    }
+  });
+
+  const submit = form.listeners.get("submit");
+  if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
+  await submit({ preventDefault: () => undefined });
+
+  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset");
+  return {
+    ...(request?.body === undefined ? {} : { request: JSON.parse(request.body) as Record<string, unknown> }),
+    status: status.textContent
+  };
+}
+
+function observePresetFieldConstraintState(javascript: string): {
+  readonly initial: Record<string, unknown>;
+  readonly googleSearchConsole: Record<string, unknown>;
+  readonly genericAfterGoogleSearchConsole: Record<string, unknown>;
+} {
+  class FakeElement {
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, () => void>();
+    id = "";
+    hidden = false;
+
+    addEventListener(name: string, listener: unknown): void {
+      if (typeof listener === "function") this.listeners.set(name, listener as () => void);
+    }
+
+    append(): void {}
+
+    replaceChildren(): void {}
+
+    querySelectorAll(selector?: string): readonly unknown[] {
+      void selector;
+      return [];
+    }
+  }
+  class FakeInput extends FakeElement {
+    disabled = false;
+    required = true;
+
+    constructor(public value: string, readonly name = "") {
+      super();
+    }
+  }
+  class FakeSelect extends FakeElement {
+    disabled = false;
+    required = true;
+
+    constructor(public value: string) {
+      super();
+    }
+  }
+  class FakeProfileRow extends FakeElement {
+    constructor(
+      private readonly name: FakeInput,
+      private readonly description: FakeInput,
+      private readonly clientSecrets: FakeInput
+    ) {
+      super();
+    }
+
+    querySelector(selector: string): unknown {
+      if (selector === "[data-gsc-profile-name]") return this.name;
+      if (selector === "[data-gsc-profile-description]") return this.description;
+      if (selector === "[data-gsc-client-secrets-file]") return this.clientSecrets;
+      return undefined;
+    }
+  }
+  class FakeAccountList extends FakeElement {
+    constructor(readonly rows: readonly FakeProfileRow[]) {
+      super();
+    }
+
+    querySelectorAll(selector: string): readonly unknown[] {
+      return selector === "[data-gsc-profile-row]" ? this.rows : [];
+    }
+  }
+  class FakePresetField extends FakeElement {
+    constructor(readonly controls: readonly (FakeInput | FakeSelect)[]) {
+      super();
+      this.dataset.presetField = "google-search-console";
+    }
+
+    querySelectorAll(selector: string): readonly unknown[] {
+      if (selector === "input") return this.controls.filter((control): control is FakeInput => control instanceof FakeInput);
+      if (selector === "input, select") return this.controls;
+      return [];
+    }
+  }
+  class FakeForm extends FakeElement {
+    constructor(readonly fields: readonly FakePresetField[]) {
+      super();
+    }
+
+    querySelectorAll(selector: string): readonly unknown[] {
+      return selector === "[data-preset-field]" ? this.fields : [];
+    }
+
+    reset(): void {}
+  }
+
+  const profileName = new FakeInput("google-work");
+  const description = new FakeInput("Work Google account");
+  const clientSecrets = new FakeInput("/tmp/work-client-secrets.json");
+  const defaultProfile = new FakeSelect("google-work");
+  profileName.dataset.gscProfileName = "true";
+  clientSecrets.dataset.gscClientSecretsFile = "true";
+  defaultProfile.id = "gsc-default-profile";
+  const field = new FakePresetField([profileName, description, clientSecrets, defaultProfile]);
+  const form = new FakeForm([field]);
+  const selection = new FakeSelect("generic");
+  const accounts = new FakeAccountList([new FakeProfileRow(profileName, description, clientSecrets)]);
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "preset-onboarding-form") return form;
+        if (id === "preset-selection") return selection;
+        if (id === "gsc-account-list") return accounts;
+        if (id === "gsc-default-profile") return defaultProfile;
+        return undefined;
+      },
+      createElement: () => new FakeElement()
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeElement,
+    HTMLTextAreaElement: FakeElement,
+    Element: FakeElement
+  });
+
+  const controls = () => ({
+    fieldHidden: field.hidden,
+    profileName: { required: profileName.required, disabled: profileName.disabled },
+    description: { required: description.required, disabled: description.disabled },
+    clientSecrets: { required: clientSecrets.required, disabled: clientSecrets.disabled },
+    defaultProfile: { required: defaultProfile.required, disabled: defaultProfile.disabled }
+  });
+  const initial = controls();
+  selection.value = "google-search-console";
+  selection.listeners.get("change")?.();
+  const googleSearchConsole = controls();
+  selection.value = "generic";
+  selection.listeners.get("change")?.();
+  return { initial, googleSearchConsole, genericAfterGoogleSearchConsole: controls() };
+}
+
 describe("local Console control server", () => {
   it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
     const server = await startConsoleServer(await writeConfig(), {
@@ -210,6 +499,8 @@ describe("local Console control server", () => {
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="preset-onboarding-view"');
+      expect(html).toContain('id="gsc-account-list"');
+      expect(html).toContain('id="gsc-default-profile"');
       expect(html).toContain("Active vs durable:");
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="provider-authentication-view"');
@@ -227,6 +518,53 @@ describe("local Console control server", () => {
         name: "analytics",
         preset: "generic",
         credentialEnv: "ANALYTICS_TOKEN"
+      });
+      await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
+        request: {
+          name: "gsc",
+          preset: "google-search-console",
+          googleSearchConsoleProfiles: [
+            {
+              name: "google-govalidate",
+              description: "GoValidate Google account",
+              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json"
+            },
+            {
+              name: "google-craftmyletter",
+              description: "CraftMyLetter Google account",
+              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
+            }
+          ],
+          defaultProfile: "google-craftmyletter"
+        }
+      });
+      await expect(submitMultiAccountGscPresetForm(javascript, {
+        firstProfileName: "Google account"
+      })).resolves.toEqual({
+        status: "Each Google Search Console profile name must use lowercase letters, digits, or hyphens."
+      });
+      expect(observePresetFieldConstraintState(javascript)).toEqual({
+        initial: {
+          fieldHidden: true,
+          profileName: { required: false, disabled: true },
+          description: { required: false, disabled: true },
+          clientSecrets: { required: false, disabled: true },
+          defaultProfile: { required: false, disabled: true }
+        },
+        googleSearchConsole: {
+          fieldHidden: false,
+          profileName: { required: true, disabled: false },
+          description: { required: false, disabled: false },
+          clientSecrets: { required: true, disabled: false },
+          defaultProfile: { required: true, disabled: false }
+        },
+        genericAfterGoogleSearchConsole: {
+          fieldHidden: true,
+          profileName: { required: false, disabled: true },
+          description: { required: false, disabled: true },
+          clientSecrets: { required: false, disabled: true },
+          defaultProfile: { required: false, disabled: true }
+        }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain("/api/v1/configurations/");
@@ -430,6 +768,97 @@ describe("local Console control server", () => {
           name: "support-tools",
           profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
         });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("accepts only structured multi-account GSC setup data", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const endpoint = new URL("/api/v1/onboarding/preset", server.url);
+        const request = {
+          name: "gsc",
+          preset: "google-search-console",
+          googleSearchConsoleProfiles: [
+            {
+              name: "google-govalidate",
+              description: "GoValidate Google account",
+              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json"
+            },
+            {
+              name: "google-craftmyletter",
+              description: "CraftMyLetter Google account",
+              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
+            }
+          ],
+          defaultProfile: "google-craftmyletter"
+        };
+        const secretBearing = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            ...request,
+            googleSearchConsoleProfiles: [{ ...request.googleSearchConsoleProfiles[0], accessToken: "must-not-be-accepted" }]
+          })
+        });
+        expect(secretBearing.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const missingDefault = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: request.name,
+            preset: request.preset,
+            googleSearchConsoleProfiles: request.googleSearchConsoleProfiles
+          })
+        });
+        expect(missingDefault.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const created = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(created.status).toBe(201);
+        expect(await created.json()).toMatchObject({
+          data: { name: "gsc", defaultProfile: "google-craftmyletter", profileCount: 2 }
+        });
+        const config = JSON.parse(await readFile(configPath, "utf8")) as {
+          readonly profiles: Record<string, {
+            readonly env: {
+              readonly GSC_CONFIG_DIR: string;
+              readonly GSC_OAUTH_CLIENT_SECRETS_FILE?: string;
+            };
+          }>;
+        };
+        expect(config.profiles).toMatchObject({
+          "google-govalidate": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" } },
+          "google-craftmyletter": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" } }
+        });
+        expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(2);
       } finally {
         await server.close();
       }

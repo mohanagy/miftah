@@ -207,6 +207,46 @@ describe("Console application service", () => {
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
   });
 
+  it("creates the same multi-account GSC configuration as the guided CLI path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-gsc-preset-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "gsc.json");
+    const service = new ConsoleApplicationService(configPath);
+    const govalidateSecrets = join(root, "govalidate-client-secrets.json");
+    const craftmyletterSecrets = join(root, "craftmyletter-client-secrets.json");
+    const request = {
+      name: "gsc",
+      preset: "google-search-console",
+      googleSearchConsoleProfiles: [
+        {
+          name: "google-govalidate",
+          description: "GoValidate Google account",
+          oauthClientSecretsFile: govalidateSecrets
+        },
+        {
+          name: "google-craftmyletter",
+          description: "CraftMyLetter Google account",
+          oauthClientSecretsFile: craftmyletterSecrets
+        }
+      ],
+      defaultProfile: "google-craftmyletter"
+    } as const;
+
+    await expect(service.onboardPreset(request)).resolves.toEqual({
+      changed: true,
+      write: true,
+      name: "gsc",
+      defaultProfile: "google-craftmyletter",
+      profileCount: 2,
+      actions: ["Created Miftah configuration 'gsc' from preset 'google-search-console'."]
+    });
+    const { name, preset, ...options } = request;
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(buildPresetConfig(name, preset, options, {
+      configurationPath: configPath
+    }));
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();
