@@ -82,7 +82,7 @@ export interface CliOptions {
   readonly noOpen?: true;
   /** Runs the provider-declared safe readiness check after `miftah setup` writes the configuration. */
   readonly verify?: true;
-  /** Discoveres standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
+  /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
   readonly nativeOAuth?: true;
   /** Makes the newly added endpoint-first OAuth account the durable default profile. */
   readonly makeDefault?: true;

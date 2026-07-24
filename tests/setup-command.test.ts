@@ -11,6 +11,7 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
 
 import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
+import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
@@ -182,6 +183,44 @@ describe("setup command", () => {
       expect(contents).not.toContain("Remote MCP HTTPS URL");
       expect(contents).not.toContain("OAuth issuer URL");
       expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("uses the injected discovery fetch when adding a native OAuth account", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "injected-fetch-account.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: {} }
+    }, null, 2), { mode: 0o600 });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const contextFetch = vi.fn(async (): Promise<Response> => {
+      throw new Error("context discovery fetch must not be used");
+    });
+    const injectedFetch = vi.fn(upstream.fetch);
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+
+    try {
+      await expect(runNativeOAuthSetup({
+        config: configPath,
+        profile: "personal",
+        upstream: "default"
+      }, {
+        input,
+        output,
+        cwd: outputRoot,
+        launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+        nativeOAuthFetch: contextFetch
+      }, { fetch: injectedFetch })).resolves.toBeUndefined();
+
+      expect(injectedFetch).toHaveBeenCalled();
+      expect(contextFetch).not.toHaveBeenCalled();
     } finally {
       await upstream.close();
     }

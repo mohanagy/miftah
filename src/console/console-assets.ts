@@ -390,6 +390,7 @@ const script = `(() => {
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
   const nativeOAuthEditor = byId("native-oauth-editor");
+  const nativeOAuthAccountEditor = byId("native-oauth-account-editor");
   const presetInputNames = Object.freeze({
     generic: ["credentialEnv"],
     "github": [],
@@ -638,6 +639,7 @@ const script = `(() => {
     const nativeOAuth = authentication.mode === "miftah-native-oauth";
     if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter && !manualOnly;
     if (nativeOAuthEditor) nativeOAuthEditor.hidden = !nativeOAuth;
+    if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;
     if (!providerAuthenticationCopy) return;
     if (manualOnly) {
       providerAuthenticationCopy.textContent = "This configuration includes local upstream settings outside Miftah's reviewed adapter envelope. Miftah will not take over OAuth here; use each upstream's documented authentication setup.";

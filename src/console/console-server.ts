@@ -31,6 +31,7 @@ const connectionsCheckingIntervalMs = 5_000;
 const maximumHeaderBytes = 16 * 1024;
 const sessionCookieName = "miftah_console_session";
 const bootstrapSchema = z.object({}).strict();
+const httpsUrlSchema = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:");
 const connectionAddSchema = z.object({
   connectionRef: z.string().min(1).max(512).optional(),
   profile: z.string().min(1).max(256),
@@ -62,7 +63,7 @@ const discoveredNativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
   description: z.string().max(1_024).optional(),
-  resource: z.string().url().max(2_048)
+  resource: httpsUrlSchema
 }).strict();
 const googleSearchConsoleProfileSchema = z.object({
   name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
@@ -293,7 +294,7 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
     return new ConsoleHttpError(
       422,
       "oauth_resource_invalid",
-      "The selected upstream must be an exact HTTPS Streamable HTTP MCP."
+      "The MCP endpoint must be an exact HTTPS Streamable HTTP URL."
     );
   }
   if (error.code === "PROFILE_ALREADY_EXISTS") {
@@ -679,6 +680,7 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
+    // This exact route must precede the broad /connections/:reference status route below.
     if (request.url === "/api/v1/connections/discover") {
       if (request.method !== "POST") {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });

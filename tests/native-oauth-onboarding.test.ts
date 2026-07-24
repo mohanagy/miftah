@@ -1,7 +1,11 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   planNativeOAuthAccountAddition,
-  planNativeOAuthFirstRunConfiguration
+  planNativeOAuthFirstRunConfiguration,
+  runNativeOAuthAccountAddition
 } from "../src/setup/native-oauth-onboarding.js";
 import {
   startOAuthCompatibilityProbe,
@@ -15,9 +19,11 @@ const secondConnectionRef = `oauthconn:${secondConnectionId}`;
 
 describe("native OAuth first-run onboarding", () => {
   const upstreams: OAuthCompatibilityProbe[] = [];
+  const temporaryDirectories: string[] = [];
 
   afterEach(async () => {
     await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
+    await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   });
 
   it("derives one strict dynamic OAuth configuration from only a canonical remote MCP endpoint", async () => {
@@ -211,5 +217,67 @@ describe("native OAuth first-run onboarding", () => {
       profile: "work",
       upstream: "default"
     }, { fetch })).rejects.toMatchObject({ code: "PROFILE_ALREADY_EXISTS" });
+  });
+
+  it("requires an explicit named upstream for multi-upstream account additions", async () => {
+    const input = {
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstreams: {
+        analytics: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+      },
+      profiles: { work: {} }
+    };
+    const noFetch = async (): Promise<Response> => {
+      throw new Error("metadata discovery must not run without an upstream selection");
+    };
+
+    await expect(planNativeOAuthAccountAddition(input, { profile: "personal" }, { fetch: noFetch }))
+      .rejects.toMatchObject({ code: "OAUTH_CONNECTION_TARGET_REQUIRED" });
+
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    upstreams.push(upstream);
+    await expect(planNativeOAuthAccountAddition(input, {
+      profile: "personal",
+      upstream: "analytics"
+    }, {
+      generateConnectionRef: () => secondConnectionId,
+      fetch: upstream.fetch
+    })).resolves.toMatchObject({
+      profile: "personal",
+      upstream: "analytics",
+      discovery: { resource: "https://mcp.example.test/mcp" }
+    });
+  });
+
+  it("reports the guarded migration backup after adding an OAuth account", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-native-oauth-account-backup-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    const original = `${JSON.stringify({
+      version: "2",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: {} }
+    }, null, 2)}\n`;
+    await writeFile(configPath, original, "utf8");
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    upstreams.push(upstream);
+
+    const result = await runNativeOAuthAccountAddition({
+      configPath,
+      profile: "personal",
+      upstream: "default"
+    }, {
+      generateConnectionRef: () => secondConnectionId,
+      fetch: upstream.fetch
+    });
+
+    expect(result).toHaveProperty("backupPath", expect.stringContaining("analytics.json.miftah-backup-"));
+    const backupPath = (result as { readonly backupPath?: string }).backupPath;
+    expect(backupPath).toBeDefined();
+    expect(await readFile(backupPath!, "utf8")).toBe(original);
   });
 });

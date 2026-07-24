@@ -70,6 +70,8 @@ export interface NativeOAuthAccountAdditionReport {
   readonly upstream: string;
   readonly resource: string;
   readonly actions: readonly string[];
+  /** A byte-exact recovery copy created when migration rewrote the selected configuration. */
+  readonly backupPath?: string;
 }
 
 export interface NativeOAuthAccountAdditionAuditSink {
@@ -141,7 +143,7 @@ function profileMetadata(description: string | undefined): Record<string, string
   return description === undefined || description.length === 0 ? {} : { description };
 }
 
-function selectedExistingUpstream(
+export function selectedExistingUpstream(
   config: MiftahConfig,
   requestedUpstream: string | undefined
 ): { readonly name: string; readonly config: UpstreamConfig & { readonly url: string } } {
@@ -277,7 +279,7 @@ export async function runNativeOAuthAccountAddition(
   const plan = await planNativeOAuthAccountAddition(sourceInput(source), options, dependencies);
   const audit = dependencies.audit ?? configuredAuditSink(plan.config);
   await audit?.ensureWritable();
-  await applyConfigReplacement(configPath, source, plan.config);
+  const backupPath = await applyConfigReplacement(configPath, source, plan.config);
   await audit?.record({ profile: plan.profile, upstream: plan.upstream, status: "success" });
   return {
     changed: true,
@@ -286,6 +288,7 @@ export async function runNativeOAuthAccountAddition(
     profile: plan.profile,
     upstream: plan.upstream,
     resource: plan.discovery.resource,
-    actions: plan.actions
+    actions: plan.actions,
+    backupPath
   };
 }

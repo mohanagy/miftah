@@ -324,6 +324,9 @@ describe("Console dashboard application service", () => {
         profiles: { work: {}, personal: { description: "Personal analytics" } },
         oauth: { connections: expect.any(Object) }
       });
+      await expect(service.addDiscoveredNativeOAuthAccount(request)).rejects.toMatchObject({
+        code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+      });
       expect(upstream.registrationRequests()).toEqual([]);
     } finally {
       await upstream.close();

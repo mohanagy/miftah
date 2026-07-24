@@ -231,7 +231,7 @@ export async function runNativeOAuthSetup(
       upstream: values.upstream,
       ...(values.makeDefault ? { makeDefault: true } : {})
     }, {
-      ...(context.nativeOAuthFetch === undefined ? {} : { fetch: context.nativeOAuthFetch })
+      ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch })
     });
     context.output.write(`OAuth discovery completed for ${result.resource}.\n`);
     context.output.write(`Added account profile '${result.profile}' to ${resolveOutputPath(values.configPath, context.cwd)}.\n`);

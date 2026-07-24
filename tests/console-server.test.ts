@@ -854,6 +854,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value, upstream: upstream.value }');
       expect(javascript).toContain("provider-adapter");
       expect(javascript).toContain("This provider owns its browser login");
+      expect(javascript).toContain('const nativeOAuthAccountEditor = byId("native-oauth-account-editor");');
+      expect(javascript).toContain("if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
       expect(javascript).toContain("statusErrorCode");
       expect(javascript).toContain("restoreUnlock");
@@ -953,6 +955,22 @@ describe("local Console control server", () => {
         body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
       });
       expect(secretBearing.status).toBe(422);
+      await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      const insecureEndpoint = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ ...request, resource: "http://mcp.example.test/mcp" })
+      });
+      expect(insecureEndpoint.status).toBe(422);
+      expect(await insecureEndpoint.json()).toEqual({
+        error: { code: "validation_error", message: "The request body is invalid." }
+      });
       await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
       const created = await fetch(endpoint, {
@@ -2078,7 +2096,7 @@ describe("local Console control server", () => {
       expect(await response.json()).toEqual({
         error: {
           code: "oauth_resource_invalid",
-          message: "The selected upstream must be an exact HTTPS Streamable HTTP MCP."
+          message: "The MCP endpoint must be an exact HTTPS Streamable HTTP URL."
         }
       });
       expect(await readFile(configPath, "utf8")).toBe(original);

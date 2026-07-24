@@ -12,7 +12,7 @@ import {
   PresetCatalogError
 } from "../config/presets.js";
 import type { PresetBuildOptions } from "../config/presets.js";
-import type { MiftahConfig, UpstreamConfig } from "../config/types.js";
+import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { AuditTrail, type AuditLifecycleInput } from "../audit/audit-trail.js";
@@ -39,6 +39,7 @@ import {
 import {
   planNativeOAuthFirstRunConfiguration,
   runNativeOAuthAccountAddition,
+  selectedExistingUpstream,
   type NativeOAuthAccountAdditionAuditSink
 } from "../setup/native-oauth-onboarding.js";
 import {
@@ -78,6 +79,7 @@ export interface ConsoleConnectionAddRequest extends OAuthConnectionAddRequest {
   readonly connectionRef?: string;
 }
 
+/** Console responses never expose local configuration or recovery-file paths. */
 export type ConsoleConnectionAddReport = Omit<ConnectionAddCommandReport, "backupPath">;
 
 export interface ConsoleNativeOAuthOnboardingRequest {
@@ -239,25 +241,11 @@ function selectedNativeOAuthUpstream(
   config: MiftahConfig,
   profile: string,
   upstream: string
-): UpstreamConfig {
+): ReturnType<typeof selectedExistingUpstream> {
   if (!Object.hasOwn(config.profiles, profile)) {
     throw new MiftahError("PROFILE_NOT_FOUND", "PROFILE_NOT_FOUND: profile does not exist");
   }
-  const selected = config.upstream === undefined
-    ? config.upstreams?.[upstream]
-    : upstream === "default"
-      ? config.upstream
-      : undefined;
-  if (selected === undefined) {
-    throw new MiftahError("UPSTREAM_NOT_FOUND", "UPSTREAM_NOT_FOUND: upstream does not exist");
-  }
-  if (selected.transport !== "streamable-http" || typeof selected.url !== "string" || selected.url.length === 0) {
-    throw new MiftahError(
-      "OAUTH_RESOURCE_INVALID",
-      "OAUTH_RESOURCE_INVALID: endpoint-first OAuth requires the selected upstream to be Streamable HTTP over exact HTTPS"
-    );
-  }
-  return selected;
+  return selectedExistingUpstream(config, upstream);
 }
 
 function consoleAuditPath(configPath: string): string {
@@ -613,23 +601,24 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   async addDiscoveredNativeOAuthConnection(
     request: ConsoleDiscoveredNativeOAuthConnectionRequest
   ): Promise<ConsoleConnectionAddReport> {
-    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(this.configPath);
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
     const config = this.trustedConfiguration?.config ?? configFromMigrationSource(source);
     const selected = selectedNativeOAuthUpstream(config, request.profile, request.upstream);
     const connectionRef = parseOAuthConnectionRef(`oauthconn:${this.generateConnectionRef()}`);
     const discovery = await discoverNativeOAuthConnection({
-      resource: selected.url as string,
+      resource: selected.config.url,
       profile: request.profile,
-      upstream: request.upstream,
+      upstream: selected.name,
       connectionRef
     }, {
       ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch })
     });
     const result = await runConnectionAddCommand({
-      configPath: this.configPath,
+      configPath,
       connectionRef,
       profile: request.profile,
-      upstream: request.upstream,
+      upstream: selected.name,
       issuer: discovery.issuer,
       clientRegistration: discovery.clientRegistration,
       scopes: discovery.advertisedScopes,
@@ -652,9 +641,10 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   async addDiscoveredNativeOAuthAccount(
     request: ConsoleDiscoveredNativeOAuthAccountRequest
   ): Promise<ConsoleConnectionAddReport> {
-    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(this.configPath);
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
     const result = await runNativeOAuthAccountAddition({
-      configPath: this.configPath,
+      configPath,
       profile: request.profile,
       ...(request.description === undefined ? {} : { description: request.description }),
       upstream: request.upstream,
@@ -665,7 +655,15 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       trustedSource: source,
       audit: new ConsoleNativeOAuthAccountAuditSink(this.audit)
     });
-    return result;
+    return {
+      changed: result.changed,
+      write: result.write,
+      connectionRef: result.connectionRef,
+      profile: result.profile,
+      upstream: result.upstream,
+      resource: result.resource,
+      actions: result.actions
+    };
   }
 
   connect(connectionRef: string): Promise<unknown> {
