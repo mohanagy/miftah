@@ -38,6 +38,7 @@ Every request must use the exact listener `Host`. Browser mutations, including b
 | Method and path | Purpose |
 | --- | --- |
 | `POST /api/v1/sessions` | Exchange the one-use bootstrap code for one browser session. |
+| `POST /api/v1/onboarding/preset` | Exclusively create the first validated configuration from a reviewed preset and safe connector metadata. Requires CSRF; raw credential values are rejected. |
 | `POST /api/v1/onboarding/native-oauth` | Exclusively create the first validated v3 native-OAuth profile, upstream, and connection. Requires CSRF and refuses an existing file. |
 | `GET /api/v1/health` | Return safe config identity, Console audit health, and restart-required guidance. |
 | `GET /api/v1/config` | Return allowlisted configuration metadata only. |

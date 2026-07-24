@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import { buildPresetConfig } from "../src/config/presets.js";
 import {
   discoverConsoleConfigCatalog,
   trustedConfigurationFor
@@ -169,6 +170,40 @@ describe("Console application service", () => {
       issuer: "https://auth.other.example.test",
       clientRegistration: "dynamic",
       scopes: []
+    })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
+  });
+
+  it("creates a first-run known connector through the shared preset setup path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-preset-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+
+    const created = await service.onboardPreset({
+      name: "support-tools",
+      preset: "generic-npx",
+      npmPackage: "@scope/server@1.2.3",
+      credentialEnv: "SUPPORT_TOKEN"
+    });
+
+    expect(created).toEqual({
+      changed: true,
+      write: true,
+      name: "support-tools",
+      defaultProfile: "default",
+      profileCount: 1,
+      actions: ["Created Miftah configuration 'support-tools' from preset 'generic-npx'."]
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(
+      buildPresetConfig("support-tools", "generic-npx", {
+        npmPackage: "@scope/server@1.2.3",
+        credentialEnv: "SUPPORT_TOKEN"
+      })
+    );
+    await expect(service.onboardPreset({
+      name: "replacement",
+      preset: "generic"
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
   });
 

@@ -101,6 +101,23 @@ export const CLI_COMMANDS = {
       "oauthClientSecretsFile"
     ]
   },
+  setup: {
+    description: "Start the guided MCP setup flow.",
+    arguments: "[name]",
+    options: [
+      "name",
+      "preset",
+      "output",
+      "client",
+      "credentialEnv",
+      "npmPackage",
+      "dockerImage",
+      "url",
+      "headerName",
+      "headerPrefix",
+      "oauthClientSecretsFile"
+    ]
+  },
   "list-tools": {
     description: "List tools available for a profile.",
     options: ["config", "profile"]
@@ -535,11 +552,11 @@ export function parseCli(argv: readonly string[]): CliInvocation {
       continue;
     }
 
-    if (command === "init" && options.name === undefined) {
+    if ((command === "init" || command === "setup") && options.name === undefined) {
       options.name = token;
       continue;
     }
-    if (command === "init") usageError("The init command accepts only one name.");
+    if (command === "init" || command === "setup") usageError(`The ${command} command accepts only one name.`);
     usageError(`Unexpected positional argument '${token}'.`);
   }
 

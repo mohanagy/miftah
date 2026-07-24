@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
@@ -8,6 +8,11 @@ import type { PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
+import {
+  createSetupConfigurationPlan,
+  publishSetupConfigurationPlan,
+  type SetupConfigurationPlan
+} from "../setup/setup-configuration.js";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
@@ -55,7 +60,7 @@ interface InitValues extends PresetBuildOptions {
 
 interface InitPlan {
   readonly output: string;
-  readonly config: MiftahConfig;
+  readonly configuration: SetupConfigurationPlan;
   readonly snippets: readonly ClientSnippet[];
   readonly claudeCodePermissionGuidance?: ClaudeCodePermissionGuidance;
   readonly providerAdapter?: ProviderAdapterDefinition;
@@ -294,7 +299,7 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
 
   return {
     output,
-    config,
+    configuration: createSetupConfigurationPlan({ configPath: output, config }),
     snippets,
     claudeCodePermissionGuidance,
     providerAdapter: getProviderAdapterForPreset(values.preset)
@@ -351,7 +356,7 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
 
   await mkdir(dirname(plan.output), { recursive: true });
   try {
-    await writeFile(plan.output, `${JSON.stringify(plan.config, null, 2)}\n`, { flag: "wx" });
+    await publishSetupConfigurationPlan(plan.configuration);
   } catch (error) {
     if (isExistingOutputError(error)) {
       usageError(`Output '${plan.output}' already exists.`);

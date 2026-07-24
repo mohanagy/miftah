@@ -3,10 +3,12 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
 import { resolvePath } from "../config/path-resolve.js";
+import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
+import type { PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 import { AuditLogger } from "../audit/audit-logger.js";
-import { AuditTrail } from "../audit/audit-trail.js";
+import { AuditTrail, type AuditLifecycleInput } from "../audit/audit-trail.js";
 import type {
   ConnectionAddCommandReport,
   ConnectionApplicationAuditEvent,
@@ -22,7 +24,10 @@ import { SecretRedactor } from "../secrets/redact.js";
 import { loadConfig } from "../config/load-config.js";
 import { MiftahError } from "../utils/errors.js";
 import { parseOAuthConnectionRef } from "../oauth/connection-types.js";
-import { writeNewConfigFile } from "../cli/migrate-config.js";
+import {
+  createSetupConfigurationPlan,
+  publishSetupConfigurationPlan
+} from "../setup/setup-configuration.js";
 import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
@@ -64,6 +69,22 @@ export interface ConsoleNativeOAuthOnboardingRequest {
   readonly scopes: readonly string[];
 }
 
+/** Non-secret input accepted for a known connector during first-run setup. */
+export interface ConsolePresetOnboardingRequest extends PresetBuildOptions {
+  readonly name: string;
+  readonly preset: string;
+}
+
+/** Redacted outcome of creating one preset-backed Miftah configuration. */
+export interface ConsolePresetOnboardingReport {
+  readonly changed: true;
+  readonly write: true;
+  readonly name: string;
+  readonly defaultProfile: string;
+  readonly profileCount: number;
+  readonly actions: readonly string[];
+}
+
 export interface ConsoleAuditRecord {
   readonly timestamp?: string;
   readonly kind?: string;
@@ -91,6 +112,8 @@ export interface ConsoleControlApplication {
   configMetadata(): Promise<ConsoleConfigMetadata>;
   /** Available only for a dashboard started without an explicit --config path. */
   selectConfiguration?(configurationId: string): Promise<ConsoleConfigMetadata>;
+  /** Available only when the embedding supports first-run known-connector setup. */
+  onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -265,24 +288,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       }
     };
     validateConfig(config);
-    const path = resolvePath(this.configPath);
-    await ensureFirstRunConfigDirectory(path);
-    await this.audit.ensureWritable();
-    try {
-      await writeNewConfigFile(path, `${JSON.stringify(config, null, 2)}\n`);
-    } catch (error) {
-      if (fileErrorCode(error) === "EEXIST") {
-        throw new MiftahError(
-          "CONFIG_ALREADY_EXISTS",
-          "CONFIG_ALREADY_EXISTS: refusing to replace an existing configuration"
-        );
-      }
-      throw new MiftahError(
-        "CONFIG_CREATE_FAILED",
-        "CONFIG_CREATE_FAILED: unable to create the initial configuration"
-      );
-    }
-    await this.audit.writeRequiredLifecycle({
+    await this.publishFirstRunConfiguration(config, {
       operation: "console/onboard-native-oauth",
       name: "connection",
       profile: request.profile,
@@ -300,6 +306,42 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
         `Created profile '${request.profile}'.`,
         `Added OAuth connection for profile '${request.profile}' and upstream 'default'.`
       ]
+    };
+  }
+
+  async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
+    let config: MiftahConfig;
+    try {
+      config = buildPresetConfig(request.name, request.preset, {
+        credentialEnv: request.credentialEnv,
+        npmPackage: request.npmPackage,
+        dockerImage: request.dockerImage,
+        url: request.url,
+        headerName: request.headerName,
+        headerPrefix: request.headerPrefix,
+        oauthClientSecretsFile: request.oauthClientSecretsFile
+      });
+      validateConfig(config);
+    } catch (error) {
+      if (error instanceof PresetCatalogError) {
+        throw new MiftahError("CONFIG_SCHEMA_INVALID", "CONFIG_SCHEMA_INVALID: the requested setup connector is not valid");
+      }
+      throw error;
+    }
+    await this.publishFirstRunConfiguration(config, {
+      operation: "console/onboard-preset",
+      name: "configuration",
+      profile: config.defaultProfile,
+      upstream: "default",
+      status: "success"
+    });
+    return {
+      changed: true,
+      write: true,
+      name: config.name,
+      defaultProfile: config.defaultProfile,
+      profileCount: Object.keys(config.profiles).length,
+      actions: [`Created Miftah configuration '${config.name}' from preset '${request.preset}'.`]
     };
   }
 
@@ -377,6 +419,30 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
 
   private async config(): Promise<MiftahConfig> {
     return this.trustedConfiguration?.config ?? loadConfig(this.configPath);
+  }
+
+  private async publishFirstRunConfiguration(
+    config: MiftahConfig,
+    audit: Pick<AuditLifecycleInput, "operation" | "name" | "profile" | "upstream" | "status">
+  ): Promise<void> {
+    const setup = createSetupConfigurationPlan({ configPath: this.configPath, config });
+    await ensureFirstRunConfigDirectory(setup.path);
+    await this.audit.ensureWritable();
+    try {
+      await publishSetupConfigurationPlan(setup);
+    } catch (error) {
+      if (fileErrorCode(error) === "EEXIST") {
+        throw new MiftahError(
+          "CONFIG_ALREADY_EXISTS",
+          "CONFIG_ALREADY_EXISTS: refusing to replace an existing configuration"
+        );
+      }
+      throw new MiftahError(
+        "CONFIG_CREATE_FAILED",
+        "CONFIG_CREATE_FAILED: unable to create the initial configuration"
+      );
+    }
+    await this.audit.writeRequiredLifecycle(audit);
   }
 
   private async runConnectionMutation(

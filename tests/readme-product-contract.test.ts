@@ -54,6 +54,8 @@ describe("product README", () => {
 
   it("gives a first-time user complete setup and profile-selection journeys", () => {
     expect(readme).toContain("## Choose your setup path");
+    expect(readme).toContain("miftah setup");
+    expect(readme).toContain("never asks for a token, password, or browser cookie");
     expect(readme).toContain("## First setup: GitHub with Claude Desktop");
     expect(readme).toContain("Developer → Edit Config");
     expect(readme).toContain("restart Claude Desktop");

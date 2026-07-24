@@ -45,6 +45,17 @@ const nativeOAuthOnboardingSchema = z.object({
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
 }).strict();
+const presetOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  preset: z.string().min(1).max(128),
+  credentialEnv: z.string().min(1).max(256).optional(),
+  npmPackage: z.string().min(1).max(1_024).optional(),
+  dockerImage: z.string().min(1).max(2_048).optional(),
+  url: z.string().min(1).max(2_048).optional(),
+  headerName: z.string().min(1).max(256).optional(),
+  headerPrefix: z.string().max(256).optional(),
+  oauthClientSecretsFile: z.string().min(1).max(4_096).optional()
+}).strict();
 
 interface BrowserSession {
   readonly id: string;
@@ -406,6 +417,25 @@ class LocalConsoleServer implements ConsoleServer {
       if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
       try {
         const result = await this.application.onboardNativeOAuth(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/preset") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = presetOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardPreset === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardPreset(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result });
       } catch (error) {

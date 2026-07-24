@@ -1,4 +1,4 @@
-import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -128,6 +128,30 @@ describe("Console dashboard application service", () => {
       clientRegistration: "dynamic",
       scopes: []
     })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
+  it("creates a first known connector through the same dashboard setup boundary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-preset-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
+
+    await expect(service.onboardPreset({
+      name: "support-tools",
+      preset: "generic-npx",
+      npmPackage: "@scope/server@1.2.3"
+    })).resolves.toMatchObject({ name: "support-tools", defaultProfile: "default" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      name: "support-tools",
+      upstream: { args: ["--yes", "@scope/server@1.2.3"] }
+    });
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
   it("selects an explicitly discovered configuration", async () => {

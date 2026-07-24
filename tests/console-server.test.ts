@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   startConsoleServer,
@@ -98,6 +99,92 @@ async function bootstrapSession(server: Awaited<ReturnType<typeof startConsoleSe
   return { cookie, csrfToken: body.data.csrfToken };
 }
 
+async function submitPresetFormWithStaleValue(javascript: string): Promise<Record<string, unknown>> {
+  type SubmitListener = (event: { readonly preventDefault: () => void }) => void | Promise<void>;
+  class FakeForm {
+    readonly listeners = new Map<string, SubmitListener>();
+    readonly values: Record<string, string> = {
+      name: "analytics",
+      preset: "generic-npx",
+      credentialEnv: "ANALYTICS_TOKEN",
+      npmPackage: "@vendor/mcp-server@1.2.3"
+    };
+
+    addEventListener(name: string, listener: SubmitListener): void {
+      this.listeners.set(name, listener);
+    }
+
+    querySelectorAll(): readonly unknown[] {
+      return [];
+    }
+
+    reset(): void {}
+  }
+  class FakeSelect {
+    value = "generic-npx";
+    readonly listeners = new Map<string, () => void>();
+
+    addEventListener(name: string, listener: () => void): void {
+      this.listeners.set(name, listener);
+    }
+  }
+  class FakeFormData {
+    constructor(private readonly form: FakeForm) {}
+
+    get(name: string): string | null {
+      return this.form.values[name] ?? null;
+    }
+  }
+
+  const form = new FakeForm();
+  const selection = new FakeSelect();
+  const requests: Array<{ readonly path: string; readonly body?: string }> = [];
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "preset-onboarding-form") return form;
+        if (id === "preset-selection") return selection;
+        return undefined;
+      }
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: class {},
+    HTMLInputElement: class {},
+    HTMLButtonElement: class {},
+    HTMLTextAreaElement: class {},
+    Element: class {},
+    FormData: FakeFormData,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown, options?: { readonly body?: unknown }) => {
+      const requestPath = String(path);
+      requests.push({
+        path: requestPath,
+        ...(typeof options?.body === "string" ? { body: options.body } : {})
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => requestPath === "/api/v1/config"
+          ? { data: { initialized: false } }
+          : { data: {} }
+      };
+    }
+  });
+
+  // Model a user entering a package for generic-npx, then changing to generic.
+  selection.value = "generic";
+  form.values.preset = "generic";
+  selection.listeners.get("change")?.();
+  const submit = form.listeners.get("submit");
+  if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
+  await submit({ preventDefault: () => undefined });
+
+  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset");
+  if (request?.body === undefined) throw new Error("Expected a preset onboarding request.");
+  return JSON.parse(request.body) as Record<string, unknown>;
+}
+
 describe("local Console control server", () => {
   it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
     const server = await startConsoleServer(await writeConfig(), {
@@ -121,6 +208,8 @@ describe("local Console control server", () => {
       expect(html).toContain("Provider adapter");
       expect(html).toContain("Upstream-owned auth");
       expect(html).toContain("Unsupported state");
+      expect(html).toContain("Set up an MCP");
+      expect(html).toContain('id="preset-onboarding-view"');
       expect(html).toContain("Active vs durable:");
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="provider-authentication-view"');
@@ -133,6 +222,12 @@ describe("local Console control server", () => {
       const javascript = await script.text();
       expect(javascript).toContain("/api/v1/sessions");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth");
+      expect(javascript).toContain("/api/v1/onboarding/preset");
+      await expect(submitPresetFormWithStaleValue(javascript)).resolves.toEqual({
+        name: "analytics",
+        preset: "generic",
+        credentialEnv: "ANALYTICS_TOKEN"
+      });
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain("/api/v1/configurations/");
       expect(javascript).toContain("provider-adapter");
@@ -268,6 +363,76 @@ describe("local Console control server", () => {
     } finally {
       await server.close();
     }
+    });
+
+    it("supports a CSRF-protected first-run known connector setup without accepting raw secrets", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const endpoint = new URL("/api/v1/onboarding/preset", server.url);
+        const request = {
+          name: "support-tools",
+          preset: "generic-npx",
+          npmPackage: "@scope/server@1.2.3",
+          credentialEnv: "SUPPORT_TOKEN"
+        };
+        const missingCsrf = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(missingCsrf.status).toBe(403);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const secretBearing = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
+        });
+        expect(secretBearing.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const created = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(created.status).toBe(201);
+        expect(await created.json()).toEqual({
+          data: {
+            changed: true,
+            write: true,
+            name: "support-tools",
+            defaultProfile: "default",
+            profileCount: 1,
+            actions: ["Created Miftah configuration 'support-tools' from preset 'generic-npx'."]
+          }
+        });
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          name: "support-tools",
+          profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
+        });
+      } finally {
+        await server.close();
+      }
     });
   });
 
