@@ -708,6 +708,69 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
   });
 
+  it("expands the effective Windows profile environment before direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-expansion", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    const environmentVariable = "MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH";
+    const originalValue = process.env[environmentVariable];
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-expansion",
+      {
+        version: "1",
+        name: "windows-path-expansion",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            upstreams: { primary: { env: { Path: `\${${environmentVariable}}` } } }
+          }
+        },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      }
+    );
+
+    process.env[environmentVariable] = "C:\\tools";
+    try {
+      const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+      expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
+    } finally {
+      if (originalValue === undefined) delete process.env[environmentVariable];
+      else process.env[environmentVariable] = originalValue;
+    }
+  });
+
+  it("resolves target secret references before Windows direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-secret-reference", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-secret-reference",
+      {
+        version: "1",
+        name: "windows-path-secret-reference",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            upstreams: { primary: { env: { Path: "secretref:dotenv://MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH" } } }
+          }
+        },
+        secrets: { envFiles: [".env"] },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      },
+      { MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH: "C:\\tools" }
+    );
+
+    const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
+    expect(JSON.stringify(report)).not.toContain("C:\\tools");
+  });
+
   it("does not leak secrets when initialization fails", async () => {
     const secret = "doctor-initialize-secret";
     const { configPath } = await writeConfig(

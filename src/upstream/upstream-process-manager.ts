@@ -43,6 +43,30 @@ export function mergeEnvironment(...environmentSets: Array<Record<string, string
   return Object.fromEntries(merged.values());
 }
 
+/** Expands configured process environment values and applies the runtime's launch precedence. */
+export function resolveProcessEnvironment(
+  upstreamEnvironment: Record<string, string> | undefined,
+  profileEnvironment: Record<string, string> | undefined
+): { environment: Record<string, string>; secretValues: string[] } {
+  const expandedUpstreamEnvironment = upstreamEnvironment
+    ? expandEnvironmentReferencesWithSecretValues(upstreamEnvironment)
+    : undefined;
+  const expandedProfileEnvironment = profileEnvironment
+    ? expandEnvironmentReferencesWithSecretValues(profileEnvironment)
+    : undefined;
+  return {
+    environment: mergeEnvironment(
+      getDefaultEnvironment(),
+      expandedUpstreamEnvironment?.values,
+      expandedProfileEnvironment?.values
+    ),
+    secretValues: [
+      ...(expandedUpstreamEnvironment?.secretValues ?? []),
+      ...(expandedProfileEnvironment?.secretValues ?? [])
+    ]
+  };
+}
+
 /** Configures lifecycle behavior, capacity, and redacted diagnostics for an upstream manager. */
 export interface UpstreamManagerOptions {
   startupTimeoutMs?: number;
@@ -560,19 +584,12 @@ export class UpstreamProcessManager {
     args: string[];
     suppressStderr: boolean;
   }> {
-    const upstreamEnvironment = this.upstream.env
-      ? expandEnvironmentReferencesWithSecretValues(this.upstream.env)
-      : undefined;
-    const profileEnvironment = profile.env ? expandEnvironmentReferencesWithSecretValues(profile.env) : undefined;
+    const resolvedEnvironment = resolveProcessEnvironment(this.upstream.env, profile.env);
     const upstreamHeaders = this.upstream.headers
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.headers)
       : undefined;
     const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
-    const baseEnvironment = mergeEnvironment(
-      getDefaultEnvironment(),
-      upstreamEnvironment?.values,
-      profileEnvironment?.values
-    );
+    const baseEnvironment = resolvedEnvironment.environment;
     let isolationEnvironment: Record<string, string> | undefined;
     let suppressStderr = false;
     if (profile.isolation !== undefined) {
@@ -598,8 +615,7 @@ export class UpstreamProcessManager {
     const environment = mergeEnvironment(baseEnvironment, isolationEnvironment);
     const headers = mergeHeaders(upstreamHeaders?.values, profileHeaders?.values);
     for (const value of [
-      ...(upstreamEnvironment?.secretValues ?? []),
-      ...(profileEnvironment?.secretValues ?? []),
+      ...resolvedEnvironment.secretValues,
       ...(upstreamHeaders?.secretValues ?? []),
       ...(profileHeaders?.secretValues ?? [])
     ]) {

@@ -335,6 +335,14 @@ describe("preset catalog", () => {
     );
   });
 
+  it("validates generic-npx input before rejecting its Windows package runner", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() =>
+      buildPresetConfig("npx", "generic-npx", { npmPackage: null as unknown as string })
+    ).toThrow("Preset option 'npmPackage' must be a string.");
+  });
+
   it("accepts only safe streamable HTTP credential header inputs", () => {
     const config = buildPresetConfig("remote", "streamable-http", {
       url: "https://mcp.example.com/v1",

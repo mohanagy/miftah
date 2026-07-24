@@ -726,15 +726,15 @@ export function buildPresetConfig(
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];
   validatePresetOptions(preset, definition.requirements, options);
+  const config = preset === "google-search-console"
+    ? buildGoogleSearchConsolePreset(name, options, context)
+    : definition.build(name, options);
   if (isWindowsNpxPresetUnavailable(preset)) {
     catalogError(
       `Preset '${preset}' uses npm's npx package runner, which requires a Windows command shell. Use a direct .exe or .com local-stdio executable, a direct-executable preset, or a remote MCP instead.`
     );
   }
-  if (preset === "google-search-console") {
-    return buildGoogleSearchConsolePreset(name, options, context);
-  }
-  return definition.build(name, options);
+  return config;
 }
 
 /** Builds a named legacy configuration preset, retaining its generic fallback behavior. */
