@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   startConsoleServer,
   type ConsoleControlApplication
@@ -173,11 +173,21 @@ describe("local Console control server", () => {
     }
   });
 
-  it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
-    temporaryDirectories.push(root);
-    const privateParent = await createPrivateConsoleDirectory(root);
-    const configPath = join(privateParent, "miftah", "miftah.json");
+  describe("first-run native OAuth HTTP flow", () => {
+    let configPath: string;
+
+    beforeEach(async () => {
+      const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
+      temporaryDirectories.push(root);
+      const privateParent = await createPrivateConsoleDirectory(root);
+      // The separate Console application test covers creating this directory.
+      // Pre-creating the trusted parent keeps this HTTP flow focused on the
+      // endpoint's first file creation on slower Windows runners.
+      const configDirectory = await createPrivateConsoleDirectory(privateParent, "miftah");
+      configPath = join(configDirectory, "miftah.json");
+    });
+
+    it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
     const server = await startConsoleServer(configPath, {
       bootstrapCredential: "test-only-bootstrap-credential",
       allowMissingConfig: true,
@@ -260,6 +270,7 @@ describe("local Console control server", () => {
     } finally {
       await server.close();
     }
+    });
   });
 
   it("requires a CSRF-protected selection before a no-config dashboard opens a discovered configuration", async () => {
