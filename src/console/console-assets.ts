@@ -117,6 +117,23 @@ const page = `<!doctype html>
         </form>
       </section>
 
+      <section id="client-entry-onboarding-view" class="work-section" hidden aria-labelledby="client-entry-onboarding-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">03 / Existing local entry</p>
+            <h2 id="client-entry-onboarding-title">Import one local stdio MCP</h2>
+          </div>
+          <p>Paste an existing Claude, Cursor, or VS Code JSON entry only when you want to reuse its executable and argument array. Miftah never scans or changes client settings.</p>
+        </div>
+        <form id="client-entry-onboarding-form" class="form-grid">
+          <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
+          <label>Selected MCP entry name<input name="entry" required maxlength="256" placeholder="posthog"></label>
+          <label class="wide">Existing client JSON<textarea name="document" required maxlength="65536" rows="12" spellcheck="false" autocomplete="off" placeholder='{"mcpServers":{"posthog":{"command":"npx","args":["--yes","@posthog/mcp@1.2.3"]}}}'></textarea></label>
+          <p class="field-note wide">The pasted text is parsed only for this request and cleared from the page afterwards. This flow accepts one selected local <code>stdio</code> entry only when it fits Miftah's static launch grammar: a direct executable, a pinned package runner, or a script path with non-sensitive flags. For custom arguments or credentials, use advanced manual setup and configure authentication separately.</p>
+          <div class="wide form-action"><button type="submit">Import selected entry</button></div>
+        </form>
+      </section>
+
       <section id="onboarding-view" class="work-section" hidden aria-labelledby="onboarding-title">
         <div class="section-heading">
           <div>
@@ -350,6 +367,7 @@ const script = `(() => {
   const unlockView = byId("unlock-view");
   const onboardingView = byId("onboarding-view");
   const presetOnboardingView = byId("preset-onboarding-view");
+  const clientEntryOnboardingView = byId("client-entry-onboarding-view");
   const workspaceView = byId("workspace-view");
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
@@ -382,6 +400,7 @@ const script = `(() => {
     if (dashboardView) dashboardView.hidden = true;
     if (onboardingView) onboardingView.hidden = true;
     if (presetOnboardingView) presetOnboardingView.hidden = true;
+    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = true;
     if (unlockView) unlockView.hidden = false;
     if (bootstrapInput instanceof HTMLInputElement) bootstrapInput.focus();
@@ -798,6 +817,7 @@ const script = `(() => {
       if (catalog.configurations.length > 0) {
         if (onboardingView) onboardingView.hidden = true;
         if (presetOnboardingView) presetOnboardingView.hidden = true;
+        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
         return;
@@ -805,12 +825,14 @@ const script = `(() => {
       if (catalog.discoveryState === "unavailable") {
         if (onboardingView) onboardingView.hidden = true;
         if (presetOnboardingView) presetOnboardingView.hidden = true;
+        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah could not safely inspect its standard configuration directory. Correct its local access or start the Console with --config.");
         return;
       }
       if (onboardingView) onboardingView.hidden = false;
       if (presetOnboardingView) presetOnboardingView.hidden = false;
+      if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
       if (workspaceView) workspaceView.hidden = true;
       updatePresetFields();
       message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
@@ -818,6 +840,7 @@ const script = `(() => {
     }
     if (onboardingView) onboardingView.hidden = true;
     if (presetOnboardingView) presetOnboardingView.hidden = true;
+    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
@@ -963,6 +986,31 @@ const script = `(() => {
         updatePresetFields();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const clientEntryOnboardingForm = byId("client-entry-onboarding-form");
+  if (clientEntryOnboardingForm instanceof HTMLFormElement) {
+    clientEntryOnboardingForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const documentInput = clientEntryOnboardingForm.querySelector("textarea[name='document']");
+      message("Importing one selected local stdio MCP entry…");
+      try {
+        const data = new FormData(clientEntryOnboardingForm);
+        await api("/api/v1/onboarding/client-entry", {
+          method: "POST",
+          body: {
+            name: String(data.get("name") || "").trim(),
+            entry: String(data.get("entry") || "").trim(),
+            document: String(data.get("document") || "")
+          }
+        });
+        clientEntryOnboardingForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+      finally {
+        if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
+      }
     });
   }
 

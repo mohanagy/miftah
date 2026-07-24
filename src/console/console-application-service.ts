@@ -29,6 +29,10 @@ import {
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
 import {
+  ClientEntryImportError,
+  createImportedClientConfiguration
+} from "../setup/client-entry-import.js";
+import {
   runProfileReadinessFromLoadedConfig,
   type ProfileReadinessReport
 } from "../setup/profile-readiness.js";
@@ -89,6 +93,14 @@ export interface ConsolePresetOnboardingReport {
   readonly actions: readonly string[];
 }
 
+/** Non-secret, explicitly selected local stdio MCP entry pasted into first-run Console setup. */
+export interface ConsoleClientEntryOnboardingRequest {
+  readonly name: string;
+  readonly entry: string;
+  /** Bounded client configuration text. It is parsed in memory and never persisted or returned. */
+  readonly document: string;
+}
+
 export interface ConsoleAuditRecord {
   readonly timestamp?: string;
   readonly kind?: string;
@@ -125,6 +137,8 @@ export interface ConsoleControlApplication {
   selectConfiguration?(configurationId: string): Promise<ConsoleConfigMetadata>;
   /** Available only when the embedding supports first-run known-connector setup. */
   onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
+  /** Available only when the embedding supports first-run selected local stdio entry import. */
+  onboardClientEntry?(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -359,6 +373,46 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       defaultProfile: config.defaultProfile,
       profileCount: Object.keys(config.profiles).length,
       actions: [`Created Miftah configuration '${config.name}' from preset '${request.preset}'.`]
+    };
+  }
+
+  async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
+    let config: MiftahConfig;
+    try {
+      config = createImportedClientConfiguration({
+        configurationName: request.name,
+        document: request.document,
+        entry: request.entry
+      });
+    } catch (error) {
+      if (error instanceof ClientEntryImportError) {
+        if (error.reason === "static-launch") {
+          throw new MiftahError(
+            "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED",
+            "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED: use advanced manual setup for custom arguments or credentials"
+          );
+        }
+        throw new MiftahError(
+          "CONFIG_SCHEMA_INVALID",
+          "CONFIG_SCHEMA_INVALID: the selected client entry cannot be imported safely"
+        );
+      }
+      throw error;
+    }
+    await this.publishFirstRunConfiguration(config, {
+      operation: "console/onboard-client-entry",
+      name: "configuration",
+      profile: config.defaultProfile,
+      upstream: "default",
+      status: "success"
+    });
+    return {
+      changed: true,
+      write: true,
+      name: config.name,
+      defaultProfile: config.defaultProfile,
+      profileCount: Object.keys(config.profiles).length,
+      actions: [`Created Miftah configuration '${config.name}' from one selected local stdio client entry.`]
     };
   }
 

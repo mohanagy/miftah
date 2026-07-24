@@ -5,6 +5,7 @@ import { MiftahError } from "../utils/errors.js";
 import {
   ConsoleApplicationService,
   type ConsoleAuditRecord,
+  type ConsoleClientEntryOnboardingRequest,
   type ConsoleConnectionAddReport,
   type ConsoleConnectionAddRequest,
   type ConsoleControlApplication,
@@ -124,6 +125,13 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardPreset(request);
+    await this.confirmCreatedFirstRunConfiguration();
+    return result;
+  }
+
+  async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
+    await this.assertFirstRunAvailable();
+    const result = await this.firstRunApplication.onboardClientEntry(request);
     await this.confirmCreatedFirstRunConfiguration();
     return result;
   }

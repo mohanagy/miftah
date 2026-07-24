@@ -15,6 +15,9 @@ export type { ConsoleControlApplication } from "./console-application-service.js
 
 const loopbackHost = "127.0.0.1";
 const defaultMaximumRequestBytes = 64 * 1024;
+const maximumClientEntryDocumentBytes = 64 * 1024;
+/** The pasted JSON is subsequently limited to 64 KiB; this only leaves bounded room for JSON string escaping and the request envelope. */
+const maximumClientEntryOnboardingRequestBytes = maximumClientEntryDocumentBytes * 2 + 8 * 1024;
 const defaultMaximumSessions = 8;
 const defaultBootstrapTtlMs = 5 * 60_000;
 const defaultMaximumRequestsPerMinute = 240;
@@ -75,6 +78,12 @@ const presetOnboardingSchema = z.object({
     });
   }
 });
+const clientEntryOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  entry: z.string().min(1).max(256),
+  /** Parsed in memory only; it is never persisted, echoed, or added to audit records. */
+  document: z.string().min(1).max(maximumClientEntryDocumentBytes)
+}).strict();
 const profileReadinessSchema = z.object({
   profile: z.string().min(1).max(256),
   upstream: z.string().min(1).max(256).optional()
@@ -115,6 +124,11 @@ export interface ConsoleServerOptions {
   readonly launcher?: ClientLauncher;
   /** Internal embedding/test seam; production CLI uses the native in-process application service. */
   readonly application?: ConsoleControlApplication;
+}
+
+interface ResolvedConsoleServerOptions extends Required<Pick<ConsoleServerOptions, "maximumRequestBytes" | "maximumSessions" | "bootstrapTtlMs" | "maximumRequestsPerMinute" | "maximumBootstrapAttemptsPerMinute" | "idleSessionMs" | "absoluteSessionMs" | "now">> {
+  /** The default leaves bounded JSON-escaping room for a 64 KiB document; an explicit global cap remains authoritative. */
+  readonly maximumClientEntryOnboardingRequestBytes: number;
 }
 
 class ConsoleHttpError extends Error {
@@ -227,6 +241,13 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       "Client snippets are unavailable because the Console launcher is not configured."
     );
   }
+  if (error.code === "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "client_entry_static_launch_unsupported",
+      "This entry needs advanced manual setup. Import supports only a static local launch; configure custom arguments or credentials separately."
+    );
+  }
   if (
     error.code.startsWith("CONFIG_") ||
     error.code.startsWith("OAUTH_CONNECTION_") ||
@@ -315,7 +336,7 @@ class LocalConsoleServer implements ConsoleServer {
     readonly bootstrapCredential: string,
     private readonly listener: Server,
     private readonly application: ConsoleControlApplication,
-    private readonly options: Required<Pick<ConsoleServerOptions, "maximumRequestBytes" | "maximumSessions" | "bootstrapTtlMs" | "maximumRequestsPerMinute" | "maximumBootstrapAttemptsPerMinute" | "idleSessionMs" | "absoluteSessionMs" | "now">>
+    private readonly options: ResolvedConsoleServerOptions
   ) {
     this.bootstrap = bootstrapCredential;
     this.bootstrapIssuedAt = options.now();
@@ -459,6 +480,25 @@ class LocalConsoleServer implements ConsoleServer {
       }
       try {
         const result = await this.application.onboardPreset(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/client-entry") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = clientEntryOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumClientEntryOnboardingRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardClientEntry === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardClientEntry(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result });
       } catch (error) {
@@ -807,6 +847,10 @@ export async function startConsoleServer(
     throw new Error("Unable to start the Miftah Console server.");
   }
   const url = new URL(`http://${loopbackHost}:${address.port}/`);
+  const maximumRequestBytes = options.maximumRequestBytes ?? defaultMaximumRequestBytes;
+  const maximumClientEntryOnboardingBytes = options.maximumRequestBytes === undefined
+    ? maximumClientEntryOnboardingRequestBytes
+    : Math.min(maximumRequestBytes, maximumClientEntryOnboardingRequestBytes);
   const server = new LocalConsoleServer(
     url,
     bootstrapCredential,
@@ -815,7 +859,8 @@ export async function startConsoleServer(
       ...(options.launcher === undefined ? {} : { launcher: options.launcher })
     }),
     {
-      maximumRequestBytes: options.maximumRequestBytes ?? defaultMaximumRequestBytes,
+      maximumRequestBytes,
+      maximumClientEntryOnboardingRequestBytes: maximumClientEntryOnboardingBytes,
       maximumSessions: options.maximumSessions ?? defaultMaximumSessions,
       bootstrapTtlMs: options.bootstrapTtlMs ?? defaultBootstrapTtlMs,
       maximumRequestsPerMinute: options.maximumRequestsPerMinute ?? defaultMaximumRequestsPerMinute,

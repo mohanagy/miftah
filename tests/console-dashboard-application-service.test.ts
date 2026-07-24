@@ -154,6 +154,32 @@ describe("Console dashboard application service", () => {
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
+  it("creates one selected local stdio entry only through the first-run dashboard boundary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-client-entry-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
+
+    await expect(service.onboardClientEntry({
+      name: "posthog-work",
+      entry: "posthog",
+      document: JSON.stringify({
+        mcpServers: { posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] } }
+      })
+    })).resolves.toMatchObject({ name: "posthog-work", defaultProfile: "default" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      name: "posthog-work",
+      profiles: { default: { policy: "readonly" } }
+    });
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
   it("selects an explicitly discovered configuration", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-selection-"));
     temporaryDirectories.push(root);

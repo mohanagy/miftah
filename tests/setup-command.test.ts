@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
   runProfileReadiness: profileReadinessMocks.run
 }));
 
-import { parseCli, renderCommandHelp } from "../src/cli/parse.js";
+import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
 import { validateConfig } from "../src/config/validate-config.js";
 
@@ -96,6 +96,197 @@ describe("setup command", () => {
     if (process.platform !== "win32") {
       expect((await stat(output)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("imports one explicitly selected local stdio entry without modifying the source client file", async () => {
+    const source = resolve(outputRoot, "claude-desktop.json");
+    const output = resolve(outputRoot, "posthog.json");
+    const document = JSON.stringify({
+      mcpServers: {
+        posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const input = new PassThrough();
+    const transcript = new PassThrough();
+
+    const result = await runSetupCommand({
+      name: "posthog-work",
+      output,
+      importFile: source,
+      importEntry: "posthog"
+    } as Parameters<typeof runSetupCommand>[0], {
+      input,
+      output: transcript,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+    input.end();
+
+    expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "posthog-work",
+      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+      profiles: { default: { policy: "readonly" } }
+    });
+    expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it.each([
+    ["a prefixed header", "--http-header=Authorization: Bearer gF7r2Uv9Qx"],
+    ["an embedded authorization header", "--metadata=Authorization: Bearer gF7r2Uv9Qx"],
+    ["an embedded bearer credential", "--metadata=Bearer gF7r2Uv9Qx"],
+    ["URL userinfo", "--url=https://user:gF7r2Uv9Qx@example.test/mcp"],
+    ["empty-user URL credentials", "--url=redis://:gF7r2Uv9Qx@cache.example/0"],
+    ["token-as-user URL credentials", "--url=https://gF7r2Uv9Qx@example.test/mcp"],
+    ["an embedded token credential", "--metadata=Token gF7r2Uv9Qx"],
+    ["a camel-cased credential option", "--myApiKey=gF7r2Uv9Qx"],
+    ["a compound credential option", "--token-value=gF7r2Uv9Qx"],
+    ["a credential query parameter", "--endpoint=https://example.test/mcp?token=gF7r2Uv9Qx"],
+    ["a JWT credential option", "--jwt=gF7r2Uv9Qx"],
+    ["an embedded JWT credential", "--metadata=JWT gF7r2Uv9Qx"],
+    ["a signed URL signature", "--url=https://example.test/mcp?signature=gF7r2Uv9Qx"],
+    ["a short signed URL signature", "--url=https://example.test/mcp?sig=gF7r2Uv9Qx"]
+  ])("does not write a configuration when imported client arguments contain %s", async (_kind, argument) => {
+    const source = resolve(outputRoot, "unsafe-client.json");
+    const output = resolve(outputRoot, "unsafe.json");
+    const secret = "gF7r2Uv9Qx";
+    const document = JSON.stringify({
+      mcpServers: {
+        unsafe: { command: "npx", args: [argument] }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const input = new PassThrough();
+    const transcript = new PassThrough();
+
+    await expect(runSetupCommand({
+      name: "unsafe",
+      output,
+      importFile: source,
+      importEntry: "unsafe"
+    } as Parameters<typeof runSetupCommand>[0], {
+      input,
+      output: transcript,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    })).rejects.toMatchObject({ message: expect.not.stringContaining(secret) });
+    input.end();
+
+    await expect(readFile(output, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it.each([
+    ["a remote URL", "https://gF7r2Uv9Qx@example.test/mcp"],
+    ["a query-bearing executable", "node?token=gF7r2Uv9Qx"]
+  ])("does not write a configuration when the selected command is %s", async (_kind, command) => {
+    const source = resolve(outputRoot, "unsafe-command-client.json");
+    const output = resolve(outputRoot, "unsafe-command.json");
+    const secret = "gF7r2Uv9Qx";
+    const document = JSON.stringify({
+      mcpServers: {
+        unsafe: { command }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const input = new PassThrough();
+    const transcript = new PassThrough();
+
+    await expect(runSetupCommand({
+      name: "unsafe-command",
+      output,
+      importFile: source,
+      importEntry: "unsafe"
+    } as Parameters<typeof runSetupCommand>[0], {
+      input,
+      output: transcript,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    })).rejects.toMatchObject({ message: expect.not.stringContaining(secret) });
+    input.end();
+
+    await expect(readFile(output, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it.each([
+    ["an environment wrapper", { command: "env", args: ["FOO=gF7r2Uv9Qx", "node", "server.mjs"] }],
+    ["Node inline code", { command: "node", args: ["-e", "require(\"./server\").start(\"gF7r2Uv9Qx\")"] }],
+    ["Python inline code", { command: "python3", args: ["-c", "start(\"gF7r2Uv9Qx\")"] }],
+    ["an unpinned package runner", { command: "npx", args: ["--yes", "@posthog/mcp"] }]
+  ])("does not write a configuration when the selected entry contains %s", async (_kind, unsafeEntry) => {
+    const source = resolve(outputRoot, "unsafe-launch-client.json");
+    const output = resolve(outputRoot, "unsafe-launch.json");
+    const secret = "gF7r2Uv9Qx";
+    const document = JSON.stringify({
+      mcpServers: { unsafe: unsafeEntry }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const input = new PassThrough();
+    const transcript = new PassThrough();
+
+    await expect(runSetupCommand({
+      name: "unsafe-launch",
+      output,
+      importFile: source,
+      importEntry: "unsafe"
+    } as Parameters<typeof runSetupCommand>[0], {
+      input,
+      output: transcript,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    })).rejects.toMatchObject({ message: expect.not.stringContaining(secret) });
+    input.end();
+
+    await expect(readFile(output, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it("rejects --verify for an imported client entry before writing a configuration", async () => {
+    const source = resolve(outputRoot, "client.json");
+    const output = resolve(outputRoot, "imported.json");
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, JSON.stringify({
+      mcpServers: { example: { command: "node", args: ["server.mjs"] } }
+    }), { mode: 0o600 });
+    const input = new PassThrough();
+    const transcript = new PassThrough();
+
+    await expect(runSetupCommand({
+      name: "example",
+      output,
+      importFile: source,
+      importEntry: "example",
+      verify: true
+    } as Parameters<typeof runSetupCommand>[0], {
+      input,
+      output: transcript,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    })).rejects.toBeInstanceOf(CliUsageError);
+    input.end();
+
+    await expect(readFile(output, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("writes every supplied Google Search Console account without echoing its client-secrets paths", async () => {

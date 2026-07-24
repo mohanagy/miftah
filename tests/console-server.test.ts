@@ -698,6 +698,10 @@ describe("local Console control server", () => {
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="preset-onboarding-view"');
+      expect(html).toContain('id="client-entry-onboarding-view"');
+      expect(html).toContain('id="client-entry-onboarding-form"');
+      expect(html).toContain("static launch grammar");
+      expect(html).toContain("advanced manual setup");
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
       expect(html).toContain("Active vs durable:");
@@ -718,6 +722,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/sessions");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth");
       expect(javascript).toContain("/api/v1/onboarding/preset");
+      expect(javascript).toContain("/api/v1/onboarding/client-entry");
       await expect(submitPresetFormWithStaleValue(javascript)).resolves.toEqual({
         name: "analytics",
         preset: "generic",
@@ -985,6 +990,259 @@ describe("local Console control server", () => {
           name: "support-tools",
           profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
         });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("imports one selected local stdio client entry through a CSRF-protected no-secret endpoint", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const endpoint = new URL("/api/v1/onboarding/client-entry", server.url);
+        const secret = "gF7r2Uv9Qx";
+        const missingCsrf = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "posthog-work",
+            entry: "posthog",
+            document: JSON.stringify({ mcpServers: { posthog: { command: "npx" } } })
+          })
+        });
+        expect(missingCsrf.status).toBe(403);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        for (const argument of [
+          `--custom-header=Authorization: Bearer ${secret}`,
+          `--metadata=Authorization: Bearer ${secret}`,
+          `--metadata=Bearer ${secret}`,
+          `--url=https://user:${secret}@example.test/mcp`,
+          `--url=redis://:${secret}@cache.example/0`,
+          `--url=https://${secret}@example.test/mcp`,
+          `--metadata=Token ${secret}`,
+          `--myApiKey=${secret}`,
+          `--token-value=${secret}`,
+          `--endpoint=https://example.test/mcp?token=${secret}`,
+          `--jwt=${secret}`,
+          `--metadata=JWT ${secret}`,
+          `--url=https://example.test/mcp?signature=${secret}`,
+          `--url=https://example.test/mcp?sig=${secret}`
+        ]) {
+          const unsafe = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              origin: server.url.origin,
+              cookie: session.cookie,
+              "x-miftah-csrf": session.csrfToken,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              name: "posthog-work",
+              entry: "posthog",
+              document: JSON.stringify({
+                mcpServers: {
+                  posthog: { command: "npx", args: [argument] }
+                }
+              })
+            })
+          });
+          expect(unsafe.status).toBe(422);
+          expect(await unsafe.text()).not.toContain(secret);
+          await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+
+        for (const command of [
+          `https://${secret}@example.test/mcp`,
+          `node?token=${secret}`
+        ]) {
+          const unsafe = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              origin: server.url.origin,
+              cookie: session.cookie,
+              "x-miftah-csrf": session.csrfToken,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              name: "posthog-work",
+              entry: "posthog",
+              document: JSON.stringify({
+                mcpServers: { posthog: { command } }
+              })
+            })
+          });
+          expect(unsafe.status).toBe(422);
+          expect(await unsafe.text()).not.toContain(secret);
+          await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+
+        for (const unsafeEntry of [
+          { command: "env", args: [`FOO=${secret}`, "node", "server.mjs"] },
+          { command: "node", args: ["-e", `require("./server").start("${secret}")`] },
+          { command: "python3", args: ["-c", `start("${secret}")`] },
+          { command: "npx", args: ["--yes", "@posthog/mcp"] }
+        ]) {
+          const unsafe = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              origin: server.url.origin,
+              cookie: session.cookie,
+              "x-miftah-csrf": session.csrfToken,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              name: "posthog-work",
+              entry: "posthog",
+              document: JSON.stringify({ mcpServers: { posthog: unsafeEntry } })
+            })
+          });
+          expect(unsafe.status).toBe(422);
+          expect(await unsafe.text()).not.toContain(secret);
+          await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+
+        const advancedManual = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "posthog-work",
+            entry: "posthog",
+            document: JSON.stringify({
+              mcpServers: {
+                posthog: {
+                  command: "npx",
+                  args: ["--yes", "@posthog/mcp@1.2.3", "--project", "craftmyletter"]
+                }
+              }
+            })
+          })
+        });
+        expect(advancedManual.status).toBe(422);
+        const advancedManualBody = await advancedManual.json();
+        expect(advancedManualBody).toEqual({
+          error: {
+            code: "client_entry_static_launch_unsupported",
+            message: "This entry needs advanced manual setup. Import supports only a static local launch; configure custom arguments or credentials separately."
+          }
+        });
+        expect(JSON.stringify(advancedManualBody)).not.toContain("--project");
+        expect(JSON.stringify(advancedManualBody)).not.toContain("craftmyletter");
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const created = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "posthog-work",
+            entry: "posthog",
+            document: JSON.stringify({
+              mcpServers: {
+                posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+              }
+            })
+          })
+        });
+        expect(created.status).toBe(201);
+        expect(await created.json()).toEqual({
+          data: {
+            changed: true,
+            write: true,
+            name: "posthog-work",
+            defaultProfile: "default",
+            profileCount: 1,
+            actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."]
+          }
+        });
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          name: "posthog-work",
+          profiles: { default: { policy: "readonly" } }
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("accepts a maximum-sized client document even when its JSON request envelope is larger than 64 KiB", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const endpoint = new URL("/api/v1/onboarding/client-entry", server.url);
+        const entry = JSON.stringify({ mcpServers: { example: { command: "node", args: ["server.mjs"] } } });
+        const document = `${entry}${" ".repeat(64 * 1024 - Buffer.byteLength(entry, "utf8"))}`;
+        const request = {
+          name: "maximum-document",
+          entry: "example",
+          document
+        };
+        expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeGreaterThan(64 * 1024);
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+
+        expect(response.status).toBe(201);
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({ name: "maximum-document" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("honors an explicitly configured request-size cap for client-entry onboarding", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true,
+        maximumRequestBytes: 32
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const response = await fetch(new URL("/api/v1/onboarding/client-entry", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "too-large",
+            entry: "example",
+            document: JSON.stringify({ mcpServers: { example: { command: "node" } } })
+          })
+        });
+
+        expect(response.status).toBe(413);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await server.close();
       }
