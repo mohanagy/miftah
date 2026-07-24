@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
+import { buildSafeStandardConfig } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 
@@ -12,7 +12,7 @@ const credentialAssignment = /(?:^|[^A-Za-z0-9])(?:access[-_]?key|access[-_]?tok
 const embeddedCredentialScheme = /(?:^|=|,|:|\{|\[|"|')(?:api[-_ ]?key|basic|bearer|jwt|token)\s+\S+/iu;
 const credentialUrlUserinfo = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s@]+@/u;
 const uriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
-const shellExecutable = /^(?:bash|cmd(?:\.exe)?|fish|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh|zsh)$/iu;
+const shellExecutable = /^(?:bash|cmd|command|fish|powershell|pwsh|sh|zsh)$/iu;
 const windowsDirectExecutable = /\.(?:com|exe)$/iu;
 const staticFlag = /^--?[A-Za-z][A-Za-z0-9-]*$/u;
 const staticPackageSpecifier = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@v?\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/u;
@@ -139,7 +139,7 @@ function credentialBearingArgument(value: string): boolean {
 
 function executableStem(command: string): string {
   const executableName = command.replaceAll("\\", "/").split("/").at(-1) ?? command;
-  return executableName.replace(/\.(?:cmd|exe)$/iu, "").toLowerCase();
+  return executableName.replace(/\.(?:cmd|com|exe)$/iu, "").toLowerCase();
 }
 
 function staticFlagArgument(value: string): boolean {
@@ -317,7 +317,12 @@ function selectedStdioEntry(value: unknown, container: ClientEntryContainer): Im
 
 function safeImportedConfig(name: string, upstream: ImportedStdioEntry): MiftahConfig {
   try {
-    const baseline = buildPresetConfig(name, "generic", {});
+    const baseline = buildSafeStandardConfig(name, {
+      transport: "stdio",
+      command: upstream.command,
+      args: [...upstream.args],
+      ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
+    });
     return validateConfig({
       ...baseline,
       description: `${name} imported from an existing MCP client entry`,
@@ -337,9 +342,6 @@ function safeImportedConfig(name: string, upstream: ImportedStdioEntry): MiftahC
       tooling: { ...baseline.tooling, unknownToolRisk: "destructive" }
     });
   } catch (error) {
-    if (error instanceof PresetCatalogError) {
-      importError("The requested Miftah configuration name is not valid.");
-    }
     if (error instanceof Error) {
       importError("The imported MCP entry could not be converted into a valid Miftah configuration.");
     }

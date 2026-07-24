@@ -7,6 +7,7 @@ import { runInitCommand } from "../src/cli/init.js";
 import { CliUsageError } from "../src/cli/parse.js";
 
 const outputRoot = resolve(process.cwd(), ".init-command-test-output");
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 interface TtyStreams {
   readonly input: PassThrough & { isTTY?: boolean };
@@ -73,11 +74,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   await rm(outputRoot, { recursive: true, force: true });
 });
 
 describe("init command", () => {
-  it("keeps noninteractive init config-only output compatible and writes a strict valid config", async () => {
+  it.skipIf(process.platform === "win32")("keeps noninteractive generic init output compatible and writes a strict valid config", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "generic.json");
 
@@ -89,15 +91,37 @@ describe("init command", () => {
     expect(streams.transcript.contents).toBe(`Created ${output}\n`);
   });
 
+  it("requires an explicit safe preset for Windows instead of silently selecting the shell-backed generic preset", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const streams = createStreams();
+    const output = resolve(outputRoot, "windows-default.json");
+
+    await expect(
+      runInitCommand({ name: "windows-default", output: "windows-default.json" }, commandContext(streams))
+    ).rejects.toThrow("On Windows, specify --preset explicitly");
+    await expectNoPath(output);
+    streams.input.end();
+  });
+
   it("reports an existing output file as a usage error without changing it", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "existing.json");
 
-    await runInitCommand({ name: "existing", output: "existing.json" }, commandContext(streams));
+    await runInitCommand({
+      name: "existing",
+      preset: "streamable-http",
+      url: "https://mcp.example.com/v1",
+      output: "existing.json"
+    }, commandContext(streams));
     const originalContents = await readFile(output, "utf8");
 
     await expect(
-      runInitCommand({ name: "replacement", output: "existing.json" }, commandContext(streams))
+      runInitCommand({
+        name: "replacement",
+        preset: "streamable-http",
+        url: "https://mcp.example.com/v1",
+        output: "existing.json"
+      }, commandContext(streams))
     ).rejects.toThrow(CliUsageError);
 
     expect(await readFile(output, "utf8")).toBe(originalContents);
@@ -134,7 +158,13 @@ describe("init command", () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "client.json");
 
-    await runInitCommand({ name: "client", output: "client.json", client: "cursor" }, commandContext(streams));
+    await runInitCommand({
+      name: "client",
+      preset: "streamable-http",
+      url: "https://mcp.example.com/v1",
+      output: "client.json",
+      client: "cursor"
+    }, commandContext(streams));
     streams.input.end();
 
     expect(JSON.parse(await readFile(output, "utf8"))).toMatchObject({ name: "client" });
@@ -154,7 +184,13 @@ describe("init command", () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "miftah.json");
 
-    await runInitCommand({ name: "miftah", output: "miftah.json", client: "claude-code" }, commandContext(streams));
+    await runInitCommand({
+      name: "miftah",
+      preset: "streamable-http",
+      url: "https://mcp.example.com/v1",
+      output: "miftah.json",
+      client: "claude-code"
+    }, commandContext(streams));
     streams.input.end();
 
     expect(streams.transcript.contents).toContain("Claude Code settings permissions:");
@@ -166,7 +202,7 @@ describe("init command", () => {
     await expect(readFile(output, "utf8")).resolves.toContain('"name": "miftah"');
   });
 
-  it("runs the TTY wizard with real streams for a generic config", async () => {
+  it.skipIf(process.platform === "win32")("runs the TTY wizard with real streams for a generic config", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "wizard-generic.json");
     const command = runInitCommand({ interactive: true }, commandContext(streams));
@@ -183,7 +219,7 @@ describe("init command", () => {
     expect(streams.transcript.contents).toContain("Claude Code project .mcp.json (claude-code):");
   });
 
-  it("prompts for generic-npx metadata and validates the resulting config", async () => {
+  it.skipIf(process.platform === "win32")("prompts for generic-npx metadata and validates the resulting config", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "wizard-npx.json");
     const command = runInitCommand(
@@ -315,7 +351,8 @@ describe("init command", () => {
         {
           interactive: true,
           name: "fully-supplied",
-          preset: "generic",
+          preset: "generic-docker",
+          dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           output: "fully-supplied.json",
           client: "all"
         },

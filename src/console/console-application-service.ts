@@ -3,7 +3,11 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
 import { resolvePath } from "../config/path-resolve.js";
-import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
+import {
+  buildPresetConfig,
+  isWindowsNpxPresetUnavailable,
+  PresetCatalogError
+} from "../config/presets.js";
 import type { PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
@@ -359,7 +363,12 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       validateConfig(config);
     } catch (error) {
       if (error instanceof PresetCatalogError) {
-        throw new MiftahError("CONFIG_SCHEMA_INVALID", "CONFIG_SCHEMA_INVALID: the requested setup connector is not valid");
+        throw new MiftahError(
+          "CONFIG_SCHEMA_INVALID",
+          isWindowsNpxPresetUnavailable(request.preset)
+            ? "CONFIG_SCHEMA_INVALID: the selected npm package-runner connector is unavailable on Windows; choose a direct .exe or .com executable, a direct-executable preset, or a remote MCP."
+            : "CONFIG_SCHEMA_INVALID: the requested setup connector is not valid"
+        );
       }
       throw error;
     }

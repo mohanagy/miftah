@@ -40,6 +40,26 @@ async function waitFor<Value>(
 }
 
 describe("upstream process manager", () => {
+  it.runIf(process.platform === "win32")("rejects a command shim before it can create a child process", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-windows-command-shim-"));
+    const markerPath = join(directory, "command-shim-ran");
+    const commandShim = join(directory, "upstream.cmd");
+    await writeFile(commandShim, `@echo off\r\necho command-shim-ran > "${markerPath}"\r\nexit /b 0\r\n`);
+    const manager = new UpstreamProcessManager(
+      { transport: "stdio", command: commandShim, args: [] },
+      { work: {} },
+      { startupTimeoutMs: 1_000 }
+    );
+
+    try {
+      await expect(manager.get("work")).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      await manager.close().catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("preserves progress emitted immediately before an upstream response", async () => {
     const manager = new UpstreamProcessManager(
       {

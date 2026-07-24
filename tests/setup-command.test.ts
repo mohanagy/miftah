@@ -91,7 +91,12 @@ describe("setup command", () => {
     });
 
     await answer(streams, "Name [miftah-wrapper]", "guided");
-    await answer(streams, "Catalog preset [generic]", "");
+    await answer(streams, "Catalog preset", "generic-docker");
+    await answer(
+      streams,
+      "Docker image (digest-pinned)",
+      "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
     await answer(streams, "Output location [guided.miftah.json]", "guided.json");
     await answer(streams, "Client", "");
     await command;
@@ -592,7 +597,7 @@ describe("setup command", () => {
     });
 
     await answer(streams, "Name [miftah-wrapper]", "gsc");
-    await answer(streams, "Catalog preset [generic]", "google-search-console");
+    await answer(streams, "Catalog preset", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");
     await answer(streams, "Google account description (optional)", "GoValidate Google account");
     await answer(streams, "Google OAuth client-secrets file (absolute path)", govalidateSecrets);

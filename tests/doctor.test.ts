@@ -67,6 +67,27 @@ function check(report: Awaited<ReturnType<typeof runDoctor>>, code: DoctorCode):
   return found;
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  if (descriptor === undefined) throw new Error("Unable to override the platform for this test.");
+  Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
+async function withWorkingDirectory<T>(directory: string, run: () => Promise<T>): Promise<T> {
+  const originalDirectory = process.cwd();
+  process.chdir(directory);
+  try {
+    return await run();
+  } finally {
+    process.chdir(originalDirectory);
+  }
+}
+
 afterEach(async () => {
   await rm(fixtureDirectory, { force: true, recursive: true });
 });
@@ -626,6 +647,128 @@ describe("doctor readiness runner", () => {
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain(configPath);
     expect(serialized).not.toContain("miftah-doctor-missing-executable");
+  });
+
+  it("reports a Windows command shim as unavailable before runtime startup", async () => {
+    const commandShim = join(fixtureDirectory, "windows-command-shim", "provider.cmd");
+    await mkdir(dirname(commandShim), { recursive: true });
+    await writeFile(commandShim, "", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-command-shim",
+      baseConfig({ transport: "stdio", command: commandShim, args: [] })
+    );
+
+    const report = await withPlatform("win32", () => runDoctor(configPath));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("error");
+    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
+    expect(JSON.stringify(report)).not.toContain(commandShim);
+  });
+
+  it("reports a Windows command-shell executable as unavailable before runtime startup", async () => {
+    const commandShell = join(fixtureDirectory, "windows-command-shell", "cmd.exe");
+    await mkdir(dirname(commandShell), { recursive: true });
+    await writeFile(commandShell, "", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-command-shell",
+      baseConfig({ transport: "stdio", command: commandShell, args: [] })
+    );
+
+    const report = await withPlatform("win32", () => runDoctor(configPath));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("error");
+    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
+    expect(JSON.stringify(report)).not.toContain(commandShell);
+  });
+
+  it("uses the effective case-insensitive Windows profile environment for direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-casing", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-casing",
+      {
+        version: "1",
+        name: "windows-path-casing",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            env: { PATH: "C:\\missing" },
+            upstreams: { primary: { env: { Path: "C:\\tools" } } }
+          }
+        },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      }
+    );
+
+    const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
+  });
+
+  it("expands the effective Windows profile environment before direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-expansion", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    const environmentVariable = "MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH";
+    const originalValue = process.env[environmentVariable];
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-expansion",
+      {
+        version: "1",
+        name: "windows-path-expansion",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            upstreams: { primary: { env: { Path: `\${${environmentVariable}}` } } }
+          }
+        },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      }
+    );
+
+    process.env[environmentVariable] = "C:\\tools";
+    try {
+      const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+      expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
+    } finally {
+      if (originalValue === undefined) delete process.env[environmentVariable];
+      else process.env[environmentVariable] = originalValue;
+    }
+  });
+
+  it("resolves target secret references before Windows direct executable readiness", async () => {
+    const commandDirectory = join(fixtureDirectory, "windows-path-secret-reference", "cwd");
+    const executable = "C:\\tools\\provider.exe";
+    await mkdir(commandDirectory, { recursive: true });
+    await writeFile(join(commandDirectory, executable), "x", { mode: 0o700 });
+    const { configPath } = await writeConfig(
+      "windows-path-secret-reference",
+      {
+        version: "1",
+        name: "windows-path-secret-reference",
+        defaultProfile: "default",
+        upstreams: { primary: { transport: "stdio", command: "provider", args: [] } },
+        profiles: {
+          default: {
+            upstreams: { primary: { env: { Path: "secretref:dotenv://MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH" } } }
+          }
+        },
+        secrets: { envFiles: [".env"] },
+        process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+      },
+      { MIFTAH_DOCTOR_WINDOWS_PROVIDER_PATH: "C:\\tools" }
+    );
+
+    const report = await withWorkingDirectory(commandDirectory, () => withPlatform("win32", () => runDoctor(configPath)));
+
+    expect(check(report, DOCTOR_CODES.EXECUTABLE).status).toBe("pass");
+    expect(JSON.stringify(report)).not.toContain("C:\\tools");
   });
 
   it("does not leak secrets when initialization fails", async () => {

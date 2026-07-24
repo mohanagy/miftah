@@ -47,15 +47,9 @@ describe("preset catalog", () => {
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
     const genericOptions = { credentialEnv: "GENERIC_TOKEN" };
     const configs = [
-      buildPresetConfig("generic", "generic", genericOptions),
       buildPresetConfig("github", "github"),
-      buildPresetConfig("sentry", "sentry"),
       buildPresetConfig("gsc", "google-search-console", {
         oauthClientSecretsFile: gscClientSecretsFile
-      }),
-      buildPresetConfig("npx", "generic-npx", {
-        npmPackage: "@scope/server@1.2.3",
-        credentialEnv: "NPM_SERVER_TOKEN"
       }),
       buildPresetConfig("docker", "generic-docker", {
         dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -72,7 +66,17 @@ describe("preset catalog", () => {
         credentialEnv: "REMOTE_TOKEN",
         headerName: "Authorization",
         headerPrefix: "Bearer "
-      })
+      }),
+      ...(process.platform === "win32"
+        ? []
+        : [
+            buildPresetConfig("generic", "generic", genericOptions),
+            buildPresetConfig("sentry", "sentry"),
+            buildPresetConfig("npx", "generic-npx", {
+              npmPackage: "@scope/server@1.2.3",
+              credentialEnv: "NPM_SERVER_TOKEN"
+            })
+          ])
     ];
 
     for (const config of configs) {
@@ -82,11 +86,8 @@ describe("preset catalog", () => {
   });
 
   it("builds exact provider contracts with only environment secret references", () => {
-    const generic = buildPresetConfig("generic", "generic");
     const github = buildPresetConfig("github", "github");
-    const sentry = buildPresetConfig("sentry", "sentry");
 
-    expect(generic.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
     expect(github.upstream?.args).toEqual([
       "run",
       "-i",
@@ -102,6 +103,12 @@ describe("preset catalog", () => {
       work: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_WORK_TOKEN}" }, policy: "readonly" },
       personal: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_TOKEN}" }, policy: "readonly" }
     });
+
+    if (process.platform === "win32") return;
+
+    const generic = buildPresetConfig("generic", "generic");
+    const sentry = buildPresetConfig("sentry", "sentry");
+    expect(generic.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
     expect(sentry.upstream?.args).toEqual(["--yes", "@sentry/mcp-server@0.36.0", "--skills=inspect"]);
     expect(sentry.profiles.default).toMatchObject({
       env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
@@ -213,12 +220,14 @@ describe("preset catalog", () => {
   });
 
   it("requires and validates exact generic preset inputs", () => {
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3" })).not.toThrow();
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).not.toThrow();
-    expect(buildPresetConfig("npx", "generic-npx", { npmPackage: "@sentry/mcp-server@0.36.0" }).upstream?.args).toEqual([
-      "--yes",
-      "@sentry/mcp-server@0.36.0"
-    ]);
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3" })).not.toThrow();
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).not.toThrow();
+      expect(buildPresetConfig("npx", "generic-npx", { npmPackage: "@sentry/mcp-server@0.36.0" }).upstream?.args).toEqual([
+        "--yes",
+        "@sentry/mcp-server@0.36.0"
+      ]);
+    }
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@latest" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@^1.2.3" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server" })).toThrow(PresetCatalogError);
@@ -228,8 +237,10 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-alpha.01" })).toThrow(
       PresetCatalogError
     );
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-0" })).not.toThrow();
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01alpha" })).not.toThrow();
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-0" })).not.toThrow();
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01alpha" })).not.toThrow();
+    }
     expect(() => buildPresetConfig("docker", "generic-docker", { dockerImage: "ghcr.io/acme/server:latest" })).toThrow(
       PresetCatalogError
     );
@@ -297,6 +308,14 @@ describe("preset catalog", () => {
     }
   });
 
+  it("rejects the legacy Windows command interpreter as a local stdio executable", () => {
+    expect(() => buildPresetConfig("local-tools", "local-stdio", {
+      localCommand: "COMMAND.COM",
+      args: ["/c", "server"],
+      acceptLocalCommand: true
+    })).toThrow(PresetCatalogError);
+  });
+
   it("requires a direct Windows binary for local stdio instead of a command-processor shim", () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
     const base = { args: ["server.mjs"], acceptLocalCommand: true } as const;
@@ -304,6 +323,24 @@ describe("preset catalog", () => {
     for (const localCommand of ["node", "server.cmd", "server.bat"]) {
       expect(() => buildPresetConfig("local-tools", "local-stdio", { ...base, localCommand })).toThrow(PresetCatalogError);
     }
+  });
+
+  it("does not create npx-backed presets on Windows where npm requires a command shell", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() => buildPresetConfig("generic", "generic")).toThrow(PresetCatalogError);
+    expect(() => buildPresetConfig("sentry", "sentry")).toThrow(PresetCatalogError);
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).toThrow(
+      PresetCatalogError
+    );
+  });
+
+  it("validates generic-npx input before rejecting its Windows package runner", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() =>
+      buildPresetConfig("npx", "generic-npx", { npmPackage: null as unknown as string })
+    ).toThrow("Preset option 'npmPackage' must be a string.");
   });
 
   it("accepts only safe streamable HTTP credential header inputs", () => {
@@ -448,7 +485,9 @@ describe("preset catalog", () => {
   );
 
   it("accepts explicitly undefined optional preset inputs", () => {
-    expect(() => buildPresetConfig("generic", "generic", { credentialEnv: undefined })).not.toThrow();
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("generic", "generic", { credentialEnv: undefined })).not.toThrow();
+    }
     expect(() => buildPresetConfig("remote", "streamable-http", {
       url: "https://mcp.example.com/v1",
       credentialEnv: undefined,

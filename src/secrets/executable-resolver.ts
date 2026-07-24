@@ -1,5 +1,7 @@
-import { access, constants } from "node:fs/promises";
+import { access, constants, open } from "node:fs/promises";
 import { posix, win32 } from "node:path";
+
+const windowsDirectExecutable = /\.(?:com|exe)$/iu;
 
 export interface ExecutableResolverOptions {
   readonly environment?: NodeJS.ProcessEnv;
@@ -36,6 +38,43 @@ export async function resolveExecutablePath(
   return undefined;
 }
 
+/**
+ * Resolves a Windows command only when it is a direct executable. Unlike the
+ * general resolver, this intentionally never considers PATHEXT entries such
+ * as .cmd or .bat and never resolves a relative path through the current
+ * directory.
+ */
+export async function resolveWindowsDirectExecutablePath(
+  command: string,
+  options: ExecutableResolverOptions = {}
+): Promise<string | undefined> {
+  if (command.length === 0 || command.includes("\u0000")) return undefined;
+
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return undefined;
+  const environment = options.environment ?? process.env;
+  const hasPath = command.includes("/") || command.includes("\\") || win32.isAbsolute(command);
+  if (hasPath) {
+    if (!win32.isAbsolute(command) || !windowsDirectExecutable.test(command)) return undefined;
+    return accessibleExecutable(command);
+  }
+
+  if (win32.extname(command).length > 0 && !windowsDirectExecutable.test(command)) return undefined;
+  const pathValue = environmentValue(environment, "PATH");
+  if (pathValue === undefined) return undefined;
+  const names = windowsDirectExecutable.test(command) ? [command] : [`${command}.exe`, `${command}.com`];
+
+  for (const entry of pathValue.split(win32.delimiter)) {
+    const directory = normalizePathEntry(entry);
+    if (directory === undefined || !win32.isAbsolute(directory)) continue;
+    for (const name of names) {
+      const resolved = await accessibleExecutable(win32.join(directory, name));
+      if (resolved !== undefined) return resolved;
+    }
+  }
+  return undefined;
+}
+
 function bareCommandCandidates(
   command: string,
   environment: NodeJS.ProcessEnv,
@@ -60,6 +99,27 @@ function windowsExtensions(command: string, environment: NodeJS.ProcessEnv): str
   if (win32.extname(command).length > 0) return [""];
   const pathExtensions = environmentValue(environment, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
   return ["", ...pathExtensions.split(";").filter((extension) => extension.length > 0)];
+}
+
+async function accessibleExecutable(candidate: string): Promise<string | undefined> {
+  try {
+    await access(candidate, constants.X_OK);
+    const file = await open(candidate, "r");
+    try {
+      const header = Buffer.alloc(2);
+      const { bytesRead } = await file.read(header, 0, header.length, 0);
+      // cross-spawn reparses shebang files through an interpreter before it
+      // decides whether to invoke cmd.exe. A direct extension alone is not a
+      // safe Windows stdio launch boundary.
+      if (bytesRead >= header.length && header[0] === 0x23 && header[1] === 0x21) return undefined;
+      return candidate;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    // An unavailable path is deliberately indistinguishable from other filesystem failures.
+    return undefined;
+  }
 }
 
 function normalizePathEntry(entry: string): string | undefined {

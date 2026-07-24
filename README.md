@@ -53,6 +53,8 @@ Start with the row that describes how your upstream MCP authenticates.
 
 Miftah requires Node.js 20 or newer. Each upstream keeps its own runtime and installation requirements; for example, the GitHub preset requires Docker and the Google Search Console adapter requires Python 3.11 or newer plus `uvx`.
 
+On Windows, `generic`, `sentry`, and `generic-npx` are unavailable. npm's `npx` runner itself requires a command shell on Windows; Miftah refuses them instead of invoking `cmd.exe`. Use a direct `.exe` or `.com` local executable, a direct-executable adapter such as `uvx.exe` or `docker.exe`, or a remote MCP instead.
+
 Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line continuations. On Windows, run the same Miftah options from PowerShell with Windows paths and PowerShell line continuation, or put the command on one line.
 
 ### Prefer guided setup?
@@ -192,7 +194,7 @@ miftah init analytics \
   --client claude-desktop
 ```
 
-Replace the example package, version, and variable name with the upstream's documented values. An exact version is required. Run `validate`, `doctor`, `test-profile`, and `list-tools` before adding the printed client JSON.
+Replace the example package, version, and variable name with the upstream's documented values. An exact version is required. This package-runner preset is available on macOS and Linux, not Windows: npm's `npx` runner uses a command shell there, and Miftah refuses it rather than invoking `cmd.exe`. On Windows, use a reviewed direct `.exe` or `.com` executable, a direct-executable adapter, or a remote MCP. Run `validate`, `doctor`, `test-profile`, and `list-tools` before adding the printed client JSON.
 
 ### Reviewed local executable template
 

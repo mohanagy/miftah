@@ -17,6 +17,7 @@ import { asRemoteError, fetchSsePostWithStatusOnly } from "./remote-error.js";
 import { UpstreamSession } from "./upstream-session.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { mergeHeaders } from "./headers.js";
+import { resolveWindowsStdioCommand } from "./windows-stdio-command.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
@@ -27,7 +28,11 @@ const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
 const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
 
-function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
+/**
+ * Combines child-process environments with Windows' case-insensitive variable
+ * semantics. Callers that preflight a launch must use this same precedence.
+ */
+export function mergeEnvironment(...environmentSets: Array<Record<string, string> | undefined>): Record<string, string> {
   if (process.platform !== "win32") return Object.assign({}, ...environmentSets);
   const merged = new Map<string, [string, string]>();
   for (const environment of environmentSets) {
@@ -36,6 +41,30 @@ function mergeEnvironment(...environmentSets: Array<Record<string, string> | und
     }
   }
   return Object.fromEntries(merged.values());
+}
+
+/** Expands configured process environment values and applies the runtime's launch precedence. */
+export function resolveProcessEnvironment(
+  upstreamEnvironment: Record<string, string> | undefined,
+  profileEnvironment: Record<string, string> | undefined
+): { environment: Record<string, string>; secretValues: string[] } {
+  const expandedUpstreamEnvironment = upstreamEnvironment
+    ? expandEnvironmentReferencesWithSecretValues(upstreamEnvironment)
+    : undefined;
+  const expandedProfileEnvironment = profileEnvironment
+    ? expandEnvironmentReferencesWithSecretValues(profileEnvironment)
+    : undefined;
+  return {
+    environment: mergeEnvironment(
+      getDefaultEnvironment(),
+      expandedUpstreamEnvironment?.values,
+      expandedProfileEnvironment?.values
+    ),
+    secretValues: [
+      ...(expandedUpstreamEnvironment?.secretValues ?? []),
+      ...(expandedProfileEnvironment?.secretValues ?? [])
+    ]
+  };
 }
 
 /** Configures lifecycle behavior, capacity, and redacted diagnostics for an upstream manager. */
@@ -357,6 +386,10 @@ export class UpstreamProcessManager {
         profileConfig.args ?? this.upstream.args ?? []
       );
       this.assertCurrentStartup(profile, generation);
+      const stdioCommand = this.upstream.transport === "stdio"
+        ? await resolveWindowsStdioCommand(this.upstream.command!, args, { environment })
+        : undefined;
+      this.assertCurrentStartup(profile, generation);
       try {
         oauthProvider = await this.options.oauthProvider?.(profile, this.upstreamName);
       } catch (error) {
@@ -371,9 +404,12 @@ export class UpstreamProcessManager {
       }
 
       if (this.upstream.transport === "stdio") {
+        if (stdioCommand === undefined) {
+          throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: stdio upstream requires a direct executable");
+        }
         stdioTransport = new StdioClientTransport({
-          command: this.upstream.command!,
-          args,
+          command: stdioCommand.command,
+          args: [...stdioCommand.args],
           env: environment,
           ...(profileConfig.cwd ?? this.upstream.cwd ? { cwd: profileConfig.cwd ?? this.upstream.cwd } : {}),
           stderr: "pipe"
@@ -548,19 +584,12 @@ export class UpstreamProcessManager {
     args: string[];
     suppressStderr: boolean;
   }> {
-    const upstreamEnvironment = this.upstream.env
-      ? expandEnvironmentReferencesWithSecretValues(this.upstream.env)
-      : undefined;
-    const profileEnvironment = profile.env ? expandEnvironmentReferencesWithSecretValues(profile.env) : undefined;
+    const resolvedEnvironment = resolveProcessEnvironment(this.upstream.env, profile.env);
     const upstreamHeaders = this.upstream.headers
       ? expandEnvironmentReferencesWithSecretValues(this.upstream.headers)
       : undefined;
     const profileHeaders = profile.headers ? expandEnvironmentReferencesWithSecretValues(profile.headers) : undefined;
-    const baseEnvironment = mergeEnvironment(
-      getDefaultEnvironment(),
-      upstreamEnvironment?.values,
-      profileEnvironment?.values
-    );
+    const baseEnvironment = resolvedEnvironment.environment;
     let isolationEnvironment: Record<string, string> | undefined;
     let suppressStderr = false;
     if (profile.isolation !== undefined) {
@@ -586,8 +615,7 @@ export class UpstreamProcessManager {
     const environment = mergeEnvironment(baseEnvironment, isolationEnvironment);
     const headers = mergeHeaders(upstreamHeaders?.values, profileHeaders?.values);
     for (const value of [
-      ...(upstreamEnvironment?.secretValues ?? []),
-      ...(profileEnvironment?.secretValues ?? []),
+      ...resolvedEnvironment.secretValues,
       ...(upstreamHeaders?.secretValues ?? []),
       ...(profileHeaders?.secretValues ?? [])
     ]) {
