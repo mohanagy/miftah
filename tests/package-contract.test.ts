@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { startFakeRemoteUpstream } from "./helpers/fake-remote-upstream.js";
 
 interface PackageManifest {
   name?: string;
@@ -306,6 +307,10 @@ class TermIgnoringNpmProcess extends EventEmitter implements NpmProcess {
   readonly stderr = new PassThrough();
   readonly signals: NodeJS.Signals[] = [];
 
+  constructor(readonly pid?: number) {
+    super();
+  }
+
   kill(signal?: NodeJS.Signals): boolean {
     if (signal !== undefined) this.signals.push(signal);
     return true;
@@ -372,6 +377,192 @@ function runInstalledBinary(binary: string, args: readonly string[], cwd: string
       windowsVerbatimArguments: true
     }
   );
+}
+
+interface InstalledBinaryResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+interface InstalledBinaryProcess {
+  readonly stdout: Readable;
+  readonly stderr: Readable;
+  readonly pid?: number;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "close", listener: (status: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+interface InstalledBinarySpawnOptions {
+  readonly cwd: string;
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly windowsVerbatimArguments?: true;
+  readonly stdio: ["ignore", "pipe", "pipe"];
+}
+
+type InstalledBinarySpawner = (
+  command: string,
+  args: readonly string[],
+  options: InstalledBinarySpawnOptions
+) => InstalledBinaryProcess;
+
+interface InstalledBinaryRuntime {
+  readonly platform: NodeJS.Platform;
+  terminateWindowsProcessTree(pid: number): Promise<void>;
+}
+
+function installedBinaryInvocation(binary: string, args: readonly string[]): { command: string; args: readonly string[] } {
+  if (process.platform !== "win32") return { command: binary, args };
+
+  return {
+    command: process.env.ComSpec ?? "cmd.exe",
+    args: ["/d", "/s", "/c", buildWindowsCommand(binary, args)]
+  };
+}
+
+const spawnInstalledBinary: InstalledBinarySpawner = (command, args, options) => {
+  const child = spawn(command, args, options);
+  if (child.stdout === null || child.stderr === null) {
+    throw new Error("Installed binary must be spawned with piped stdout and stderr.");
+  }
+  return child;
+};
+
+function windowsTaskkillPath(): string {
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  if (!systemRoot) throw new Error("SystemRoot is required to terminate a Windows process tree safely.");
+  return join(systemRoot, "System32", "taskkill.exe");
+}
+
+async function terminateWindowsProcessTree(pid: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const taskkill = spawn(windowsTaskkillPath(), ["/pid", String(pid), "/t", "/f"], {
+      shell: false,
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    taskkill.once("error", (error) => reject(error));
+    taskkill.once("close", (status, signal) => {
+      if (status === 0 || status === 128) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `taskkill could not terminate process tree ${pid}: ${
+            status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`
+          }`
+        )
+      );
+    });
+  });
+}
+
+const defaultInstalledBinaryRuntime: InstalledBinaryRuntime = {
+  platform: process.platform,
+  terminateWindowsProcessTree
+};
+
+async function terminateInstalledBinary(
+  child: InstalledBinaryProcess,
+  runtime: InstalledBinaryRuntime,
+  force: boolean
+): Promise<void> {
+  if (runtime.platform === "win32") {
+    if (child.pid === undefined) {
+      throw new Error("Windows installed binary process did not expose a PID for process-tree cleanup.");
+    }
+    await runtime.terminateWindowsProcessTree(child.pid);
+    return;
+  }
+  child.kill(force ? "SIGKILL" : "SIGTERM");
+}
+
+async function runInstalledBinaryAsync(
+  binary: string,
+  args: readonly string[],
+  cwd: string,
+  timeoutMs = npmCommandTimeoutMs,
+  spawnProcess: InstalledBinarySpawner = spawnInstalledBinary,
+  runtime: InstalledBinaryRuntime = defaultInstalledBinaryRuntime
+): Promise<InstalledBinaryResult> {
+  const invocation = installedBinaryInvocation(binary, args);
+  return new Promise<InstalledBinaryResult>((resolve, reject) => {
+    const child = spawnProcess(invocation.command, invocation.args, {
+      cwd,
+      shell: false,
+      windowsHide: true,
+      ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {}),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = () =>
+      new Error(`Installed binary ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKill !== undefined) clearTimeout(forceKill);
+      outcome();
+    };
+    const cleanupFailure = (error: unknown): void => {
+      child.kill("SIGKILL");
+      settle(() => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(new Error(`Installed binary cleanup failed: ${message}.${npmDiagnostics(stdout, stderr)}`));
+      });
+    };
+    const terminate = (force: boolean): void => {
+      void terminateInstalledBinary(child, runtime, force).catch(cleanupFailure);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminate(false);
+      forceKill = setTimeout(() => {
+        if (settled) return;
+        if (runtime.platform !== "win32") {
+          child.kill("SIGKILL");
+          settle(() => reject(timeoutError()));
+          return;
+        }
+        void terminateInstalledBinary(child, runtime, true).then(
+          () => settle(() => reject(timeoutError())),
+          cleanupFailure
+        );
+      }, npmTerminationGraceMs);
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => reject(new Error(`Installed binary ${args.join(" ")} could not start: ${error.message}.${npmDiagnostics(stdout, stderr)}`)));
+    });
+    child.once("close", (status, signal) => {
+      settle(() => {
+        if (timedOut) {
+          reject(timeoutError());
+          return;
+        }
+        if (status === null) {
+          reject(new Error(`Installed binary ${args.join(" ")} terminated by ${signal ?? "an unknown signal"}.${npmDiagnostics(stdout, stderr)}`));
+          return;
+        }
+        resolve({ status, stdout, stderr });
+      });
+    });
+  });
 }
 
 function quoteForPosixShell(value: string): string {
@@ -596,6 +787,53 @@ describe("packed artifact contract", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
     expect(completed).toBe(false);
     await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("keeps the test worker responsive while a remote-backed installed binary is pending", async () => {
+    let completed = false;
+    const child = new DelayedNpmProcess(100);
+    const running = runInstalledBinaryAsync(
+      "miftah",
+      ["doctor", "--config", "remote.json"],
+      repositoryRoot,
+      1_000,
+      () => child
+    ).finally(() => {
+      completed = true;
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(completed).toBe(false);
+    await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("kills the whole Windows command tree when an async installed binary times out", async () => {
+    const child = new TermIgnoringNpmProcess(42_424);
+    const killedTreePids: number[] = [];
+    const result = await Promise.race([
+      runInstalledBinaryAsync(
+        "miftah.cmd",
+        ["doctor", "--config", "remote.json"],
+        repositoryRoot,
+        5,
+        () => child,
+        {
+          platform: "win32",
+          terminateWindowsProcessTree: async (pid) => {
+            killedTreePids.push(pid);
+            child.emit("close", null, "SIGKILL");
+          }
+        }
+      ).then(
+        () => "resolved",
+        (error: unknown) => error
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 500))
+    ]);
+
+    expect(result).toBeInstanceOf(Error);
+    expect(killedTreePids).toEqual([42_424]);
+    expect(child.signals).toEqual([]);
   });
 
   it("keeps an active npm command alive when output proves forward progress", async () => {
@@ -934,7 +1172,7 @@ describe("packed artifact contract", () => {
             TEST_INITIALIZED_PATH: healthyInitializedPath
           })
         );
-        const healthyDoctor = runInstalledBinary(binary, ["doctor", "--config", healthyConfigPath], directory);
+        const healthyDoctor = await runInstalledBinaryAsync(binary, ["doctor", "--config", healthyConfigPath], directory);
         expect(
           healthyDoctor.status,
           [healthyDoctor.stderr || healthyDoctor.stdout, fixtureLifecycleDiagnostic(healthyStartedPath, healthyInitializedPath)]
@@ -951,7 +1189,7 @@ describe("packed artifact contract", () => {
           "doctor-degraded.json",
           doctorConfig("packed-doctor-degraded", { TEST_FAIL_LIST_RESOURCES: "true" })
         );
-        const degradedDoctor = runInstalledBinary(
+        const degradedDoctor = await runInstalledBinaryAsync(
           binary,
           ["doctor", "--json", "--config", degradedConfigPath],
           directory
@@ -1023,6 +1261,20 @@ describe("packed artifact contract", () => {
           name,
           defaultProfile: "work",
           upstream: { transport: "stdio", command: process.execPath, args },
+          profiles,
+          process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
+          ...extras
+        });
+        const remoteCliConfig = (
+          name: string,
+          profiles: Record<string, unknown>,
+          url: string,
+          extras: Record<string, unknown> = {}
+        ) => ({
+          version: "1",
+          name,
+          defaultProfile: "work",
+          upstream: { transport: "streamable-http", url },
           profiles,
           process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
           ...extras
@@ -1198,52 +1450,67 @@ describe("packed artifact contract", () => {
           }
         });
 
-        const automationConfigPath = await writeCliConfig(
-          "automation config with spaces.json",
-          cliConfig("packed-cli-automation", {
-            work: { env: { TEST_ACCOUNT_NAME: "automation-account" } }
-          })
-        );
-        const schemaAutomation = runInstalledBinary(binary, ["schema"], cliContractDirectory);
-        expect(schemaAutomation.status, schemaAutomation.stderr || schemaAutomation.stdout).toBe(0);
-        expect(schemaAutomation.stderr).toBe("");
-        expect(JSON.parse(schemaAutomation.stdout)).toMatchObject({
-          $schema: "https://json-schema.org/draft/2019-09/schema#"
-        });
-        const validateAutomation = runInstalledBinary(
-          binary,
-          ["validate", "--config", automationConfigPath],
-          cliContractDirectory
-        );
-        expect(validateAutomation.status, validateAutomation.stderr || validateAutomation.stdout).toBe(0);
-        expect(validateAutomation.stderr).toBe("");
-        expect(JSON.parse(validateAutomation.stdout)).toMatchObject({ ok: true, name: "packed-cli-automation" });
-        const doctorAutomation = runInstalledBinary(
-          binary,
-          ["doctor", "--json", "--config", automationConfigPath],
-          cliContractDirectory
-        );
-        expect(doctorAutomation.status, doctorAutomation.stderr || doctorAutomation.stdout).toBe(0);
-        expect(doctorAutomation.stderr).toBe("");
-        expect(JSON.parse(doctorAutomation.stdout)).toMatchObject({ ok: true, overallStatus: "healthy" });
-        const listedTools = runInstalledBinary(
-          binary,
-          ["list-tools", "--config", automationConfigPath, "--profile", "work"],
-          cliContractDirectory
-        );
-        expect(listedTools.status, listedTools.stderr || listedTools.stdout).toBe(0);
-        expect(listedTools.stderr).toBe("");
-        expect(JSON.parse(listedTools.stdout)).toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: "whoami" })])
-        );
-        const testedProfile = runInstalledBinary(
-          binary,
-          ["test-profile", "--config", automationConfigPath, "--profile", "work"],
-          cliContractDirectory
-        );
-        expect(testedProfile.status, testedProfile.stderr || testedProfile.stdout).toBe(0);
-        expect(testedProfile.stderr).toBe("");
-        expect(JSON.parse(testedProfile.stdout)).toEqual({ ok: true, profile: "work" });
+        const automationUpstream = await startFakeRemoteUpstream();
+        try {
+          const automationConfigPath = await writeCliConfig(
+            "automation config with spaces.json",
+            remoteCliConfig(
+              "packed-cli-automation",
+              { work: { headers: { "X-Profile": "automation-account" } } },
+              automationUpstream.streamableHttpUrl
+            )
+          );
+          const schemaAutomation = runInstalledBinary(binary, ["schema"], cliContractDirectory);
+          expect(schemaAutomation.status, schemaAutomation.stderr || schemaAutomation.stdout).toBe(0);
+          expect(schemaAutomation.stderr).toBe("");
+          expect(JSON.parse(schemaAutomation.stdout)).toMatchObject({
+            $schema: "https://json-schema.org/draft/2019-09/schema#"
+          });
+          const validateAutomation = runInstalledBinary(
+            binary,
+            ["validate", "--config", automationConfigPath],
+            cliContractDirectory
+          );
+          expect(validateAutomation.status, validateAutomation.stderr || validateAutomation.stdout).toBe(0);
+          expect(validateAutomation.stderr).toBe("");
+          expect(JSON.parse(validateAutomation.stdout)).toMatchObject({ ok: true, name: "packed-cli-automation" });
+          const doctorAutomation = await runInstalledBinaryAsync(
+            binary,
+            ["doctor", "--json", "--config", automationConfigPath],
+            cliContractDirectory
+          );
+          expect(doctorAutomation.status, doctorAutomation.stderr || doctorAutomation.stdout).toBe(0);
+          expect(doctorAutomation.stderr).toBe("");
+          expect(JSON.parse(doctorAutomation.stdout)).toMatchObject({ ok: true, overallStatus: "healthy" });
+          const listedTools = await runInstalledBinaryAsync(
+            binary,
+            ["list-tools", "--config", automationConfigPath, "--profile", "work"],
+            cliContractDirectory
+          );
+          expect(listedTools.status, listedTools.stderr || listedTools.stdout).toBe(0);
+          expect(listedTools.stderr).toBe("");
+          expect(JSON.parse(listedTools.stdout)).toEqual(
+            expect.arrayContaining([expect.objectContaining({ name: "whoami" })])
+          );
+          const testedProfile = await runInstalledBinaryAsync(
+            binary,
+            ["test-profile", "--config", automationConfigPath, "--profile", "work"],
+            cliContractDirectory
+          );
+          expect(testedProfile.status, testedProfile.stderr || testedProfile.stdout).toBe(0);
+          expect(testedProfile.stderr).toBe("");
+          expect(JSON.parse(testedProfile.stdout)).toEqual({ ok: true, profile: "work" });
+          expect(automationUpstream.requests()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                path: "/mcp",
+                headers: expect.objectContaining({ "x-profile": "automation-account" })
+              })
+            ])
+          );
+        } finally {
+          await automationUpstream.close();
+        }
 
         const noRuntimeStartPath = join(cliContractDirectory, "runtime must not start");
         const unavailableSecretName = "MIFTAH_PACKED_CONTRACT_MISSING_SECRET";
@@ -1320,7 +1587,7 @@ describe("packed artifact contract", () => {
             { secrets: { allowPlaintextSecrets: true } }
           )
         );
-        const failedInit = runInstalledBinary(
+        const failedInit = await runInstalledBinaryAsync(
           binary,
           ["test-profile", "--config", failedInitConfigPath],
           cliContractDirectory
