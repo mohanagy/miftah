@@ -1,6 +1,6 @@
 import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
@@ -63,6 +63,48 @@ describe("Console dashboard application service", () => {
     });
 
     await expect(verifyWindowsConfigPathSecurity(configPath, "file")).resolves.toBe(true);
+  });
+
+  it.runIf(process.platform === "win32")("reports the production ACL result for every catalog candidate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-catalog-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    await writeConfig(join(directory, "sentry.json"), {
+      version: "3",
+      name: "sentry",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
+      profiles: { default: {} }
+    });
+
+    const aclProbes: Array<{ candidate: string; kind: "file" | "directory"; trusted: boolean }> = [];
+    const catalog = await discoverConsoleConfigCatalog({
+      configDirectory: directory,
+      windowsAclVerifier: async (path, kind) => {
+        const trusted = await verifyWindowsConfigPathSecurity(path, kind).catch(() => false);
+        aclProbes.push({ candidate: kind === "directory" ? "directory" : basename(path), kind, trusted });
+        return trusted;
+      }
+    });
+
+    expect({
+      aclProbes,
+      configurationNames: catalog.configurations.map((configuration) => configuration.metadata.name)
+    }).toEqual({
+      aclProbes: [
+        { candidate: "directory", kind: "directory", trusted: true },
+        { candidate: "gsc.json", kind: "file", trusted: true },
+        { candidate: "sentry.json", kind: "file", trusted: true }
+      ],
+      configurationNames: ["gsc", "sentry"]
+    });
   });
 
   it("discovers safe standard-directory configurations without exposing source details", async () => {
