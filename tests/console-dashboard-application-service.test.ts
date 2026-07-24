@@ -1,4 +1,4 @@
-import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +77,22 @@ function catalogFixtureLabel(path: string, kind: "file" | "directory"): "directo
   }
 }
 
+async function compareFileIdentities(first: string, second: string): Promise<{
+  readonly bigintIdentity: "same" | "different";
+  readonly numberIdentity: "same" | "different";
+}> {
+  const [firstNumber, secondNumber, firstBigInt, secondBigInt] = await Promise.all([
+    lstat(first),
+    lstat(second),
+    lstat(first, { bigint: true }),
+    lstat(second, { bigint: true })
+  ]);
+  return {
+    numberIdentity: firstNumber.dev === secondNumber.dev && firstNumber.ino === secondNumber.ino ? "same" : "different",
+    bigintIdentity: firstBigInt.dev === secondBigInt.dev && firstBigInt.ino === secondBigInt.ino ? "same" : "different"
+  };
+}
+
 describe("Console dashboard application service", () => {
   it.runIf(process.platform === "win32")("creates fixture files that pass the production Windows ACL verifier", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-"));
@@ -120,6 +136,10 @@ describe("Console dashboard application service", () => {
       profiles: { work: {} }
     });
 
+    const fixtureIdentity = process.platform === "win32"
+      ? await compareFileIdentities(gscPath, sentryPath)
+      : undefined;
+
     // Instrument the exact dashboard catalog invocation on Windows. The mock
     // delegates to the real catalog and real verifier; it only records safe
     // fixture labels so a fail-closed omission identifies its boundary.
@@ -154,6 +174,7 @@ describe("Console dashboard application service", () => {
     if (process.platform === "win32") {
       expect({
         aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
+        fixtureIdentity,
         serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
       }).toEqual({
         aclProbeSummary: [
@@ -161,6 +182,7 @@ describe("Console dashboard application service", () => {
           { candidate: "gsc", kind: "file", outcome: "trusted" },
           { candidate: "sentry", kind: "file", outcome: "trusted" }
         ],
+        fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
         serviceConfigurationNames: ["gsc", "sentry"]
       });
     }
