@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildPresetConfig } from "../src/config/presets.js";
+import {
+  buildPresetConfig,
+  isWindowsNpxPresetUnavailable,
+  PresetCatalogError
+} from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { MiftahError } from "../src/utils/errors.js";
 
@@ -532,6 +536,10 @@ describe("config runtime parity", () => {
     }],
     ["streamable-http", { url: "https://mcp.example.com" }]
   ])("keeps the %s generated preset valid", (preset, options) => {
+    if (isWindowsNpxPresetUnavailable(preset)) {
+      expect(() => buildPresetConfig("test", preset, options)).toThrow(PresetCatalogError);
+      return;
+    }
     expect(() => validateConfig(buildPresetConfig("test", preset, options))).not.toThrow();
   });
 
