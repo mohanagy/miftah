@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { validateConfig } from "../config/validate-config.js";
 import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
 import type { GoogleSearchConsoleProfileOptions, PresetBuildOptions } from "../config/presets.js";
@@ -53,6 +54,8 @@ export interface InitCommandContext {
   readonly output: Writable & { readonly isTTY?: boolean };
   readonly cwd: string;
   readonly launcher: ClientLauncher;
+  /** Internal test/runtime seam for endpoint-first OAuth metadata discovery. */
+  readonly nativeOAuthFetch?: FetchLike;
 }
 
 interface InitValues extends PresetBuildOptions {

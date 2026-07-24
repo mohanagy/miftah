@@ -15,6 +15,7 @@ import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
+import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -731,6 +732,11 @@ describe("local Console control server", () => {
       expect(html).toContain("Set up an MCP");
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
+      expect(html).toContain("Discover OAuth and create profile");
+      expect(html).toContain("Miftah checks this exact HTTPS endpoint for standards-based OAuth before it creates the configuration.");
+      expect(html).toContain("Discover OAuth from configured upstream");
+      expect(html).toContain("Add another native OAuth account");
+      expect(html).toContain("Advanced manual OAuth registration");
       expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-view"');
@@ -755,7 +761,9 @@ describe("local Console control server", () => {
       expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
       const javascript = await script.text();
       expect(javascript).toContain("/api/v1/sessions");
-      expect(javascript).toContain("/api/v1/onboarding/native-oauth");
+      expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
+      expect(javascript).toContain("/api/v1/connections/discover");
+      expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/onboarding/preset");
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
@@ -846,6 +854,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value, upstream: upstream.value }');
       expect(javascript).toContain("provider-adapter");
       expect(javascript).toContain("This provider owns its browser login");
+      expect(javascript).toContain('const nativeOAuthAccountEditor = byId("native-oauth-account-editor");');
+      expect(javascript).toContain("if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
       expect(javascript).toContain("statusErrorCode");
       expect(javascript).toContain("restoreUnlock");
@@ -894,11 +904,15 @@ describe("local Console control server", () => {
       configPath = join(privateParent, "miftah", "miftah.json");
     });
 
-    it("supports a CSRF-protected first-run native OAuth setup and copy-only client snippets", async () => {
+    it("discovers endpoint-first OAuth before a CSRF-protected first-run setup and copy-only client snippets", async () => {
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
     const server = await startConsoleServer(configPath, {
       bootstrapCredential: "test-only-bootstrap-credential",
       allowMissingConfig: true,
-      launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+      application: new ConsoleApplicationService(configPath, {
+        nativeOAuthFetch: upstream.fetch,
+        launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+      })
     });
 
     try {
@@ -911,15 +925,12 @@ describe("local Console control server", () => {
         data: { initialized: false, restartRequiredForExistingClients: true }
       });
 
-      const endpoint = new URL("/api/v1/onboarding/native-oauth", server.url);
+      const endpoint = new URL("/api/v1/onboarding/native-oauth/discover", server.url);
       const request = {
         name: "posthog-work",
         profile: "production",
         description: "Production account",
-        resource: "https://mcp.example.test/mcp",
-        issuer: "https://auth.example.test",
-        clientRegistration: "dynamic",
-        scopes: ["openid", "analytics:read"]
+        resource: upstream.streamableHttpUrl
       };
       const missingCsrf = await fetch(endpoint, {
         method: "POST",
@@ -946,6 +957,22 @@ describe("local Console control server", () => {
       expect(secretBearing.status).toBe(422);
       await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
+      const insecureEndpoint = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ ...request, resource: "http://mcp.example.test/mcp" })
+      });
+      expect(insecureEndpoint.status).toBe(422);
+      expect(await insecureEndpoint.json()).toEqual({
+        error: { code: "validation_error", message: "The request body is invalid." }
+      });
+      await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
       const created = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -960,6 +987,11 @@ describe("local Console control server", () => {
       expect(await created.json()).toMatchObject({
         data: { profile: "production", upstream: "default", resource: "https://mcp.example.test/mcp" }
       });
+      expect(upstream.discoveryRequests()).toEqual([
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-authorization-server"
+      ]);
+      expect(upstream.registrationRequests()).toEqual([]);
 
       const snippets = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
         headers: { origin: server.url.origin, cookie: session.cookie }
@@ -976,7 +1008,71 @@ describe("local Console control server", () => {
       expect(JSON.stringify(snippetBody)).not.toContain("auth.example.test");
     } finally {
       await server.close();
+      await upstream.close();
     }
+    });
+
+    it("does not write a configuration when endpoint-first OAuth lacks dynamic registration", async () => {
+      const discoveryFetch: typeof globalThis.fetch = async (input) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.toString() === "https://mcp.example.test/.well-known/oauth-protected-resource/mcp") {
+          return new Response("not found", { status: 404 });
+        }
+        if (url.toString() === "https://mcp.example.test/.well-known/oauth-protected-resource") {
+          return Response.json({
+            resource: "https://mcp.example.test/mcp",
+            authorization_servers: ["https://auth.example.test"],
+            scopes_supported: ["analytics:read"]
+          });
+        }
+        if (url.toString() === "https://auth.example.test/.well-known/oauth-authorization-server") {
+          return Response.json({
+            issuer: "https://auth.example.test",
+            authorization_endpoint: "https://auth.example.test/authorize",
+            token_endpoint: "https://auth.example.test/token",
+            response_types_supported: ["code"],
+            grant_types_supported: ["authorization_code", "refresh_token"],
+            token_endpoint_auth_methods_supported: ["none"],
+            code_challenge_methods_supported: ["S256"],
+            client_id_metadata_document_supported: true,
+            authorization_response_iss_parameter_supported: true
+          });
+        }
+        throw new Error(`unexpected URL ${url}`);
+      };
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true,
+        application: new ConsoleApplicationService(configPath, { nativeOAuthFetch: discoveryFetch })
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const response = await fetch(new URL("/api/v1/onboarding/native-oauth/discover", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "posthog-work",
+            profile: "production",
+            resource: "https://mcp.example.test/mcp"
+          })
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({
+          error: {
+            code: "oauth_client_registration_unsupported",
+            message: "The endpoint does not support automatic OAuth setup. Use its documented manual registration details."
+          }
+        });
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await server.close();
+      }
     });
 
     it("supports a CSRF-protected first-run known connector setup without accepting raw secrets", async () => {
@@ -1808,6 +1904,202 @@ describe("local Console control server", () => {
         headers: { origin: server.url.origin, cookie: session.cookie }
       });
       expect(mcpRoute.status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("derives OAuth connection metadata from an existing configured upstream without accepting browser-supplied OAuth fields", async () => {
+    const configPath = await writeOAuthConfig();
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      application: new ConsoleApplicationService(configPath, {
+        generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
+        nativeOAuthFetch: upstream.fetch
+      })
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/connections/discover", server.url);
+      const request = { profile: "personal", upstream: "default" };
+      const missingCsrf = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(missingCsrf.status).toBe(403);
+      expect(await readFile(configPath, "utf8")).not.toContain("oauthconn:");
+
+      const injectedMetadata = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          ...request,
+          resource: "https://attacker.example.test/mcp",
+          issuer: "https://attacker.example.test",
+          clientRegistration: "pre-registered",
+          scopes: ["admin"],
+          accessToken: "must-not-be-accepted"
+        })
+      });
+      expect(injectedMetadata.status).toBe(422);
+      expect(await readFile(configPath, "utf8")).not.toContain("oauthconn:");
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(created.status).toBe(201);
+      expect(await created.json()).toMatchObject({
+        data: {
+          connectionRef: "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
+          profile: "personal",
+          upstream: "default",
+          resource: "https://mcp.example.test/mcp"
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        oauth: {
+          connections: {
+            "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c": {
+              issuer: "https://mcp.example.test",
+              clientRegistration: "dynamic",
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      });
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await server.close();
+      await upstream.close();
+    }
+  });
+
+  it("adds a new endpoint-discovered OAuth account profile without accepting endpoint or issuer metadata from the browser", async () => {
+    const configPath = await writeOAuthConfig();
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      application: new ConsoleApplicationService(configPath, {
+        generateConnectionRef: () => "67e7cc2b-f812-4b2f-8c0d-bec84f570ab3",
+        nativeOAuthFetch: upstream.fetch
+      })
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/native-oauth/discover", server.url);
+      const request = {
+        profile: "personal-2",
+        description: "Second personal account",
+        upstream: "default",
+        makeDefault: true
+      };
+      const invalid = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          ...request,
+          resource: "https://attacker.example.test/mcp",
+          issuer: "https://attacker.example.test",
+          clientRegistration: "pre-registered",
+          scopes: ["admin"]
+        })
+      });
+      expect(invalid.status).toBe(422);
+      expect(await readFile(configPath, "utf8")).not.toContain("personal-2");
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(created.status).toBe(201);
+      expect(await created.json()).toMatchObject({
+        data: {
+          connectionRef: "oauthconn:67e7cc2b-f812-4b2f-8c0d-bec84f570ab3",
+          profile: "personal-2",
+          upstream: "default",
+          resource: "https://mcp.example.test/mcp"
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "personal-2",
+        profiles: { "personal-2": { description: "Second personal account" } },
+        oauth: {
+          connections: {
+            "oauthconn:67e7cc2b-f812-4b2f-8c0d-bec84f570ab3": {
+              profile: "personal-2",
+              issuer: "https://mcp.example.test",
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      });
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await server.close();
+      await upstream.close();
+    }
+  });
+
+  it("rejects endpoint-first OAuth for a non-HTTPS Streamable HTTP upstream with a safe client error", async () => {
+    const configPath = await writeConfig();
+    const original = await readFile(configPath, "utf8");
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      application: new ConsoleApplicationService(configPath)
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/connections/discover", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", upstream: "default" })
+      });
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "oauth_resource_invalid",
+          message: "The MCP endpoint must be an exact HTTPS Streamable HTTP URL."
+        }
+      });
+      expect(await readFile(configPath, "utf8")).toBe(original);
     } finally {
       await server.close();
     }

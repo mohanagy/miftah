@@ -4,6 +4,7 @@ type ValueOptionName =
   | "output"
   | "preset"
   | "name"
+  | "description"
   | "client"
   | "importFile"
   | "importEntry"
@@ -33,6 +34,8 @@ type BooleanOptionName =
   | "nonInteractive"
   | "noOpen"
   | "verify"
+  | "nativeOAuth"
+  | "makeDefault"
   | "acceptLocalCommand";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
@@ -42,6 +45,7 @@ export interface CliOptions {
   readonly output?: string;
   readonly preset?: string;
   readonly name?: string;
+  readonly description?: string;
   readonly client?: string;
   /** Explicit absolute source file for a reviewed existing local stdio MCP entry. */
   readonly importFile?: string;
@@ -78,6 +82,10 @@ export interface CliOptions {
   readonly noOpen?: true;
   /** Runs the provider-declared safe readiness check after `miftah setup` writes the configuration. */
   readonly verify?: true;
+  /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
+  readonly nativeOAuth?: true;
+  /** Makes the newly added endpoint-first OAuth account the durable default profile. */
+  readonly makeDefault?: true;
 }
 
 interface CliCommandMetadata {
@@ -138,6 +146,10 @@ export const CLI_COMMANDS = {
     arguments: "[name]",
     options: [
       "name",
+      "description",
+      "profile",
+      "config",
+      "upstream",
       "preset",
       "output",
       "client",
@@ -154,6 +166,8 @@ export const CLI_COMMANDS = {
       "args",
       "cwd",
       "acceptLocalCommand",
+      "nativeOAuth",
+      "makeDefault",
       "verify"
     ]
   },
@@ -268,6 +282,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: true,
     usage: "--name <name>",
     description: "Configuration name."
+  },
+  description: {
+    name: "description",
+    takesValue: true,
+    usage: "--description <text>",
+    description: "Optional non-secret description for a newly added account profile."
   },
   client: {
     name: "client",
@@ -437,6 +457,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--verify",
     description: "Run declared safe readiness checks after setup writes the configuration."
   },
+  nativeOAuth: {
+    name: "nativeOAuth",
+    takesValue: false,
+    usage: "--native-oauth",
+    description: "Discover standards-based OAuth from a remote HTTPS MCP endpoint before creating its configuration."
+  },
+  makeDefault: {
+    name: "makeDefault",
+    takesValue: false,
+    usage: "--make-default",
+    description: "Make the newly added account the durable default profile."
+  },
   acceptLocalCommand: {
     name: "acceptLocalCommand",
     takesValue: false,
@@ -451,6 +483,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--output": OPTION_DEFINITIONS.output,
   "--preset": OPTION_DEFINITIONS.preset,
   "--name": OPTION_DEFINITIONS.name,
+  "--description": OPTION_DEFINITIONS.description,
   "--client": OPTION_DEFINITIONS.client,
   "--import-file": OPTION_DEFINITIONS.importFile,
   "--import-entry": OPTION_DEFINITIONS.importEntry,
@@ -479,6 +512,8 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
   "--no-open": OPTION_DEFINITIONS.noOpen,
   "--verify": OPTION_DEFINITIONS.verify,
+  "--native-oauth": OPTION_DEFINITIONS.nativeOAuth,
+  "--make-default": OPTION_DEFINITIONS.makeDefault,
   "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",
   "-h": "help",

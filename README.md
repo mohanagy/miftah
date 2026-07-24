@@ -46,7 +46,7 @@ Start with the row that describes how your upstream MCP authenticates.
 | Another exact-pinned npm or container STDIO server | Use `generic-npx` or `generic-docker`, then add profiles around it. |
 | A local executable and argument array you personally reviewed | Use `local-stdio`; it saves literal command and argument-array metadata without a shell. |
 | Remote HTTPS Streamable HTTP with a token or API key | Use the `streamable-http` preset with a secret-backed header. |
-| Remote HTTPS Streamable HTTP with standards-compatible OAuth | Use Native remote OAuth through `miftah dashboard` or the `connection` and `auth` CLI commands. |
+| Remote HTTPS Streamable HTTP with standards-compatible OAuth | Start with `miftah setup --native-oauth` or `miftah dashboard`. Miftah discovers supported OAuth from the endpoint; use manual `connection add` only when a provider gives you registration details. |
 | Local or provider-specific MCP that opens its own OAuth flow | Use Upstream-owned OAuth. Miftah wraps the process but does not take over its token cache. |
 | Google Search Console | Use the reviewed `google-search-console` adapter preset. OAuth remains upstream-owned. |
 | One account and no need for profile, policy, routing, or audit controls | Keep the direct MCP entry; Miftah may not add value for this case. |
@@ -63,7 +63,7 @@ Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line cont
 miftah setup
 ```
 
-This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. For `local-stdio`, it collects one literal argument at a time, shows a no-secret review summary, and requires an explicit acknowledgement. Miftah does not run the local executable during setup. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
+This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. For a remote OAuth server, run `miftah setup --native-oauth`: it asks for the exact HTTPS endpoint and account name, then discovers whether Miftah can safely own the OAuth flow. For `local-stdio`, it collects one literal argument at a time, shows a no-secret review summary, and requires an explicit acknowledgement. Miftah does not run the local executable during setup. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
 
 ## First setup: GitHub with Claude Desktop
 
@@ -281,13 +281,13 @@ The easiest first run is:
 miftah dashboard
 ```
 
-Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration, a Native remote OAuth profile, or one explicitly pasted local stdio entry there; it never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
+Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration, a Native remote OAuth profile, or one explicitly pasted local stdio entry there; it never overwrites an existing file. Native OAuth first-run asks only for a configuration name, account profile, and exact remote HTTPS endpoint; it discovers the OAuth details before creating anything. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
 
 The optional dashboard:
 
 1. starts a foreground-only service on literal `127.0.0.1`;
 2. opens the system browser and asks for the one-time bootstrap code printed in the terminal;
-3. creates a first validated known-preset configuration, Native remote OAuth profile and connection, or explicitly pasted local stdio entry when the selected config path does not exist;
+3. creates a first validated known-preset configuration, Native remote OAuth profile and connection, or explicitly pasted local stdio entry when the selected config path does not exist; native OAuth discovery completes before the configuration is written;
 4. offers a separate **Connect** action that starts the reviewed system-browser authorization;
 5. shows redacted connection and audit state; and
 6. generates client JSON for you to review and copy.
@@ -301,7 +301,63 @@ miftah dashboard --config ~/.config/miftah/remote-service.json
 miftah dashboard --config ~/.config/miftah/remote-service.json --no-open
 ```
 
-The equivalent CLI path is plan-first:
+### Endpoint-first OAuth setup
+
+For a standards-based remote MCP, start with its exact HTTPS MCP endpoint. You do not need to know its OAuth issuer, registration mode, scopes, or token storage details:
+
+```bash
+miftah setup --native-oauth \
+  --name remote-service \
+  --profile work \
+  --url https://mcp.example.com/mcp \
+  --output ~/.config/miftah/remote-service.json \
+  --client claude-desktop
+```
+
+Miftah discovers the issuer, supported OAuth metadata, and dynamic client-registration capability from the endpoint itself. It requires exactly one safe authorization server and dynamic registration support. If either condition is missing, it stops before writing the configuration and tells you to use the provider's upstream-owned or advanced manual path instead.
+
+The command prints the scopes advertised by the server so you can review them before Miftah saves the configuration. No browser authorization, client registration, or credential is created during setup. Authorization begins only when you explicitly connect the named account:
+
+```bash
+miftah auth connect --config ~/.config/miftah/remote-service.json \
+  --profile work \
+  --upstream default
+
+miftah connection test --config ~/.config/miftah/remote-service.json \
+  --profile work \
+  --upstream default
+
+miftah connection list --config ~/.config/miftah/remote-service.json --client claude-desktop
+```
+
+### Add another native OAuth account
+
+After the first account is configured, add each additional account as its own named profile. You give Miftah the existing configuration, the new profile name, and the upstream already in that trusted configuration; it never asks you to re-enter an endpoint, issuer, client secret, token, or browser cookie.
+
+```bash
+miftah setup --native-oauth \
+  --config ~/.config/miftah/remote-service.json \
+  --profile personal \
+  --description "Personal analytics account" \
+  --upstream default \
+  --make-default
+```
+
+Miftah preserves each existing account and its OAuth binding. It discovers OAuth from the selected configured upstream, then atomically adds the new profile and its separate binding. `--make-default` changes the durable default for future MCP connections; omit it to keep the current default. As with first setup, no browser authorization, client registration, or credential is created until you choose to connect the new profile:
+
+```bash
+miftah auth connect --config ~/.config/miftah/remote-service.json \
+  --profile personal \
+  --upstream default
+```
+
+The dashboard offers the same path through **Add another native OAuth account**. Existing MCP clients keep their active profile until they restart or reconnect.
+
+The dashboard also offers the existing-profile flow: create a configuration from the endpoint on first run, or choose an existing profile and HTTPS upstream, then select **Discover OAuth from configured upstream**. It never accepts a token, OAuth code, client secret, or browser cookie in the form. The provider consent screen opens only after you select **Connect**.
+
+### Advanced manual OAuth registration
+
+Use this only if the provider has pre-registered a client for you, requires client metadata, or does not advertise dynamic registration. The endpoint-first path intentionally does not guess those provider-specific values. The equivalent manual CLI path is plan-first:
 
 ```bash
 miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json

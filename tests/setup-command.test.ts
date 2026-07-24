@@ -11,7 +11,9 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
 
 import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
+import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
 
@@ -75,6 +77,247 @@ describe("setup command", () => {
   it("makes the guided setup flow a first-class command", () => {
     expect(parseCli(["setup"])).toEqual({ kind: "run", command: "setup", options: {} });
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
+  });
+
+  it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {
+    const output = resolve(outputRoot, "posthog-work.json");
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const transcript = new PassThrough();
+    let contents = "";
+    transcript.on("data", (chunk: Buffer) => { contents += chunk.toString(); });
+
+    try {
+      const result = await runSetupCommand({
+        nativeOAuth: true,
+        name: "posthog-work",
+        profile: "production",
+        url: upstream.streamableHttpUrl,
+        output: "posthog-work.json",
+        client: "claude-desktop"
+      }, {
+        input,
+        output: Object.assign(transcript, { isTTY: false }),
+        cwd: outputRoot,
+        launcher: {
+          command: process.execPath,
+          args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+        },
+        nativeOAuthFetch: upstream.fetch
+      });
+
+      expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+        version: "3",
+        name: "posthog-work",
+        defaultProfile: "production",
+        upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+      });
+      expect(upstream.discoveryRequests()).toEqual([
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-authorization-server"
+      ]);
+      expect(upstream.registrationRequests()).toEqual([]);
+      expect(contents).toContain("OAuth discovery completed");
+      expect(contents).toContain("Claude Desktop settings config");
+      expect(contents).not.toContain("fixture-access-token");
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("adds another native OAuth account to an existing configuration without asking for an endpoint or issuer", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "posthog-work.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: { description: "Work analytics" } }
+    }, null, 2), { mode: 0o600 });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const transcript = new PassThrough();
+    let contents = "";
+    transcript.on("data", (chunk: Buffer) => { contents += chunk.toString(); });
+
+    try {
+      await expect(runSetupCommand({
+        nativeOAuth: true,
+        config: configPath,
+        profile: "personal",
+        description: "Personal analytics",
+        upstream: "default",
+        makeDefault: true
+      }, {
+        input,
+        output: Object.assign(transcript, { isTTY: false }),
+        cwd: outputRoot,
+        launcher: {
+          command: process.execPath,
+          args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+        },
+        nativeOAuthFetch: upstream.fetch
+      })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+      expect(validateConfig(JSON.parse(await readFile(configPath, "utf8")))).toMatchObject({
+        defaultProfile: "personal",
+        profiles: {
+          work: { description: "Work analytics" },
+          personal: { description: "Personal analytics" }
+        }
+      });
+      const stored = JSON.parse(await readFile(configPath, "utf8")) as {
+        readonly oauth: { readonly connections: Record<string, { readonly profile: string; readonly upstream: string }> };
+      };
+      expect(Object.values(stored.oauth.connections)).toContainEqual({
+        profile: "personal",
+        upstream: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://mcp.example.test",
+        clientRegistration: "dynamic",
+        scopes: ["mcp:tools"]
+      });
+      expect(contents).toContain("Added account profile 'personal'");
+      expect(contents).not.toContain("Remote MCP HTTPS URL");
+      expect(contents).not.toContain("OAuth issuer URL");
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("uses the injected discovery fetch when adding a native OAuth account", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "injected-fetch-account.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: {} }
+    }, null, 2), { mode: 0o600 });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const contextFetch = vi.fn(async (): Promise<Response> => {
+      throw new Error("context discovery fetch must not be used");
+    });
+    const injectedFetch = vi.fn(upstream.fetch);
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+
+    try {
+      await expect(runNativeOAuthSetup({
+        config: configPath,
+        profile: "personal",
+        upstream: "default"
+      }, {
+        input,
+        output,
+        cwd: outputRoot,
+        launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+        nativeOAuthFetch: contextFetch
+      }, { fetch: injectedFetch })).resolves.toBeUndefined();
+
+      expect(injectedFetch).toHaveBeenCalled();
+      expect(contextFetch).not.toHaveBeenCalled();
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("continues the interactive native OAuth account wizard when a profile name was supplied", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "multi-upstream.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstreams: {
+        analytics: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+      },
+      profiles: { work: { description: "Work analytics" } }
+    }, null, 2), { mode: 0o600 });
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const streams = createStreams();
+    const command = runSetupCommand({
+      nativeOAuth: true,
+      config: configPath,
+      profile: "personal"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    try {
+      await answer(streams, "Account profile description (optional)", "Personal analytics");
+      await answer(streams, "Configured upstream [default]", "analytics");
+      await answer(streams, "Make this the durable default profile? (yes/no) [no]", "yes");
+      await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      streams.input.end();
+
+      expect(validateConfig(JSON.parse(await readFile(configPath, "utf8")))).toMatchObject({
+        defaultProfile: "personal",
+        profiles: {
+          work: { description: "Work analytics" },
+          personal: { description: "Personal analytics" }
+        }
+      });
+      expect(streams.transcript.contents).toContain("Account profile description (optional)");
+      expect(streams.transcript.contents).toContain("Configured upstream [default]");
+      expect(streams.transcript.contents).toContain("Make this the durable default profile? (yes/no) [no]");
+      expect(streams.transcript.contents).not.toContain("Remote MCP HTTPS URL");
+      expect(streams.transcript.contents).not.toContain("OAuth issuer URL");
+      expect(upstream.registrationRequests()).toEqual([]);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("guides a user through the endpoint-first native OAuth setup questions", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "guided-oauth.json");
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const command = runSetupCommand({ nativeOAuth: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    try {
+      await answer(streams, "Configuration name [miftah-remote]", "posthog-work");
+      await answer(streams, "Account profile name [default]", "production");
+      await answer(streams, "Account profile description (optional)", "Production analytics");
+      await answer(streams, "Remote MCP HTTPS URL", upstream.streamableHttpUrl);
+      await answer(streams, "Output location [posthog-work.miftah.json]", "guided-oauth.json");
+      await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+      await command;
+      streams.input.end();
+
+      const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+      expect(config).toMatchObject({
+        name: "posthog-work",
+        defaultProfile: "production",
+        profiles: { production: { description: "Production analytics" } }
+      });
+      expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
+      expect(streams.transcript.contents).toContain("Server-advertised scopes: mcp:tools.");
+      expect(streams.transcript.contents).not.toContain("OAuth issuer URL");
+      expect(streams.transcript.contents).not.toContain("client secret");
+    } finally {
+      await upstream.close();
+    }
   });
 
   it("creates a validated owner-only configuration through the guided setup flow", async () => {

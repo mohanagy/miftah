@@ -189,6 +189,50 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--verify"]);
   });
 
+  it("offers endpoint-first native OAuth only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--native-oauth",
+      "--name", "posthog-work",
+      "--profile", "production",
+      "--url", "https://mcp.example.test/mcp",
+      "--output", "posthog-work.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        nativeOAuth: true,
+        name: "posthog-work",
+        profile: "production",
+        url: "https://mcp.example.test/mcp",
+        output: "posthog-work.json"
+      }
+    });
+    expect(parseCli([
+      "setup",
+      "--native-oauth",
+      "--config", "posthog-work.json",
+      "--profile", "personal",
+      "--description", "Personal analytics",
+      "--upstream", "default",
+      "--make-default"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        nativeOAuth: true,
+        config: "posthog-work.json",
+        profile: "personal",
+        description: "Personal analytics",
+        upstream: "default",
+        makeDefault: true
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--native-oauth");
+    expect(renderCommandHelp("setup")).toContain("--make-default");
+    expectUsageError(["init", "--native-oauth"]);
+  });
+
   it("accepts explicit client-entry import only from guided setup", () => {
     expect(parseCli([
       "setup",

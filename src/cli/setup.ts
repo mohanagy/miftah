@@ -5,9 +5,13 @@ import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
 import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
 import { runClientEntryImportSetup } from "./setup-client-entry-import.js";
+import { runNativeOAuthSetup } from "./setup-native-oauth.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
-export type SetupCommandOptions = InitCommandOptions & Pick<CliOptions, "verify" | "importFile" | "importEntry">;
+export type SetupCommandOptions = InitCommandOptions & Pick<
+  CliOptions,
+  "config" | "description" | "makeDefault" | "upstream" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "profile"
+>;
 
 export interface SetupCommandResult {
   readonly verification: "not-applicable" | "skipped" | "complete" | "incomplete";
@@ -24,6 +28,43 @@ type ReadinessDecision = "verify" | "skip" | "cancelled";
  * validation, config writer, and client-handoff implementation.
  */
 export async function runSetupCommand(options: SetupCommandOptions, context: InitCommandContext): Promise<SetupCommandResult> {
+  if (options.nativeOAuth === true) {
+    if (options.importFile !== undefined || options.importEntry !== undefined) {
+      throw new CliUsageError("Native OAuth setup cannot import an existing local client entry.");
+    }
+    if (options.verify === true) {
+      throw new CliUsageError("Option '--verify' is unavailable for native OAuth setup because no upstream call runs before browser authorization.");
+    }
+    const incompatible = [
+      "preset",
+      "credentialEnv",
+      "npmPackage",
+      "dockerImage",
+      "headerName",
+      "headerPrefix",
+      "oauthClientSecretsFile",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand"
+    ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
+    if (incompatible !== undefined) {
+      throw new CliUsageError(`Option '--${incompatible}' is unavailable for endpoint-first native OAuth setup.`);
+    }
+    await runNativeOAuthSetup(options, context, {
+      ...(context.nativeOAuthFetch === undefined ? {} : { fetch: context.nativeOAuthFetch })
+    });
+    return { verification: "not-applicable", exitCode: 0, reports: [] };
+  }
+  if (
+    options.config !== undefined ||
+    options.description !== undefined ||
+    options.makeDefault === true ||
+    options.profile !== undefined ||
+    options.upstream !== undefined
+  ) {
+    throw new CliUsageError("Options '--config', '--profile', '--upstream', '--description', and '--make-default' require '--native-oauth' with guided setup.");
+  }
   if (options.importFile !== undefined || options.importEntry !== undefined) {
     if (options.verify === true) {
       throw new CliUsageError("Option '--verify' is unavailable for imported client entries because Miftah does not infer a reviewed provider adapter.");

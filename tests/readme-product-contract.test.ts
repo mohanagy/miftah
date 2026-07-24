@@ -86,6 +86,14 @@ describe("product README", () => {
     expect(readme).toContain("## OAuth and the local dashboard");
     expect(readme).toContain("Native remote OAuth");
     expect(readme).toContain("Upstream-owned OAuth");
+    expect(readme).toContain("miftah setup --native-oauth");
+    expect(readme).toContain("Miftah discovers the issuer, supported OAuth metadata, and dynamic client-registration capability from the endpoint itself.");
+    expect(readme).toContain("No browser authorization, client registration, or credential is created during setup.");
+    expect(readme).toContain("### Add another native OAuth account");
+    expect(readme).toContain("Miftah preserves each existing account and its OAuth binding.");
+    expect(readme).toContain("--make-default");
+    expect(readme).toContain("Add another native OAuth account");
+    expect(readme).toContain("### Advanced manual OAuth registration");
     expect(readme).toContain("miftah connection add --config");
     expect(readme).toContain("miftah auth connect --config");
     expect(readme).toContain("--preset google-search-console");

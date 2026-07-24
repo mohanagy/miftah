@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
+import { readConfigMigrationSource, type ConfigMigrationSource } from "../cli/migrate-config.js";
+import { planConfigMigration } from "../config/migrate-config.js";
 import { resolvePath } from "../config/path-resolve.js";
 import {
   buildPresetConfig,
@@ -28,10 +31,17 @@ import { SecretRedactor } from "../secrets/redact.js";
 import { loadConfig } from "../config/load-config.js";
 import { MiftahError } from "../utils/errors.js";
 import { parseOAuthConnectionRef } from "../oauth/connection-types.js";
+import { discoverNativeOAuthConnection } from "../oauth/remote-oauth-discovery.js";
 import {
   createSetupConfigurationPlan,
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
+import {
+  planNativeOAuthFirstRunConfiguration,
+  runNativeOAuthAccountAddition,
+  selectedExistingUpstream,
+  type NativeOAuthAccountAdditionAuditSink
+} from "../setup/native-oauth-onboarding.js";
 import {
   ClientEntryImportError,
   createImportedClientConfiguration
@@ -69,6 +79,7 @@ export interface ConsoleConnectionAddRequest extends OAuthConnectionAddRequest {
   readonly connectionRef?: string;
 }
 
+/** Console responses never expose local configuration or recovery-file paths. */
 export type ConsoleConnectionAddReport = Omit<ConnectionAddCommandReport, "backupPath">;
 
 export interface ConsoleNativeOAuthOnboardingRequest {
@@ -79,6 +90,28 @@ export interface ConsoleNativeOAuthOnboardingRequest {
   readonly issuer: string;
   readonly clientRegistration: string;
   readonly scopes: readonly string[];
+}
+
+/** Endpoint-first native OAuth onboarding keeps issuer and registration internals out of the Console request. */
+export interface ConsoleDiscoveredNativeOAuthOnboardingRequest {
+  readonly name: string;
+  readonly profile: string;
+  readonly description?: string;
+  readonly resource: string;
+}
+
+/** Existing configurations derive the exact resource from their selected upstream, never from the browser request. */
+export interface ConsoleDiscoveredNativeOAuthConnectionRequest {
+  readonly profile: string;
+  readonly upstream: string;
+}
+
+/** Adds a new, independently authorized account profile from an already configured HTTPS upstream. */
+export interface ConsoleDiscoveredNativeOAuthAccountRequest {
+  readonly profile: string;
+  readonly description?: string;
+  readonly upstream: string;
+  readonly makeDefault?: boolean;
 }
 
 /** Non-secret input accepted for a known connector during first-run setup. */
@@ -143,6 +176,18 @@ export interface ConsoleControlApplication {
   onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   /** Available only when the embedding supports first-run selected local stdio entry import. */
   onboardClientEntry?(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
+  /** Available only when the embedding supports endpoint-first native OAuth discovery. */
+  onboardDiscoveredNativeOAuth?(
+    request: ConsoleDiscoveredNativeOAuthOnboardingRequest
+  ): Promise<ConsoleConnectionAddReport>;
+  /** Available when an initialized configuration supports an endpoint-first OAuth connection. */
+  addDiscoveredNativeOAuthConnection?(
+    request: ConsoleDiscoveredNativeOAuthConnectionRequest
+  ): Promise<ConsoleConnectionAddReport>;
+  /** Available when an initialized configuration supports adding another endpoint-discovered OAuth account. */
+  addDiscoveredNativeOAuthAccount?(
+    request: ConsoleDiscoveredNativeOAuthAccountRequest
+  ): Promise<ConsoleConnectionAddReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -170,6 +215,8 @@ export interface ConsoleApplicationDependencies {
   readonly commandService?: ConsoleOAuthCommandService;
   readonly generateConnectionRef?: () => string;
   readonly launcher?: ClientLauncher;
+  /** Internal test/runtime seam; endpoint-first discovery is guarded and never persists credentials. */
+  readonly nativeOAuthFetch?: FetchLike;
   /** A selected dashboard entry that was read through the catalog's verified file handle. */
   readonly trustedConfiguration?: ConsoleTrustedConfiguration;
 }
@@ -178,6 +225,27 @@ function fileErrorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
+}
+
+function configFromMigrationSource(source: ConfigMigrationSource): MiftahConfig {
+  let input: unknown;
+  try {
+    input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(source.originalBytes));
+  } catch {
+    throw new MiftahError("CONFIG_INVALID_JSON", "CONFIG_INVALID_JSON: configuration is not valid JSON");
+  }
+  return planConfigMigration(input).config as MiftahConfig;
+}
+
+function selectedNativeOAuthUpstream(
+  config: MiftahConfig,
+  profile: string,
+  upstream: string
+): ReturnType<typeof selectedExistingUpstream> {
+  if (!Object.hasOwn(config.profiles, profile)) {
+    throw new MiftahError("PROFILE_NOT_FOUND", "PROFILE_NOT_FOUND: profile does not exist");
+  }
+  return selectedExistingUpstream(config, upstream);
 }
 
 function consoleAuditPath(configPath: string): string {
@@ -237,6 +305,24 @@ class ConsoleConnectionAuditSink implements ConnectionApplicationAuditSink {
   }
 }
 
+class ConsoleNativeOAuthAccountAuditSink implements NativeOAuthAccountAdditionAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  record(event: { readonly profile: string; readonly upstream: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/oauth-profile-add",
+      name: "profile",
+      profile: event.profile,
+      upstream: event.upstream,
+      status: event.status
+    });
+  }
+}
+
 /** Shared, in-process Console application layer. It never invokes the Miftah CLI. */
 export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly auditPath: string;
@@ -245,6 +331,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly commandService: ConsoleOAuthCommandService;
   private readonly generateConnectionRef: () => string;
   private readonly launcher: ClientLauncher | undefined;
+  private readonly nativeOAuthFetch: FetchLike | undefined;
   private readonly trustedConfiguration: ConsoleTrustedConfiguration | undefined;
 
   constructor(
@@ -260,6 +347,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     );
     this.generateConnectionRef = dependencies.generateConnectionRef ?? randomUUID;
     this.launcher = dependencies.launcher;
+    this.nativeOAuthFetch = dependencies.nativeOAuthFetch;
   }
 
   async health(): Promise<ConsoleHealth> {
@@ -337,6 +425,31 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
         `Created profile '${request.profile}'.`,
         `Added OAuth connection for profile '${request.profile}' and upstream 'default'.`
       ]
+    };
+  }
+
+  async onboardDiscoveredNativeOAuth(
+    request: ConsoleDiscoveredNativeOAuthOnboardingRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    const plan = await planNativeOAuthFirstRunConfiguration(request, {
+      generateConnectionRef: this.generateConnectionRef,
+      ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch })
+    });
+    await this.publishFirstRunConfiguration(plan.config, {
+      operation: "console/onboard-native-oauth",
+      name: "connection",
+      profile: request.profile,
+      upstream: "default",
+      status: "success"
+    });
+    return {
+      changed: true,
+      write: true,
+      connectionRef: plan.connectionRef,
+      profile: request.profile,
+      upstream: "default",
+      resource: plan.discovery.resource,
+      actions: [...plan.actions]
     };
   }
 
@@ -473,6 +586,74 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     }, {
       audit: new ConsoleConnectionAuditSink(this.audit),
       ...(this.trustedConfiguration === undefined ? {} : { trustedSource: this.trustedConfiguration.migrationSource })
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
+      connectionRef: result.connectionRef,
+      profile: result.profile,
+      upstream: result.upstream,
+      resource: result.resource,
+      actions: result.actions
+    };
+  }
+
+  async addDiscoveredNativeOAuthConnection(
+    request: ConsoleDiscoveredNativeOAuthConnectionRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const config = this.trustedConfiguration?.config ?? configFromMigrationSource(source);
+    const selected = selectedNativeOAuthUpstream(config, request.profile, request.upstream);
+    const connectionRef = parseOAuthConnectionRef(`oauthconn:${this.generateConnectionRef()}`);
+    const discovery = await discoverNativeOAuthConnection({
+      resource: selected.config.url,
+      profile: request.profile,
+      upstream: selected.name,
+      connectionRef
+    }, {
+      ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch })
+    });
+    const result = await runConnectionAddCommand({
+      configPath,
+      connectionRef,
+      profile: request.profile,
+      upstream: selected.name,
+      issuer: discovery.issuer,
+      clientRegistration: discovery.clientRegistration,
+      scopes: discovery.advertisedScopes,
+      write: true
+    }, {
+      audit: new ConsoleConnectionAuditSink(this.audit),
+      trustedSource: source
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
+      connectionRef: result.connectionRef,
+      profile: result.profile,
+      upstream: result.upstream,
+      resource: result.resource,
+      actions: result.actions
+    };
+  }
+
+  async addDiscoveredNativeOAuthAccount(
+    request: ConsoleDiscoveredNativeOAuthAccountRequest
+  ): Promise<ConsoleConnectionAddReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runNativeOAuthAccountAddition({
+      configPath,
+      profile: request.profile,
+      ...(request.description === undefined ? {} : { description: request.description }),
+      upstream: request.upstream,
+      ...(request.makeDefault === true ? { makeDefault: true } : {})
+    }, {
+      generateConnectionRef: this.generateConnectionRef,
+      ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch }),
+      trustedSource: source,
+      audit: new ConsoleNativeOAuthAccountAuditSink(this.audit)
     });
     return {
       changed: result.changed,

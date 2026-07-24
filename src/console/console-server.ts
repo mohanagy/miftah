@@ -31,6 +31,7 @@ const connectionsCheckingIntervalMs = 5_000;
 const maximumHeaderBytes = 16 * 1024;
 const sessionCookieName = "miftah_console_session";
 const bootstrapSchema = z.object({}).strict();
+const httpsUrlSchema = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:");
 const connectionAddSchema = z.object({
   connectionRef: z.string().min(1).max(512).optional(),
   profile: z.string().min(1).max(256),
@@ -38,6 +39,16 @@ const connectionAddSchema = z.object({
   issuer: z.string().url().max(2_048),
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
+}).strict();
+const discoveredNativeOAuthConnectionSchema = z.object({
+  profile: z.string().min(1).max(256),
+  upstream: z.string().min(1).max(256)
+}).strict();
+const discoveredNativeOAuthAccountSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().max(1_024).optional(),
+  upstream: z.string().min(1).max(256),
+  makeDefault: z.literal(true).optional()
 }).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
@@ -47,6 +58,12 @@ const nativeOAuthOnboardingSchema = z.object({
   issuer: z.string().url().max(2_048),
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
+}).strict();
+const discoveredNativeOAuthOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  profile: z.string().min(1).max(256),
+  description: z.string().max(1_024).optional(),
+  resource: httpsUrlSchema
 }).strict();
 const googleSearchConsoleProfileSchema = z.object({
   name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
@@ -259,6 +276,30 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       "This entry needs advanced manual setup. Import supports only a static local launch; configure custom arguments or credentials separately."
     );
   }
+  if (error.code === "OAUTH_DISCOVERY_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_discovery_unsupported",
+      "The endpoint does not support the required standards-based OAuth setup."
+    );
+  }
+  if (error.code === "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_client_registration_unsupported",
+      "The endpoint does not support automatic OAuth setup. Use its documented manual registration details."
+    );
+  }
+  if (error.code === "OAUTH_RESOURCE_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_resource_invalid",
+      "The MCP endpoint must be an exact HTTPS Streamable HTTP URL."
+    );
+  }
+  if (error.code === "PROFILE_ALREADY_EXISTS") {
+    return new ConsoleHttpError(422, "profile_already_exists", "That account profile already exists.");
+  }
   if (
     error.code.startsWith("CONFIG_") ||
     error.code.startsWith("OAUTH_CONNECTION_") ||
@@ -463,6 +504,27 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
+    if (request.url === "/api/v1/onboarding/native-oauth/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthOnboardingSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardDiscoveredNativeOAuth === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardDiscoveredNativeOAuth(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
     if (request.url === "/api/v1/onboarding/native-oauth") {
       if (request.method !== "POST") {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
@@ -590,6 +652,49 @@ class LocalConsoleServer implements ConsoleServer {
       if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
       try {
         const result = await this.application.addConnection(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/native-oauth/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthAccountSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addDiscoveredNativeOAuthAccount === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addDiscoveredNativeOAuthAccount(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    // This exact route must precede the broad /connections/:reference status route below.
+    if (request.url === "/api/v1/connections/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthConnectionSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addDiscoveredNativeOAuthConnection === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addDiscoveredNativeOAuthConnection(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
       } catch (error) {

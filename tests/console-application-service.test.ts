@@ -11,8 +11,13 @@ import {
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import {
+  startOAuthCompatibilityProbe,
+  type OAuthCompatibilityProbe
+} from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
+const oauthUpstreams: OAuthCompatibilityProbe[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -43,6 +48,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 
 afterEach(async () => {
   if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
+  await Promise.all(oauthUpstreams.splice(0).map((upstream) => upstream.close()));
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -214,6 +220,194 @@ describe("Console application service", () => {
       clientRegistration: "dynamic",
       scopes: []
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
+  });
+
+  it("discovers a first-run native OAuth binding from the endpoint before writing the configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-discovered-native-oauth-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    oauthUpstreams.push(upstream);
+    const service = new ConsoleApplicationService(configPath, {
+      generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    const created = await service.onboardDiscoveredNativeOAuth({
+      name: "posthog-work",
+      profile: "production",
+      description: "Production account",
+      resource: upstream.streamableHttpUrl
+    });
+
+    expect(created).toMatchObject({
+      connectionRef,
+      profile: "production",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp",
+      actions: [
+        "Created profile 'production'.",
+        "Discovered standards-based OAuth for profile 'production'.",
+        "Added OAuth connection for profile 'production' and upstream 'default'."
+      ]
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      oauth: {
+        connections: {
+          [connectionRef]: {
+            issuer: "https://mcp.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    });
+    expect(upstream.registrationRequests()).toEqual([]);
+  });
+
+  it("discovers OAuth from an existing selected Streamable HTTP upstream before adding its connection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-existing-native-oauth-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "miftah.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "production",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { production: { description: "Production analytics" } }
+    }, null, 2));
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    oauthUpstreams.push(upstream);
+    const service = new ConsoleApplicationService(configPath, {
+      generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    await expect(service.addDiscoveredNativeOAuthConnection({
+      profile: "production",
+      upstream: "default"
+    })).resolves.toMatchObject({
+      connectionRef,
+      profile: "production",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp"
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      oauth: {
+        connections: {
+          [connectionRef]: {
+            profile: "production",
+            upstream: "default",
+            resource: "https://mcp.example.test/mcp",
+            issuer: "https://mcp.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    });
+    expect(upstream.discoveryRequests()).toEqual([
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-authorization-server"
+    ]);
+    expect(upstream.registrationRequests()).toEqual([]);
+  });
+
+  it("adds another native OAuth account profile atomically from the existing upstream", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-add-native-oauth-account-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "miftah.json");
+    await writeFile(configPath, JSON.stringify({
+      version: "3",
+      name: "posthog-work",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { work: { description: "Work analytics" } },
+      oauth: {
+        connections: {
+          [connectionRef]: {
+            profile: "work",
+            upstream: "default",
+            resource: "https://mcp.example.test/mcp",
+            issuer: "https://mcp.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    }, null, 2));
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    oauthUpstreams.push(upstream);
+    const service = new ConsoleApplicationService(configPath, {
+      generateConnectionRef: () => "f7a93c2d-778e-48e2-9d52-56a9d3b577cf",
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    await expect(service.addDiscoveredNativeOAuthAccount({
+      profile: "personal",
+      description: "Personal analytics",
+      upstream: "default",
+      makeDefault: true
+    })).resolves.toMatchObject({
+      connectionRef: "oauthconn:f7a93c2d-778e-48e2-9d52-56a9d3b577cf",
+      profile: "personal",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp",
+      actions: [
+        "Created profile 'personal'.",
+        "Discovered standards-based OAuth for profile 'personal'.",
+        "Added OAuth connection for profile 'personal' and upstream 'default'.",
+        "Set durable default profile to 'personal'."
+      ]
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "personal",
+      profiles: {
+        work: { description: "Work analytics" },
+        personal: { description: "Personal analytics" }
+      },
+      oauth: {
+        connections: {
+          [connectionRef]: { profile: "work" },
+          "oauthconn:f7a93c2d-778e-48e2-9d52-56a9d3b577cf": {
+            profile: "personal",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    });
+    expect(upstream.registrationRequests()).toEqual([]);
+    await expect(service.auditRecords(10)).resolves.toContainEqual(expect.objectContaining({
+      operation: "console/oauth-profile-add",
+      profile: "personal",
+      upstream: "default",
+      status: "success"
+    }));
+  });
+
+  it("rejects an existing non-Streamable upstream before it can fetch OAuth metadata or write a connection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-non-native-upstream-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "miftah.json");
+    const original = JSON.stringify({
+      version: "3",
+      name: "local-tools",
+      defaultProfile: "production",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: { production: {} }
+    }, null, 2);
+    await writeFile(configPath, original);
+    const fetch = async (): Promise<Response> => {
+      throw new Error("metadata fetch must not run");
+    };
+    const service = new ConsoleApplicationService(configPath, { nativeOAuthFetch: fetch });
+
+    await expect(service.addDiscoveredNativeOAuthConnection({
+      profile: "production",
+      upstream: "default"
+    })).rejects.toMatchObject({ code: "OAUTH_RESOURCE_INVALID" });
+    expect(await readFile(configPath, "utf8")).toBe(original);
   });
 
   it("creates a first-run known connector through the shared preset setup path", async () => {
