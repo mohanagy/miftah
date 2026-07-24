@@ -2,12 +2,14 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuditTrail } from "../src/audit/audit-trail.js";
 import { runProfileReadiness } from "../src/setup/profile-readiness.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -197,6 +199,25 @@ describe("setup profile readiness", () => {
     });
     await expect(readFile(fixture.startPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(fixture.callPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("checks audit writability before opening an unsupported readiness audit scope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-setup-readiness-unsupported-audit-"));
+    temporaryDirectories.push(root);
+    const blockedParent = join(root, "not-a-directory");
+    await writeFile(blockedParent, "regular file");
+    const fixture = await createReadinessFixture({
+      auditPath: join(blockedParent, "audit.jsonl"),
+      profileEnvironment: { PATH: "/untrusted-provider-bin" }
+    });
+    const beginOperation = vi.spyOn(AuditTrail.prototype, "beginOperation");
+
+    await expect(fixture.run()).rejects.toMatchObject({
+      code: "AUDIT_WRITE_FAILED",
+      message: "AUDIT_WRITE_FAILED: profile readiness did not complete"
+    });
+    expect(beginOperation).not.toHaveBeenCalled();
+    await expect(readFile(fixture.startPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does not start or call a provider when policy denies the declared probe", async () => {

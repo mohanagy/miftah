@@ -180,7 +180,6 @@ export async function runProfileReadinessFromLoadedConfig(
     target.signal?.addEventListener("abort", abortListener, { once: true });
     if (target.signal?.aborted) closeRuntimeForAbort();
     throwIfAborted(target.signal);
-    throwIfAborted(target.signal);
     const session = await runtime.manager.get(resolvedTarget.profile, resolvedTarget.upstream);
     throwIfAborted(target.signal);
     const tool = (await session.listTools({ signal: target.signal })).tools.find((candidate) => candidate.name === safeReadProbe.name);
@@ -265,13 +264,17 @@ async function recordUnsupportedReadiness(
   target: ResolvedTarget
 ): Promise<ProfileReadinessReport> {
   const audit = configuredAuditTrail(config, new SecretRedactor());
+  try {
+    await audit.ensureWritable();
+  } catch (error) {
+    throw safeReadinessError(error);
+  }
   const scope = audit.beginOperation({
     operation: "setup/profile-readiness",
     name: "provider-adapter",
     sourceProfile: target.profile,
     profile: target.profile
   });
-  await audit.ensureWritable();
   scope.update({ upstream: target.upstream, routingReason: "setup-profile", routingSource: "setup-profile" });
   await scope.finish({ status: "blocked", errorCode: "PROFILE_READINESS_UNSUPPORTED" });
   return {
