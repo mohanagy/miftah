@@ -223,6 +223,63 @@ describe("Console application service", () => {
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
   });
 
+  it("creates a first-run configuration from one explicitly selected local stdio client entry without accepting credentials", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.onboardClientEntry({
+      name: "posthog-work",
+      entry: "posthog",
+      document: JSON.stringify({
+        mcpServers: {
+          posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+        }
+      })
+    })).resolves.toEqual({
+      changed: true,
+      write: true,
+      name: "posthog-work",
+      defaultProfile: "default",
+      profileCount: 1,
+      actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."]
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      name: "posthog-work",
+      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+      profiles: { default: { policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+  });
+
+  it("gives a bounded advanced-manual recovery code for an entry outside the static launch grammar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-static-launch-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.onboardClientEntry({
+      name: "posthog-work",
+      entry: "posthog",
+      document: JSON.stringify({
+        mcpServers: {
+          posthog: {
+            command: "npx",
+            args: ["--yes", "@posthog/mcp@1.2.3", "--project", "craftmyletter"]
+          }
+        }
+      })
+    })).rejects.toMatchObject({
+      code: "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED",
+      message: "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED: use advanced manual setup for custom arguments or credentials"
+    });
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("creates the same multi-account GSC configuration as the guided CLI path", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-gsc-preset-"));
     temporaryDirectories.push(root);

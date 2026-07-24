@@ -5,6 +5,8 @@ type ValueOptionName =
   | "preset"
   | "name"
   | "client"
+  | "importFile"
+  | "importEntry"
   | "credentialEnv"
   | "npmPackage"
   | "dockerImage"
@@ -29,6 +31,10 @@ export interface CliOptions {
   readonly preset?: string;
   readonly name?: string;
   readonly client?: string;
+  /** Explicit absolute source file for a reviewed existing local stdio MCP entry. */
+  readonly importFile?: string;
+  /** Explicit MCP entry name selected from the source client configuration. */
+  readonly importEntry?: string;
   readonly credentialEnv?: string;
   readonly npmPackage?: string;
   readonly dockerImage?: string;
@@ -111,6 +117,8 @@ export const CLI_COMMANDS = {
       "preset",
       "output",
       "client",
+      "importFile",
+      "importEntry",
       "credentialEnv",
       "npmPackage",
       "dockerImage",
@@ -238,6 +246,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: true,
     usage: "--client <claude-desktop|claude-code|cursor|vscode|all>",
     description: "Print client configuration snippets."
+  },
+  importFile: {
+    name: "importFile",
+    takesValue: true,
+    usage: "--import-file <file>",
+    description: "Absolute existing MCP client JSON file to import without modifying it."
+  },
+  importEntry: {
+    name: "importEntry",
+    takesValue: true,
+    usage: "--import-entry <name>",
+    description: "Explicit local stdio MCP entry selected from the import file."
   },
   credentialEnv: {
     name: "credentialEnv",
@@ -380,6 +400,8 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--preset": OPTION_DEFINITIONS.preset,
   "--name": OPTION_DEFINITIONS.name,
   "--client": OPTION_DEFINITIONS.client,
+  "--import-file": OPTION_DEFINITIONS.importFile,
+  "--import-entry": OPTION_DEFINITIONS.importEntry,
   "--credential-env": OPTION_DEFINITIONS.credentialEnv,
   "--npm-package": OPTION_DEFINITIONS.npmPackage,
   "--docker-image": OPTION_DEFINITIONS.dockerImage,

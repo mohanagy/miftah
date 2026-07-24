@@ -189,6 +189,28 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--verify"]);
   });
 
+  it("accepts explicit client-entry import only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "analytics",
+      "--import-file=/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
+      "--import-entry=posthog",
+      "--output=analytics.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        name: "analytics",
+        importFile: "/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
+        importEntry: "posthog",
+        output: "analytics.json"
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--import-file <file>");
+    expect(renderCommandHelp("setup")).toContain("--import-entry <name>");
+    expectUsageError(["init", "--import-file", "/Users/example/config.json", "--import-entry", "posthog"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

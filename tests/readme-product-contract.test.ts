@@ -100,6 +100,18 @@ describe("product README", () => {
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
   });
 
+  it("documents the explicit no-secret local stdio client-entry import path", () => {
+    expect(readme).toContain("## Reuse one existing local stdio MCP entry");
+    expect(readme).toContain("--import-file");
+    expect(readme).toContain("--import-entry");
+    expect(readme).toContain("does not scan or modify the source client file");
+    expect(readme).toContain("does not infer OAuth ownership");
+    expect(readme).toContain("`--verify` is rejected because an imported entry has no reviewed provider adapter");
+    expect(readme).toContain("static launch grammar");
+    expect(readme).toContain("exact version");
+    expect(readme).toContain("advanced manual setup");
+  });
+
   it("describes the Claude Desktop guide without promising missing screenshots", () => {
     expect(readme).toContain("For host-specific notes, use the [Claude Desktop setup]");
     expect(readme).not.toContain("For screenshots and host-specific notes");

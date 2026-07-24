@@ -4,9 +4,10 @@ import { MiftahError } from "../utils/errors.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
 import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
+import { runClientEntryImportSetup } from "./setup-client-entry-import.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
-export type SetupCommandOptions = InitCommandOptions & Pick<CliOptions, "verify">;
+export type SetupCommandOptions = InitCommandOptions & Pick<CliOptions, "verify" | "importFile" | "importEntry">;
 
 export interface SetupCommandResult {
   readonly verification: "not-applicable" | "skipped" | "complete" | "incomplete";
@@ -23,6 +24,15 @@ type ReadinessDecision = "verify" | "skip" | "cancelled";
  * validation, config writer, and client-handoff implementation.
  */
 export async function runSetupCommand(options: SetupCommandOptions, context: InitCommandContext): Promise<SetupCommandResult> {
+  if (options.importFile !== undefined || options.importEntry !== undefined) {
+    if (options.verify === true) {
+      throw new CliUsageError("Option '--verify' is unavailable for imported client entries because Miftah does not infer a reviewed provider adapter.");
+    }
+    await runClientEntryImportSetup(options, context);
+    // Imported client entries are intentionally untrusted/manual. They do not
+    // inherit a reviewed provider adapter and are never launched during import.
+    return { verification: "not-applicable", exitCode: 0, reports: [] };
+  }
   const created = await runInitCommand({ ...options, interactive: true }, context);
   if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
     return { verification: "not-applicable", exitCode: 0, reports: [] };

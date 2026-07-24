@@ -194,6 +194,24 @@ Replace the example package, version, and variable name with the upstream's docu
 
 If the upstream needs custom arguments, headers, working directories, several named upstreams, or profile-specific overrides, generate the nearest safe preset and then use the [Configuration reference](docs/config.md). Always keep subprocess arguments as arrays; Miftah does not need a shell command string.
 
+## Reuse one existing local stdio MCP entry
+
+If you already have a local Claude Desktop, Claude Code, Cursor, or VS Code MCP entry, `miftah setup` can create a safe first Miftah configuration from one entry you explicitly choose. It does not scan or modify the source client file.
+
+```bash
+miftah setup posthog-work \
+  --import-file "$HOME/Library/Application Support/Claude/claude_desktop_config.json" \
+  --import-entry posthog \
+  --output ~/.config/miftah/posthog-work.json \
+  --client claude-desktop
+```
+
+`--import-file` must be an absolute regular JSON file, and `--import-entry` is the exact entry name under `mcpServers` (Claude Desktop, Claude Code, or Cursor) or `servers` (VS Code). Miftah reads that one file through a bounded verified handle and leaves it byte-for-byte untouched. It imports only a finite **static launch grammar**: a literal local executable, an optional absolute working directory, and either an exact-version package-runner launch with a runner-specific safe prefix and no arguments after the package, a script path plus non-sensitive flags, or a direct executable plus non-sensitive flags.
+
+The importer rejects remote transports, `env`, headers, shell settings, unsupported fields, environment wrappers, inline code, opaque values or assignments, URL userinfo, unpinned package references, and credential-shaped arguments. It creates one `default` profile with a read-only policy and treats unknown tools as destructive until you deliberately configure a policy. It does not launch the imported executable or copy credentials; `--verify` is rejected because an imported entry has no reviewed provider adapter. It does not infer OAuth ownership from a command or URL. If the entry needs custom values, OAuth, or an API key, use advanced manual setup, then configure the upstream's documented flow and Miftah secret references separately.
+
+For a browser-first first run, `miftah dashboard` offers the same paste-only import path. The Console parses the pasted JSON only for that local request, does not persist or return it, and clears it from the page afterwards.
+
 ### What a multi-profile configuration contains
 
 The GitHub preset is a runnable two-profile example. Its central account mapping is:
@@ -236,13 +254,13 @@ The easiest first run is:
 miftah dashboard
 ```
 
-Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration or a Native remote OAuth profile there; it never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
+Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration, a Native remote OAuth profile, or one explicitly pasted local stdio entry there; it never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
 
 The optional dashboard:
 
 1. starts a foreground-only service on literal `127.0.0.1`;
 2. opens the system browser and asks for the one-time bootstrap code printed in the terminal;
-3. creates a first validated known-preset configuration or Native remote OAuth profile and connection when the selected config path does not exist;
+3. creates a first validated known-preset configuration, Native remote OAuth profile and connection, or explicitly pasted local stdio entry when the selected config path does not exist;
 4. offers a separate **Connect** action that starts the reviewed system-browser authorization;
 5. shows redacted connection and audit state; and
 6. generates client JSON for you to review and copy.
