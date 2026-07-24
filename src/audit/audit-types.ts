@@ -43,7 +43,7 @@ export interface AuditHealth {
 
 export type AuditEventKind = "operation" | "lifecycle" | "approval" | "profile";
 export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
-export type AuditRoutingSource = "rule" | "matcher" | "active-profile" | "default-profile";
+export type AuditRoutingSource = "rule" | "matcher" | "active-profile" | "default-profile" | "setup-profile";
 export type ApprovalAuditAction = "requested" | "approved" | "denied" | "expired" | "consumed";
 export type ProfileAuditAction =
   | "confirmation-requested"

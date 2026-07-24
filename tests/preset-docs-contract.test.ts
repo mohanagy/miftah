@@ -93,7 +93,8 @@ describe("preset documentation contract", () => {
       "--url",
       "--header-name",
       "--header-prefix",
-      "--oauth-client-secrets-file"
+      "--oauth-client-secrets-file",
+      "--verify"
     ]) {
       expect(cli).toContain(option);
     }
@@ -119,9 +120,16 @@ describe("preset documentation contract", () => {
     expect(providerAdapters).toContain("GSC_CREDENTIALS_PATH");
     expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
     expect(providerAdapters).toContain("get_capabilities");
+    expect(providerAdapters).toContain("`setup --verify`");
+    expect(providerAdapters).toContain("Console action");
+    expect(providerAdapters).toContain("`PROFILE_READINESS_UNSUPPORTED`");
+    expect(providerAdapters).toContain("configuration-controlled `PATH`");
+    expect(providerAdapters).toContain("does not start a provider process");
     expect(providerAdapters).toContain("reauthenticate");
     expect(providerAdapters).toContain("GSC_ALLOW_DESTRUCTIVE");
     expect(oauthSupport).not.toContain("No provider-adapter API exists today");
     expect(oauthSupport).toContain("Google Search Console pilot");
+    expect(cli).toContain("If the post-write readiness prompt is cancelled, Miftah keeps the configuration, reports incomplete verification, and exits 1.");
+    expect(cli).toContain("A non-ready `setup --verify` result also keeps the configuration and exits 1.");
   });
 });

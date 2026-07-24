@@ -36,6 +36,8 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(consoleApi).toContain("There is no host option, LAN mode, background daemon, or automatic startup.");
     expect(consoleApi).toContain("`POST /api/v1/sessions`");
     expect(consoleApi).toContain("`POST /api/v1/onboarding/native-oauth`");
+    expect(consoleApi).toContain("`POST /api/v1/profile-readiness`");
+    expect(consoleApi).toContain("provider-declared safe read-only check");
     expect(consoleApi).toContain("GSC accepts only structured account names/descriptions/client-secrets paths");
     expect(consoleApi).toContain("`GET /api/v1/client-snippets?client=<name>`");
     expect(consoleApi).toContain("`POST /api/v1/connections/:ref/test`");

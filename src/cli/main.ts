@@ -184,7 +184,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "setup") {
-    await runSetupCommand(args, {
+    const result = await runSetupCommand(args, {
       input: process.stdin,
       output: process.stdout,
       cwd: process.cwd(),
@@ -193,6 +193,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
         args: [fileURLToPath(import.meta.url), "serve"]
       }
     });
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;
   }
   if (command === "dashboard") {

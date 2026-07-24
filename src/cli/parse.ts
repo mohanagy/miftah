@@ -19,7 +19,7 @@ type ValueOptionName =
   | "clientRegistration"
   | "scopes"
   | "port";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen";
+type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen" | "verify";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -50,6 +50,8 @@ export interface CliOptions {
   readonly write?: true;
   readonly nonInteractive?: true;
   readonly noOpen?: true;
+  /** Runs the provider-declared safe readiness check after `miftah setup` writes the configuration. */
+  readonly verify?: true;
 }
 
 interface CliCommandMetadata {
@@ -115,7 +117,8 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
-      "oauthClientSecretsFile"
+      "oauthClientSecretsFile",
+      "verify"
     ]
   },
   "list-tools": {
@@ -361,6 +364,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--no-open",
     description: "Print the local dashboard URL without opening a browser."
+  },
+  verify: {
+    name: "verify",
+    takesValue: false,
+    usage: "--verify",
+    description: "Run declared safe readiness checks after setup writes the configuration."
   }
 };
 
@@ -392,6 +401,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--write": OPTION_DEFINITIONS.write,
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
   "--no-open": OPTION_DEFINITIONS.noOpen,
+  "--verify": OPTION_DEFINITIONS.verify,
   "--help": "help",
   "-h": "help",
   "--version": "version",

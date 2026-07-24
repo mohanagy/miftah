@@ -60,9 +60,17 @@ interface InitValues extends PresetBuildOptions {
 
 interface InitPlan {
   readonly output: string;
+  readonly config: MiftahConfig;
   readonly configuration: SetupConfigurationPlan;
   readonly snippets: readonly ClientSnippet[];
   readonly claudeCodePermissionGuidance?: ClaudeCodePermissionGuidance;
+  readonly providerAdapter?: ProviderAdapterDefinition;
+}
+
+/** Safe result of publishing a generated configuration. It contains no raw secret values. */
+export interface InitCommandResult {
+  readonly output: string;
+  readonly config: MiftahConfig;
   readonly providerAdapter?: ProviderAdapterDefinition;
 }
 
@@ -366,6 +374,7 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
 
   return {
     output,
+    config,
     configuration: createSetupConfigurationPlan({ configPath: output, config }),
     snippets,
     claudeCodePermissionGuidance,
@@ -415,7 +424,7 @@ function writeSnippets(
 }
 
 /** Creates a strict catalog config and optionally prints copy-paste client snippets. */
-export async function runInitCommand(options: InitCommandOptions, context: InitCommandContext): Promise<void> {
+export async function runInitCommand(options: InitCommandOptions, context: InitCommandContext): Promise<InitCommandResult> {
   const values = options.interactive === true
     ? await collectInteractiveValues(options, context)
     : nonInteractiveValues(options);
@@ -433,4 +442,5 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
   context.output.write(`Created ${plan.output}\n`);
   writeProviderAdapterGuidance(context.output, plan.providerAdapter);
   writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
+  return { output: plan.output, config: plan.config, providerAdapter: plan.providerAdapter };
 }

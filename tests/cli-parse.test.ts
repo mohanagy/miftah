@@ -179,6 +179,16 @@ describe("CLI parser", () => {
     expectUsageError(["init", "example", "--name", "named-example"]);
   });
 
+  it("offers the opt-in provider readiness check only from guided setup", () => {
+    expect(parseCli(["setup", "--verify"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { verify: true }
+    });
+    expect(renderCommandHelp("setup")).toContain("--verify");
+    expectUsageError(["init", "--verify"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

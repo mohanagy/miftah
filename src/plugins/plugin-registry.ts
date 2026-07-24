@@ -165,6 +165,8 @@ export class PluginRegistry {
 export interface PluginRegistryLoadOptions {
   /** Canonical local directory that every resolved plugin module must remain below. */
   readonly rootDirectory?: string;
+  /** Cancels manifest preflight and terminates any isolated plugin host child. */
+  readonly signal?: AbortSignal;
 }
 
 /** Preflights each explicit local allowlist entry before Miftah constructs an MCP server. */
@@ -175,32 +177,44 @@ export async function loadPluginRegistry(
   const entries = config?.allowlist ?? [];
   validatePluginEntries(entries);
   const timeoutMs = config?.timeoutMs ?? defaultPluginTimeoutMs;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
   let rootDirectory: string | undefined;
-  if (options.rootDirectory !== undefined) {
-    try {
-      rootDirectory = await realpath(options.rootDirectory);
-    } catch {
+  try {
+    if (controller.signal.aborted) throw incompatiblePluginError();
+    if (options.rootDirectory !== undefined) {
+      try {
+        rootDirectory = await realpath(options.rootDirectory);
+      } catch {
+        throw incompatiblePluginError();
+      }
+    }
+    if (controller.signal.aborted) {
       throw incompatiblePluginError();
     }
+    const attempts = entries.map((entry) =>
+      loadPlugin(entry, timeoutMs, rootDirectory, controller.signal).catch((error: unknown) => {
+        controller.abort();
+        throw error;
+      })
+    );
+    const outcomes = await Promise.allSettled(attempts);
+    if (options.signal?.aborted) throw incompatiblePluginError();
+    const failure = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
+    );
+    if (failure !== undefined) throw incompatiblePluginError();
+    const plugins = outcomes.map((outcome) => {
+      if (outcome.status !== "fulfilled") throw incompatiblePluginError();
+      return outcome.value;
+    });
+    return new PluginRegistry(timeoutMs, plugins.sort((first, second) => first.id.localeCompare(second.id)));
+  } finally {
+    controller.abort();
+    options.signal?.removeEventListener("abort", abort);
   }
-  const controller = new AbortController();
-  const attempts = entries.map((entry) =>
-    loadPlugin(entry, timeoutMs, rootDirectory, controller.signal).catch((error: unknown) => {
-      controller.abort();
-      throw error;
-    })
-  );
-  const outcomes = await Promise.allSettled(attempts);
-  controller.abort();
-  const failure = outcomes.find(
-    (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
-  );
-  if (failure !== undefined) throw incompatiblePluginError();
-  const plugins = outcomes.map((outcome) => {
-    if (outcome.status !== "fulfilled") throw incompatiblePluginError();
-    return outcome.value;
-  });
-  return new PluginRegistry(timeoutMs, plugins.sort((first, second) => first.id.localeCompare(second.id)));
 }
 
 function validatePluginEntries(entries: readonly PluginConfig[]): void {

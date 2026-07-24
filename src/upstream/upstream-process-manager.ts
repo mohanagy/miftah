@@ -356,11 +356,13 @@ export class UpstreamProcessManager {
         profileConfig,
         profileConfig.args ?? this.upstream.args ?? []
       );
+      this.assertCurrentStartup(profile, generation);
       try {
         oauthProvider = await this.options.oauthProvider?.(profile, this.upstreamName);
       } catch (error) {
         throw this.oauthAuthorizationFailure(error);
       }
+      this.assertCurrentStartup(profile, generation);
       if (oauthProvider !== undefined && this.upstream.transport !== "streamable-http") {
         throw new MiftahError(
           "OAUTH_CONNECTION_INVALID",
@@ -958,6 +960,12 @@ export class UpstreamProcessManager {
 
   private isCurrent(profile: string, generation: number): boolean {
     return !this.closed && this.generation(profile) === generation;
+  }
+
+  /** Prevents a closed manager from spawning a process after an async startup dependency settles. */
+  private assertCurrentStartup(profile: string, generation: number): void {
+    if (this.isCurrent(profile, generation)) return;
+    throw new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
   }
 
   private assertOpen(): void {

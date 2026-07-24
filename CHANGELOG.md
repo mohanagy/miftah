@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
-- [#204](https://github.com/mohanagy/miftah/issues/204) Added guided multi-account Google Search Console onboarding through the CLI and local Console. It creates named profiles with an explicit durable default and separate upstream-owned OAuth state directories per generated configuration file and profile, while continuing to keep browser login, token-cache contents, reauthentication, revocation, and account identity verification outside Miftah.
+- [#204](https://github.com/mohanagy/miftah/issues/204) Added guided multi-account Google Search Console onboarding through the CLI and local Console, including an explicit opt-in first-success check that resolves only the selected target, verifies audit/policy/identity boundaries before its one declared read-only probe, and cancels with the requesting Console session. The check trusts only the catalog's reviewed launch envelope and fails closed without launching a process after execution-affecting customization. It creates named profiles with an explicit durable default and separate upstream-owned OAuth state directories per generated configuration file and profile, while continuing to keep browser login, token-cache contents, reauthentication, revocation, and account identity verification outside Miftah.
 
 ### Changed
 

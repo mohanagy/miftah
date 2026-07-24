@@ -54,6 +54,22 @@ async function writeConfig(): Promise<string> {
   return path;
 }
 
+async function writeSingleNamedUpstreamConfig(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "miftah-console-named-upstream-"));
+  temporaryDirectories.push(directory);
+  const path = join(directory, "miftah.json");
+  await writeFile(path, JSON.stringify({
+    version: "3",
+    name: "console-named-upstream-test",
+    defaultProfile: "personal",
+    upstreams: {
+      analytics: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+    },
+    profiles: { personal: {} }
+  }));
+  return path;
+}
+
 describe("Console application service", () => {
   it.skipIf(process.platform === "win32")("binds a trusted dashboard snapshot through a configuration mutation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-trusted-snapshot-"));
@@ -301,6 +317,47 @@ describe("Console application service", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain(connectionRef);
     expect(JSON.stringify(records)).not.toContain("auth.example.test");
+  });
+
+  it("uses the shared readiness service and records the Console action without launching an unsupported provider", async () => {
+    const configPath = await writeConfig();
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.profileReadiness({ profile: "personal" })).resolves.toEqual({
+      status: "unsupported",
+      profile: "personal",
+      upstream: "default",
+      safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" },
+      identity: { status: "not-checked" }
+    });
+    await expect(service.auditRecords(10)).resolves.toEqual([
+      expect.objectContaining({
+        operation: "console/profile-readiness",
+        name: "profile",
+        profile: "personal",
+        upstream: "default",
+        status: "failure",
+        errorCode: "PROFILE_READINESS_UNSUPPORTED"
+      })
+    ]);
+  });
+
+  it("audits the resolved named upstream rather than inventing a default target", async () => {
+    const service = new ConsoleApplicationService(await writeSingleNamedUpstreamConfig());
+
+    await expect(service.profileReadiness({ profile: "personal" })).resolves.toMatchObject({
+      status: "unsupported",
+      profile: "personal",
+      upstream: "analytics"
+    });
+    await expect(service.auditRecords(10)).resolves.toEqual([
+      expect.objectContaining({
+        operation: "console/profile-readiness",
+        profile: "personal",
+        upstream: "analytics",
+        errorCode: "PROFILE_READINESS_UNSUPPORTED"
+      })
+    ]);
   });
 
   it("returns live redacted connection state for dashboard connection cards", async () => {

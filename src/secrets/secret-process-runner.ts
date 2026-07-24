@@ -229,8 +229,11 @@ function runPreparedSecretCommand(
     };
 
     const onAbort = () => terminate("cancelled");
-    options.signal?.addEventListener("abort", onAbort, { once: true });
     const timeout = setTimeout(terminate, timeoutMs, "timeout");
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    // An abort can occur while `spawn` materializes its options, before the listener exists.
+    // Re-check after registration so the contained child is terminated rather than waiting for timeout.
+    if (options.signal?.aborted) onAbort();
 
     if (command.stdin !== undefined && !usesWindowsHelper) {
       stdin!.once("error", () => terminate("unavailable"));

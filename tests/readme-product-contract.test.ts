@@ -83,6 +83,10 @@ describe("product README", () => {
     expect(readme).toContain("miftah auth connect --config");
     expect(readme).toContain("--preset google-search-console");
     expect(readme).toContain("miftah setup gsc --preset google-search-console");
+    expect(readme).toContain("miftah setup gsc --preset google-search-console --verify");
+    expect(readme).toContain("Miftah does not invent a probe or show the provider output");
+    expect(readme).toContain("A non-ready readiness result leaves the configuration in place and exits 1.");
+    expect(readme).toContain("If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1.");
     expect(readme).toContain("one or more named Google accounts");
     expect(readme).toContain(
       "miftah init remote-service --preset streamable-http --url https://mcp.example.com --output ~/.config/miftah/remote-service.json"

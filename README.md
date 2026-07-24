@@ -60,7 +60,7 @@ Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line cont
 miftah setup
 ```
 
-This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Use `miftah init` when you want the same catalog in a scripted command.
+This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
 
 ## First setup: GitHub with Claude Desktop
 
@@ -311,7 +311,13 @@ To configure one or more named Google accounts behind one connector, use the gui
 miftah setup gsc --preset google-search-console
 ```
 
-The wizard asks for one or more named Google accounts, an optional description and client-secrets path for each, then the default profile. Each generated profile gets a different `GSC_CONFIG_DIR`, and Miftah namespaces that directory by the generated configuration file as well as the profile. The exact-pinned upstream therefore keeps its token cache separate even when two configuration files use the same Miftah name. Complete the upstream browser flow separately for every account, then run `miftah validate` and `miftah doctor` against the generated configuration. Separate caches do not verify Google-account identity or property access; confirm those in the upstream before relying on a profile. See the [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot).
+If you want the reviewed first-success check immediately after the configuration is written, use:
+
+```bash
+miftah setup gsc --preset google-search-console --verify
+```
+
+The wizard asks for one or more named Google accounts, an optional description and client-secrets path for each, then the default profile. Each generated profile gets a different `GSC_CONFIG_DIR`, and Miftah namespaces that directory by the generated configuration file as well as the profile. The exact-pinned upstream therefore keeps its token cache separate even when two configuration files use the same Miftah name. `--verify` replaces the final yes/no prompt and runs the adapter's declared `get_capabilities` check once for every named profile. Miftah does not invent a probe or show the provider output; it reports only the bounded readiness status. A non-ready readiness result leaves the configuration in place and exits 1. If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1. The automatic check intentionally applies only while the reviewed GSC launch shape is unchanged; custom commands, process `PATH`, working directories, isolation, or unknown provider environment settings remain supported for manual use but are not auto-probed. Because Google login is upstream-owned, the provider may still open its own browser flow when it has no session. Complete the upstream browser flow separately for every account, then run `miftah validate` and `miftah doctor` against the generated configuration. Separate caches do not verify Google-account identity or property access; confirm those in the upstream before relying on a profile. See the [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot).
 
 ## Everyday commands
 

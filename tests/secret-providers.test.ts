@@ -12,7 +12,7 @@ import {
 } from "../src/secrets/external-secret-providers.js";
 import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-providers.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
-import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
+import { SecretProcessError, runSecretCommand, type SecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
 import { MiftahError } from "../src/utils/errors.js";
 
@@ -1224,6 +1224,28 @@ describe("secret command runner", () => {
           ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: expectedKind }));
         });
       });
+
+  it.runIf(process.platform !== "win32")(
+    "cancels a child when its signal aborts while spawn options are materialized",
+    async () => {
+      const controller = new AbortController();
+      let environmentReads = 0;
+      const command: SecretCommand = {
+        executable: process.execPath,
+        args: ["-e", "setTimeout(() => undefined, 1_000)"],
+        get environment() {
+          environmentReads += 1;
+          controller.abort();
+          return {};
+        }
+      };
+
+      await expect(
+        runSecretCommand(command, { signal: controller.signal, timeoutMs: 100 })
+      ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "cancelled" }));
+      expect(environmentReads).toBeGreaterThan(0);
+    }
+  );
 
   it("classifies a missing executable without retaining its path", async () => {
     await inSandbox(async (directory) => {

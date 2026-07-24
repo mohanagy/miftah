@@ -25,6 +25,10 @@ import {
 export interface RuntimeCreationOptions {
   /** Overrides profile-state persistence without changing the resolved public configuration. */
   profileState?: StateConfig;
+  /** Limits a short-lived setup check to its selected runtime dependencies. */
+  dependencyMode?: "full" | "profile-readiness";
+  /** Cancels dependency resolution before managers or upstream children are constructed. */
+  signal?: AbortSignal;
   /** Internal protocol dependencies used by deterministic OAuth fixtures and native runtime wiring. */
   oauth?: RemoteOAuthRuntimeOptions;
   /** Internal persistence seam for deterministic identity-binding tests. */
@@ -44,7 +48,7 @@ export async function createRuntime(
 ) {
   const configuredPath = resolvePath(configPath);
   const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
-  const resolved = await resolveRuntimeConfig(runtimeConfigPath, scope);
+  const resolved = await resolveRuntimeConfig(runtimeConfigPath, scope, { signal: options.signal });
   return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
 }
 
@@ -59,7 +63,7 @@ export async function createRuntimeFromLoadedConfig(
   options: RuntimeCreationOptions = {}
 ) {
   const runtimeConfigPath = resolvePath(configPath);
-  const resolved = await resolveRuntimeConfigFromLoadedConfig(runtimeConfigPath, config, scope);
+  const resolved = await resolveRuntimeConfigFromLoadedConfig(runtimeConfigPath, config, scope, { signal: options.signal });
   return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
 }
 
@@ -69,12 +73,19 @@ async function createRuntimeFromResolvedConfig(
   options: RuntimeCreationOptions
 ) {
   const { config, upstream, secretValues, redactor, plugins } = resolved;
+  const readinessDependencies = options.dependencyMode === "profile-readiness";
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
-  const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
+  const oauth = readinessDependencies
+    ? undefined
+    : await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
   const identities = new IdentityManager(config, {
-    bindingStore:
-      options.identity?.bindingStore ??
-      new FileIdentityBindingStore(defaultIdentityBindingPath(runtimeConfigPath))
+    ...(readinessDependencies
+      ? options.identity
+      : {
+          bindingStore:
+            options.identity?.bindingStore ??
+            new FileIdentityBindingStore(defaultIdentityBindingPath(runtimeConfigPath))
+        })
   });
   await identities.initialize();
   const managerOptions = {
@@ -92,7 +103,7 @@ async function createRuntimeFromResolvedConfig(
   const manager = config.upstreams
     ? new MultiUpstreamProcessManager(config, managerOptions)
     : new UpstreamProcessManager(upstream!, config.profiles, managerOptions);
-  const profileState = options.profileState ?? config.state;
+  const profileState = readinessDependencies ? undefined : options.profileState ?? config.state;
   const profileManager = new ProfileManager(
     config,
     config.security,
