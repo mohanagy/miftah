@@ -284,6 +284,12 @@ describe("Console dashboard application service", () => {
   it("adds another endpoint-first OAuth account only after selecting its configuration", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-add-account-"));
     temporaryDirectories.push(root);
+    let phase = "fixture";
+    const slowPhaseMarker = process.platform === "win32"
+      ? setTimeout(() => {
+          process.stderr.write(`[miftah-test] console-dashboard-native-oauth-account phase=${phase}\n`);
+        }, 4_500)
+      : undefined;
     const directory = await createPrivateConsoleDirectory(root);
     const configPath = join(directory, "posthog.json");
     await writeConfig(configPath, {
@@ -301,6 +307,7 @@ describe("Console dashboard application service", () => {
     });
 
     try {
+      phase = "preselection-rejection";
       const request = {
         profile: "personal",
         description: "Personal analytics",
@@ -310,15 +317,19 @@ describe("Console dashboard application service", () => {
       await expect(service.addDiscoveredNativeOAuthAccount(request)).rejects.toMatchObject({
         code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
       });
+      phase = "catalog";
       const metadata = await service.configMetadata();
       const selected = metadata.catalog?.configurations.find((configuration) => configuration.name === "posthog-work");
       if (selected === undefined) throw new Error("Expected PostHog configuration.");
+      phase = "selection";
       await service.selectConfiguration(selected.id);
 
+      phase = "account-addition";
       await expect(service.addDiscoveredNativeOAuthAccount(request)).resolves.toMatchObject({
         profile: "personal",
         upstream: "default"
       });
+      phase = "assertions";
       expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
         defaultProfile: "personal",
         profiles: { work: {}, personal: { description: "Personal analytics" } },
@@ -329,6 +340,7 @@ describe("Console dashboard application service", () => {
       });
       expect(upstream.registrationRequests()).toEqual([]);
     } finally {
+      if (slowPhaseMarker !== undefined) clearTimeout(slowPhaseMarker);
       await upstream.close();
     }
   });
