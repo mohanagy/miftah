@@ -360,23 +360,13 @@ function buildWindowsCommand(binary: string, args: readonly string[]): string {
 }
 
 function runInstalledBinary(binary: string, args: readonly string[], cwd: string) {
-  if (process.platform !== "win32") {
-    return spawnSync(binary, args, {
-      cwd,
-      encoding: "utf8",
-      timeout: npmCommandTimeoutMs
-    });
-  }
-  return spawnSync(
-    process.env.ComSpec ?? "cmd.exe",
-    ["/d", "/s", "/c", buildWindowsCommand(binary, args)],
-    {
-      cwd,
-      encoding: "utf8",
-      timeout: npmCommandTimeoutMs,
-      windowsVerbatimArguments: true
-    }
-  );
+  const invocation = installedBinaryInvocation(binary, args);
+  return spawnSync(invocation.command, invocation.args, {
+    cwd,
+    encoding: "utf8",
+    timeout: npmCommandTimeoutMs,
+    ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {})
+  });
 }
 
 interface InstalledBinaryResult {
