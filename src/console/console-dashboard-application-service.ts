@@ -9,7 +9,9 @@ import {
   type ConsoleConnectionAddRequest,
   type ConsoleControlApplication,
   type ConsoleHealth,
-  type ConsoleNativeOAuthOnboardingRequest
+  type ConsoleNativeOAuthOnboardingRequest,
+  type ConsolePresetOnboardingReport,
+  type ConsolePresetOnboardingRequest
 } from "./console-application-service.js";
 import {
   discoverConsoleConfigCatalog,
@@ -111,39 +113,16 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   }
 
   async onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport> {
-    const discovered = await this.discover();
-    if (discovered.catalog.discoveryState !== "ready") {
-      throw new MiftahError(
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the standard configuration directory could not be inspected safely"
-      );
-    }
-    if (discovered.configurations.length > 0) {
-      throw new MiftahError(
-        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED",
-        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED: select an existing configuration before changing it"
-      );
-    }
+    await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardNativeOAuth(request);
-    const refreshed = await this.discover();
-    const configuredPath = resolvePath(this.options.defaultConfigPath);
-    const createdPath = await realpath(configuredPath).catch(() => configuredPath);
-    const created = refreshed.configurations.find((configuration) => configuration.path === createdPath);
-    if (refreshed.catalog.discoveryState !== "ready" || created === undefined) {
-      throw new MiftahError(
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the created configuration could not be registered safely"
-      );
-    }
-    if (trustedConfigurationFor(created) === undefined) {
-      throw new MiftahError(
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
-        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the created configuration could not be registered safely"
-      );
-    }
-    // A later operation must always start with an explicit selection of the
-    // newly catalogued bytes, rather than auto-binding a post-create pathname.
-    this.active = undefined;
+    await this.confirmCreatedFirstRunConfiguration();
+    return result;
+  }
+
+  async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
+    await this.assertFirstRunAvailable();
+    const result = await this.firstRunApplication.onboardPreset(request);
+    await this.confirmCreatedFirstRunConfiguration();
     return result;
   }
 
@@ -217,6 +196,38 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
       "CONSOLE_CONFIGURATION_SELECTION_REQUIRED",
       "CONSOLE_CONFIGURATION_SELECTION_REQUIRED: select a configuration before using Console controls"
     );
+  }
+
+  private async assertFirstRunAvailable(): Promise<void> {
+    const discovered = await this.discover();
+    if (discovered.catalog.discoveryState !== "ready") {
+      throw new MiftahError(
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the standard configuration directory could not be inspected safely"
+      );
+    }
+    if (discovered.configurations.length > 0) {
+      throw new MiftahError(
+        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED",
+        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED: select an existing configuration before changing it"
+      );
+    }
+  }
+
+  private async confirmCreatedFirstRunConfiguration(): Promise<void> {
+    const refreshed = await this.discover();
+    const configuredPath = resolvePath(this.options.defaultConfigPath);
+    const createdPath = await realpath(configuredPath).catch(() => configuredPath);
+    const created = refreshed.configurations.find((configuration) => configuration.path === createdPath);
+    if (refreshed.catalog.discoveryState !== "ready" || created === undefined || trustedConfigurationFor(created) === undefined) {
+      throw new MiftahError(
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the created configuration could not be registered safely"
+      );
+    }
+    // A later operation must always start with an explicit selection of the
+    // newly catalogued bytes, rather than auto-binding a post-create pathname.
+    this.active = undefined;
   }
 
   private selectedFrom(discovered: ConsoleConfigCatalogDiscovery): SelectedConsoleConfiguration | undefined {

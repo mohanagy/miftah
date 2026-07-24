@@ -78,6 +78,39 @@ const page = `<!doctype html>
         <div id="configuration-catalog" class="configuration-catalog"></div>
       </section>
 
+      <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">02 / First connection</p>
+            <h2 id="preset-onboarding-title">Set up an MCP</h2>
+          </div>
+          <p>Choose a known connector. Miftah writes only validated configuration references; it never asks for a password or token here.</p>
+        </div>
+        <form id="preset-onboarding-form" class="form-grid">
+          <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
+          <label>Known connector
+            <select name="preset" id="preset-selection">
+              <option value="generic">Generic reference MCP</option>
+              <option value="sentry">Sentry</option>
+              <option value="github">GitHub</option>
+              <option value="google-search-console">Google Search Console</option>
+              <option value="generic-npx">Custom npx package</option>
+              <option value="generic-docker">Custom Docker image</option>
+              <option value="streamable-http">Remote Streamable HTTP MCP</option>
+            </select>
+          </label>
+          <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
+          <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
+          <label class="wide" data-preset-field="streamable-http" hidden>Remote MCP URL<input name="url" type="url" maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
+          <label class="wide" data-preset-field="google-search-console" hidden>Google OAuth client-secrets file<input name="oauthClientSecretsFile" maxlength="4096" placeholder="/Users/you/gsc-client-secrets.json"></label>
+          <label data-preset-field="generic generic-npx generic-docker streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
+          <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
+          <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
+          <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache.</p>
+          <div class="wide form-action"><button type="submit">Create configuration</button></div>
+        </form>
+      </section>
+
       <section id="onboarding-view" class="work-section" hidden aria-labelledby="onboarding-title">
         <div class="section-heading">
           <div>
@@ -289,12 +322,22 @@ const script = `(() => {
   const dashboardView = byId("dashboard-view");
   const unlockView = byId("unlock-view");
   const onboardingView = byId("onboarding-view");
+  const presetOnboardingView = byId("preset-onboarding-view");
   const workspaceView = byId("workspace-view");
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
   const nativeOAuthEditor = byId("native-oauth-editor");
+  const presetInputNames = Object.freeze({
+    generic: ["credentialEnv"],
+    "github": [],
+    "sentry": [],
+    "google-search-console": ["oauthClientSecretsFile"],
+    "generic-npx": ["credentialEnv", "npmPackage"],
+    "generic-docker": ["credentialEnv", "dockerImage"],
+    "streamable-http": ["credentialEnv", "url", "headerName", "headerPrefix"]
+  });
   let csrfToken = "";
 
   function message(text) {
@@ -309,6 +352,7 @@ const script = `(() => {
     csrfToken = "";
     if (dashboardView) dashboardView.hidden = true;
     if (onboardingView) onboardingView.hidden = true;
+    if (presetOnboardingView) presetOnboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = true;
     if (unlockView) unlockView.hidden = false;
     if (bootstrapInput instanceof HTMLInputElement) bootstrapInput.focus();
@@ -508,6 +552,27 @@ const script = `(() => {
     });
   }
 
+  function updatePresetFields() {
+    const form = byId("preset-onboarding-form");
+    const selection = byId("preset-selection");
+    if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement)) return;
+    const preset = selection.value;
+    form.querySelectorAll("[data-preset-field]").forEach((field) => {
+      if (!(field instanceof HTMLElement)) return;
+      const visible = (field.dataset.presetField || "").split(" ").includes(preset);
+      field.hidden = !visible;
+      field.querySelectorAll("input").forEach((input) => {
+        if (!(input instanceof HTMLInputElement)) return;
+        input.required = visible && (
+          (input.name === "npmPackage" && preset === "generic-npx") ||
+          (input.name === "dockerImage" && preset === "generic-docker") ||
+          (input.name === "url" && preset === "streamable-http") ||
+          (input.name === "oauthClientSecretsFile" && preset === "google-search-console")
+        );
+      });
+    });
+  }
+
   async function refresh() {
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
@@ -517,22 +582,27 @@ const script = `(() => {
       renderProviderAuthentication(undefined);
       if (catalog.configurations.length > 0) {
         if (onboardingView) onboardingView.hidden = true;
+        if (presetOnboardingView) presetOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
         if (onboardingView) onboardingView.hidden = true;
+        if (presetOnboardingView) presetOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah could not safely inspect its standard configuration directory. Correct its local access or start the Console with --config.");
         return;
       }
       if (onboardingView) onboardingView.hidden = false;
+      if (presetOnboardingView) presetOnboardingView.hidden = false;
       if (workspaceView) workspaceView.hidden = true;
-      message("No safe Miftah configuration exists yet. Create the first native OAuth profile below.");
+      updatePresetFields();
+      message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
       return;
     }
     if (onboardingView) onboardingView.hidden = true;
+    if (presetOnboardingView) presetOnboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
@@ -622,6 +692,39 @@ const script = `(() => {
           }
         });
         onboardingForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const presetOnboardingForm = byId("preset-onboarding-form");
+  if (presetOnboardingForm instanceof HTMLFormElement) {
+    const presetSelection = byId("preset-selection");
+    if (presetSelection instanceof HTMLSelectElement) {
+      presetSelection.addEventListener("change", updatePresetFields);
+    }
+    updatePresetFields();
+    presetOnboardingForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(presetOnboardingForm);
+      const request = {
+        name: String(data.get("name") || "").trim(),
+        preset: String(data.get("preset") || "")
+      };
+      const preset = request.preset;
+      const allowedNames = presetInputNames[preset] || [];
+      ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
+        if (!allowedNames.includes(name)) return;
+        const value = String(data.get(name) || "").trim();
+        if (value) request[name] = value;
+      });
+      const headerPrefix = String(data.get("headerPrefix") || "");
+      if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
+      message("Creating the validated Miftah configuration…");
+      try {
+        await api("/api/v1/onboarding/preset", { method: "POST", body: request });
+        presetOnboardingForm.reset();
+        updatePresetFields();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
     });

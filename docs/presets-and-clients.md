@@ -50,7 +50,7 @@ Use the following upstream materials when assessing a pin or provider configurat
 
 ## First run
 
-`init` uses the strict catalog. The default preset is `generic`; an unknown preset is rejected rather than falling back. (The legacy library-only `presetConfig` fallback does not describe CLI behavior.)
+`init` and guided `setup` use the strict catalog. The default preset is `generic`; an unknown preset is rejected rather than falling back. (The legacy library-only `presetConfig` fallback does not describe CLI behavior.)
 
 ```sh
 miftah init [name] \
@@ -65,6 +65,8 @@ miftah init [name] \
 Without `--interactive`, `init` creates only a configuration unless `--client` is supplied. With `--client`, it still creates the configuration and prints JSON snippets; it never writes a client file. For `--client claude-code` or `--client all`, it also prints a separately labelled Claude Code `permissions.ask` fragment for the visible Miftah management tools that require explicit client review. It never writes or overwrites Claude Code settings. Creation is exclusive and never overwrites an existing output path.
 
 `--interactive` is available only when both input and output are real TTYs. EOF or Ctrl-C cancels before the configuration write. The wizard asks only for a name, catalog preset, safe preset metadata (variable names, URLs, header metadata, pins), output location, and client selection. It never asks for or echoes a secret value.
+
+`miftah setup [name]` is the dedicated guided command. It uses that same TTY-only wizard and safe preset options, with interactivity required by the command instead of supplied as `--interactive`.
 
 For `google-search-console`, `--oauth-client-secrets-file` is required and is written only to the generated profile environment. The safe adapter summary printed by `init` does not echo that path. The printed client snippets use absolute paths to the Node executable and compiled Miftah CLI so GUI clients do not depend on `PATH`. Regenerate them after moving or upgrading Miftah, or after changing the configuration path. Copy generated JSON as JSON; do not hand-edit the command into a shell string.
 

@@ -42,7 +42,7 @@ Start with the row that describes how your upstream MCP authenticates.
 
 | Your upstream MCP | Use this Miftah path |
 | --- | --- |
-| GitHub or Sentry | Generate a strict built-in preset with `miftah init`. |
+| GitHub or Sentry | Run guided setup with `miftah setup`, or generate a strict built-in preset with `miftah init`. |
 | Another exact-pinned local STDIO server | Use `generic-npx` or `generic-docker`, then add profiles around it. |
 | Remote HTTPS Streamable HTTP with a token or API key | Use the `streamable-http` preset with a secret-backed header. |
 | Remote HTTPS Streamable HTTP with standards-compatible OAuth | Use Native remote OAuth through `miftah dashboard` or the `connection` and `auth` CLI commands. |
@@ -53,6 +53,14 @@ Start with the row that describes how your upstream MCP authenticates.
 Miftah requires Node.js 20 or newer. Each upstream keeps its own runtime and installation requirements; for example, the GitHub preset requires Docker and the Google Search Console adapter requires Python 3.11 or newer plus `uvx`.
 
 Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line continuations. On Windows, run the same Miftah options from PowerShell with Windows paths and PowerShell line continuation, or put the command on one line.
+
+### Prefer guided setup?
+
+```bash
+miftah setup
+```
+
+This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Use `miftah init` when you want the same catalog in a scripted command.
 
 ## First setup: GitHub with Claude Desktop
 
@@ -228,13 +236,13 @@ The easiest first run is:
 miftah dashboard
 ```
 
-Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
+Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration or a Native remote OAuth profile there; it never overwrites an existing file. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
 
 The optional dashboard:
 
 1. starts a foreground-only service on literal `127.0.0.1`;
 2. opens the system browser and asks for the one-time bootstrap code printed in the terminal;
-3. creates a first validated Native remote OAuth profile and connection when the selected config path does not exist;
+3. creates a first validated known-preset configuration or Native remote OAuth profile and connection when the selected config path does not exist;
 4. offers a separate **Connect** action that starts the reviewed system-browser authorization;
 5. shows redacted connection and audit state; and
 6. generates client JSON for you to review and copy.

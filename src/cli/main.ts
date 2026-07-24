@@ -15,6 +15,7 @@ import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./pa
 import { exitCodeForError } from "./exit-codes.js";
 import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
+import { runSetupCommand } from "./setup.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 import { runMigrateConfigCommand } from "./migrate-config.js";
@@ -172,6 +173,18 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "init") {
     await runInitCommand(args, {
+      input: process.stdin,
+      output: process.stdout,
+      cwd: process.cwd(),
+      launcher: {
+        command: process.execPath,
+        args: [fileURLToPath(import.meta.url), "serve"]
+      }
+    });
+    return;
+  }
+  if (command === "setup") {
+    await runSetupCommand(args, {
       input: process.stdin,
       output: process.stdout,
       cwd: process.cwd(),
