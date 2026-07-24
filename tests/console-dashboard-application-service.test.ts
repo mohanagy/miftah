@@ -82,13 +82,21 @@ describe("Console dashboard application service", () => {
         }
       }
     });
-    await writeConfig(join(directory, "sentry.json"), {
+    const sentryPath = join(directory, "sentry.json");
+    await writeConfig(sentryPath, {
       version: "3",
       name: "sentry",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: "npx", args: ["--yes", "@sentry/mcp-server@0.36.0"] },
       profiles: { work: {} }
     });
+
+    // Keep the production-only ACL boundary explicit on Windows: catalog
+    // discovery deliberately suppresses individual untrusted candidates.
+    if (process.platform === "win32") {
+      await expect(verifyWindowsConfigPathSecurity(gscPath, "file")).resolves.toBe(true);
+      await expect(verifyWindowsConfigPathSecurity(sentryPath, "file")).resolves.toBe(true);
+    }
 
     const service = new ConsoleDashboardApplicationService({
       defaultConfigPath: join(directory, "miftah.json"),
