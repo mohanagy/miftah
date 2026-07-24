@@ -1393,7 +1393,19 @@ describe("packed artifact contract", () => {
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
         const initialized = runInstalledBinaryThroughShell(
           binary,
-          ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
+          process.platform === "win32"
+            ? [
+                "init",
+                "starter config with spaces",
+                "--preset",
+                "local-stdio",
+                "--local-command",
+                process.execPath,
+                "--accept-local-command",
+                "--output",
+                initOutputPath
+              ]
+            : ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
           cliContractDirectory
         );
         expect(initialized.status, initialized.stderr || initialized.stdout).toBe(0);
