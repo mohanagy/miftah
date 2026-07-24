@@ -29,6 +29,10 @@ import {
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
 import {
+  runProfileReadinessFromLoadedConfig,
+  type ProfileReadinessReport
+} from "../setup/profile-readiness.js";
+import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
@@ -96,6 +100,13 @@ export interface ConsoleAuditRecord {
   readonly errorCode?: string;
 }
 
+export interface ConsoleProfileReadinessRequest {
+  readonly profile: string;
+  readonly upstream?: string;
+  /** Internal transport cancellation; never accepted from or serialized to Console clients. */
+  readonly signal?: AbortSignal;
+}
+
 export interface ConsoleHealth {
   readonly status: "ok";
   readonly config: { readonly name: string; readonly version: string };
@@ -123,6 +134,8 @@ export interface ConsoleControlApplication {
   reauth(connectionRef: string): Promise<unknown>;
   testConnection(connectionRef: string): Promise<unknown>;
   disconnect(connectionRef: string): Promise<unknown>;
+  /** Runs exactly one provider-declared safe read-only readiness call for a selected profile. */
+  profileReadiness?(request: ConsoleProfileReadinessRequest): Promise<ProfileReadinessReport>;
   auditRecords(limit: number): Promise<readonly ConsoleAuditRecord[]>;
 }
 
@@ -421,6 +434,35 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     return this.runConnectionMutation(connectionRef, "disconnect", (service) => service.disconnect({ connectionRef }));
   }
 
+  async profileReadiness(request: ConsoleProfileReadinessRequest): Promise<ProfileReadinessReport> {
+    const config = await this.config();
+    await this.audit.ensureWritable();
+    try {
+      const report = await runProfileReadinessFromLoadedConfig(this.configPath, config, request);
+      const errorCode = readinessErrorCode(report);
+      await this.audit.writeRequiredLifecycle({
+        operation: "console/profile-readiness",
+        name: "profile",
+        profile: request.profile,
+        upstream: report.upstream,
+        status: readinessAuditStatus(report),
+        ...(errorCode === undefined ? {} : { errorCode })
+      });
+      return report;
+    } catch (error) {
+      const errorCode = error instanceof MiftahError ? error.code : "UPSTREAM_CALL_FAILED";
+      await this.audit.writeRequiredLifecycle({
+        operation: "console/profile-readiness",
+        name: "profile",
+        profile: request.profile,
+        ...(request.upstream === undefined ? {} : { upstream: request.upstream }),
+        status: "failure",
+        errorCode
+      });
+      throw error;
+    }
+  }
+
   private async config(): Promise<MiftahConfig> {
     return this.trustedConfiguration?.config ?? loadConfig(this.configPath);
   }
@@ -516,4 +558,15 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     }
     return records.slice(-limit);
   }
+}
+
+function readinessAuditStatus(report: ProfileReadinessReport): "success" | "failure" | "blocked" | "confirmation-required" {
+  if (report.status === "ready") return "success";
+  if (report.status === "blocked") return "blocked";
+  if (report.status === "confirmation-required") return "confirmation-required";
+  return "failure";
+}
+
+function readinessErrorCode(report: ProfileReadinessReport): string | undefined {
+  return report.safeRead.errorCode ?? report.identity.errorCode;
 }

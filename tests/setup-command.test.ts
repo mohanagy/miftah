@@ -1,7 +1,14 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const profileReadinessMocks = vi.hoisted(() => ({ run: vi.fn() }));
+
+vi.mock("../src/setup/profile-readiness.js", () => ({
+  runProfileReadiness: profileReadinessMocks.run
+}));
+
 import { parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
 import { validateConfig } from "../src/config/validate-config.js";
@@ -54,6 +61,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  profileReadinessMocks.run.mockReset();
   await rm(outputRoot, { recursive: true, force: true });
 });
 
@@ -96,7 +104,7 @@ describe("setup command", () => {
     const govalidateSecrets = resolve("fixtures", "gsc", "govalidate-client-secrets.json");
     const craftmyletterSecrets = resolve("fixtures", "gsc", "craftmyletter-client-secrets.json");
 
-    await runSetupCommand({
+    const command = runSetupCommand({
       name: "gsc",
       preset: "google-search-console",
       output: "gsc.json",
@@ -123,6 +131,8 @@ describe("setup command", () => {
         args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
       }
     });
+    await answer(streams, "Run the reviewed safe readiness check for every account now? (yes/no) [no]", "no");
+    await command;
     streams.input.end();
 
     const config = JSON.parse(await readFile(output, "utf8")) as {
@@ -145,6 +155,119 @@ describe("setup command", () => {
     expect(streams.transcript.contents).not.toContain(craftmyletterSecrets);
   });
 
+  it("uses --verify to run the bounded provider readiness check once for every supplied account", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "gsc-verified.json");
+    const govalidateSecrets = resolve("fixtures", "gsc", "govalidate-client-secrets.json");
+    const craftmyletterSecrets = resolve("fixtures", "gsc", "craftmyletter-client-secrets.json");
+    profileReadinessMocks.run.mockImplementation(async (_configPath: string, target: { readonly profile: string }) => ({
+      status: "ready",
+      profile: target.profile,
+      upstream: "default",
+      adapter: "Google Search Console",
+      safeRead: { status: "passed", tool: "get_capabilities" },
+      identity: { status: "unavailable" }
+    }));
+
+    const result = await runSetupCommand({
+      name: "gsc",
+      preset: "google-search-console",
+      output: "gsc-verified.json",
+      client: "claude-desktop",
+      verify: true,
+      googleSearchConsoleProfiles: [
+        { name: "google-govalidate", oauthClientSecretsFile: govalidateSecrets },
+        { name: "google-craftmyletter", oauthClientSecretsFile: craftmyletterSecrets }
+      ],
+      defaultProfile: "google-craftmyletter"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+    streams.input.end();
+
+    expect(result).toMatchObject({ verification: "complete" });
+    expect(profileReadinessMocks.run).toHaveBeenCalledTimes(2);
+    expect(profileReadinessMocks.run).toHaveBeenNthCalledWith(1, output, { profile: "google-craftmyletter" });
+    expect(profileReadinessMocks.run).toHaveBeenNthCalledWith(2, output, { profile: "google-govalidate" });
+    expect(streams.transcript.contents).not.toContain("Run the reviewed safe readiness check for every account now?");
+    expect(streams.transcript.contents).toContain("Profile 'google-craftmyletter': safe read-only check succeeded; identity is unavailable.");
+    expect(streams.transcript.contents).not.toContain(govalidateSecrets);
+    expect(streams.transcript.contents).not.toContain(craftmyletterSecrets);
+  });
+
+  it("keeps the written config and returns an incomplete nonzero outcome when the post-write readiness prompt is cancelled", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "gsc-readiness-cancelled.json");
+    const clientSecrets = resolve("fixtures", "gsc", "client-secrets.json");
+    const command = runSetupCommand({
+      name: "gsc",
+      preset: "google-search-console",
+      output: "gsc-readiness-cancelled.json",
+      client: "claude-desktop",
+      googleSearchConsoleProfiles: [{ name: "work", oauthClientSecretsFile: clientSecrets }],
+      defaultProfile: "work"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await streams.transcript.waitFor("Run the reviewed safe readiness check for every account now? (yes/no) [no]");
+    streams.input.end();
+
+    await expect(command).resolves.toMatchObject({ verification: "incomplete", exitCode: 1, reports: [] });
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({ name: "gsc" });
+    expect(profileReadinessMocks.run).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain("First-success verification was cancelled after configuration creation; the configuration remains available.");
+  });
+
+  it("writes config before --verify and returns a nonzero outcome when readiness is incomplete", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "gsc-verify-incomplete.json");
+    const clientSecrets = resolve("fixtures", "gsc", "client-secrets.json");
+    profileReadinessMocks.run.mockResolvedValue({
+      status: "unsupported",
+      profile: "work",
+      upstream: "default",
+      adapter: "Google Search Console",
+      safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" },
+      identity: { status: "not-checked" }
+    });
+
+    const result = await runSetupCommand({
+      name: "gsc",
+      preset: "google-search-console",
+      output: "gsc-verify-incomplete.json",
+      client: "claude-desktop",
+      verify: true,
+      googleSearchConsoleProfiles: [{ name: "work", oauthClientSecretsFile: clientSecrets }],
+      defaultProfile: "work"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+    streams.input.end();
+
+    expect(result).toMatchObject({ verification: "incomplete", exitCode: 1 });
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({ name: "gsc" });
+    expect(streams.transcript.contents).toContain("Profile 'work': readiness is unsupported (unavailable: PROFILE_READINESS_UNSUPPORTED).");
+  });
+
   it("isolates upstream-owned Google OAuth state for separate config files with the same display name", async () => {
     const clientSecrets = resolve("fixtures", "gsc", "client-secrets.json");
     const firstOutput = resolve(outputRoot, "customer-a", "gsc.json");
@@ -152,7 +275,7 @@ describe("setup command", () => {
 
     for (const output of [firstOutput, secondOutput]) {
       const streams = createStreams();
-      await runSetupCommand({
+      const command = runSetupCommand({
         name: "gsc",
         preset: "google-search-console",
         output,
@@ -168,6 +291,8 @@ describe("setup command", () => {
           args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
         }
       });
+      await answer(streams, "Run the reviewed safe readiness check for every account now? (yes/no) [no]", "no");
+      await command;
       streams.input.end();
     }
 
@@ -237,6 +362,7 @@ describe("setup command", () => {
     await answer(streams, "Default Google account profile [google-govalidate]", "google-craftmyletter");
     await answer(streams, "Output location [gsc.miftah.json]", "gsc-interactive.json");
     await answer(streams, "Client", "");
+    await answer(streams, "Run the reviewed safe readiness check for every account now? (yes/no) [no]", "no");
     await command;
     streams.input.end();
 

@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntime } from "../src/runtime/create-runtime.js";
+import { createRuntime, createRuntimeFromLoadedConfig } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
+import type { MiftahConfig } from "../src/config/types.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -154,6 +155,69 @@ describe("runtime secret resolution scope", () => {
     expect(resolved.config.server?.http?.authToken).toBe("${MISSING_HTTP_SERVER_SECRET}");
   });
 
+  it("does not preflight an unrelated plugin while resolving one selected profile and upstream", async () => {
+    const configPath = await writeScopedConfig();
+    const directory = dirname(configPath);
+    const markerPath = join(directory, "unrelated-plugin-loaded");
+    await writeFile(
+      join(directory, "unrelated-plugin.mjs"),
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(markerPath)}, "loaded");
+export default {
+  apiVersion: "1",
+  id: "unrelated-plugin",
+  kind: "secret-provider",
+  async resolve() { return { value: "not-used" }; }
+};\n`,
+      "utf8"
+    );
+    const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    config.plugins = {
+      allowlist: [{ id: "unrelated-plugin", kind: "secret-provider", path: "./unrelated-plugin.mjs" }]
+    };
+    await writeFile(configPath, JSON.stringify(config), "utf8");
+
+    await expect(resolveScopedRuntimeConfig(configPath, {
+      profile: "healthy",
+      upstreamName: "healthy"
+    })).resolves.toMatchObject({ config: { name: "scoped-resolution" } });
+    await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("still preflights and resolves the selected target's referenced secret-provider plugin", async () => {
+    const configPath = await writeScopedConfig();
+    const directory = dirname(configPath);
+    const markerPath = join(directory, "selected-plugin-loaded");
+    await writeFile(
+      join(directory, "selected-plugin.mjs"),
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(markerPath)}, "loaded");
+export default {
+  apiVersion: "1",
+  id: "selected-plugin",
+  kind: "secret-provider",
+  async resolve() { return { value: "selected-plugin-secret" }; }
+};\n`,
+      "utf8"
+    );
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      profiles: Record<string, { env?: Record<string, string> }>;
+      plugins?: unknown;
+    };
+    config.profiles.healthy!.env = { PROFILE_TOKEN: "secretref:selected-plugin://account" };
+    config.plugins = {
+      allowlist: [{ id: "selected-plugin", kind: "secret-provider", path: "./selected-plugin.mjs" }]
+    };
+    await writeFile(configPath, JSON.stringify(config), "utf8");
+
+    const resolved = await resolveScopedRuntimeConfig(configPath, {
+      profile: "healthy",
+      upstreamName: "healthy"
+    });
+    expect(resolved.config.profiles.healthy?.env).toEqual({ PROFILE_TOKEN: "selected-plugin-secret" });
+    await expect(readFile(markerPath, "utf8")).resolves.toBe("loaded");
+  });
+
   it("resolves a secret-backed HTTP bearer token and registers it for redaction", async () => {
     const configPath = await writeHttpServerConfig();
 
@@ -173,6 +237,54 @@ describe("runtime secret resolution scope", () => {
 
     try {
       expect(runtime.config.server?.http?.authToken).toBe("${MISSING_HTTP_SERVER_SECRET}");
+    } finally {
+      await runtime.manager.close();
+    }
+  });
+
+  it("does not initialize unrelated native OAuth state for an isolated readiness runtime", async () => {
+    const configPath = await writeScopedConfig();
+    const config: MiftahConfig = {
+      version: "3",
+      name: "readiness-native-oauth-boundary",
+      defaultProfile: "gsc",
+      upstreams: {
+        gsc: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+        remote: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
+      },
+      profiles: { gsc: {}, remote: {} },
+      oauth: {
+        connections: {
+          "oauthconn:3a01b5df-4d5d-4d92-a825-c77ba0b54ef1": {
+            profile: "remote",
+            upstream: "remote",
+            resource: "https://mcp.example.test/mcp",
+            issuer: "https://auth.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    };
+    const runtime = await createRuntimeFromLoadedConfig(
+      configPath,
+      config,
+      { profile: "gsc", upstreamName: "gsc" },
+      {
+        dependencyMode: "profile-readiness",
+        oauth: {
+          metadataStore: { load: async () => [], save: async () => undefined },
+          credentialStore: {
+            load: async () => undefined,
+            save: async () => undefined,
+            delete: async () => undefined
+          }
+        }
+      }
+    );
+
+    try {
+      expect(runtime.oauth).toBeUndefined();
     } finally {
       await runtime.manager.close();
     }

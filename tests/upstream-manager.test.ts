@@ -608,6 +608,33 @@ describe("upstream process manager", () => {
     }
   });
 
+  it("does not spawn a child after manager shutdown wins during pre-transport startup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-close-before-transport-"));
+    const startCountPath = join(directory, "starts");
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [fixture],
+        env: { TEST_START_COUNT_PATH: startCountPath }
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000 }
+    );
+
+    try {
+      const startup = manager.get("work");
+      const closing = manager.close();
+
+      await expect(closing).resolves.toBeUndefined();
+      await expect(startup).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(readFile(startCountPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("releases a profile capacity reservation after a failed startup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-failed-start-capacity-"));
     const failurePath = join(directory, "fail");

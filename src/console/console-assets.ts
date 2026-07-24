@@ -155,9 +155,22 @@ const page = `<!doctype html>
 
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
-            <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Provider-managed connection</h2></div>
+            <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
             <p id="provider-authentication-copy"></p>
           </div>
+        </section>
+
+        <section id="profile-readiness-view" class="work-section profile-readiness" hidden aria-labelledby="profile-readiness-title">
+          <div class="section-heading">
+            <div><p class="step">First safe call</p><h2 id="profile-readiness-title">Verify an account without guessing</h2></div>
+            <p>Miftah runs one provider-declared read-only check for the selected account. It never substitutes an arbitrary tool or exposes provider output here.</p>
+          </div>
+          <div class="input-row">
+            <label class="grow">Account profile<select id="profile-readiness-profile" required></select></label>
+            <label class="grow">Upstream<select id="profile-readiness-upstream" required></select></label>
+            <button id="run-profile-readiness" type="button">Run reviewed safe check</button>
+          </div>
+          <p id="profile-readiness-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 
         <section class="work-section" aria-labelledby="connections-title">
@@ -309,6 +322,8 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-card button { min-height: 2.4rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
+.profile-readiness { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
+.profile-readiness .input-row { max-width: 42rem; }
 .connection { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; border: 1px solid var(--line); background: var(--panel); }
 .connection p { margin: .25rem 0 0; overflow-wrap: anywhere; font: .77rem/1.5 ui-monospace, monospace; }
 .connection-actions { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
@@ -351,6 +366,8 @@ const script = `(() => {
     "streamable-http": ["credentialEnv", "url", "headerName", "headerPrefix"]
   });
   let csrfToken = "";
+  let profileReadinessTargets = [];
+  let profileReadinessGeneration = 0;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -561,7 +578,9 @@ const script = `(() => {
       const authentication = record(configuration.authentication);
       ownership.textContent = authentication.mode === "provider-adapter"
         ? "provider-owned authentication"
-        : "Miftah-managed native OAuth available";
+        : authentication.mode === "miftah-native-oauth"
+          ? "Miftah-managed native OAuth available"
+          : "manual upstream authentication required";
       details.append(title, summary, ownership);
       const button = document.createElement("button");
       button.type = "button";
@@ -579,9 +598,16 @@ const script = `(() => {
   function renderProviderAuthentication(value) {
     const authentication = record(value);
     const providerAdapter = authentication.mode === "provider-adapter";
-    if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter;
-    if (nativeOAuthEditor) nativeOAuthEditor.hidden = providerAdapter;
-    if (!providerAdapter || !providerAuthenticationCopy) return;
+    const manualOnly = authentication.mode === "manual-only";
+    const nativeOAuth = authentication.mode === "miftah-native-oauth";
+    if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter && !manualOnly;
+    if (nativeOAuthEditor) nativeOAuthEditor.hidden = !nativeOAuth;
+    if (!providerAuthenticationCopy) return;
+    if (manualOnly) {
+      providerAuthenticationCopy.textContent = "This configuration includes local upstream settings outside Miftah's reviewed adapter envelope. Miftah will not take over OAuth here; use each upstream's documented authentication setup.";
+      return;
+    }
+    if (!providerAdapter) return;
     const provider = typeof authentication.provider === "string" ? authentication.provider : "This provider";
     const reauthOwner = authentication.reauthOwner === "upstream" ? "Use the provider adapter's documented reauthentication tool when needed."
       : "Use the provider's documented reauthentication flow when needed.";
@@ -589,6 +615,65 @@ const script = `(() => {
       ? " Revoke access from the provider console; Miftah does not remove or inspect the provider cache."
       : " Miftah only manages the boundaries declared by this adapter.";
     providerAuthenticationCopy.textContent = "This provider owns its browser login and private token cache. " + provider + " keeps OAuth outside Miftah. " + reauthOwner + disconnectOwner;
+  }
+
+  function configuredProfileReadinessTargets(authentication) {
+    const targets = record(authentication).readinessTargets;
+    if (!Array.isArray(targets)) return [];
+    return targets.map(record).flatMap((target) => {
+      const profile = typeof target.profile === "string" ? target.profile : "";
+      const upstream = typeof target.upstream === "string" ? target.upstream : "";
+      return profile && upstream ? [{ profile, upstream }] : [];
+    });
+  }
+
+  function clearProfileReadinessResult() {
+    profileReadinessGeneration += 1;
+    const result = byId("profile-readiness-result");
+    if (result) result.textContent = "";
+  }
+
+  function syncProfileReadinessUpstreams(preferredUpstream) {
+    clearProfileReadinessResult();
+    const profile = byId("profile-readiness-profile");
+    const upstream = byId("profile-readiness-upstream");
+    if (!(profile instanceof HTMLSelectElement) || !(upstream instanceof HTMLSelectElement)) return;
+    const values = profileReadinessTargets
+      .filter((target) => target.profile === profile.value)
+      .map((target) => target.upstream);
+    setOptions(upstream, values);
+    if (typeof preferredUpstream === "string" && values.includes(preferredUpstream)) upstream.value = preferredUpstream;
+  }
+
+  function renderProfileReadiness(authentication, defaultProfile) {
+    const view = byId("profile-readiness-view");
+    clearProfileReadinessResult();
+    profileReadinessTargets = configuredProfileReadinessTargets(authentication);
+    if (view) view.hidden = profileReadinessTargets.length === 0;
+    const profile = byId("profile-readiness-profile");
+    const upstream = byId("profile-readiness-upstream");
+    if (profileReadinessTargets.length === 0) {
+      setOptions(profile, []);
+      setOptions(upstream, []);
+      return;
+    }
+    const profiles = [...new Set(profileReadinessTargets.map((target) => target.profile))];
+    setOptions(profile, profiles);
+    if (profile instanceof HTMLSelectElement && profiles.includes(defaultProfile)) profile.value = defaultProfile;
+    syncProfileReadinessUpstreams();
+  }
+
+  function profileReadinessMessage(value) {
+    const report = record(value);
+    const profile = typeof report.profile === "string" ? report.profile : "selected profile";
+    const safeRead = record(report.safeRead);
+    const tool = typeof safeRead.tool === "string" ? safeRead.tool : "the provider-declared read-only tool";
+    const errorCode = typeof safeRead.errorCode === "string" ? " (" + safeRead.errorCode + ")" : "";
+    if (report.status === "ready") return "Reviewed safe check completed for " + profile + " using " + tool + ".";
+    if (report.status === "confirmation-required") return "Miftah did not call the provider because this check requires confirmation" + errorCode + ".";
+    if (report.status === "identity-failed") return "Miftah did not complete the check because identity verification failed" + errorCode + ".";
+    if (report.status === "unsupported") return "This profile has no provider-declared safe check" + errorCode + ".";
+    return "Miftah did not complete the reviewed safe check" + errorCode + ".";
   }
 
   function renderConnections(value, authentication) {
@@ -600,7 +685,9 @@ const script = `(() => {
       const empty = document.createElement("p");
       empty.textContent = record(authentication).mode === "provider-adapter"
         ? "This provider manages its OAuth state outside Miftah; no native OAuth binding is configured here."
-        : "No native OAuth connections are configured yet.";
+        : record(authentication).mode === "manual-only"
+          ? "This configuration uses upstream-managed authentication. Miftah has no native OAuth binding to manage here."
+          : "No native OAuth connections are configured yet.";
       list.append(empty);
       return;
     }
@@ -707,6 +794,7 @@ const script = `(() => {
     const catalog = renderConfigurationCatalog(metadata);
     if (metadata.initialized !== true) {
       renderProviderAuthentication(undefined);
+      renderProfileReadiness(undefined, "");
       if (catalog.configurations.length > 0) {
         if (onboardingView) onboardingView.hidden = true;
         if (presetOnboardingView) presetOnboardingView.hidden = true;
@@ -734,14 +822,16 @@ const script = `(() => {
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
     const configVersion = byId("config-version");
+    const configuredDefaultProfile = typeof metadata.defaultProfile === "string" ? metadata.defaultProfile : "";
     const defaultProfile = byId("default-profile");
     if (configName) configName.textContent = String(metadata.name || "—");
     if (configVersion) configVersion.textContent = "Config v" + String(metadata.version || "—");
-    if (defaultProfile) defaultProfile.textContent = String(metadata.defaultProfile || "—");
+    if (defaultProfile) defaultProfile.textContent = configuredDefaultProfile || "—";
     const profiles = Array.isArray(metadata.profiles) ? metadata.profiles.map((item) => String(record(item).name || "")).filter(Boolean) : [];
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
     setOptions(byId("connection-profile"), profiles);
     setOptions(byId("connection-upstream"), upstreams);
+    renderProfileReadiness(metadata.authentication, configuredDefaultProfile);
     const results = await Promise.all([
       api("/api/v1/health"),
       api("/api/v1/connections"),
@@ -917,6 +1007,52 @@ const script = `(() => {
         await refresh();
       } catch (error) { message(errorMessage(error)); }
       finally { button.disabled = false; }
+    });
+  }
+
+  const runProfileReadiness = byId("run-profile-readiness");
+  const profileReadinessProfile = byId("profile-readiness-profile");
+  if (profileReadinessProfile instanceof HTMLSelectElement) {
+    profileReadinessProfile.addEventListener("change", () => syncProfileReadinessUpstreams());
+  }
+  const profileReadinessUpstream = byId("profile-readiness-upstream");
+  if (profileReadinessUpstream instanceof HTMLSelectElement) {
+    profileReadinessUpstream.addEventListener("change", clearProfileReadinessResult);
+  }
+  if (runProfileReadiness instanceof HTMLButtonElement) {
+    runProfileReadiness.addEventListener("click", async () => {
+      const profile = byId("profile-readiness-profile");
+      const upstream = byId("profile-readiness-upstream");
+      const result = byId("profile-readiness-result");
+      if (!(profile instanceof HTMLSelectElement) || !profile.value || !(upstream instanceof HTMLSelectElement) || !upstream.value) return;
+      if (!profileReadinessTargets.some((target) => target.profile === profile.value && target.upstream === upstream.value)) {
+        message("This profile does not have a reviewed safe check.");
+        return;
+      }
+      clearProfileReadinessResult();
+      const readinessGeneration = profileReadinessGeneration;
+      const selectedProfile = profile.value;
+      const selectedUpstream = upstream.value;
+      runProfileReadiness.disabled = true;
+      message("Running the reviewed safe check…");
+      try {
+        const report = await api("/api/v1/profile-readiness", {
+          method: "POST",
+          body: { profile: profile.value, upstream: upstream.value }
+        });
+        const publicResult = profileReadinessMessage(report);
+        if (
+          readinessGeneration !== profileReadinessGeneration ||
+          profile.value !== selectedProfile ||
+          upstream.value !== selectedUpstream
+        ) return;
+        if (result) result.textContent = publicResult;
+        message(publicResult);
+        renderAudit(await api("/api/v1/audit?limit=50"));
+      } catch (error) {
+        if (readinessGeneration === profileReadinessGeneration) message(errorMessage(error));
+      }
+      finally { runProfileReadiness.disabled = false; }
     });
   }
 

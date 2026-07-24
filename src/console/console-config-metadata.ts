@@ -1,8 +1,15 @@
-import { PROVIDER_ADAPTER_CATALOG, type ProviderAdapterDefinition } from "../config/provider-adapters.js";
+import {
+  getProviderAdapterForProfileTarget,
+  type ProviderAdapterDefinition
+} from "../config/provider-adapters.js";
 import type { MiftahConfig } from "../config/types.js";
 
 export interface ConsoleAuthenticationMetadata {
-  readonly mode: "miftah-native-oauth" | "provider-adapter";
+  /**
+   * `manual-only` means this local configuration is neither eligible for
+   * Miftah-native OAuth nor wholly inside one reviewed provider adapter.
+   */
+  readonly mode: "miftah-native-oauth" | "provider-adapter" | "manual-only";
   readonly credentialOwner: "miftah" | "upstream" | "manual-only";
   readonly browserHandoff: "miftah" | "upstream" | "manual-only";
   readonly tokenStore: "miftah-vault" | "upstream-private" | "external";
@@ -10,6 +17,13 @@ export interface ConsoleAuthenticationMetadata {
   readonly reauthOwner?: "miftah" | "upstream" | "manual-only";
   readonly disconnectOwner?: "miftah" | "upstream" | "manual-only";
   readonly identityEvidence?: "verified-probe" | "upstream-reported" | "unavailable";
+  /** Exact non-secret profile/upstream pairs that remain inside a reviewed safe-read adapter envelope. */
+  readonly readinessTargets?: readonly ConsoleProfileReadinessTarget[];
+}
+
+export interface ConsoleProfileReadinessTarget {
+  readonly profile: string;
+  readonly upstream: string;
 }
 
 export interface ConsoleDiscoveredConfiguration {
@@ -82,40 +96,72 @@ function configuredUpstreams(config: MiftahConfig): readonly ConfiguredUpstream[
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function sameArguments(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return left !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
+function readinessTargets(config: MiftahConfig): readonly ConsoleProfileReadinessTarget[] {
+  return Object.keys(config.profiles)
+    .sort((left, right) => left.localeCompare(right))
+    .flatMap((profile) => configuredUpstreams(config)
+      .filter(({ name: upstream }) => getProviderAdapterForProfileTarget(config, profile, upstream)?.diagnostics.safeReadProbe !== undefined)
+      .map(({ name: upstream }) => ({ profile, upstream })));
 }
 
-function adapterForConfig(upstreams: readonly ConfiguredUpstream[]): ProviderAdapterDefinition | undefined {
-  if (upstreams.length === 0) return undefined;
-  return Object.values(PROVIDER_ADAPTER_CATALOG.adapters).find((adapter) =>
-    upstreams.every((upstream) =>
-      upstream.transport === adapter.launch.transport &&
-      upstream.command === adapter.launch.command &&
-      sameArguments(upstream.args, adapter.launch.args)
-    )
-  );
+/**
+ * A base upstream may carry an older argument default while every effective
+ * profile launch is the reviewed adapter. In that case the Console can still
+ * accurately describe the configuration as provider-owned. A partial target
+ * set is never enough: one outside-envelope target makes provider ownership
+ * and native OAuth both inaccurate for the configuration as a whole.
+ */
+function adapterForEffectiveTargets(
+  config: MiftahConfig,
+  targets: readonly ConsoleProfileReadinessTarget[]
+): ProviderAdapterDefinition | undefined {
+  const upstreams = configuredUpstreams(config);
+  const expectedTargetCount = Object.keys(config.profiles).length * upstreams.length;
+  if (targets.length === 0 || targets.length !== expectedTargetCount) return undefined;
+
+  const adapters = targets.map(({ profile, upstream }) => getProviderAdapterForProfileTarget(config, profile, upstream));
+  const adapter = adapters[0];
+  return adapter !== undefined && adapters.every((candidate) => candidate === adapter) ? adapter : undefined;
+}
+
+function supportsNativeOAuth(upstreams: readonly ConfiguredUpstream[]): boolean {
+  return upstreams.length > 0 && upstreams.every(({ transport }) => transport === "streamable-http");
 }
 
 export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuthenticationMetadata {
-  const adapter = adapterForConfig(configuredUpstreams(config));
-  if (adapter === undefined) {
+  const upstreams = configuredUpstreams(config);
+  const targets = readinessTargets(config);
+  const adapter = adapterForEffectiveTargets(config, targets);
+  if (adapter !== undefined) {
     return {
-      mode: "miftah-native-oauth",
-      credentialOwner: "miftah",
-      browserHandoff: "miftah",
-      tokenStore: "miftah-vault"
+      mode: "provider-adapter",
+      provider: adapter.displayName,
+      credentialOwner: adapter.authentication.credentialOwnership,
+      browserHandoff: adapter.authentication.browserHandoff,
+      tokenStore: adapter.authentication.tokenStore,
+      reauthOwner: adapter.lifecycle.reauth.owner,
+      disconnectOwner: adapter.lifecycle.disconnect.owner,
+      identityEvidence: adapter.identity.evidence,
+      readinessTargets: targets
     };
   }
+
+  if (!supportsNativeOAuth(upstreams)) {
+    return {
+      mode: "manual-only",
+      credentialOwner: "manual-only",
+      browserHandoff: "manual-only",
+      tokenStore: "external",
+      ...(targets.length === 0 ? {} : { readinessTargets: targets })
+    };
+  }
+
   return {
-    mode: "provider-adapter",
-    provider: adapter.displayName,
-    credentialOwner: adapter.authentication.credentialOwnership,
-    browserHandoff: adapter.authentication.browserHandoff,
-    tokenStore: adapter.authentication.tokenStore,
-    reauthOwner: adapter.lifecycle.reauth.owner,
-    disconnectOwner: adapter.lifecycle.disconnect.owner,
-    identityEvidence: adapter.identity.evidence
+    mode: "miftah-native-oauth",
+    credentialOwner: "miftah",
+    browserHandoff: "miftah",
+    tokenStore: "miftah-vault",
+    ...(targets.length === 0 ? {} : { readinessTargets: targets })
   };
 }
 

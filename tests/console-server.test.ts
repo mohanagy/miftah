@@ -3,12 +3,13 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   startConsoleServer,
   type ConsoleControlApplication
 } from "../src/console/console-server.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { ConsoleApplicationService } from "../src/console/console-application-service.js";
 import { MiftahError } from "../src/utils/errors.js";
 import {
   createPrivateConsoleDirectory,
@@ -183,6 +184,204 @@ async function submitPresetFormWithStaleValue(javascript: string): Promise<Recor
   const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset");
   if (request?.body === undefined) throw new Error("Expected a preset onboarding request.");
   return JSON.parse(request.body) as Record<string, unknown>;
+}
+
+function clearProfileReadinessResultOnTargetChange(javascript: string): {
+  readonly afterProfileChange: string;
+  readonly afterUpstreamChange: string;
+} {
+  type ChangeListener = () => void;
+
+  class FakeElement {
+    textContent = "";
+  }
+  class FakeSelect extends FakeElement {
+    readonly listeners = new Map<string, ChangeListener>();
+    value = "profile-a";
+
+    addEventListener(name: string, listener: ChangeListener): void {
+      this.listeners.set(name, listener);
+    }
+
+    append(): void {}
+
+    replaceChildren(): void {}
+  }
+
+  const profile = new FakeSelect();
+  const upstream = new FakeSelect();
+  const result = new FakeElement();
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "profile-readiness-profile") return profile;
+        if (id === "profile-readiness-upstream") return upstream;
+        if (id === "profile-readiness-result") return result;
+        return undefined;
+      },
+      createElement(): FakeElement {
+        return new FakeElement();
+      }
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: class {},
+    HTMLTextAreaElement: class {},
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } }
+  });
+
+  result.textContent = "Completed for profile-a";
+  profile.listeners.get("change")?.();
+  const afterProfileChange = result.textContent;
+
+  result.textContent = "Completed for profile-b";
+  upstream.listeners.get("change")?.();
+  return { afterProfileChange, afterUpstreamChange: result.textContent };
+}
+
+async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascript: string): Promise<{
+  readonly visibleAfterSelection: boolean;
+  readonly hiddenAfterUnselection: boolean;
+  readonly readinessRequestsAfterUnselection: number;
+}> {
+  type Listener = (event?: { readonly preventDefault: () => void }) => void | Promise<void>;
+
+  class FakeElement {
+    hidden = true;
+    disabled = false;
+    textContent = "";
+    value = "";
+    className = "";
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, Listener>();
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    append(...children: unknown[]): void {
+      void children;
+    }
+
+    replaceChildren(...children: unknown[]): void {
+      void children;
+    }
+
+    focus(): void {}
+
+    select(): void {}
+  }
+
+  class FakeForm extends FakeElement {
+    reset(): void {}
+  }
+
+  class FakeInput extends FakeElement {}
+  class FakeSelect extends FakeElement {
+    override replaceChildren(...children: unknown[]): void {
+      void children;
+      this.value = "";
+    }
+
+    override append(...children: unknown[]): void {
+      const option = children.find((child): child is FakeElement => child instanceof FakeElement && child.value.length > 0);
+      if (!this.value && option !== undefined) this.value = option.value;
+    }
+  }
+  class FakeButton extends FakeElement {}
+  class FakeTextArea extends FakeElement {}
+
+  const unlockForm = new FakeForm();
+  const bootstrapInput = new FakeInput();
+  const readinessView = new FakeElement();
+  const readinessProfile = new FakeSelect();
+  const readinessUpstream = new FakeSelect();
+  const readinessResult = new FakeElement();
+  const readinessButton = new FakeButton();
+  const elements: Record<string, FakeElement> = {
+    status: new FakeElement(),
+    "dashboard-view": new FakeElement(),
+    "unlock-view": new FakeElement(),
+    "unlock-form": unlockForm,
+    bootstrap: bootstrapInput,
+    "onboarding-view": new FakeElement(),
+    "preset-onboarding-view": new FakeElement(),
+    "workspace-view": new FakeElement(),
+    "configuration-catalog-view": new FakeElement(),
+    "configuration-catalog": new FakeElement(),
+    "provider-authentication-view": new FakeElement(),
+    "provider-authentication-copy": new FakeElement(),
+    "native-oauth-editor": new FakeElement(),
+    "profile-readiness-view": readinessView,
+    "profile-readiness-profile": readinessProfile,
+    "profile-readiness-upstream": readinessUpstream,
+    "profile-readiness-result": readinessResult,
+    "run-profile-readiness": readinessButton
+  };
+  const metadata = [
+    {
+      initialized: true,
+      name: "gsc",
+      version: "3",
+      defaultProfile: "google-work",
+      profiles: [{ name: "google-work" }],
+      upstreams: [{ name: "default" }],
+      authentication: {
+        mode: "provider-adapter",
+        readinessTargets: [{ profile: "google-work", upstream: "default" }]
+      }
+    },
+    { initialized: false, catalog: { discoveryState: "ready", configurations: [{ id: "gsc", name: "gsc" }] } }
+  ];
+  const requests: string[] = [];
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        return elements[id];
+      },
+      createElement(): FakeElement {
+        return new FakeElement();
+      }
+    },
+    HTMLFormElement: FakeForm,
+    HTMLInputElement: FakeInput,
+    HTMLSelectElement: FakeSelect,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    HTMLElement: FakeElement,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown) => {
+      const requestPath = String(path);
+      requests.push(requestPath);
+      const data = requestPath === "/api/v1/sessions"
+        ? { csrfToken: "test-csrf" }
+        : requestPath === "/api/v1/config"
+          ? metadata.shift()
+          : requestPath === "/api/v1/health"
+            ? { audit: { state: "healthy" } }
+            : [];
+      return { ok: true, status: requestPath === "/api/v1/sessions" ? 201 : 200, json: async () => ({ data }) };
+    }
+  });
+
+  const unlock = unlockForm.listeners.get("submit");
+  if (unlock === undefined) throw new Error("Expected the Console unlock handler.");
+  await unlock({ preventDefault: () => undefined });
+  const visibleAfterSelection = readinessView.hidden === false;
+  await unlock({ preventDefault: () => undefined });
+  const hiddenAfterUnselection = readinessView.hidden === true;
+  const runReadiness = readinessButton.listeners.get("click");
+  if (runReadiness === undefined) throw new Error("Expected the profile readiness handler.");
+  await runReadiness();
+  return {
+    visibleAfterSelection,
+    hiddenAfterUnselection,
+    readinessRequestsAfterUnselection: requests.filter((path) => path === "/api/v1/profile-readiness").length
+  };
 }
 
 async function submitMultiAccountGscPresetForm(
@@ -504,6 +703,11 @@ describe("local Console control server", () => {
       expect(html).toContain("Active vs durable:");
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="provider-authentication-view"');
+      expect(html).toContain('id="profile-readiness-view"');
+      expect(html).toContain('id="profile-readiness-profile"');
+      expect(html).toContain('id="profile-readiness-upstream"');
+      expect(html).toContain('id="run-profile-readiness"');
+      expect(html).toContain("Run reviewed safe check");
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 
@@ -568,6 +772,19 @@ describe("local Console control server", () => {
       });
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain("/api/v1/configurations/");
+      expect(javascript).toContain("/api/v1/profile-readiness");
+      expect(clearProfileReadinessResultOnTargetChange(javascript)).toEqual({
+        afterProfileChange: "",
+        afterUpstreamChange: ""
+      });
+      await expect(clearProfileReadinessStateWhenConfigurationIsUnselected(javascript)).resolves.toEqual({
+        visibleAfterSelection: true,
+        hiddenAfterUnselection: true,
+        readinessRequestsAfterUnselection: 0
+      });
+      expect(javascript).toContain("Running the reviewed safe check");
+      expect(javascript).toContain("profile.value = defaultProfile");
+      expect(javascript).toContain('body: { profile: profile.value, upstream: upstream.value }');
       expect(javascript).toContain("provider-adapter");
       expect(javascript).toContain("This provider owns its browser login");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
@@ -1341,6 +1558,95 @@ describe("local Console control server", () => {
         `disconnect:${reference}`
       ]);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes profile readiness only through a strict CSRF-protected Console action", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "profile-readiness-bootstrap-credential"
+    });
+    try {
+      const session = await bootstrapSession(server);
+      const url = new URL("/api/v1/profile-readiness", server.url);
+      const missingCsrf = await fetch(url, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal" })
+      });
+      expect(missingCsrf.status).toBe(403);
+
+      const invalidBody = await fetch(url, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", unexpected: true })
+      });
+      expect(invalidBody.status).toBe(422);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal" })
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        data: {
+          status: "unsupported",
+          profile: "personal",
+          safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" }
+        }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("passes a request-bound cancellation signal to the profile readiness service", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const readiness = vi.spyOn(ConsoleApplicationService.prototype, "profileReadiness").mockImplementation(async (request) => {
+      receivedSignal = request.signal;
+      return {
+        status: "unsupported",
+        profile: request.profile,
+        upstream: request.upstream ?? "default",
+        safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" },
+        identity: { status: "not-checked" }
+      };
+    });
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "profile-readiness-cancellation-bootstrap-credential"
+    });
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/profile-readiness", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", upstream: "default" })
+      });
+      expect(response.status).toBe(200);
+      expect(receivedSignal).toBeInstanceOf(AbortSignal);
+      expect(receivedSignal?.aborted).toBe(false);
+    } finally {
+      readiness.mockRestore();
       await server.close();
     }
   });

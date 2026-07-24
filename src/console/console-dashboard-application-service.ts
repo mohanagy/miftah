@@ -10,9 +10,11 @@ import {
   type ConsoleControlApplication,
   type ConsoleHealth,
   type ConsoleNativeOAuthOnboardingRequest,
+  type ConsoleProfileReadinessRequest,
   type ConsolePresetOnboardingReport,
   type ConsolePresetOnboardingRequest
 } from "./console-application-service.js";
+import type { ProfileReadinessReport } from "../setup/profile-readiness.js";
 import {
   discoverConsoleConfigCatalog,
   trustedConfigurationFor,
@@ -161,6 +163,10 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
 
   async disconnect(connectionRef: string): Promise<unknown> {
     return (await this.selectedApplication()).application.disconnect(connectionRef);
+  }
+
+  async profileReadiness(request: ConsoleProfileReadinessRequest): Promise<ProfileReadinessReport> {
+    return (await this.selectedApplication()).application.profileReadiness(request);
   }
 
   async auditRecords(limit: number): Promise<readonly ConsoleAuditRecord[]> {

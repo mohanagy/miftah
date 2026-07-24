@@ -101,6 +101,16 @@ const identityInputSchema =
       : process.env.TEST_IDENTITY_SCHEMA === "additional-properties-false"
         ? { type: "object", properties: {}, additionalProperties: false }
       : { type: "object", properties: {} };
+const safeReadTool = process.env.TEST_INCLUDE_SAFE_READ_TOOL === "true" ? "get_capabilities" : undefined;
+const safeReadCallPath = process.env.TEST_SAFE_READ_CALL_PATH;
+const safeReadResponse = process.env.TEST_SAFE_READ_RESPONSE ?? "safe-read";
+const safeReadAnnotations = parseOptionalJson(process.env.TEST_SAFE_READ_ANNOTATIONS, "TEST_SAFE_READ_ANNOTATIONS");
+const safeReadInputSchema =
+  process.env.TEST_SAFE_READ_SCHEMA === "required"
+    ? { type: "object", properties: { account: { type: "string" } }, required: ["account"] }
+    : process.env.TEST_SAFE_READ_SCHEMA === "all-of-required"
+      ? { type: "object", properties: {}, allOf: [{ required: ["account"] }] }
+      : { type: "object", properties: {} };
 
 let toolListRequests = 0;
 
@@ -367,6 +377,16 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
             }
           ]
         : []),
+      ...(safeReadTool && !secondPage
+        ? [
+            {
+              name: safeReadTool,
+              description: "Run the provider-declared empty-object readiness probe.",
+              inputSchema: safeReadInputSchema,
+              ...(safeReadAnnotations === undefined ? {} : { annotations: safeReadAnnotations })
+            }
+          ]
+        : []),
       ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
         ? [
             {
@@ -439,6 +459,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (request.params.name === "identity") {
     return { content: [{ type: "text", text: identityResponse }] };
+  }
+  if (request.params.name === safeReadTool) {
+    if (safeReadCallPath) {
+      writeFileSync(safeReadCallPath, JSON.stringify({
+        name: request.params.name,
+        arguments: request.params.arguments ?? {}
+      }));
+    }
+    return { content: [{ type: "text", text: safeReadResponse }] };
   }
   if (request.params.name === "echo") {
     return { content: [{ type: "text", text: String(request.params.arguments?.message ?? "") }] };
