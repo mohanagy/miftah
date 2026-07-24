@@ -17,6 +17,7 @@ const migrationRace = vi.hoisted(() => ({
   mutatedHeldAfterPublish: false,
   replacementTargetAfterPublish: undefined as Buffer | undefined,
   replacedPublishedTarget: false,
+  maskPublishedCandidateIdentity: false,
   triggered: false
 }));
 
@@ -24,6 +25,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const stats = await actual.lstat(...args);
+      const [path] = args;
+      const isPublishedCandidateOrTarget =
+        migrationRace.maskPublishedCandidateIdentity &&
+        migrationRace.replacedPublishedTarget &&
+        typeof path === "string" &&
+        (path === migrationRace.configPath || path.endsWith("candidate.miftah-migrate.tmp"));
+      if (!isPublishedCandidateOrTarget) return stats;
+      return Object.assign(Object.create(stats), {
+        dev: 1,
+        ino: 1,
+        isFile: stats.isFile.bind(stats),
+        isSymbolicLink: stats.isSymbolicLink.bind(stats)
+      });
+    },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
       const [from, to] = args;
       const isSourceMove =
@@ -279,6 +296,7 @@ afterEach(async () => {
   migrationRace.mutatedHeldAfterPublish = false;
   migrationRace.replacementTargetAfterPublish = undefined;
   migrationRace.replacedPublishedTarget = false;
+  migrationRace.maskPublishedCandidateIdentity = false;
   migrationRace.triggered = false;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -552,6 +570,7 @@ describe("migrate-config command", () => {
     const plan = planConfigMigration(legacyConfig());
     migrationRace.configPath = configPath;
     migrationRace.replacementTargetAfterPublish = concurrent;
+    migrationRace.maskPublishedCandidateIdentity = true;
 
     await expect(applyConfigMigration(configPath, source, plan)).rejects.toMatchObject({
       code: "CONFIG_MIGRATION_WRITE_FAILED"

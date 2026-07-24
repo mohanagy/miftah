@@ -147,10 +147,6 @@ function sameRegularFile(first: Stats, second: Stats): boolean {
   return isRegularNonSymlink(first) && isRegularNonSymlink(second) && matchesFingerprint(second, fingerprint(first));
 }
 
-function sameRegularFileIdentity(first: Stats, second: Stats): boolean {
-  return isRegularNonSymlink(first) && isRegularNonSymlink(second) && first.dev === second.dev && first.ino === second.ino;
-}
-
 async function closeAndRemove(handle: Awaited<ReturnType<typeof open>> | undefined, path: string): Promise<void> {
   const cleanup: unknown[] = [];
   if (handle !== undefined) {
@@ -407,7 +403,7 @@ async function installWithoutOverwriting(
     await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
     await link(transaction.backupPath, publishedBackupPath);
     const [privateBackup, publishedBackup] = await Promise.all([lstat(transaction.backupPath), lstat(publishedBackupPath)]);
-    if (!sameRegularFileIdentity(privateBackup, publishedBackup)) {
+    if (!sameRegularFile(privateBackup, publishedBackup)) {
       throw new Error("migration backup publication did not retain the private backup file");
     }
   } catch (error) {
@@ -452,7 +448,7 @@ async function installWithoutOverwriting(
   } catch {
     throw new MigrationTransactionError(transaction.directory);
   }
-  if (!sameRegularFileIdentity(privateCandidate, publishedCandidate)) {
+  if (!sameRegularFile(privateCandidate, publishedCandidate)) {
     throw new MigrationTransactionError(transaction.directory);
   }
 
