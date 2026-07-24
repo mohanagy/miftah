@@ -12,6 +12,12 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -165,12 +171,13 @@ describe("Console dashboard application service", () => {
       configDirectory: directory,
       launcher: { command: process.execPath, args: ["serve"] }
     });
+    const entry = importableClientEntry();
 
     await expect(service.onboardClientEntry({
       name: "posthog-work",
       entry: "posthog",
       document: JSON.stringify({
-        mcpServers: { posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] } }
+        mcpServers: { posthog: entry }
       })
     })).resolves.toMatchObject({ name: "posthog-work", defaultProfile: "default" });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({

@@ -13,6 +13,7 @@ const embeddedCredentialScheme = /(?:^|=|,|:|\{|\[|"|')(?:api[-_ ]?key|basic|bea
 const credentialUrlUserinfo = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s@]+@/u;
 const uriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
 const shellExecutable = /^(?:bash|cmd(?:\.exe)?|fish|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh|zsh)$/iu;
+const windowsDirectExecutable = /\.(?:com|exe)$/iu;
 const staticFlag = /^--?[A-Za-z][A-Za-z0-9-]*$/u;
 const staticPackageSpecifier = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@v?\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/u;
 const staticScriptPath = /^[A-Za-z0-9._~@%+\\/-]+$/u;
@@ -292,6 +293,12 @@ function selectedStdioEntry(value: unknown, container: ClientEntryContainer): Im
   const executable = executableStem(command);
   if (shellExecutable.test(executable)) {
     importError("Shell executables cannot be imported. Use the upstream executable and argument array directly.");
+  }
+  if (process.platform === "win32" && (!absolutePath(command) || !windowsDirectExecutable.test(command))) {
+    importError(
+      "Windows client-entry import requires a direct absolute .exe or .com executable instead of a command-processor shim.",
+      "static-launch"
+    );
   }
 
   const rawArgs = value.args ?? [];

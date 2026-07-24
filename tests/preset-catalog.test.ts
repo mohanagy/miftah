@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildPresetConfig,
   PRESET_CATALOG,
@@ -13,10 +13,19 @@ function serializedConfig(config: unknown): string {
 }
 
 const gscClientSecretsFile = resolve("fixtures", "gsc", "client-secrets.json");
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function localExecutable(): string {
+  return process.platform === "win32" ? process.execPath : "node";
+}
+
+afterEach(() => {
+  if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
+});
 
 describe("preset catalog", () => {
   it("publishes one versioned catalog with inspectable preset requirements", () => {
-    expect(PRESET_CATALOG.version).toBe("2");
+    expect(PRESET_CATALOG.version).toBe("3");
     expect(Object.keys(PRESET_CATALOG.presets)).toEqual([
       "generic",
       "github",
@@ -24,10 +33,13 @@ describe("preset catalog", () => {
       "google-search-console",
       "generic-npx",
       "generic-docker",
+      "local-stdio",
       "streamable-http"
     ]);
     expect(PRESET_CATALOG.presets["generic-npx"].requirements.npmPackage).toBe("required");
     expect(PRESET_CATALOG.presets["generic-docker"].requirements.dockerImage).toBe("required");
+    expect(PRESET_CATALOG.presets["local-stdio"].requirements.localCommand).toBe("required");
+    expect(PRESET_CATALOG.presets["local-stdio"].requirements.acceptLocalCommand).toBe("required");
     expect(PRESET_CATALOG.presets["streamable-http"].requirements.url).toBe("required");
     expect(PRESET_CATALOG.presets["google-search-console"].requirements.oauthClientSecretsFile).toBe("required");
   });
@@ -48,6 +60,12 @@ describe("preset catalog", () => {
       buildPresetConfig("docker", "generic-docker", {
         dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         credentialEnv: "DOCKER_SERVER_TOKEN"
+      }),
+      buildPresetConfig("local", "local-stdio", {
+        localCommand: localExecutable(),
+        args: ["server.mjs"],
+        acceptLocalCommand: true,
+        credentialEnv: "LOCAL_MCP_TOKEN"
       }),
       buildPresetConfig("remote", "streamable-http", {
         url: "https://mcp.example.com/v1",
@@ -224,6 +242,68 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("docker", "generic-docker", {
       dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     })).not.toThrow();
+  });
+
+  it("requires explicit acknowledgement before creating a restricted local stdio configuration", () => {
+    const localCommand = localExecutable();
+    const args = [resolve("fixtures", "fake-local-mcp.mjs"), "--stdio", "$pageview"];
+
+    expect(() => buildPresetConfig("local-tools", "local-stdio", { localCommand, args })).toThrow(PresetCatalogError);
+
+    const config = buildPresetConfig("local-tools", "local-stdio", {
+      localCommand,
+      args,
+      acceptLocalCommand: true,
+      credentialEnv: "LOCAL_MCP_TOKEN"
+    });
+
+    expect(config.upstream).toEqual({ transport: "stdio", command: localCommand, args });
+    expect(config.profiles.default).toEqual({
+      description: "Locally configured MCP executable; configure authentication with secret references when required.",
+      env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" },
+      policy: "readonly"
+    });
+    expect(config.policies).toEqual({
+      readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] }
+    });
+    expect(config.tooling?.unknownToolRisk).toBe("destructive");
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("rejects shell-shaped, credential-bearing, and non-native local stdio inputs without echoing them", () => {
+    const secret = "local-secret-that-must-not-appear";
+    const base = { localCommand: localExecutable(), args: ["server.mjs"], acceptLocalCommand: true } as const;
+    const foreignPath = process.platform === "win32" ? "/tmp/server" : "C:\\tools\\server.exe";
+    const unsafe = [
+      { ...base, localCommand: "/bin/sh" },
+      { ...base, localCommand: "env" },
+      { ...base, localCommand: `node?token=${secret}` },
+      { ...base, args: [`--token=${secret}`] },
+      { ...base, args: [`https://example.test/mcp?signature=${secret}`] },
+      { ...base, args: ["${LOCAL_MCP_TOKEN}"] },
+      { ...base, args: ["--config=${LOCAL_MCP_CONFIG}"] },
+      { ...base, cwd: "relative-directory" },
+      { ...base, cwd: foreignPath }
+    ];
+
+    for (const options of unsafe) {
+      try {
+        buildPresetConfig("local-tools", "local-stdio", options);
+        throw new Error("Expected local stdio input to be rejected.");
+      } catch (error) {
+        expect(error).toBeInstanceOf(PresetCatalogError);
+        expect(error instanceof Error ? error.message : "").not.toContain(secret);
+      }
+    }
+  });
+
+  it("requires a direct Windows binary for local stdio instead of a command-processor shim", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const base = { args: ["server.mjs"], acceptLocalCommand: true } as const;
+
+    for (const localCommand of ["node", "server.cmd", "server.bat"]) {
+      expect(() => buildPresetConfig("local-tools", "local-stdio", { ...base, localCommand })).toThrow(PresetCatalogError);
+    }
   });
 
   it("accepts only safe streamable HTTP credential header inputs", () => {

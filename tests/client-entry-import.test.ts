@@ -6,6 +6,12 @@ import {
   inspectClientConfiguration
 } from "../src/setup/client-entry-import.js";
 
+function importableEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 describe("client entry import", () => {
   it("lists supported client entries without returning their configuration values", () => {
     const document = JSON.stringify({
@@ -22,14 +28,12 @@ describe("client entry import", () => {
   });
 
   it("imports one reviewed Claude-compatible stdio entry into a validated safe-default configuration", () => {
+    const entry = importableEntry();
     const config = createImportedClientConfiguration({
       configurationName: "posthog-work",
       document: JSON.stringify({
         mcpServers: {
-          posthog: {
-            command: "npx",
-            args: ["--yes", "@posthog/mcp@1.2.3"]
-          }
+          posthog: entry
         }
       }),
       entry: "posthog"
@@ -42,8 +46,8 @@ describe("client entry import", () => {
       defaultProfile: "default",
       upstream: {
         transport: "stdio",
-        command: "npx",
-        args: ["--yes", "@posthog/mcp@1.2.3"]
+        command: entry.command,
+        args: entry.args
       },
       profiles: { default: {} },
       security: { requireExplicitProfileForDestructive: true }
@@ -51,7 +55,7 @@ describe("client entry import", () => {
   });
 
   it("imports an exact-version pnpm dlx launch without treating dlx as the package", () => {
-    const config = createImportedClientConfiguration({
+    const request = {
       configurationName: "posthog-work",
       document: JSON.stringify({
         mcpServers: {
@@ -62,7 +66,14 @@ describe("client entry import", () => {
         }
       }),
       entry: "posthog"
-    });
+    } as const;
+
+    if (process.platform === "win32") {
+      expect(() => createImportedClientConfiguration(request)).toThrow(ClientEntryImportError);
+      return;
+    }
+
+    const config = createImportedClientConfiguration(request);
 
     expect(config.upstream).toMatchObject({
       transport: "stdio",
@@ -76,8 +87,8 @@ describe("client entry import", () => {
     { command: "bunx", args: ["--bun", "--no-install", "--silent", "@posthog/mcp@1.2.3"] },
     { command: "pnpx", args: ["@posthog/mcp@1.2.3"] },
     { command: "uvx", args: ["--isolated", "mcp-search-console@0.3.2"] }
-  ])("imports a known-safe exact package-runner launch: $command $args", ({ command, args }) => {
-    const config = createImportedClientConfiguration({
+  ])("handles a known exact package-runner launch according to the platform boundary: $command $args", ({ command, args }) => {
+    const request = {
       configurationName: "static-runner",
       document: JSON.stringify({
         mcpServers: {
@@ -85,9 +96,36 @@ describe("client entry import", () => {
         }
       }),
       entry: "example"
-    });
+    } as const;
+
+    if (process.platform === "win32") {
+      expect(() => createImportedClientConfiguration(request)).toThrow(ClientEntryImportError);
+      return;
+    }
+
+    const config = createImportedClientConfiguration(request);
 
     expect(config.upstream).toMatchObject({ command, args });
+  });
+
+  it("rejects Windows client entries that would require a command-processor shim", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      for (const entry of [
+        { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+        { command: "node", args: ["server.mjs"] },
+        { command: "C:\\tools\\server.cmd", args: [] }
+      ]) {
+        expect(() => createImportedClientConfiguration({
+          configurationName: "windows-shell-shim",
+          document: JSON.stringify({ mcpServers: { example: entry } }),
+          entry: "example"
+        })).toThrow(ClientEntryImportError);
+      }
+    } finally {
+      if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
+    }
   });
 
   it.each([

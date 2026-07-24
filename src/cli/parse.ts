@@ -14,6 +14,9 @@ type ValueOptionName =
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "localCommand"
+  | "args"
+  | "cwd"
   | "transport"
   | "connection"
   | "upstream"
@@ -21,7 +24,16 @@ type ValueOptionName =
   | "clientRegistration"
   | "scopes"
   | "port";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen" | "verify";
+type BooleanOptionName =
+  | "follow"
+  | "json"
+  | "interactive"
+  | "includeArguments"
+  | "write"
+  | "nonInteractive"
+  | "noOpen"
+  | "verify"
+  | "acceptLocalCommand";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -42,6 +54,14 @@ export interface CliOptions {
   readonly headerName?: string;
   readonly headerPrefix?: string;
   readonly oauthClientSecretsFile?: string;
+  /** One literal executable for the explicitly reviewed local stdio setup flow. */
+  readonly localCommand?: string;
+  /** Repeated literal argv elements for the explicitly reviewed local stdio setup flow. */
+  readonly args?: readonly string[];
+  /** Optional native absolute working directory for the local stdio setup flow. */
+  readonly cwd?: string;
+  /** Required acknowledgement before persisting an unreviewed local executable. */
+  readonly acceptLocalCommand?: true;
   readonly transport?: "stdio" | "http";
   readonly connection?: string;
   readonly upstream?: string;
@@ -106,7 +126,11 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
-      "oauthClientSecretsFile"
+      "oauthClientSecretsFile",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand"
     ]
   },
   setup: {
@@ -126,6 +150,10 @@ export const CLI_COMMANDS = {
       "headerName",
       "headerPrefix",
       "oauthClientSecretsFile",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand",
       "verify"
     ]
   },
@@ -301,6 +329,24 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--oauth-client-secrets-file <file>",
     description: "Absolute Google OAuth client-secrets file for the GSC preset."
   },
+  localCommand: {
+    name: "localCommand",
+    takesValue: true,
+    usage: "--local-command <executable>",
+    description: "Literal executable for the explicitly reviewed local-stdio preset."
+  },
+  args: {
+    name: "args",
+    takesValue: true,
+    usage: "--arg <value>",
+    description: "One local-stdio argv value; repeat and use --arg=--flag for a leading dash."
+  },
+  cwd: {
+    name: "cwd",
+    takesValue: true,
+    usage: "--cwd <directory>",
+    description: "Native absolute working directory for the local-stdio preset."
+  },
   transport: {
     name: "transport",
     takesValue: true,
@@ -390,6 +436,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--verify",
     description: "Run declared safe readiness checks after setup writes the configuration."
+  },
+  acceptLocalCommand: {
+    name: "acceptLocalCommand",
+    takesValue: false,
+    usage: "--accept-local-command",
+    description: "Confirm review of an untrusted local executable before writing it."
   }
 };
 
@@ -409,6 +461,9 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
+  "--local-command": OPTION_DEFINITIONS.localCommand,
+  "--arg": OPTION_DEFINITIONS.args,
+  "--cwd": OPTION_DEFINITIONS.cwd,
   "--transport": OPTION_DEFINITIONS.transport,
   "--connection": OPTION_DEFINITIONS.connection,
   "--upstream": OPTION_DEFINITIONS.upstream,
@@ -424,6 +479,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
   "--no-open": OPTION_DEFINITIONS.noOpen,
   "--verify": OPTION_DEFINITIONS.verify,
+  "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",
   "-h": "help",
   "--version": "version",
@@ -446,9 +502,9 @@ function isCliCommand(value: string): value is CliCommand {
 }
 
 function setValueOption(options: { [name: string]: unknown }, name: ValueOptionName, value: string): void {
-  if (name === "scopes") {
-    const existing = options.scopes;
-    options.scopes = [...(Array.isArray(existing) ? existing : []), value];
+  if (name === "scopes" || name === "args") {
+    const existing = options[name];
+    options[name] = [...(Array.isArray(existing) ? existing : []), value];
     return;
   }
   if (options[name] !== undefined) usageError(`Duplicate option '--${name}'.`);

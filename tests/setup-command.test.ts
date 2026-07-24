@@ -15,6 +15,12 @@ import { validateConfig } from "../src/config/validate-config.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
 
+function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.execPath, args: ["server.mjs"] }
+    : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
+}
+
 class StreamTranscript {
   #contents = "";
   #waiters: Array<{ readonly text: string; readonly occurrences: number; readonly resolve: () => void }> = [];
@@ -98,12 +104,57 @@ describe("setup command", () => {
     }
   });
 
+  it("stores a reviewed local argv configuration without launching or probing it", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "local-tools.json");
+    const localCommand = process.platform === "win32" ? process.execPath : "node";
+    const command = runSetupCommand({
+      name: "local-tools",
+      preset: "local-stdio",
+      output: "local-tools.json",
+      localCommand,
+      args: ["server.mjs", "--stdio", "$pageview"],
+      cwd: outputRoot,
+      credentialEnv: "LOCAL_MCP_TOKEN"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(
+      streams,
+      "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
+      "yes"
+    );
+    await answer(streams, "Client", "");
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(JSON.parse(await readFile(output, "utf8"))).toMatchObject({
+      upstream: { transport: "stdio", command: localCommand, args: ["server.mjs", "--stdio", "$pageview"], cwd: outputRoot },
+      profiles: { default: { env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" }, policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+    expect(profileReadinessMocks.run).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain(
+      "Local command review: 1 executable with 3 argument(s); working directory: configured; credential environment: configured."
+    );
+    expect(streams.transcript.contents).not.toContain("$pageview");
+  });
+
   it("imports one explicitly selected local stdio entry without modifying the source client file", async () => {
     const source = resolve(outputRoot, "claude-desktop.json");
     const output = resolve(outputRoot, "posthog.json");
+    const entry = importableClientEntry();
     const document = JSON.stringify({
       mcpServers: {
-        posthog: { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] }
+        posthog: entry
       }
     });
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
@@ -130,7 +181,7 @@ describe("setup command", () => {
     expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
     expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
       name: "posthog-work",
-      upstream: { transport: "stdio", command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] },
+      upstream: { transport: "stdio", command: entry.command, args: entry.args },
       profiles: { default: { policy: "readonly" } }
     });
     expect(await readFile(source, "utf8")).toBe(document);

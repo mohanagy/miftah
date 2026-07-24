@@ -43,7 +43,8 @@ Start with the row that describes how your upstream MCP authenticates.
 | Your upstream MCP | Use this Miftah path |
 | --- | --- |
 | GitHub or Sentry | Run guided setup with `miftah setup`, or generate a strict built-in preset with `miftah init`. |
-| Another exact-pinned local STDIO server | Use `generic-npx` or `generic-docker`, then add profiles around it. |
+| Another exact-pinned npm or container STDIO server | Use `generic-npx` or `generic-docker`, then add profiles around it. |
+| A local executable and argument array you personally reviewed | Use `local-stdio`; it saves literal command and argument-array metadata without a shell. |
 | Remote HTTPS Streamable HTTP with a token or API key | Use the `streamable-http` preset with a secret-backed header. |
 | Remote HTTPS Streamable HTTP with standards-compatible OAuth | Use Native remote OAuth through `miftah dashboard` or the `connection` and `auth` CLI commands. |
 | Local or provider-specific MCP that opens its own OAuth flow | Use Upstream-owned OAuth. Miftah wraps the process but does not take over its token cache. |
@@ -60,7 +61,7 @@ Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line cont
 miftah setup
 ```
 
-This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
+This walks through a configuration name, a reviewed connector preset, the safe metadata that preset needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. For `local-stdio`, it collects one literal argument at a time, shows a no-secret review summary, and requires an explicit acknowledgement. Miftah does not run the local executable during setup. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
 
 ## First setup: GitHub with Claude Desktop
 
@@ -175,6 +176,7 @@ Built-in presets are reviewed, exact-pinned configurations. Generic compatibilit
 | `generic` | MCP reference/test server, not a production provider recommendation |
 | `generic-npx` | Another exact-version npm MCP package |
 | `generic-docker` | Another container pinned by canonical `@sha256:` digest |
+| `local-stdio` | A reviewed local executable with one literal argument per array element |
 | `streamable-http` | An exact HTTPS Streamable HTTP upstream |
 
 ### Minimal exact-pinned npm MCP template
@@ -192,7 +194,28 @@ miftah init analytics \
 
 Replace the example package, version, and variable name with the upstream's documented values. An exact version is required. Run `validate`, `doctor`, `test-profile`, and `list-tools` before adding the printed client JSON.
 
-If the upstream needs custom arguments, headers, working directories, several named upstreams, or profile-specific overrides, generate the nearest safe preset and then use the [Configuration reference](docs/config.md). Always keep subprocess arguments as arrays; Miftah does not need a shell command string.
+### Reviewed local executable template
+
+Use this when the upstream documentation gives you a direct local STDIO executable rather than an exact npm package or digest-pinned container. Each argument is supplied separately—never as one shell command string:
+
+```bash
+miftah init local-tools \
+  --preset local-stdio \
+  --local-command node \
+  --arg server.mjs \
+  --arg=--stdio \
+  --cwd "$HOME/development/local-tools" \
+  --credential-env SERVICE_API_KEY \
+  --accept-local-command \
+  --output ~/.config/miftah/local-tools.json \
+  --client claude-desktop
+```
+
+On macOS and Linux, `--local-command` accepts a bare executable such as `node` or a native absolute executable path. On Windows, provide an absolute `.exe` or `.com` binary—not a bare command or a `.cmd`/`.bat` shim—so direct argument-array execution never falls back to `cmd.exe`. Every `--arg` becomes one literal argv element; use `--arg=--flag` when an argument itself begins with `--`. Miftah never invokes a shell or expands `$`, `${...}`, or `~` in these values. Keep credentials out of the command and arguments: use `--credential-env` to write only a `${ENV_NAME}` reference into the profile.
+
+`--accept-local-command` is your acknowledgement that you reviewed the executable and every argument. The generated profile starts with a read-only policy and treats unknown upstream tools as destructive until you add an intentional policy. `init` and `setup` save the configuration only; they do not launch or probe a generic local executable. After you review the generated config, run the diagnostics you choose before adding its printed client JSON.
+
+For one reviewed local executable, use `local-stdio` for arguments and a working directory. For several named upstreams, profile-specific overrides, or other advanced topology, use the [Configuration reference](docs/config.md). Always keep subprocess arguments as arrays; Miftah does not need a shell command string.
 
 ## Reuse one existing local stdio MCP entry
 
@@ -207,6 +230,8 @@ miftah setup posthog-work \
 ```
 
 `--import-file` must be an absolute regular JSON file, and `--import-entry` is the exact entry name under `mcpServers` (Claude Desktop, Claude Code, or Cursor) or `servers` (VS Code). Miftah reads that one file through a bounded verified handle and leaves it byte-for-byte untouched. It imports only a finite **static launch grammar**: a literal local executable, an optional absolute working directory, and either an exact-version package-runner launch with a runner-specific safe prefix and no arguments after the package, a script path plus non-sensitive flags, or a direct executable plus non-sensitive flags.
+
+On Windows, the import path accepts only a direct absolute `.exe` or `.com` executable. Bare runners such as `npx` or `node`, and `.cmd`/`.bat` shims, are rejected rather than being dispatched through a command processor.
 
 The importer rejects remote transports, `env`, headers, shell settings, unsupported fields, environment wrappers, inline code, opaque values or assignments, URL userinfo, unpinned package references, and credential-shaped arguments. It creates one `default` profile with a read-only policy and treats unknown tools as destructive until you deliberately configure a policy. It does not launch the imported executable or copy credentials; `--verify` is rejected because an imported entry has no reviewed provider adapter. It does not infer OAuth ownership from a command or URL. If the entry needs custom values, OAuth, or an API key, use advanced manual setup, then configure the upstream's documented flow and Miftah secret references separately.
 

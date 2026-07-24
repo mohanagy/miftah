@@ -211,6 +211,35 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--import-file", "/Users/example/config.json", "--import-entry", "posthog"]);
   });
 
+  it("parses an explicitly reviewed local executable as a literal argument array", () => {
+    expect(parseCli([
+      "setup",
+      "local-tools",
+      "--preset=local-stdio",
+      "--local-command=node",
+      "--arg=server.mjs",
+      "--arg=--stdio",
+      "--arg=$pageview",
+      "--cwd=/Users/example/projects/local-tools",
+      "--credential-env=LOCAL_MCP_TOKEN",
+      "--accept-local-command"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        name: "local-tools",
+        preset: "local-stdio",
+        localCommand: "node",
+        args: ["server.mjs", "--stdio", "$pageview"],
+        cwd: "/Users/example/projects/local-tools",
+        credentialEnv: "LOCAL_MCP_TOKEN",
+        acceptLocalCommand: true
+      }
+    });
+    expectUsageError(["setup", "--arg", "--stdio"]);
+    expectUsageError(["validate", "--local-command", "node"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

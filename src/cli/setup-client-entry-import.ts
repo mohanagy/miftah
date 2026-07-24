@@ -49,6 +49,10 @@ function rejectPresetOptions(options: ClientEntryImportSetupOptions): void {
     options.headerName,
     options.headerPrefix,
     options.oauthClientSecretsFile,
+    options.localCommand,
+    options.args,
+    options.cwd,
+    options.acceptLocalCommand,
     options.googleSearchConsoleProfiles,
     options.defaultProfile
   ].some((value) => value !== undefined);
