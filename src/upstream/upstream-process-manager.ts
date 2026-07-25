@@ -137,9 +137,16 @@ export interface UpstreamHealth {
 
 type StartSource = "demand" | "manual" | "automatic";
 
+interface TransportCloseSignal {
+  readonly promise: Promise<void>;
+  isClosed(): boolean;
+  resolve(): void;
+}
+
 interface ManagedSession {
   readonly session: UpstreamSession;
   readonly transport: Transport;
+  readonly transportClosed: TransportCloseSignal;
   readonly pid: number | null;
   readonly token: number;
   readonly generation: number;
@@ -150,6 +157,7 @@ interface ManagedSession {
 
 interface StartingAttempt {
   readonly transport: Transport;
+  readonly transportClosed: TransportCloseSignal;
   readonly generation: number;
   readonly oauthProvider?: ManagedOAuthClientProvider;
   pid: number | null;
@@ -162,10 +170,43 @@ interface ScheduledRestart {
   resolve(): void;
 }
 
+/**
+ * Holds a profile capacity reservation until every local child close signal has settled.
+ * A clean idle handoff may reuse that same reservation; a forced or timed-out cleanup
+ * promotes the gate and blocks another process for the profile.
+ */
+interface PendingTeardown {
+  readonly signals: readonly TransportCloseSignal[];
+  readonly reason: UpstreamStopReason;
+  blocksReplacement: boolean;
+}
+
+interface TeardownLease {
+  readonly teardown: PendingTeardown;
+  readonly ownsTeardown: boolean;
+}
+
 type ResolvedOptions = Required<
   Pick<UpstreamManagerOptions, "startupTimeoutMs" | "shutdownTimeoutMs" | "restartOnCrash" | "maxRestarts">
 > &
   Omit<UpstreamManagerOptions, "startupTimeoutMs" | "shutdownTimeoutMs" | "restartOnCrash" | "maxRestarts">;
+
+function createCloseSignal(): TransportCloseSignal {
+  let closed = false;
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    isClosed: () => closed,
+    resolve: () => {
+      if (closed) return;
+      closed = true;
+      resolvePromise?.();
+    }
+  };
+}
 
 /**
  * Owns one upstream process pool. Sessions are cached by profile and created only on demand.
@@ -177,6 +218,7 @@ export class UpstreamProcessManager {
   private readonly startingAttempts = new Map<string, StartingAttempt>();
   private readonly manualRestarts = new Map<string, Promise<UpstreamSession>>();
   private readonly automaticRestarts = new Map<string, ScheduledRestart>();
+  private readonly pendingTeardowns = new Map<string, Set<PendingTeardown>>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   private readonly stabilityTimers = new Map<string, NodeJS.Timeout>();
   private readonly generations = new Map<string, number>();
@@ -338,6 +380,18 @@ export class UpstreamProcessManager {
 
   private async restartProfile(profile: string): Promise<UpstreamSession> {
     await this.stopProfile(profile, "restart", false);
+    const cancelledStart = this.starts.get(profile);
+    if (cancelledStart) {
+      await withTimeout(
+        cancelledStart.then(
+          () => undefined,
+          () => undefined
+        ),
+        this.options.shutdownTimeoutMs,
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: cancelled startup cleanup timed out after ${this.options.shutdownTimeoutMs}ms`
+      );
+    }
     return this.startOnce(profile, "manual");
   }
 
@@ -345,7 +399,7 @@ export class UpstreamProcessManager {
     this.assertOpen();
     const pending = this.starts.get(profile);
     if (pending) return pending;
-    const start = this.start(profile, source);
+    const start = this.startAfterPendingTeardown(profile, source);
     this.starts.set(profile, start);
     void start.then(
       () => {
@@ -356,6 +410,18 @@ export class UpstreamProcessManager {
       }
     );
     return start;
+  }
+
+  private async startAfterPendingTeardown(profile: string, source: StartSource): Promise<UpstreamSession> {
+    // Preserve the established clean idle-handoff behavior: only a forced or timed-out
+    // cleanup blocks a replacement. Every gate, including a clean handoff, still holds capacity.
+    if (this.hasBlockingTeardown(profile)) {
+      throw new MiftahError(
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: previous upstream process cleanup is still pending for '${profile}'`
+      );
+    }
+    return this.start(profile, source);
   }
 
   private async start(profile: string, source: StartSource): Promise<UpstreamSession> {
@@ -375,7 +441,17 @@ export class UpstreamProcessManager {
     let stdioTransport: StdioClientTransport | undefined;
     let oauthProvider: ManagedOAuthClientProvider | undefined;
     let startingAttempt: StartingAttempt | undefined;
+    let transportClosed = createCloseSignal();
     let reserved = false;
+
+    const trackTransportClose = (managedTransport: Transport): TransportCloseSignal => {
+      const closeSignal = createCloseSignal();
+      managedTransport.onclose = () => {
+        closeSignal.resolve();
+        this.handleTransportClosed(profile, token, generation);
+      };
+      return closeSignal;
+    };
 
     try {
       reserved = this.limiter.acquire(profile, this.upstreamName);
@@ -438,9 +514,15 @@ export class UpstreamProcessManager {
       }
 
       transport = new ProgressPreservingTransport(transport);
-      transport.onclose = () => this.handleTransportClosed(profile, token, generation);
+      transportClosed = trackTransportClose(transport);
       let client = new Client({ name: "miftah", version: MIFTAH_VERSION });
-      startingAttempt = { transport, generation, pid: null, ...(oauthProvider === undefined ? {} : { oauthProvider }) };
+      startingAttempt = {
+        transport,
+        transportClosed,
+        generation,
+        pid: null,
+        ...(oauthProvider === undefined ? {} : { oauthProvider })
+      };
       this.startingAttempts.set(profile, startingAttempt);
       let connection = client.connect(transport);
       startingAttempt.pid = stdioTransport?.pid ?? null;
@@ -470,9 +552,9 @@ export class UpstreamProcessManager {
           ...(this.options.remoteFetch === undefined ? {} : { fetch: this.options.remoteFetch })
         });
         transport = new ProgressPreservingTransport(streamableTransport);
-        transport.onclose = () => this.handleTransportClosed(profile, token, generation);
+        transportClosed = trackTransportClose(transport);
         client = new Client({ name: "miftah", version: MIFTAH_VERSION });
-        startingAttempt = { transport, generation, pid: null, oauthProvider };
+        startingAttempt = { transport, transportClosed, generation, pid: null, oauthProvider };
         this.startingAttempts.set(profile, startingAttempt);
         connection = client.connect(transport);
         void connection.catch(() => undefined);
@@ -492,7 +574,6 @@ export class UpstreamProcessManager {
       }
       const pid = stdioTransport?.pid ?? null;
       if (!this.isCurrent(profile, generation)) {
-        await this.terminateTransport(transport, pid);
         throw new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
       }
 
@@ -513,6 +594,7 @@ export class UpstreamProcessManager {
       const entry: ManagedSession = {
         session,
         transport,
+        transportClosed,
         pid,
         token,
         generation,
@@ -534,7 +616,25 @@ export class UpstreamProcessManager {
       return session;
     } catch (error) {
       const pid = stdioTransport?.pid ?? null;
-      if (transport) await this.terminateTransport(transport, pid);
+      let teardownPending = this.hasBlockingTeardown(profile);
+      if (transport) {
+        const teardownLease = this.beginTeardown(
+          profile,
+          pid === null ? [] : [transportClosed],
+          "shutdown"
+        );
+        const reaped = await this.terminateTransport(transport, pid, transportClosed);
+        if (teardownLease?.ownsTeardown) {
+          const { teardown } = teardownLease;
+          if (reaped || this.teardownIsComplete(teardown)) {
+            this.completeTeardown(profile, teardown);
+          } else {
+            teardown.blocksReplacement = true;
+            this.deferTeardown(profile, teardown);
+          }
+        }
+        teardownPending = this.hasBlockingTeardown(profile);
+      }
       await oauthProvider?.close().catch(() => undefined);
       if (this.startingAttempts.get(profile) === startingAttempt) this.startingAttempts.delete(profile);
       const current = this.isCurrent(profile, generation);
@@ -551,9 +651,9 @@ export class UpstreamProcessManager {
           errorCode: failure.code
         });
       }
-      if (source !== "automatic" || !this.canAutomaticallyRetry(profile)) {
-        this.limiter.release(profile, this.upstreamName);
-      } else if (!reserved) {
+      if (!teardownPending && (source !== "automatic" || !this.canAutomaticallyRetry(profile))) {
+        this.releaseProfileCapacity(profile);
+      } else if (!teardownPending && !reserved) {
         this.limiter.acquire(profile, this.upstreamName);
       }
       throw failure;
@@ -682,7 +782,7 @@ export class UpstreamProcessManager {
     if (this.options.restartOnCrash) {
       this.scheduleAutomaticRestart(profile, generation);
     } else {
-      this.limiter.release(profile, this.upstreamName);
+      this.releaseProfileCapacity(profile);
     }
   }
 
@@ -708,7 +808,7 @@ export class UpstreamProcessManager {
         status: "failure",
         errorCode: "UPSTREAM_RESTART_LIMIT_EXCEEDED"
       });
-      this.limiter.release(profile, this.upstreamName);
+      this.releaseProfileCapacity(profile);
       return;
     }
 
@@ -783,7 +883,7 @@ export class UpstreamProcessManager {
       scheduled.resolve();
     }
     if (releaseReservation && !this.sessions.has(profile) && !this.starts.has(profile)) {
-      this.limiter.release(profile, this.upstreamName);
+      this.releaseProfileCapacity(profile);
     }
   }
 
@@ -811,25 +911,78 @@ export class UpstreamProcessManager {
 
   /** Stops a profile, cancels an in-progress start, and avoids stale lifecycle state after a replacement begins. */
   private async stopProfile(profile: string, reason: UpstreamStopReason, releaseReservation: boolean): Promise<void> {
-    const startEpoch = this.startEpoch(profile);
     const startingAttempt = this.startingAttempts.get(profile);
+    const entry = this.sessions.get(profile);
+    // A repeated stop with no current transport must not release capacity that an
+    // already-closing child still owns. A replacement transport gets its own gate.
+    if (!entry && !startingAttempt && this.hasPendingTeardown(profile)) return;
+
+    const startEpoch = this.startEpoch(profile);
     this.incrementGeneration(profile);
     this.clearIdleTimer(profile);
     this.clearStabilityTimer(profile);
-    const entry = this.sessions.get(profile);
     this.sessions.delete(profile);
     let shutdownFailure: ShutdownFailureReason | undefined;
+    const localCloseSignals: TransportCloseSignal[] = [];
+    if (entry && entry.pid !== null) localCloseSignals.push(entry.transportClosed);
+    if (startingAttempt && startingAttempt.pid !== null) localCloseSignals.push(startingAttempt.transportClosed);
+    const teardownLease = this.beginTeardown(profile, localCloseSignals, reason);
+    const teardown = teardownLease?.teardown;
 
     if (entry) {
       entry.closing = true;
-      shutdownFailure = await this.closeSession(entry);
+      const closed = await this.closeSession(entry);
+      shutdownFailure = closed.failure;
     }
     if (startingAttempt) {
-      await this.terminateTransport(startingAttempt.transport, startingAttempt.pid);
+      await this.terminateTransport(
+        startingAttempt.transport,
+        startingAttempt.pid,
+        startingAttempt.transportClosed
+      );
       await startingAttempt.oauthProvider?.close().catch(() => undefined);
     }
-    if (this.startEpoch(profile) !== startEpoch) return;
-    if (releaseReservation) this.limiter.release(profile, this.upstreamName);
+    const teardownPending = teardown !== undefined && !this.teardownIsComplete(teardown);
+    if (teardownPending && teardownLease?.ownsTeardown) {
+      teardown.blocksReplacement = true;
+      this.deferTeardown(profile, teardown);
+    }
+    if (teardownPending) {
+      shutdownFailure = "shutdown-timeout";
+    } else if (teardownLease?.ownsTeardown && teardown !== undefined) {
+      this.completeTeardown(profile, teardown);
+    }
+    if (this.startEpoch(profile) !== startEpoch) {
+      if (!this.sessions.has(profile) && !this.starts.has(profile)) this.releaseProfileCapacity(profile);
+      return;
+    }
+    if (teardownPending) {
+      this.setProcessState(profile, "failed", {
+        pid: null,
+        error: `UPSTREAM_SHUTDOWN_TIMEOUT: upstream process cleanup is still pending for '${profile}'`,
+        resetCapabilities: true
+      });
+      const failureCode = "UPSTREAM_SHUTDOWN_TIMEOUT";
+      if (reason === "restart") {
+        this.publishLifecycle({
+          type: "restart-failure",
+          profile,
+          upstreamName: this.upstreamName,
+          status: "failure",
+          errorCode: failureCode
+        });
+      } else {
+        this.publishLifecycle({
+          type: reason === "idle" ? "idle" : "shutdown",
+          profile,
+          upstreamName: this.upstreamName,
+          status: "failure",
+          errorCode: failureCode
+        });
+      }
+      return;
+    }
+    if (releaseReservation) this.releaseProfileCapacity(profile);
     this.setProcessState(profile, "stopped", {
       pid: null,
       resetCapabilities: true,
@@ -857,12 +1010,11 @@ export class UpstreamProcessManager {
     }
   }
 
-  /** Finalizes a session after a timeout or close error so lifecycle capacity is never stranded. */
-  private async closeSession(
-    entry: ManagedSession
-  ): Promise<ShutdownFailureReason | undefined> {
+  /** Stops a session and confirms a local child has exited before its capacity can be reused. */
+  private async closeSession(entry: ManagedSession): Promise<{ failure?: ShutdownFailureReason; reaped: boolean }> {
     const close = this.closeManagedSession(entry);
     void close.catch(() => undefined);
+    let failure: ShutdownFailureReason | undefined;
     try {
       await withTimeout(
         close,
@@ -870,17 +1022,42 @@ export class UpstreamProcessManager {
         "UPSTREAM_SHUTDOWN_TIMEOUT",
         `UPSTREAM_SHUTDOWN_TIMEOUT: shutdown timed out after ${this.options.shutdownTimeoutMs}ms`
       );
-      return undefined;
     } catch (error) {
-      // Abort a hung remote session deletion before returning lifecycle capacity.
-      await this.forceCloseTransport(entry.transport, entry.pid);
-      return error instanceof MiftahError && error.code === "UPSTREAM_SHUTDOWN_TIMEOUT"
+      failure = error instanceof MiftahError && error.code === "UPSTREAM_SHUTDOWN_TIMEOUT"
         ? "shutdown-timeout"
         : "shutdown-error";
     }
+    // A timed-out remote DELETE still owns an in-flight HTTP request. Closing the
+    // client transport aborts that request without turning remote cleanup into a
+    // local-child capacity gate.
+    if (entry.pid === null) {
+      if (failure !== undefined) await this.forceCloseTransport(entry.transport, null);
+      return { failure, reaped: true };
+    }
+    if (entry.transportClosed.isClosed()) return { failure, reaped: true };
+
+    // The SDK can return from its own SIGKILL path before the child emits close.
+    // Force the known PID once more, then use Miftah's existing shutdown bound to
+    // decide whether it is safe to recycle this profile's capacity.
+    await this.forceCloseTransport(entry.transport, entry.pid);
+    try {
+      await withTimeout(
+        entry.transportClosed.promise,
+        this.options.shutdownTimeoutMs,
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: process cleanup timed out after ${this.options.shutdownTimeoutMs}ms`
+      );
+      return { failure, reaped: true };
+    } catch {
+      return { failure: "shutdown-timeout", reaped: false };
+    }
   }
 
-  private async terminateTransport(transport: Transport, pid: number | null): Promise<void> {
+  private async terminateTransport(
+    transport: Transport,
+    pid: number | null,
+    transportClosed?: TransportCloseSignal
+  ): Promise<boolean> {
     const underlying = unwrapProgressPreservingTransport(transport);
     if (underlying instanceof StreamableHTTPClientTransport && underlying.sessionId) {
       await withTimeout(
@@ -891,9 +1068,88 @@ export class UpstreamProcessManager {
       ).catch(() => undefined);
     }
     await this.forceCloseTransport(transport, pid);
+    if (pid === null || transportClosed === undefined || transportClosed.isClosed()) return true;
+    try {
+      await withTimeout(
+        transportClosed.promise,
+        this.options.shutdownTimeoutMs,
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: process cleanup timed out after ${this.options.shutdownTimeoutMs}ms`
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  /** Forcibly tears down a local transport without waiting for remote session cleanup. */
+  /** Installs the local-child cleanup gate before any shutdown operation can await. */
+  private beginTeardown(
+    profile: string,
+    signals: readonly TransportCloseSignal[],
+    reason: UpstreamStopReason
+  ): TeardownLease | undefined {
+    if (signals.length === 0) return undefined;
+    const closeSignals = [...new Set(signals)];
+    const teardown: PendingTeardown = {
+      signals: closeSignals,
+      reason,
+      blocksReplacement: false
+    };
+    const teardowns = this.pendingTeardowns.get(profile) ?? new Set<PendingTeardown>();
+    const existing = [...teardowns].find((candidate) =>
+      closeSignals.every((signal) => candidate.signals.includes(signal))
+    );
+    if (existing) return { teardown: existing, ownsTeardown: false };
+    teardowns.add(teardown);
+    this.pendingTeardowns.set(profile, teardowns);
+    return { teardown, ownsTeardown: true };
+  }
+
+  /** Returns whether any local-child cleanup gate still owns this profile's capacity reservation. */
+  private hasPendingTeardown(profile: string): boolean {
+    return (this.pendingTeardowns.get(profile)?.size ?? 0) > 0;
+  }
+
+  /** Returns whether a timed-out local cleanup makes another process for this profile unsafe to start. */
+  private hasBlockingTeardown(profile: string): boolean {
+    return [...(this.pendingTeardowns.get(profile) ?? [])].some((teardown) => teardown.blocksReplacement);
+  }
+
+  /** Returns whether all local children protected by this cleanup gate have emitted close. */
+  private teardownIsComplete(teardown: PendingTeardown): boolean {
+    return teardown.signals.every((signal) => signal.isClosed());
+  }
+
+  /** Removes an owned cleanup gate after its local children have been confirmed reaped. */
+  private completeTeardown(profile: string, teardown: PendingTeardown): boolean {
+    const teardowns = this.pendingTeardowns.get(profile);
+    if (teardowns === undefined || !teardowns.delete(teardown)) return false;
+    if (teardowns.size === 0) this.pendingTeardowns.delete(profile);
+    return true;
+  }
+
+  /** Releases capacity only when no local child cleanup gate remains for the profile. */
+  private releaseProfileCapacity(profile: string): void {
+    if (this.hasPendingTeardown(profile)) return;
+    this.limiter.release(profile, this.upstreamName);
+  }
+
+  /** Holds profile capacity until every timed-out local transport has actually closed. */
+  private deferTeardown(profile: string, teardown: PendingTeardown): void {
+    void Promise.all(teardown.signals.map((signal) => signal.promise)).then(() => {
+      if (!this.completeTeardown(profile, teardown)) return;
+      const activeReplacement = this.sessions.has(profile) || this.starts.has(profile);
+      if (!activeReplacement) this.releaseProfileCapacity(profile);
+      if (this.closed || activeReplacement || this.hasPendingTeardown(profile)) return;
+      this.setProcessState(profile, "stopped", {
+        pid: null,
+        resetCapabilities: true,
+        lastStopReason: teardown.reason
+      });
+    });
+  }
+
+  /** Forcibly closes a transport without exceeding the configured shutdown bound. */
   private async forceCloseTransport(transport: Transport, pid: number | null): Promise<void> {
     if (pid !== null) {
       try {
@@ -902,7 +1158,12 @@ export class UpstreamProcessManager {
         if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
       }
     }
-    await transport.close().catch(() => undefined);
+    await withTimeout(
+      Promise.resolve().then(() => transport.close()),
+      this.options.shutdownTimeoutMs,
+      "UPSTREAM_SHUTDOWN_TIMEOUT",
+      `UPSTREAM_SHUTDOWN_TIMEOUT: forced transport close timed out after ${this.options.shutdownTimeoutMs}ms`
+    ).catch(() => undefined);
   }
 
   /** Deletes a remote Streamable HTTP session before closing its local client transport. */
