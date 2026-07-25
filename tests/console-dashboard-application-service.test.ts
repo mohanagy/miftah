@@ -2,7 +2,10 @@ import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
+import {
+  discoverConsoleConfigCatalog,
+  type ConsoleConfigCatalogCandidateStageEvent
+} from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
@@ -16,6 +19,9 @@ const temporaryDirectories: string[] = [];
 const catalogAclDiagnostic = vi.hoisted(() => ({
   verifier: undefined as undefined | ((path: string, kind: "file" | "directory") => Promise<boolean>)
 }));
+const catalogStageDiagnostic = vi.hoisted(() => ({
+  observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
+}));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
@@ -23,9 +29,13 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
     ...actual,
     discoverConsoleConfigCatalog: (options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) => {
       const verifier = catalogAclDiagnostic.verifier;
-      return actual.discoverConsoleConfigCatalog(
-        verifier === undefined ? options : { ...options, windowsAclVerifier: verifier }
-      );
+      const observer = catalogStageDiagnostic.observer;
+      const instrumentedOptions = {
+        ...options,
+        ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
+        ...(observer === undefined ? {} : { candidateStageObserver: observer })
+      };
+      return actual.discoverConsoleConfigCatalog(instrumentedOptions);
     }
   };
 });
@@ -54,6 +64,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
+  catalogStageDiagnostic.observer = undefined;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -91,6 +102,24 @@ async function compareFileIdentities(first: string, second: string): Promise<{
     numberIdentity: firstNumber.dev === secondNumber.dev && firstNumber.ino === secondNumber.ino ? "same" : "different",
     bigintIdentity: firstBigInt.dev === secondBigInt.dev && firstBigInt.ino === secondBigInt.ino ? "same" : "different"
   };
+}
+
+function catalogStageSummary(
+  events: readonly ConsoleConfigCatalogCandidateStageEvent[],
+  configurationNames: readonly string[] | undefined
+): readonly {
+  readonly candidate: "gsc" | "sentry";
+  readonly stages: readonly Omit<ConsoleConfigCatalogCandidateStageEvent, "candidateIndex">[];
+  readonly accepted: boolean;
+}[] {
+  const candidates = ["gsc", "sentry"] as const;
+  return candidates.map((candidate, candidateIndex) => ({
+    candidate,
+    stages: events
+      .filter((event) => event.candidateIndex === candidateIndex)
+      .map(({ stage, outcome }) => ({ stage, outcome })),
+    accepted: configurationNames?.includes(candidate) ?? false
+  }));
 }
 
 describe("Console dashboard application service", () => {
@@ -139,6 +168,10 @@ describe("Console dashboard application service", () => {
     const fixtureIdentity = process.platform === "win32"
       ? await compareFileIdentities(gscPath, sentryPath)
       : undefined;
+    const candidateStages: ConsoleConfigCatalogCandidateStageEvent[] = [];
+    catalogStageDiagnostic.observer = (event) => {
+      candidateStages.push(event);
+    };
 
     // Instrument the exact dashboard catalog invocation on Windows. The mock
     // delegates to the real catalog and real verifier; it only records safe
@@ -170,7 +203,46 @@ describe("Console dashboard application service", () => {
 
     const initial = await service.configMetadata().finally(() => {
       catalogAclDiagnostic.verifier = undefined;
+      catalogStageDiagnostic.observer = undefined;
     });
+    expect(catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name))).toEqual([
+      {
+        candidate: "gsc",
+        stages: [
+          { stage: "acl", outcome: "success" },
+          { stage: "open", outcome: "success" },
+          { stage: "opened-validation", outcome: "success" },
+          { stage: "read", outcome: "success" },
+          { stage: "after-read-validation", outcome: "success" },
+          { stage: "decode", outcome: "success" },
+          { stage: "parse", outcome: "success" },
+          { stage: "migration-source", outcome: "success" },
+          { stage: "close", outcome: "success" },
+          { stage: "dedupe", outcome: "success" },
+          { stage: "metadata", outcome: "success" },
+          { stage: "accepted", outcome: "success" }
+        ],
+        accepted: true
+      },
+      {
+        candidate: "sentry",
+        stages: [
+          { stage: "acl", outcome: "success" },
+          { stage: "open", outcome: "success" },
+          { stage: "opened-validation", outcome: "success" },
+          { stage: "read", outcome: "success" },
+          { stage: "after-read-validation", outcome: "success" },
+          { stage: "decode", outcome: "success" },
+          { stage: "parse", outcome: "success" },
+          { stage: "migration-source", outcome: "success" },
+          { stage: "close", outcome: "success" },
+          { stage: "dedupe", outcome: "success" },
+          { stage: "metadata", outcome: "success" },
+          { stage: "accepted", outcome: "success" }
+        ],
+        accepted: true
+      }
+    ]);
     if (process.platform === "win32") {
       expect({
         aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
