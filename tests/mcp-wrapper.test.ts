@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import { randomUUID } from "node:crypto";
+import { watch } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolResultSchema,
@@ -47,6 +48,64 @@ async function fixtureLifecycleState(initializedPath: string, toolListStartedPat
     access(toolListStartedPath).then(() => true, () => false)
   ]);
   return { initialized, toolListStarted };
+}
+
+interface PathArrivalWatch {
+  readonly wait: Promise<void>;
+  close(): void;
+}
+
+/** Arms a filesystem event before a child-process request, avoiding a polling race with child startup. */
+function watchForPathArrival(path: string): PathArrivalWatch {
+  let watcher: ReturnType<typeof watch> | undefined;
+  let fallbackPoll: NodeJS.Timeout | undefined;
+  let settled = false;
+  let resolveWait!: () => void;
+  let rejectWait!: (error: unknown) => void;
+  const wait = new Promise<void>((resolve, reject) => {
+    resolveWait = resolve;
+    rejectWait = reject;
+  });
+  const settle = (error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    watcher?.close();
+    if (fallbackPoll !== undefined) clearInterval(fallbackPoll);
+    if (error === undefined) resolveWait();
+    else rejectWait(error);
+  };
+  const verify = () => {
+    void access(path).then(
+      () => settle(),
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") settle(error);
+      }
+    );
+  };
+  try {
+    watcher = watch(dirname(path), { persistent: false }, verify);
+    watcher.on("error", settle);
+  } catch (error) {
+    settle(error);
+  }
+  if (!settled) {
+    // fs.watch can drop directory events under load, so keep verifying the exact
+    // path without imposing a shorter deadline than the test itself.
+    fallbackPoll = setInterval(verify, 50);
+    fallbackPoll.unref();
+    verify();
+  }
+  return {
+    wait,
+    close: () => {
+      watcher?.close();
+      if (fallbackPoll !== undefined) clearInterval(fallbackPoll);
+      if (!settled) {
+        settled = true;
+        resolveWait();
+      }
+    }
+  };
 }
 
 function registeredTool(originalName: string): RegisteredTool {
@@ -2855,14 +2914,16 @@ describe("Miftah MCP wrapper", () => {
     const client = new Client({ name: "cancelled-resource-subscription-retry-test-client", version: "1.0.0" });
     const controller = new AbortController();
     const updates: string[] = [];
+    let subscribeStarted: PathArrivalWatch | undefined;
     client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
       updates.push(notification.params.uri);
     });
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      subscribeStarted = watchForPathArrival(subscribeStartedPath);
       const cancelled = client.subscribeResource({ uri: "account://current" }, { signal: controller.signal });
-      await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
+      await subscribeStarted.wait;
       controller.abort("test cancellation");
 
       await expect(cancelled).rejects.toThrow();
@@ -2874,6 +2935,7 @@ describe("Miftah MCP wrapper", () => {
       await expectExactlyOneNotification(() => updates.length);
       expect(updates).toEqual(["account://current"]);
     } finally {
+      subscribeStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
