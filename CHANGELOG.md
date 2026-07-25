@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- [#205](https://github.com/mohanagy/miftah/issues/205) Audit journal lock probing now gives a just-queued local connection refusal one additional check phase to settle before it fails closed. This prevents host-scheduling races from being mistaken for an ambiguous lock holder without increasing the bounded probe or lock-acquisition timeouts; truly ambiguous probes remain unavailable.
 - [#217](https://github.com/mohanagy/miftah/issues/217) Windows STDIO launch now resolves only direct `.exe`/`.com` commands before the MCP SDK, rejects command shims and shell executables, and refuses npx-backed presets on Windows rather than silently falling back to `cmd.exe`.
 
 ## [0.4.0] - 2026-07-23
