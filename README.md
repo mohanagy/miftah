@@ -219,9 +219,9 @@ On macOS and Linux, `--local-command` accepts a bare executable such as `node` o
 
 For one reviewed local executable, use `local-stdio` for arguments and a working directory. For several named upstreams, profile-specific overrides, or other advanced topology, use the [Configuration reference](docs/config.md). Always keep subprocess arguments as arrays; Miftah does not need a shell command string.
 
-## Reuse one existing local stdio MCP entry
+## Reuse one existing MCP client entry
 
-If you already have a local Claude Desktop, Claude Code, Cursor, or VS Code MCP entry, `miftah setup` can create a safe first Miftah configuration from one entry you explicitly choose. It does not scan or modify the source client file.
+If you already have a local or remote Claude Desktop, Claude Code, Cursor, or VS Code MCP entry, `miftah setup` can create a safe first Miftah configuration from one entry you explicitly choose. It does not scan or modify the source client file.
 
 ```bash
 miftah setup posthog-work \
@@ -231,13 +231,16 @@ miftah setup posthog-work \
   --client claude-desktop
 ```
 
-`--import-file` must be an absolute regular JSON file, and `--import-entry` is the exact entry name under `mcpServers` (Claude Desktop, Claude Code, or Cursor) or `servers` (VS Code). Miftah reads that one file through a bounded verified handle and leaves it byte-for-byte untouched. It imports only a finite **static launch grammar**: a literal local executable, an optional absolute working directory, and either an exact-version package-runner launch with a runner-specific safe prefix and no arguments after the package, a script path plus non-sensitive flags, or a direct executable plus non-sensitive flags.
+`--import-file` must be an absolute regular JSON file, and `--import-entry` is the exact entry name under `mcpServers` (Claude Desktop, Claude Code, or Cursor) or `servers` (VS Code). Miftah reads that one file through a bounded verified handle and leaves it byte-for-byte untouched. It accepts one of two strict shapes:
+
+- a finite **static launch grammar** for local stdio: a literal local executable, an optional absolute working directory, and either an exact-version package-runner launch with a runner-specific safe prefix and no arguments after the package, a script path plus non-sensitive flags, or a direct executable plus non-sensitive flags; or
+- a credential-free HTTPS remote entry: a `url` under `mcpServers` or VS Code `servers`, explicitly marked `type: "http"` or `"streamable-http"`. The URL cannot contain userinfo, a query, a fragment, or an opaque credential-shaped path segment.
 
 On Windows, the import path accepts only a direct absolute `.exe` or `.com` executable. Bare runners such as `npx` or `node`, and `.cmd`/`.bat` shims, are rejected rather than being dispatched through a command processor.
 
-The importer rejects remote transports, `env`, headers, shell settings, unsupported fields, environment wrappers, inline code, opaque values or assignments, URL userinfo, unpinned package references, and credential-shaped arguments. It creates one `default` profile with a read-only policy and treats unknown tools as destructive until you deliberately configure a policy. It does not launch the imported executable or copy credentials; `--verify` is rejected because an imported entry has no reviewed provider adapter. It does not infer OAuth ownership from a command or URL. If the entry needs custom values, OAuth, or an API key, use advanced manual setup, then configure the upstream's documented flow and Miftah secret references separately.
+The importer rejects `env`, headers, shell settings, unsupported fields, environment wrappers, inline code, opaque values or assignments, unsupported remote transports, URL userinfo, opaque credential-shaped URL path segments, unpinned package references, and credential-shaped arguments. It creates one `default` profile with a read-only policy and treats unknown tools as destructive until you deliberately configure a policy. It does not launch the imported executable or copy credentials. For a credential-free HTTPS remote entry, it does not discover OAuth or call the remote endpoint. `--verify` is rejected because an imported entry has no reviewed provider adapter. It does not infer OAuth ownership from a command or URL. If the entry needs custom values, OAuth, an API key, headers, or an opaque endpoint token, use advanced manual setup, then configure the upstream's documented flow and Miftah secret references separately.
 
-For a browser-first first run, `miftah dashboard` offers the same paste-only import path. The Console parses the pasted JSON only for that local request, does not persist or return it, and clears it from the page afterwards.
+For a browser-first first run, `miftah dashboard` offers the same paste-only local and credential-free remote import path. The Console parses the pasted JSON only for that local request, does not persist or return it, and clears it from the page afterwards.
 
 ### What a multi-profile configuration contains
 
@@ -281,13 +284,13 @@ The easiest first run is:
 miftah dashboard
 ```
 
-Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration, a Native remote OAuth profile, or one explicitly pasted local stdio entry there; it never overwrites an existing file. Native OAuth first-run asks only for a configuration name, account profile, and exact remote HTTPS endpoint; it discovers the OAuth details before creating anything. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
+Without `--config`, `miftah dashboard` finds safe direct Miftah JSON configurations in `~/.config/miftah` and asks you to choose one. It does not scan Claude Desktop settings, running processes, or arbitrary folders. For true first-run onboarding, it uses `~/.config/miftah/miftah.json` by default and can create a known-preset configuration, a Native remote OAuth profile, or one explicitly pasted local stdio or credential-free HTTPS remote entry there; it never overwrites an existing file. Native OAuth first-run asks only for a configuration name, account profile, and exact remote HTTPS endpoint; it discovers the OAuth details before creating anything. Pass `--config ~/.config/miftah/github.json` when you want to open exactly one configuration and skip the selector.
 
 The optional dashboard:
 
 1. starts a foreground-only service on literal `127.0.0.1`;
 2. opens the system browser and asks for the one-time bootstrap code printed in the terminal;
-3. creates a first validated known-preset configuration, Native remote OAuth profile and connection, or explicitly pasted local stdio entry when the selected config path does not exist; native OAuth discovery completes before the configuration is written;
+3. creates a first validated known-preset configuration, Native remote OAuth profile and connection, or explicitly pasted local stdio or credential-free HTTPS remote entry when the selected config path does not exist; native OAuth discovery completes before the configuration is written;
 4. offers a separate **Connect** action that starts the reviewed system-browser authorization;
 5. shows redacted connection and audit state; and
 6. generates client JSON for you to review and copy.

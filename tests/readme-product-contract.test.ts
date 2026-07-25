@@ -123,12 +123,14 @@ describe("product README", () => {
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
   });
 
-  it("documents the explicit no-secret local stdio client-entry import path", () => {
-    expect(readme).toContain("## Reuse one existing local stdio MCP entry");
+  it("documents the explicit no-secret local and remote client-entry import paths", () => {
+    expect(readme).toContain("## Reuse one existing MCP client entry");
     expect(readme).toContain("--import-file");
     expect(readme).toContain("--import-entry");
     expect(readme).toContain("does not scan or modify the source client file");
     expect(readme).toContain("does not infer OAuth ownership");
+    expect(readme).toContain("credential-free HTTPS remote entry");
+    expect(readme).toContain("does not discover OAuth or call the remote endpoint");
     expect(readme).toContain("`--verify` is rejected because an imported entry has no reviewed provider adapter");
     expect(readme).toContain("static launch grammar");
     expect(readme).toContain("exact version");

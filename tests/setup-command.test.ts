@@ -449,6 +449,51 @@ describe("setup command", () => {
     expect(await readFile(source, "utf8")).toBe(document);
   });
 
+  it("imports one explicitly selected remote HTTPS entry without OAuth discovery or an upstream call", async () => {
+    const source = resolve(outputRoot, "cursor-remote.json");
+    const output = resolve(outputRoot, "remote-analytics.json");
+    const document = JSON.stringify({
+      mcpServers: {
+        analytics: { type: "http", url: "https://mcp.example.test/mcp" }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const streams = createStreams();
+    const nativeOAuthFetch = vi.fn(async (): Promise<Response> => {
+      throw new Error("remote client-entry import must not discover OAuth");
+    });
+
+    const result = await runSetupCommand({
+      name: "remote-analytics",
+      output,
+      importFile: source,
+      importEntry: "analytics"
+    } as Parameters<typeof runSetupCommand>[0], {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch
+    });
+    streams.input.end();
+
+    expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "remote-analytics",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { default: { policy: "readonly" } }
+    });
+    expect(await readFile(source, "utf8")).toBe(document);
+    expect(nativeOAuthFetch).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain(
+      "Imported one HTTPS remote MCP entry without copying credentials. Miftah did not discover OAuth or call the upstream."
+    );
+  });
+
   it("accepts a remote MCP source without making native OAuth assumptions", async () => {
     const output = resolve(outputRoot, "remote-tools.json");
     const streams = createStreams();

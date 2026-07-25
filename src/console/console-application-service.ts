@@ -150,7 +150,7 @@ export interface ConsolePresetOnboardingReport {
   readonly actions: readonly string[];
 }
 
-/** Non-secret, explicitly selected local stdio MCP entry pasted into first-run Console setup. */
+/** Non-secret, explicitly selected local stdio or canonical HTTPS MCP entry pasted into first-run Console setup. */
 export interface ConsoleClientEntryOnboardingRequest {
   readonly name: string;
   readonly entry: string;
@@ -588,7 +588,11 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       name: config.name,
       defaultProfile: config.defaultProfile,
       profileCount: Object.keys(config.profiles).length,
-      actions: [`Created Miftah configuration '${config.name}' from one selected local stdio client entry.`]
+      actions: [
+        config.upstream?.transport === "streamable-http"
+          ? `Created Miftah configuration '${config.name}' from one selected HTTPS remote client entry without OAuth discovery or an upstream call.`
+          : `Created Miftah configuration '${config.name}' from one selected local stdio client entry.`
+      ]
     };
   }
 
