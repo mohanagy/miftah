@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoverConsoleConfigCatalog,
+  type ConsoleConfigCatalogCandidateIdentityDiagnosticEvent,
   type ConsoleConfigCatalogCandidateStageEvent
 } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
@@ -22,6 +23,9 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
+const catalogIdentityDiagnostic = vi.hoisted(() => ({
+  observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent) => void)
+}));
 const catalogDiscoveryDiagnostic = vi.hoisted(() => ({ invocations: 0 }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
@@ -31,10 +35,12 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
     async discoverConsoleConfigCatalog(options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) {
       const verifier = catalogAclDiagnostic.verifier;
       const observer = catalogStageDiagnostic.observer;
+      const identityObserver = catalogIdentityDiagnostic.observer;
       const instrumentedOptions = {
         ...options,
         ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
-        ...(observer === undefined ? {} : { candidateStageObserver: observer })
+        ...(observer === undefined ? {} : { candidateStageObserver: observer }),
+        ...(identityObserver === undefined ? {} : { candidateIdentityObserver: identityObserver })
       };
       catalogDiscoveryDiagnostic.invocations += 1;
       return actual.discoverConsoleConfigCatalog(instrumentedOptions);
@@ -67,6 +73,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
+  catalogIdentityDiagnostic.observer = undefined;
   catalogDiscoveryDiagnostic.invocations = 0;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -200,6 +207,12 @@ describe("Console dashboard application service", () => {
     catalogStageDiagnostic.observer = (event) => {
       candidateStages.push(event);
     };
+    const candidateIdentities: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent[] = [];
+    if (process.platform === "win32") {
+      catalogIdentityDiagnostic.observer = (event) => {
+        candidateIdentities.push(event);
+      };
+    }
 
     // Instrument the exact dashboard catalog invocation on Windows. The mock
     // delegates to the real catalog and real verifier; it only records safe
@@ -235,6 +248,7 @@ describe("Console dashboard application service", () => {
     });
     expect({
       stageSummary: catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name)),
+      identitySummary: candidateIdentities,
       ...(process.platform === "win32" ? { fixtureIdentity, openedFixtureIdentity } : {})
     }).toEqual({
       stageSummary: [
@@ -275,6 +289,12 @@ describe("Console dashboard application service", () => {
           accepted: true
         }
       ],
+      identitySummary: process.platform === "win32"
+        ? [
+            { candidateIndex: 0, bigintDuplicate: false, numberDuplicate: false },
+            { candidateIndex: 1, bigintDuplicate: false, numberDuplicate: false }
+          ]
+        : [],
       ...(process.platform === "win32" ? {
         fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
         openedFixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" }

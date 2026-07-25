@@ -28,6 +28,8 @@ export interface ConsoleConfigCatalogDiscoveryOptions {
   readonly windowsAclVerifier?: WindowsConfigAclVerifier;
   /** Test-only opaque diagnostic observer for one catalog invocation. */
   readonly candidateStageObserver?: ConsoleConfigCatalogCandidateStageObserver;
+  /** Test-only comparison of number and BigInt file-handle identities. */
+  readonly candidateIdentityObserver?: ConsoleConfigCatalogCandidateIdentityDiagnosticObserver;
 }
 
 export type WindowsConfigAclVerifier = (path: string, kind: "file" | "directory") => Promise<boolean>;
@@ -60,6 +62,22 @@ export interface ConsoleConfigCatalogCandidateStageEvent {
 
 /** Test-only observer for opaque candidate diagnostics. */
 export type ConsoleConfigCatalogCandidateStageObserver = (event: ConsoleConfigCatalogCandidateStageEvent) => void;
+
+/**
+ * Test-only identity comparison. It never carries a path, identity value, or
+ * configuration data; it only says whether this candidate matches an earlier
+ * candidate under each Node Stats representation.
+ */
+export interface ConsoleConfigCatalogCandidateIdentityDiagnosticEvent {
+  readonly candidateIndex: number;
+  readonly numberDuplicate: boolean;
+  readonly bigintDuplicate: boolean;
+}
+
+/** Test-only observer for opaque file-identity comparisons. */
+export type ConsoleConfigCatalogCandidateIdentityDiagnosticObserver = (
+  event: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent
+) => void;
 
 type TrustedConfigurationFileHandle = Awaited<ReturnType<typeof open>>;
 
@@ -201,10 +219,12 @@ async function readTrustedConfiguration(
   platform: NodeJS.Platform,
   windowsAclVerifier: WindowsConfigAclVerifier,
   candidateIndex: number,
-  candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined
+  candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined,
+  candidateIdentityObserver: ConsoleConfigCatalogCandidateIdentityDiagnosticObserver | undefined
 ): Promise<{
   readonly path: string;
   readonly identity: string;
+  readonly bigintIdentity?: string;
   readonly trustedConfiguration: ConsoleTrustedConfiguration;
 } | undefined> {
   const observed = await lstat(path);
@@ -244,6 +264,11 @@ async function readTrustedConfiguration(
       return undefined;
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "success");
+    let bigintIdentity: string | undefined;
+    if (candidateIdentityObserver !== undefined) {
+      const openedBigInt = await handle.stat({ bigint: true });
+      bigintIdentity = `${openedBigInt.dev}:${openedBigInt.ino}`;
+    }
     let content: Buffer;
     try {
       content = await handle.readFile();
@@ -296,6 +321,7 @@ async function readTrustedConfiguration(
     return {
       path: canonical,
       identity: `${opened.dev}:${opened.ino}`,
+      ...(bigintIdentity === undefined ? {} : { bigintIdentity }),
       trustedConfiguration: {
         config,
         contentDigest: createHash("sha256").update(content).digest("base64url"),
@@ -318,6 +344,7 @@ export async function discoverConsoleConfigCatalog(
   const ownerUid = options.ownerUid ?? defaultOwnerUid(platform);
   const windowsAclVerifier = options.windowsAclVerifier ?? verifyWindowsConfigPathSecurity;
   const candidateStageObserver = options.candidateStageObserver;
+  const candidateIdentityObserver = options.candidateIdentityObserver;
   let directory: string | undefined;
   try {
     directory = await trustedDirectory(resolve(options.configDirectory), ownerUid, platform, windowsAclVerifier);
@@ -345,6 +372,7 @@ export async function discoverConsoleConfigCatalog(
   }
 
   const identities = new Set<string>();
+  const bigintIdentities = candidateIdentityObserver === undefined ? undefined : new Set<string>();
   const configurations: DiscoveredConsoleConfiguration[] = [];
   for (const [candidateIndex, name] of names.entries()) {
     try {
@@ -355,14 +383,19 @@ export async function discoverConsoleConfigCatalog(
         platform,
         windowsAclVerifier,
         candidateIndex,
-        candidateStageObserver
+        candidateStageObserver,
+        candidateIdentityObserver
       );
       if (discovered === undefined) continue;
-      if (identities.has(discovered.identity)) {
+      const numberDuplicate = identities.has(discovered.identity);
+      const bigintDuplicate = discovered.bigintIdentity !== undefined && bigintIdentities?.has(discovered.bigintIdentity) === true;
+      candidateIdentityObserver?.({ candidateIndex, numberDuplicate, bigintDuplicate });
+      if (numberDuplicate) {
         observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "duplicate");
         continue;
       }
       identities.add(discovered.identity);
+      if (discovered.bigintIdentity !== undefined) bigintIdentities?.add(discovered.bigintIdentity);
       observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "success");
       let summary: ReturnType<typeof consoleInitializedConfigMetadata>;
       try {
