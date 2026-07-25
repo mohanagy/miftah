@@ -85,6 +85,69 @@ describe("provider-owned account onboarding", () => {
     expect(input).toEqual(original);
   });
 
+  it("rejects reserved object property names before planning a provider account", () => {
+    const configPath = join(tmpdir(), "miftah-provider-account-reserved-profile", "gsc.json");
+    const credentialFile = join(tmpdir(), "miftah-provider-account-reserved-profile", "client-secrets.json");
+    const input = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-work", oauthClientSecretsFile: credentialFile }],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+    const original = structuredClone(input);
+
+    for (const profile of ["__proto__", "constructor", "prototype"]) {
+      const failure = (() => {
+        try {
+          return planProviderAccountAddition(input, { configPath, profile, credentialFile });
+        } catch (error) {
+          return error;
+        }
+      })();
+
+      expect(failure, profile).toMatchObject({
+        code: "PROVIDER_ACCOUNT_INPUT_INVALID",
+        message: "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
+      });
+      expect(input, profile).toEqual(original);
+    }
+  });
+
+  it("refuses a planned account whose provider state would collide by case", () => {
+    const configPath = join(tmpdir(), "miftah-provider-account-case-collision", "gsc.json");
+    const existingCredentialFile = join(tmpdir(), "miftah-provider-account-case-collision", "existing-client-secrets.json");
+    const newCredentialFile = join(tmpdir(), "miftah-provider-account-case-collision", "new-client-secrets.json");
+    const input = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-existing", oauthClientSecretsFile: existingCredentialFile }],
+      defaultProfile: "google-existing"
+    }, { configurationPath: configPath });
+    const proposed = planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-work",
+      credentialFile: newCredentialFile
+    });
+    const proposedStateDirectory = proposed.config.profiles["google-work"]?.env?.GSC_CONFIG_DIR;
+    if (typeof proposedStateDirectory !== "string") {
+      throw new Error("Expected planned provider account to define an isolated state directory.");
+    }
+    input.profiles["google-existing"]!.env!.GSC_CONFIG_DIR =
+      proposedStateDirectory.slice(0, -"google-work".length) + "Google-Work";
+    const original = structuredClone(input);
+
+    const failure = (() => {
+      try {
+        return planProviderAccountAddition(input, {
+          configPath,
+          profile: "google-work",
+          credentialFile: newCredentialFile
+        });
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(failure).toMatchObject({ code: "PROVIDER_ACCOUNT_ADDITION_UNSUPPORTED" });
+    expect(input).toEqual(original);
+  });
+
   it("writes its fail-closed lifecycle record relative to the selected configuration, never the caller working directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-provider-account-audit-"));
     const configPath = join(directory, "gsc.json");

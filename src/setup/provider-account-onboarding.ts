@@ -8,8 +8,10 @@ import {
   type ConfigMigrationSource
 } from "../cli/migrate-config.js";
 import {
+  assertSafeProviderAdapterAccountProfileName,
   buildProviderAdapterAccountProfile,
   getProviderAdapterForAccountProvisioning,
+  providerAdapterStateDirectoryKey,
   ProviderAdapterAccountProfileError
 } from "../config/provider-adapters.js";
 import { planConfigMigration } from "../config/migrate-config.js";
@@ -74,6 +76,16 @@ function providerAccountAdditionUnavailable(): never {
   );
 }
 
+function providerAccountInputInvalid(error: ProviderAdapterAccountProfileError): never {
+  if (error.reason === "unsupported") providerAccountAdditionUnavailable();
+  throw new MiftahError(
+    "PROVIDER_ACCOUNT_INPUT_INVALID",
+    error.reason === "profile"
+      ? "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
+      : "PROVIDER_ACCOUNT_INPUT_INVALID: choose an absolute literal credential-file path"
+  );
+}
+
 /**
  * Plans one additional provider-owned account from a fully trusted existing
  * adapter configuration. It never reads a provider token cache or writes any
@@ -88,6 +100,12 @@ export function planProviderAccountAddition(
   const adapter = getProviderAdapterForAccountProvisioning(config);
   if (adapter?.accountProvisioning === undefined) {
     providerAccountAdditionUnavailable();
+  }
+  try {
+    assertSafeProviderAdapterAccountProfileName(options.profile);
+  } catch (error) {
+    if (error instanceof ProviderAdapterAccountProfileError) providerAccountInputInvalid(error);
+    throw error;
   }
   if (Object.hasOwn(config.profiles, options.profile)) {
     throw new MiftahError("PROFILE_ALREADY_EXISTS", "PROFILE_ALREADY_EXISTS: account profile already exists");
@@ -111,21 +129,22 @@ export function planProviderAccountAddition(
     });
   } catch (error) {
     if (error instanceof ProviderAdapterAccountProfileError) {
-      if (error.reason === "unsupported") providerAccountAdditionUnavailable();
-      throw new MiftahError(
-        "PROVIDER_ACCOUNT_INPUT_INVALID",
-        error.reason === "profile"
-          ? "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
-          : "PROVIDER_ACCOUNT_INPUT_INVALID: choose an absolute literal credential-file path"
-      );
+      providerAccountInputInvalid(error);
     }
     throw error;
   }
   const stateDirectory = profile.env?.[adapter.accountProvisioning.stateDirectory.environment];
+  const stateDirectoryKey = typeof stateDirectory === "string"
+    ? providerAdapterStateDirectoryKey(stateDirectory)
+    : undefined;
   if (
-    typeof stateDirectory !== "string" ||
+    stateDirectoryKey === undefined ||
     Object.values(config.profiles).some(
-      (existing) => existing.env?.[adapter.accountProvisioning!.stateDirectory.environment] === stateDirectory
+      (existing) => {
+        const existingStateDirectory = existing.env?.[adapter.accountProvisioning!.stateDirectory.environment];
+        return typeof existingStateDirectory === "string" &&
+          providerAdapterStateDirectoryKey(existingStateDirectory) === stateDirectoryKey;
+      }
     )
   ) {
     providerAccountAdditionUnavailable();

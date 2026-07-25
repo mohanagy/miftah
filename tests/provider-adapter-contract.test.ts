@@ -251,6 +251,14 @@ describe("provider adapter contract", () => {
     const sharedStateDirectory = structuredClone(safe);
     sharedStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work");
     expect(getProviderAdapterForAccountProvisioning(sharedStateDirectory)).toBeUndefined();
+
+    const caseVariantStateDirectory = structuredClone(safe);
+    caseVariantStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "WORK");
+    expect(getProviderAdapterForAccountProvisioning(caseVariantStateDirectory)).toBeUndefined();
+
+    const trailingWindowsAlias = structuredClone(safe);
+    trailingWindowsAlias.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work. ");
+    expect(getProviderAdapterForAccountProvisioning(trailingWindowsAlias)).toBeUndefined();
   });
 
   it("fails closed when a named upstream can override an otherwise isolated account binding", () => {
@@ -310,9 +318,33 @@ describe("provider adapter contract", () => {
       credentialFile: privatePath("client-secrets.json")
     };
 
-    for (const profile of ["..", "../outside", "nested/account", "nested\\account", "google\0work"]) {
+    for (const profile of [
+      ".",
+      "..",
+      "../outside",
+      "nested/account",
+      "nested\\account",
+      "google\0work",
+      "__proto__",
+      "constructor",
+      "prototype"
+    ]) {
       expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile })).toThrow(ProviderAdapterAccountProfileError);
     }
+  });
+
+  it("uses one canonical provider-state directory for case-variant account names", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      credentialFile: privatePath("client-secrets.json")
+    };
+
+    const lowercase = buildProviderAdapterAccountProfile(adapter, { ...request, profile: "google-work" });
+    const uppercase = buildProviderAdapterAccountProfile(adapter, { ...request, profile: "Google-Work" });
+
+    expect(uppercase.env?.GSC_CONFIG_DIR).toBe(lowercase.env?.GSC_CONFIG_DIR);
   });
 
   it("reports the direct account-profile validation cause without misdescribing it as a credential path", () => {

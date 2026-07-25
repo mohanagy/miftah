@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import type { MiftahConfig, ProfileConfig, ProfileUpstreamOverride, UpstreamConfig } from "./types.js";
 
 export type ProviderAdapterOwner = "miftah" | "upstream" | "manual-only";
@@ -244,13 +244,40 @@ function requireCredentialFile(value: unknown): string {
   return value;
 }
 
-function isSafeStateDirectoryProfile(profile: string): boolean {
-  return profile.length > 0 &&
-    profile !== "." &&
-    profile !== ".." &&
-    !profile.includes("/") &&
-    !profile.includes("\\") &&
-    !hasControlCharacter(profile);
+const reservedProviderAdapterProfileNames = new Set(["__proto__", "constructor", "prototype"]);
+const trailingWindowsPathSuffixPattern = /[. ]+$/u;
+
+/**
+ * Rejects profile names which would mutate an ordinary configuration object
+ * before schema validation. The setup flow must call this before assigning a
+ * caller-controlled profile key.
+ */
+export function assertSafeProviderAdapterAccountProfileName(profile: string): void {
+  if (
+    profile.length === 0 ||
+    profile === "." ||
+    profile === ".." ||
+    profile.includes("/") ||
+    profile.includes("\\") ||
+    hasControlCharacter(profile) ||
+    reservedProviderAdapterProfileNames.has(profile)
+  ) {
+    throw new ProviderAdapterAccountProfileError("profile");
+  }
+}
+
+/**
+ * Computes a conservative cross-platform identity for an adapter-owned state
+ * directory. It is comparison-only: existing configured paths are never
+ * rewritten or moved. Windows treats case and trailing dots/spaces as aliases,
+ * so account provisioning rejects a collision on every host.
+ */
+export function providerAdapterStateDirectoryKey(stateDirectory: string): string {
+  const normalized = resolve(stateDirectory)
+    .split(sep)
+    .map((segment) => segment.replace(trailingWindowsPathSuffixPattern, "").toLocaleLowerCase("en-US"))
+    .join(sep);
+  return resolve(normalized);
 }
 
 function adapterStateDirectory(
@@ -259,14 +286,12 @@ function adapterStateDirectory(
   configurationPath: string | undefined,
   profile: string
 ): string {
-  if (!isSafeStateDirectoryProfile(profile)) {
-    throw new ProviderAdapterAccountProfileError("profile");
-  }
+  assertSafeProviderAdapterAccountProfileName(profile);
   const configurationIdentity = configurationPath === undefined
     ? configurationName
     : resolve(configurationPath);
   const configurationNamespace = createHash("sha256").update(configurationIdentity).digest("hex");
-  return join(homedir(), ".config", "miftah", namespace, configurationNamespace, profile);
+  return join(homedir(), ".config", "miftah", namespace, configurationNamespace, profile.toLocaleLowerCase("en-US"));
 }
 
 /**
@@ -349,12 +374,13 @@ export function getProviderAdapterForAccountProvisioning(config: MiftahConfig): 
     if (
       !isLiteralAbsolutePath(credentialFile) ||
       !isLiteralAbsolutePath(stateDirectory) ||
-      stateDirectory !== resolve(stateDirectory) ||
-      directories.has(resolve(stateDirectory))
+      stateDirectory !== resolve(stateDirectory)
     ) {
       return undefined;
     }
-    directories.add(resolve(stateDirectory));
+    const stateDirectoryKey = providerAdapterStateDirectoryKey(stateDirectory);
+    if (directories.has(stateDirectoryKey)) return undefined;
+    directories.add(stateDirectoryKey);
   }
   return adapter;
 }
