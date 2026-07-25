@@ -57,6 +57,34 @@ describe("provider-owned account onboarding", () => {
     expect(input).toEqual(original);
   });
 
+  it("reports unsafe provider profile input without misdescribing it as credential input", () => {
+    const configPath = join(tmpdir(), "miftah-provider-account-profile-input", "gsc.json");
+    const credentialFile = join(tmpdir(), "miftah-provider-account-profile-input", "client-secrets.json");
+    const input = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-work", oauthClientSecretsFile: credentialFile }],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+    const original = structuredClone(input);
+
+    const failure = (() => {
+      try {
+        return planProviderAccountAddition(input, {
+          configPath,
+          profile: "../outside",
+          credentialFile
+        });
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(failure).toMatchObject({
+      code: "PROVIDER_ACCOUNT_INPUT_INVALID",
+      message: "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
+    });
+    expect(input).toEqual(original);
+  });
+
   it("writes its fail-closed lifecycle record relative to the selected configuration, never the caller working directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-provider-account-audit-"));
     const configPath = join(directory, "gsc.json");

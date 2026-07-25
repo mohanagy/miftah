@@ -111,9 +111,12 @@ export function planProviderAccountAddition(
     });
   } catch (error) {
     if (error instanceof ProviderAdapterAccountProfileError) {
+      if (error.reason === "unsupported") providerAccountAdditionUnavailable();
       throw new MiftahError(
         "PROVIDER_ACCOUNT_INPUT_INVALID",
-        "PROVIDER_ACCOUNT_INPUT_INVALID: choose an absolute literal credential-file path"
+        error.reason === "profile"
+          ? "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
+          : "PROVIDER_ACCOUNT_INPUT_INVALID: choose an absolute literal credential-file path"
       );
     }
     throw error;

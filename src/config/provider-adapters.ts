@@ -207,7 +207,9 @@ export interface ProviderAdapterAccountProfileRequest {
 
 /** Bounded, non-secret input failure for a provider-owned account profile. */
 export class ProviderAdapterAccountProfileError extends Error {
-  constructor(reason: "credential-file" | "profile" | "unsupported" = "credential-file") {
+  constructor(
+    readonly reason: "credential-file" | "profile" | "unsupported" = "credential-file"
+  ) {
     super(reason === "credential-file"
       ? "Provider account setup requires an absolute literal credential-file path."
       : reason === "profile"
