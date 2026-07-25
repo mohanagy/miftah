@@ -22,12 +22,13 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
+const catalogDiscoveryDiagnostic = vi.hoisted(() => ({ invocations: 0 }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
   return {
     ...actual,
-    discoverConsoleConfigCatalog: (options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) => {
+    async discoverConsoleConfigCatalog(options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) {
       const verifier = catalogAclDiagnostic.verifier;
       const observer = catalogStageDiagnostic.observer;
       const instrumentedOptions = {
@@ -35,6 +36,7 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
         ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
         ...(observer === undefined ? {} : { candidateStageObserver: observer })
       };
+      catalogDiscoveryDiagnostic.invocations += 1;
       return actual.discoverConsoleConfigCatalog(instrumentedOptions);
     }
   };
@@ -65,6 +67,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
+  catalogDiscoveryDiagnostic.invocations = 0;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -392,6 +395,19 @@ describe("Console dashboard application service", () => {
     });
   });
 
+  it("rejects an unselected Console operation before scanning its catalog", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-unselected-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+    expect(catalogDiscoveryDiagnostic.invocations).toBe(0);
+  });
+
   it("adds endpoint-first native OAuth only after an explicit configuration selection", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-discovered-oauth-"));
     temporaryDirectories.push(root);
@@ -438,12 +454,6 @@ describe("Console dashboard application service", () => {
   it("adds another endpoint-first OAuth account only after selecting its configuration", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-add-account-"));
     temporaryDirectories.push(root);
-    let phase = "fixture";
-    const slowPhaseMarker = process.platform === "win32"
-      ? setTimeout(() => {
-          process.stderr.write(`[miftah-test] console-dashboard-native-oauth-account phase=${phase}\n`);
-        }, 4_500)
-      : undefined;
     const directory = await createPrivateConsoleDirectory(root);
     const configPath = join(directory, "posthog.json");
     await writeConfig(configPath, {
@@ -461,7 +471,6 @@ describe("Console dashboard application service", () => {
     });
 
     try {
-      phase = "preselection-rejection";
       const request = {
         profile: "personal",
         description: "Personal analytics",
@@ -471,19 +480,15 @@ describe("Console dashboard application service", () => {
       await expect(service.addDiscoveredNativeOAuthAccount(request)).rejects.toMatchObject({
         code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
       });
-      phase = "catalog";
       const metadata = await service.configMetadata();
       const selected = metadata.catalog?.configurations.find((configuration) => configuration.name === "posthog-work");
       if (selected === undefined) throw new Error("Expected PostHog configuration.");
-      phase = "selection";
       await service.selectConfiguration(selected.id);
 
-      phase = "account-addition";
       await expect(service.addDiscoveredNativeOAuthAccount(request)).resolves.toMatchObject({
         profile: "personal",
         upstream: "default"
       });
-      phase = "assertions";
       expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
         defaultProfile: "personal",
         profiles: { work: {}, personal: { description: "Personal analytics" } },
@@ -494,7 +499,6 @@ describe("Console dashboard application service", () => {
       });
       expect(upstream.registrationRequests()).toEqual([]);
     } finally {
-      if (slowPhaseMarker !== undefined) clearTimeout(slowPhaseMarker);
       await upstream.close();
     }
   });

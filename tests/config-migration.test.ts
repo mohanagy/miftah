@@ -9,6 +9,8 @@ const migrationRace = vi.hoisted(() => ({
   concurrentBytes: undefined as Buffer | undefined,
   sourceBytesBeforeMove: undefined as Buffer | undefined,
   sourceMtimeBeforeMove: undefined as Date | undefined,
+  failCandidateOpen: false,
+  failedCandidateOpen: false,
   failCandidateLink: false,
   failedCandidateLink: false,
   backupLinked: false,
@@ -46,6 +48,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         isFile: stats.isFile.bind(stats),
         isSymbolicLink: stats.isSymbolicLink.bind(stats)
       });
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const [path, flags] = args;
+      if (
+        migrationRace.failCandidateOpen &&
+        typeof path === "string" &&
+        path.endsWith("candidate.miftah-migrate.tmp") &&
+        flags === "wx"
+      ) {
+        migrationRace.failedCandidateOpen = true;
+        throw Object.assign(new Error("simulated candidate setup collision"), { code: "EEXIST" });
+      }
+      return actual.open(...args);
     },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
       const [from, to] = args;
@@ -294,6 +309,8 @@ afterEach(async () => {
   migrationRace.concurrentBytes = undefined;
   migrationRace.sourceBytesBeforeMove = undefined;
   migrationRace.sourceMtimeBeforeMove = undefined;
+  migrationRace.failCandidateOpen = false;
+  migrationRace.failedCandidateOpen = false;
   migrationRace.failCandidateLink = false;
   migrationRace.failedCandidateLink = false;
   migrationRace.backupLinked = false;
@@ -388,6 +405,25 @@ describe("migrate-config command", () => {
     });
     expect(await readFile(configPath, "utf8")).toBe(original);
     expect(await readFile(`${configPath}.bak`, "utf8")).toBe("existing backup");
+  });
+
+  it("reports a candidate setup collision without treating it as an existing published backup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-config-migration-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const original = `${JSON.stringify(legacyConfig(), null, 2)}\n`;
+    await writeFile(configPath, original, "utf8");
+    migrationRace.failCandidateOpen = true;
+
+    await expect(runMigrateConfigCommand({ configPath, write: true })).rejects.toMatchObject({
+      code: "CONFIG_MIGRATION_WRITE_FAILED",
+      message: expect.stringContaining("synced migration candidate")
+    });
+
+    expect(migrationRace.failedCandidateOpen).toBe(true);
+    expect(await readFile(configPath, "utf8")).toBe(original);
+    await expect(access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readdir(directory)).some((entry) => entry.startsWith(".miftah.json.miftah-migrate-"))).toBe(false);
   });
 
   it("migrates a canonical v2 configuration to v3 without synthesizing OAuth state", async () => {

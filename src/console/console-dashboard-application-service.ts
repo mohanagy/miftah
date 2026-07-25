@@ -243,6 +243,12 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   }
 
   private async selectedApplication(): Promise<SelectedConsoleApplication> {
+    if (this.active === undefined) {
+      throw new MiftahError(
+        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED",
+        "CONSOLE_CONFIGURATION_SELECTION_REQUIRED: select a configuration before using Console controls"
+      );
+    }
     const discovered = await this.discover();
     if (discovered.catalog.discoveryState !== "ready") {
       throw new MiftahError(
