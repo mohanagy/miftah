@@ -754,6 +754,10 @@ describe("local Console control server", () => {
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
       expect(html).toContain("Active vs durable:");
+      expect(html).toContain('id="default-profile-editor"');
+      expect(html).toContain('id="default-profile-selection"');
+      expect(html).toContain('id="set-default-profile"');
+      expect(html).toContain("Choose which account new MCP sessions start with");
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
@@ -849,6 +853,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain("/api/v1/configurations/");
       expect(javascript).toContain("/api/v1/profile-readiness");
+      expect(javascript).toContain("/api/v1/profiles/default");
+      expect(javascript).toContain('body: { profile: profile.value }');
       expect(clearProfileReadinessResultOnTargetChange(javascript)).toEqual({
         afterProfileChange: "",
         afterUpstreamChange: ""
@@ -2198,6 +2204,101 @@ describe("local Console control server", () => {
       };
       expect(config.defaultProfile).toBe("google-third");
       expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("changes the durable default profile only through a strict CSRF-protected Console request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-default-profile-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "gsc.json");
+    const workSecrets = join(directory, "google-work-client-secrets.json");
+    const personalSecrets = join(directory, "google-personal-client-secrets.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: workSecrets },
+        { name: "google-personal", oauthClientSecretsFile: personalSecrets }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`, { mode: 0o600 });
+    const before = JSON.parse(await readFile(configPath, "utf8")) as { readonly profiles: unknown };
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/default", server.url);
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "google-personal", credentialFile: personalSecrets })
+      });
+      expect(rejected.status).toBe(422);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({ defaultProfile: "google-work" });
+
+      const changed = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "google-personal" })
+      });
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toEqual({
+        data: {
+          changed: true,
+          write: true,
+          profile: "google-personal",
+          actions: ["Set durable default profile to 'google-personal'."]
+        }
+      });
+      const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
+        readonly defaultProfile: string;
+        readonly profiles: unknown;
+      };
+      expect(persisted.defaultProfile).toBe("google-personal");
+      expect(persisted.profiles).toEqual(before.profiles);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts every existing non-empty configuration profile name when changing the durable default", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-default-profile-name-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "1",
+      name: "console-default-profile-name",
+      defaultProfile: "personal",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: { personal: {}, "client_1": {} }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const changed = await fetch(new URL("/api/v1/profiles/default", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "client_1" })
+      });
+
+      expect(changed.status).toBe(200);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({ defaultProfile: "client_1" });
     } finally {
       await server.close();
     }

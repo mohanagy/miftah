@@ -56,6 +56,12 @@ const providerAccountAdditionSchema = z.object({
   credentialFile: z.string().min(1).max(4_096),
   makeDefault: z.literal(true).optional()
 }).strict();
+const defaultProfileChangeSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence in the guarded configuration transaction rather
+  // than imposing the narrower preset-onboarding slug grammar here.
+  profile: z.string().min(1)
+}).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
@@ -650,6 +656,25 @@ class LocalConsoleServer implements ConsoleServer {
       } finally {
         request.off("aborted", abortReadiness);
         response.off("close", abortReadiness);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/default") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = defaultProfileChangeSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.setDefaultProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.setDefaultProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
       }
       return;
     }

@@ -452,6 +452,43 @@ describe("Console dashboard application service", () => {
     });
   });
 
+  it("changes an existing durable default only after selection and clears the stale selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-default-profile-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "gsc.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "google-work",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { "google-work": {}, "google-personal": {} }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+
+    await expect(service.setDefaultProfile({ profile: "google-personal" })).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
+    const initial = await service.configMetadata();
+    const selected = initial.catalog?.configurations.find((configuration) => configuration.name === "gsc");
+    if (selected === undefined) throw new Error("Expected a discovered GSC configuration.");
+    await service.selectConfiguration(selected.id);
+
+    await expect(service.setDefaultProfile({ profile: "google-personal" })).resolves.toMatchObject({
+      changed: true,
+      write: true,
+      profile: "google-personal"
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "google-personal",
+      profiles: { "google-work": {}, "google-personal": {} }
+    });
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
   it("rejects an unselected Console operation before scanning its catalog", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-unselected-"));
     temporaryDirectories.push(root);
