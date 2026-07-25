@@ -1,4 +1,3 @@
-import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,6 +52,25 @@ function terminateFixtureProcess(pid: number): void {
     if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
     throw error;
   }
+}
+
+/** Observes the SDK's public close callback without coupling the test to its private child handle. */
+function observeTransportClose(transport: StdioClientTransport, onClose: () => void): void {
+  const wrap = (callback: (() => void) | undefined): (() => void) | undefined =>
+    callback === undefined
+      ? undefined
+      : () => {
+          onClose();
+          callback();
+        };
+  let delegate = wrap(transport.onclose);
+  Object.defineProperty(transport, "onclose", {
+    configurable: true,
+    get: () => delegate,
+    set: (callback: (() => void) | undefined) => {
+      delegate = wrap(callback);
+    }
+  });
 }
 
 describe("upstream process manager", () => {
@@ -806,26 +824,23 @@ describe("upstream process manager", () => {
       { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25 }
     );
     const originalStart = StdioClientTransport.prototype.start;
-    let firstChild: ChildProcess | undefined;
+    let firstTransportStarted = false;
     let firstChildClosed = false;
     let replacementStartedBeforeFirstChildClosed = false;
     const start = vi.spyOn(StdioClientTransport.prototype, "start").mockImplementation(async function (
       this: StdioClientTransport
     ) {
-      if (firstChild !== undefined) {
+      if (firstTransportStarted) {
         replacementStartedBeforeFirstChildClosed ||= !firstChildClosed;
       }
       await originalStart.call(this);
-      const child = (this as unknown as { _process?: ChildProcess })._process;
-      if (child === undefined) throw new Error("Expected stdio transport to retain its spawned child.");
+      if (firstTransportStarted) return;
 
-      if (firstChild === undefined) {
-        firstChild = child;
-        child.once("close", () => {
-          firstChildClosed = true;
-        });
-        return;
-      }
+      if (this.pid === null) throw new Error("Expected stdio transport to expose its child PID after start.");
+      firstTransportStarted = true;
+      observeTransportClose(this, () => {
+        firstChildClosed = true;
+      });
     });
 
     try {
@@ -876,6 +891,8 @@ describe("upstream process manager", () => {
 
       await expect(manager.get("work")).resolves.toBeDefined();
       expect(await countStarts(startCountPath)).toBe(2);
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      expect(Number.isSafeInteger(descendantPid)).toBe(true);
     } finally {
       if (descendantPid !== undefined) {
         terminateFixtureProcess(descendantPid);
