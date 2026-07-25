@@ -61,6 +61,8 @@ export interface ConsoleConfigCatalogCandidateStageEvent {
 /** Test-only observer for opaque candidate diagnostics. */
 export type ConsoleConfigCatalogCandidateStageObserver = (event: ConsoleConfigCatalogCandidateStageEvent) => void;
 
+type TrustedConfigurationFileHandle = Awaited<ReturnType<typeof open>>;
+
 function observeCandidateStage(
   observer: ConsoleConfigCatalogCandidateStageObserver | undefined,
   candidateIndex: number,
@@ -178,7 +180,7 @@ async function trustedDirectory(
 }
 
 async function closeTrustedConfigurationHandle(
-  handle: Awaited<ReturnType<typeof open>>,
+  handle: TrustedConfigurationFileHandle,
   candidateIndex: number,
   candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined
 ): Promise<void> {
@@ -186,6 +188,7 @@ async function closeTrustedConfigurationHandle(
     await handle.close();
   } catch (error) {
     observeCandidateStage(candidateStageObserver, candidateIndex, "close", "error");
+    // Candidate discovery deliberately fails closed if any guarded-read cleanup fails.
     throw error;
   }
   observeCandidateStage(candidateStageObserver, candidateIndex, "close", "success");
@@ -216,7 +219,7 @@ async function readTrustedConfiguration(
   }
   observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "success");
 
-  let handle: Awaited<ReturnType<typeof open>>;
+  let handle: TrustedConfigurationFileHandle;
   try {
     handle = await open(canonical, readOnlyFlags);
   } catch (error) {

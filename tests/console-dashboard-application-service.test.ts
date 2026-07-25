@@ -112,6 +112,7 @@ function catalogStageSummary(
   readonly stages: readonly Omit<ConsoleConfigCatalogCandidateStageEvent, "candidateIndex">[];
   readonly accepted: boolean;
 }[] {
+  // The catalog sorts the only two JSON fixtures alphabetically: gsc is index 0, sentry is index 1.
   const candidates = ["gsc", "sentry"] as const;
   return candidates.map((candidate, candidateIndex) => ({
     candidate,
