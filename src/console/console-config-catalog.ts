@@ -26,9 +26,51 @@ export interface ConsoleConfigCatalogDiscoveryOptions {
   readonly ownerUid?: number;
   /** Test seam for Windows DACL verification. */
   readonly windowsAclVerifier?: WindowsConfigAclVerifier;
+  /** Test-only opaque diagnostic observer for one catalog invocation. */
+  readonly candidateStageObserver?: ConsoleConfigCatalogCandidateStageObserver;
 }
 
 export type WindowsConfigAclVerifier = (path: string, kind: "file" | "directory") => Promise<boolean>;
+
+/** Opaque test-only stages for diagnosing a rejected catalog candidate. */
+export type ConsoleConfigCatalogCandidateStage =
+  | "acl"
+  | "open"
+  | "opened-validation"
+  | "read"
+  | "after-read-validation"
+  | "decode"
+  | "parse"
+  | "migration-source"
+  | "close"
+  | "dedupe"
+  | "metadata"
+  | "accepted"
+  | "candidate";
+
+/** A stage outcome never carries a path, filesystem identity, config value, or error detail. */
+export type ConsoleConfigCatalogCandidateOutcome = "success" | "rejected" | "duplicate" | "error";
+
+export interface ConsoleConfigCatalogCandidateStageEvent {
+  /** Stable only within one discovery invocation; never derived from a pathname. */
+  readonly candidateIndex: number;
+  readonly stage: ConsoleConfigCatalogCandidateStage;
+  readonly outcome: ConsoleConfigCatalogCandidateOutcome;
+}
+
+/** Test-only observer for opaque candidate diagnostics. */
+export type ConsoleConfigCatalogCandidateStageObserver = (event: ConsoleConfigCatalogCandidateStageEvent) => void;
+
+type TrustedConfigurationFileHandle = Awaited<ReturnType<typeof open>>;
+
+function observeCandidateStage(
+  observer: ConsoleConfigCatalogCandidateStageObserver | undefined,
+  candidateIndex: number,
+  stage: ConsoleConfigCatalogCandidateStage,
+  outcome: ConsoleConfigCatalogCandidateOutcome
+): void {
+  observer?.({ candidateIndex, stage, outcome });
+}
 
 export interface DiscoveredConsoleConfiguration {
   /** Canonical local path retained only in the in-process registry. */
@@ -137,12 +179,29 @@ async function trustedDirectory(
   return canonical;
 }
 
+async function closeTrustedConfigurationHandle(
+  handle: TrustedConfigurationFileHandle,
+  candidateIndex: number,
+  candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined
+): Promise<void> {
+  try {
+    await handle.close();
+  } catch (error) {
+    observeCandidateStage(candidateStageObserver, candidateIndex, "close", "error");
+    // Candidate discovery deliberately fails closed if any guarded-read cleanup fails.
+    throw error;
+  }
+  observeCandidateStage(candidateStageObserver, candidateIndex, "close", "success");
+}
+
 async function readTrustedConfiguration(
   path: string,
   directory: string,
   ownerUid: number | undefined,
   platform: NodeJS.Platform,
-  windowsAclVerifier: WindowsConfigAclVerifier
+  windowsAclVerifier: WindowsConfigAclVerifier,
+  candidateIndex: number,
+  candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined
 ): Promise<{
   readonly path: string;
   readonly identity: string;
@@ -154,40 +213,97 @@ async function readTrustedConfiguration(
   if (!isWithin(directory, canonical)) return undefined;
   const resolved = await stat(canonical);
   if (!isTrustedFile(resolved, ownerUid, platform) || !sameEntry(observed, resolved)) return undefined;
-  if (!(await hasTrustedWindowsAcl(canonical, "file", platform, windowsAclVerifier))) return undefined;
+  if (!(await hasTrustedWindowsAcl(canonical, "file", platform, windowsAclVerifier))) {
+    observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "rejected");
+    return undefined;
+  }
+  observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "success");
 
-  const handle = await open(canonical, readOnlyFlags);
+  let handle: TrustedConfigurationFileHandle;
   try {
-    const opened = await handle.stat();
+    handle = await open(canonical, readOnlyFlags);
+  } catch (error) {
+    observeCandidateStage(candidateStageObserver, candidateIndex, "open", "error");
+    throw error;
+  }
+  observeCandidateStage(candidateStageObserver, candidateIndex, "open", "success");
+  try {
+    let opened: Stats;
+    try {
+      opened = await handle.stat();
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "error");
+      throw error;
+    }
     if (
       !isTrustedFile(opened, ownerUid, platform) ||
       !sameEntry(observed, opened) ||
       opened.size > maximumConfigurationBytes
     ) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "rejected");
       return undefined;
     }
-    const content = await handle.readFile();
-    const afterRead = await handle.stat();
+    observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "success");
+    let content: Buffer;
+    try {
+      content = await handle.readFile();
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "read", "error");
+      throw error;
+    }
+    observeCandidateStage(candidateStageObserver, candidateIndex, "read", "success");
+    let afterRead: Stats;
+    try {
+      afterRead = await handle.stat();
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "error");
+      throw error;
+    }
     if (
       !isTrustedFile(afterRead, ownerUid, platform) ||
       !sameEntry(observed, afterRead) ||
       afterRead.size !== opened.size ||
       content.byteLength > maximumConfigurationBytes
     ) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "rejected");
       return undefined;
     }
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(content);
+    observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "success");
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(content);
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "decode", "error");
+      throw error;
+    }
+    observeCandidateStage(candidateStageObserver, candidateIndex, "decode", "success");
+    let config: ReturnType<typeof loadConfigFromText>;
+    try {
+      config = loadConfigFromText(text, canonical);
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "parse", "error");
+      throw error;
+    }
+    observeCandidateStage(candidateStageObserver, candidateIndex, "parse", "success");
+    let migrationSource: ReturnType<typeof createConfigMigrationSource>;
+    try {
+      migrationSource = createConfigMigrationSource(content, afterRead);
+    } catch (error) {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "error");
+      throw error;
+    }
+    observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "success");
     return {
       path: canonical,
       identity: `${opened.dev}:${opened.ino}`,
       trustedConfiguration: {
-        config: loadConfigFromText(text, canonical),
+        config,
         contentDigest: createHash("sha256").update(content).digest("base64url"),
-        migrationSource: createConfigMigrationSource(content, afterRead)
+        migrationSource
       }
     };
   } finally {
-    await handle.close();
+    await closeTrustedConfigurationHandle(handle, candidateIndex, candidateStageObserver);
   }
 }
 
@@ -201,6 +317,7 @@ export async function discoverConsoleConfigCatalog(
   const platform = options.platform ?? process.platform;
   const ownerUid = options.ownerUid ?? defaultOwnerUid(platform);
   const windowsAclVerifier = options.windowsAclVerifier ?? verifyWindowsConfigPathSecurity;
+  const candidateStageObserver = options.candidateStageObserver;
   let directory: string | undefined;
   try {
     directory = await trustedDirectory(resolve(options.configDirectory), ownerUid, platform, windowsAclVerifier);
@@ -229,19 +346,32 @@ export async function discoverConsoleConfigCatalog(
 
   const identities = new Set<string>();
   const configurations: DiscoveredConsoleConfiguration[] = [];
-  for (const name of names) {
+  for (const [candidateIndex, name] of names.entries()) {
     try {
       const discovered = await readTrustedConfiguration(
         join(directory, name),
         directory,
         ownerUid,
         platform,
-        windowsAclVerifier
+        windowsAclVerifier,
+        candidateIndex,
+        candidateStageObserver
       );
       if (discovered === undefined) continue;
-      if (identities.has(discovered.identity)) continue;
+      if (identities.has(discovered.identity)) {
+        observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "duplicate");
+        continue;
+      }
       identities.add(discovered.identity);
-      const summary = consoleInitializedConfigMetadata(discovered.trustedConfiguration.config);
+      observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "success");
+      let summary: ReturnType<typeof consoleInitializedConfigMetadata>;
+      try {
+        summary = consoleInitializedConfigMetadata(discovered.trustedConfiguration.config);
+      } catch (error) {
+        observeCandidateStage(candidateStageObserver, candidateIndex, "metadata", "error");
+        throw error;
+      }
+      observeCandidateStage(candidateStageObserver, candidateIndex, "metadata", "success");
       const configuration: DiscoveredConsoleConfiguration = {
         path: discovered.path,
         initializedMetadata: summary,
@@ -262,7 +392,9 @@ export async function discoverConsoleConfigCatalog(
       };
       trustedConfigurations.set(configuration, discovered.trustedConfiguration);
       configurations.push(configuration);
+      observeCandidateStage(candidateStageObserver, candidateIndex, "accepted", "success");
     } catch {
+      observeCandidateStage(candidateStageObserver, candidateIndex, "candidate", "error");
       // A malformed, raced, or untrusted candidate is never a Console entry.
     }
   }

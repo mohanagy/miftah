@@ -1,8 +1,11 @@
-import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { discoverConsoleConfigCatalog } from "../src/console/console-config-catalog.js";
+import { basename, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  discoverConsoleConfigCatalog,
+  type ConsoleConfigCatalogCandidateStageEvent
+} from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
@@ -13,6 +16,29 @@ import {
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
+const catalogAclDiagnostic = vi.hoisted(() => ({
+  verifier: undefined as undefined | ((path: string, kind: "file" | "directory") => Promise<boolean>)
+}));
+const catalogStageDiagnostic = vi.hoisted(() => ({
+  observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
+}));
+
+vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
+  return {
+    ...actual,
+    discoverConsoleConfigCatalog: (options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) => {
+      const verifier = catalogAclDiagnostic.verifier;
+      const observer = catalogStageDiagnostic.observer;
+      const instrumentedOptions = {
+        ...options,
+        ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
+        ...(observer === undefined ? {} : { candidateStageObserver: observer })
+      };
+      return actual.discoverConsoleConfigCatalog(instrumentedOptions);
+    }
+  };
+});
 
 function supportedKnownConnectorOptions(): {
   readonly preset: string;
@@ -37,6 +63,8 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 }
 
 afterEach(async () => {
+  catalogAclDiagnostic.verifier = undefined;
+  catalogStageDiagnostic.observer = undefined;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -46,6 +74,53 @@ async function writeConfig(path: string, value: unknown): Promise<void> {
 
 async function writeCatalogFixture(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+function catalogFixtureLabel(path: string, kind: "file" | "directory"): "directory" | "gsc" | "sentry" | "other" {
+  if (kind === "directory") return "directory";
+  switch (basename(path).toLocaleLowerCase("en-US")) {
+    case "gsc.json":
+      return "gsc";
+    case "sentry.json":
+      return "sentry";
+    default:
+      return "other";
+  }
+}
+
+async function compareFileIdentities(first: string, second: string): Promise<{
+  readonly bigintIdentity: "same" | "different";
+  readonly numberIdentity: "same" | "different";
+}> {
+  const [firstNumber, secondNumber, firstBigInt, secondBigInt] = await Promise.all([
+    lstat(first),
+    lstat(second),
+    lstat(first, { bigint: true }),
+    lstat(second, { bigint: true })
+  ]);
+  return {
+    numberIdentity: firstNumber.dev === secondNumber.dev && firstNumber.ino === secondNumber.ino ? "same" : "different",
+    bigintIdentity: firstBigInt.dev === secondBigInt.dev && firstBigInt.ino === secondBigInt.ino ? "same" : "different"
+  };
+}
+
+function catalogStageSummary(
+  events: readonly ConsoleConfigCatalogCandidateStageEvent[],
+  configurationNames: readonly string[] | undefined
+): readonly {
+  readonly candidate: "gsc" | "sentry";
+  readonly stages: readonly Omit<ConsoleConfigCatalogCandidateStageEvent, "candidateIndex">[];
+  readonly accepted: boolean;
+}[] {
+  // The catalog sorts the only two JSON fixtures alphabetically: gsc is index 0, sentry is index 1.
+  const candidates = ["gsc", "sentry"] as const;
+  return candidates.map((candidate, candidateIndex) => ({
+    candidate,
+    stages: events
+      .filter((event) => event.candidateIndex === candidateIndex)
+      .map(({ stage, outcome }) => ({ stage, outcome })),
+    accepted: configurationNames?.includes(candidate) ?? false
+  }));
 }
 
 describe("Console dashboard application service", () => {
@@ -91,11 +166,34 @@ describe("Console dashboard application service", () => {
       profiles: { work: {} }
     });
 
-    // Keep the production-only ACL boundary explicit on Windows: catalog
-    // discovery deliberately suppresses individual untrusted candidates.
+    const fixtureIdentity = process.platform === "win32"
+      ? await compareFileIdentities(gscPath, sentryPath)
+      : undefined;
+    const candidateStages: ConsoleConfigCatalogCandidateStageEvent[] = [];
+    catalogStageDiagnostic.observer = (event) => {
+      candidateStages.push(event);
+    };
+
+    // Instrument the exact dashboard catalog invocation on Windows. The mock
+    // delegates to the real catalog and real verifier; it only records safe
+    // fixture labels so a fail-closed omission identifies its boundary.
+    const aclProbes: Array<{
+      candidate: "directory" | "gsc" | "sentry" | "other";
+      kind: "file" | "directory";
+      outcome: "trusted" | "untrusted" | "error";
+    }> = [];
     if (process.platform === "win32") {
-      await expect(verifyWindowsConfigPathSecurity(gscPath, "file")).resolves.toBe(true);
-      await expect(verifyWindowsConfigPathSecurity(sentryPath, "file")).resolves.toBe(true);
+      catalogAclDiagnostic.verifier = async (path, kind) => {
+        const candidate = catalogFixtureLabel(path, kind);
+        try {
+          const trusted = await verifyWindowsConfigPathSecurity(path, kind);
+          aclProbes.push({ candidate, kind, outcome: trusted ? "trusted" : "untrusted" });
+          return trusted;
+        } catch (error) {
+          aclProbes.push({ candidate, kind, outcome: "error" });
+          throw error;
+        }
+      };
     }
 
     const service = new ConsoleDashboardApplicationService({
@@ -104,7 +202,63 @@ describe("Console dashboard application service", () => {
       launcher: { command: process.execPath, args: ["serve"] }
     });
 
-    const initial = await service.configMetadata();
+    const initial = await service.configMetadata().finally(() => {
+      catalogAclDiagnostic.verifier = undefined;
+      catalogStageDiagnostic.observer = undefined;
+    });
+    expect(catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name))).toEqual([
+      {
+        candidate: "gsc",
+        stages: [
+          { stage: "acl", outcome: "success" },
+          { stage: "open", outcome: "success" },
+          { stage: "opened-validation", outcome: "success" },
+          { stage: "read", outcome: "success" },
+          { stage: "after-read-validation", outcome: "success" },
+          { stage: "decode", outcome: "success" },
+          { stage: "parse", outcome: "success" },
+          { stage: "migration-source", outcome: "success" },
+          { stage: "close", outcome: "success" },
+          { stage: "dedupe", outcome: "success" },
+          { stage: "metadata", outcome: "success" },
+          { stage: "accepted", outcome: "success" }
+        ],
+        accepted: true
+      },
+      {
+        candidate: "sentry",
+        stages: [
+          { stage: "acl", outcome: "success" },
+          { stage: "open", outcome: "success" },
+          { stage: "opened-validation", outcome: "success" },
+          { stage: "read", outcome: "success" },
+          { stage: "after-read-validation", outcome: "success" },
+          { stage: "decode", outcome: "success" },
+          { stage: "parse", outcome: "success" },
+          { stage: "migration-source", outcome: "success" },
+          { stage: "close", outcome: "success" },
+          { stage: "dedupe", outcome: "success" },
+          { stage: "metadata", outcome: "success" },
+          { stage: "accepted", outcome: "success" }
+        ],
+        accepted: true
+      }
+    ]);
+    if (process.platform === "win32") {
+      expect({
+        aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
+        fixtureIdentity,
+        serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
+      }).toEqual({
+        aclProbeSummary: [
+          { candidate: "directory", kind: "directory", outcome: "trusted" },
+          { candidate: "gsc", kind: "file", outcome: "trusted" },
+          { candidate: "sentry", kind: "file", outcome: "trusted" }
+        ],
+        fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
+        serviceConfigurationNames: ["gsc", "sentry"]
+      });
+    }
     expect(initial).toMatchObject({
       initialized: false,
       restartRequiredForExistingClients: true,
