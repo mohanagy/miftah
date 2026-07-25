@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats, type Stats } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createConfigMigrationSource } from "../cli/migrate-config.js";
@@ -118,8 +118,16 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function sameEntry(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">): boolean {
+/** Uses exact-width IDs because Node Number file IDs can be lossy on Windows. */
+export function sameBigIntFileIdentity(
+  left: Pick<BigIntStats, "dev" | "ino">,
+  right: Pick<BigIntStats, "dev" | "ino">
+): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+function bigintFileIdentity(entry: Pick<BigIntStats, "dev" | "ino">): string {
+  return `${entry.dev}:${entry.ino}`;
 }
 
 function isWithin(parent: string, child: string): boolean {
@@ -127,26 +135,27 @@ function isWithin(parent: string, child: string): boolean {
   return path.length > 0 && !path.startsWith("..") && !isAbsolute(path);
 }
 
-function hasExpectedOwner(entry: Pick<Stats, "uid">, ownerUid: number | undefined): boolean {
-  return ownerUid === undefined || entry.uid === ownerUid;
+function hasExpectedOwner(entry: Pick<Stats | BigIntStats, "uid">, ownerUid: number | undefined): boolean {
+  if (ownerUid === undefined) return true;
+  return typeof entry.uid === "bigint" ? entry.uid === BigInt(ownerUid) : entry.uid === ownerUid;
 }
 
-function hasSafeDirectoryMode(entry: Pick<Stats, "mode">, platform: NodeJS.Platform): boolean {
+function hasSafeDirectoryMode(entry: Pick<Stats | BigIntStats, "mode">, platform: NodeJS.Platform): boolean {
   // Node does not expose Windows DACLs through Stats. The established Miftah
   // Windows permission diagnostic is similarly skipped; non-link/canonical
   // validation remains enforced on every platform.
   return platform === "win32" || (Number(entry.mode) & 0o022) === 0;
 }
 
-function hasSafeFileMode(entry: Pick<Stats, "mode">, platform: NodeJS.Platform): boolean {
+function hasSafeFileMode(entry: Pick<Stats | BigIntStats, "mode">, platform: NodeJS.Platform): boolean {
   return platform === "win32" || (Number(entry.mode) & 0o066) === 0;
 }
 
-function isTrustedDirectory(entry: Stats, ownerUid: number | undefined, platform: NodeJS.Platform): boolean {
+function isTrustedDirectory(entry: Stats | BigIntStats, ownerUid: number | undefined, platform: NodeJS.Platform): boolean {
   return entry.isDirectory() && !entry.isSymbolicLink() && hasExpectedOwner(entry, ownerUid) && hasSafeDirectoryMode(entry, platform);
 }
 
-function isTrustedFile(entry: Stats, ownerUid: number | undefined, platform: NodeJS.Platform): boolean {
+function isTrustedFile(entry: Stats | BigIntStats, ownerUid: number | undefined, platform: NodeJS.Platform): boolean {
   return entry.isFile() && !entry.isSymbolicLink() && hasExpectedOwner(entry, ownerUid) && hasSafeFileMode(entry, platform);
 }
 
@@ -178,17 +187,17 @@ async function trustedDirectory(
   platform: NodeJS.Platform,
   windowsAclVerifier: WindowsConfigAclVerifier
 ): Promise<string | undefined> {
-  let observed: Stats;
+  let observed: BigIntStats;
   try {
-    observed = await lstat(directory);
+    observed = await lstat(directory, { bigint: true });
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
   }
   if (!isTrustedDirectory(observed, ownerUid, platform)) throw new Error("unsafe configuration directory");
   const canonical = await realpath(directory);
-  const resolved = await lstat(canonical);
-  if (!isTrustedDirectory(resolved, ownerUid, platform) || !sameEntry(observed, resolved)) {
+  const resolved = await lstat(canonical, { bigint: true });
+  if (!isTrustedDirectory(resolved, ownerUid, platform) || !sameBigIntFileIdentity(observed, resolved)) {
     throw new Error("unsafe configuration directory");
   }
   if (!(await hasTrustedWindowsAcl(canonical, "directory", platform, windowsAclVerifier))) {
@@ -223,16 +232,18 @@ async function readTrustedConfiguration(
   candidateIdentityObserver: ConsoleConfigCatalogCandidateIdentityDiagnosticObserver | undefined
 ): Promise<{
   readonly path: string;
+  /** Exact-width identity used for security comparisons and catalog dedupe. */
   readonly identity: string;
-  readonly bigintIdentity?: string;
+  /** Test-only Number projection retained to diagnose platform precision loss. */
+  readonly numberIdentity?: string;
   readonly trustedConfiguration: ConsoleTrustedConfiguration;
 } | undefined> {
-  const observed = await lstat(path);
+  const observed = await lstat(path, { bigint: true });
   if (!isTrustedFile(observed, ownerUid, platform)) return undefined;
   const canonical = await realpath(path);
   if (!isWithin(directory, canonical)) return undefined;
-  const resolved = await stat(canonical);
-  if (!isTrustedFile(resolved, ownerUid, platform) || !sameEntry(observed, resolved)) return undefined;
+  const resolved = await stat(canonical, { bigint: true });
+  if (!isTrustedFile(resolved, ownerUid, platform) || !sameBigIntFileIdentity(observed, resolved)) return undefined;
   if (!(await hasTrustedWindowsAcl(canonical, "file", platform, windowsAclVerifier))) {
     observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "rejected");
     return undefined;
@@ -249,26 +260,24 @@ async function readTrustedConfiguration(
   observeCandidateStage(candidateStageObserver, candidateIndex, "open", "success");
   try {
     let opened: Stats;
+    let openedIdentity: BigIntStats;
     try {
-      opened = await handle.stat();
+      [opened, openedIdentity] = await Promise.all([handle.stat(), handle.stat({ bigint: true })]);
     } catch (error) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "error");
       throw error;
     }
     if (
-      !isTrustedFile(opened, ownerUid, platform) ||
-      !sameEntry(observed, opened) ||
+      !isTrustedFile(openedIdentity, ownerUid, platform) ||
+      !sameBigIntFileIdentity(observed, openedIdentity) ||
       opened.size > maximumConfigurationBytes
     ) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "rejected");
       return undefined;
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "success");
-    let bigintIdentity: string | undefined;
-    if (candidateIdentityObserver !== undefined) {
-      const openedBigInt = await handle.stat({ bigint: true });
-      bigintIdentity = `${openedBigInt.dev}:${openedBigInt.ino}`;
-    }
+    const identity = bigintFileIdentity(openedIdentity);
+    const numberIdentity = candidateIdentityObserver === undefined ? undefined : `${opened.dev}:${opened.ino}`;
     let content: Buffer;
     try {
       content = await handle.readFile();
@@ -278,16 +287,17 @@ async function readTrustedConfiguration(
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "read", "success");
     let afterRead: Stats;
+    let afterReadIdentity: BigIntStats;
     try {
-      afterRead = await handle.stat();
+      [afterRead, afterReadIdentity] = await Promise.all([handle.stat(), handle.stat({ bigint: true })]);
     } catch (error) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "error");
       throw error;
     }
     if (
-      !isTrustedFile(afterRead, ownerUid, platform) ||
-      !sameEntry(observed, afterRead) ||
-      afterRead.size !== opened.size ||
+      !isTrustedFile(afterReadIdentity, ownerUid, platform) ||
+      !sameBigIntFileIdentity(observed, afterReadIdentity) ||
+      afterReadIdentity.size !== openedIdentity.size ||
       content.byteLength > maximumConfigurationBytes
     ) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "rejected");
@@ -320,8 +330,8 @@ async function readTrustedConfiguration(
     observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "success");
     return {
       path: canonical,
-      identity: `${opened.dev}:${opened.ino}`,
-      ...(bigintIdentity === undefined ? {} : { bigintIdentity }),
+      identity,
+      ...(numberIdentity === undefined ? {} : { numberIdentity }),
       trustedConfiguration: {
         config,
         contentDigest: createHash("sha256").update(content).digest("base64url"),
@@ -372,7 +382,7 @@ export async function discoverConsoleConfigCatalog(
   }
 
   const identities = new Set<string>();
-  const bigintIdentities = candidateIdentityObserver === undefined ? undefined : new Set<string>();
+  const numberIdentities = candidateIdentityObserver === undefined ? undefined : new Set<string>();
   const configurations: DiscoveredConsoleConfiguration[] = [];
   for (const [candidateIndex, name] of names.entries()) {
     try {
@@ -387,15 +397,15 @@ export async function discoverConsoleConfigCatalog(
         candidateIdentityObserver
       );
       if (discovered === undefined) continue;
-      const numberDuplicate = identities.has(discovered.identity);
-      const bigintDuplicate = discovered.bigintIdentity !== undefined && bigintIdentities?.has(discovered.bigintIdentity) === true;
+      const bigintDuplicate = identities.has(discovered.identity);
+      const numberDuplicate = discovered.numberIdentity !== undefined && numberIdentities?.has(discovered.numberIdentity) === true;
       candidateIdentityObserver?.({ candidateIndex, numberDuplicate, bigintDuplicate });
-      if (numberDuplicate) {
+      if (bigintDuplicate) {
         observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "duplicate");
         continue;
       }
       identities.add(discovered.identity);
-      if (discovered.bigintIdentity !== undefined) bigintIdentities?.add(discovered.bigintIdentity);
+      if (discovered.numberIdentity !== undefined) numberIdentities?.add(discovered.numberIdentity);
       observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "success");
       let summary: ReturnType<typeof consoleInitializedConfigMetadata>;
       try {
