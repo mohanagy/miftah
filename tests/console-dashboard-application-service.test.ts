@@ -22,13 +22,14 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
+const catalogDiscoveryDiagnostic = vi.hoisted(() => ({ operation: "idle" }));
 const migrationDiagnostic = vi.hoisted(() => ({ operation: "idle" }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
   return {
     ...actual,
-    discoverConsoleConfigCatalog: (options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) => {
+    async discoverConsoleConfigCatalog(options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) {
       const verifier = catalogAclDiagnostic.verifier;
       const observer = catalogStageDiagnostic.observer;
       const instrumentedOptions = {
@@ -36,7 +37,12 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
         ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
         ...(observer === undefined ? {} : { candidateStageObserver: observer })
       };
-      return actual.discoverConsoleConfigCatalog(instrumentedOptions);
+      catalogDiscoveryDiagnostic.operation = "catalog-discovery";
+      try {
+        return await actual.discoverConsoleConfigCatalog(instrumentedOptions);
+      } finally {
+        catalogDiscoveryDiagnostic.operation = "idle";
+      }
     }
   };
 });
@@ -81,6 +87,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
+  catalogDiscoveryDiagnostic.operation = "idle";
   migrationDiagnostic.operation = "idle";
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -459,7 +466,7 @@ describe("Console dashboard application service", () => {
     const slowPhaseMarker = process.platform === "win32"
       ? setTimeout(() => {
           process.stderr.write(
-            `[miftah-test] console-dashboard-native-oauth-account phase=${phase} migration=${migrationDiagnostic.operation}\n`
+            `[miftah-test] console-dashboard-native-oauth-account phase=${phase} catalog=${catalogDiscoveryDiagnostic.operation} migration=${migrationDiagnostic.operation}\n`
           );
         }, 4_000)
       : undefined;
@@ -502,15 +509,17 @@ describe("Console dashboard application service", () => {
         profile: "personal",
         upstream: "default"
       });
-      phase = "assertions";
+      phase = "post-account-assertions";
       expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
         defaultProfile: "personal",
         profiles: { work: {}, personal: { description: "Personal analytics" } },
         oauth: { connections: expect.any(Object) }
       });
+      phase = "post-mutation-selection-rejection";
       await expect(service.addDiscoveredNativeOAuthAccount(request)).rejects.toMatchObject({
         code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
       });
+      phase = "registration-assertion";
       expect(upstream.registrationRequests()).toEqual([]);
     } finally {
       if (slowPhaseMarker !== undefined) clearTimeout(slowPhaseMarker);
