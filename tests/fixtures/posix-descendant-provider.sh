@@ -8,9 +8,11 @@ record_descendant() {
 }
 
 keep_streams_open() {
-  while :; do
-    sleep 60
-  done
+  fifo="${MIFTAH_FAKE_RECORD_PATH:?}.fifo"
+  mkfifo "$fifo"
+  exec 3<>"$fifo"
+  rm -f "$fifo"
+  IFS= read -r _ <&3
 }
 
 case "${MIFTAH_FAKE_MODE:-}" in
