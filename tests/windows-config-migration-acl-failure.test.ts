@@ -57,7 +57,8 @@ describe("Windows migration ACL failure boundary", () => {
     await writeFile(configPath, original, "utf8");
 
     await expect(runMigrateConfigCommand({ configPath, write: true })).rejects.toMatchObject({
-      code: "CONFIG_MIGRATION_WRITE_FAILED"
+      code: "CONFIG_MIGRATION_WRITE_FAILED",
+      message: expect.stringContaining("preserve and verify the source Windows security descriptor")
     });
 
     expect(aclMocks.copyBatch).toHaveBeenCalledOnce();

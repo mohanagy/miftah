@@ -493,6 +493,13 @@ async function installWithoutOverwriting(
         migrationWriteError("could not create the synced migration candidate; the original configuration was restored")
       );
     }
+    if (error instanceof MigrationFilePreparationError && error.phase === "descriptor") {
+      await restoreAndEscalate(
+        transaction,
+        () => restoreHeldSource(transaction, path, heldFingerprint),
+        migrationWriteError("could not preserve and verify the source Windows security descriptor; the original configuration was restored")
+      );
+    }
     const restoredError = errorCode(error) === "EEXIST"
       ? new MiftahError(
         "CONFIG_MIGRATION_BACKUP_EXISTS",

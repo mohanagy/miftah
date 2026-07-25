@@ -167,6 +167,23 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("foreach ($target in $targets)");
   });
 
+  it("fails closed before launch when either batch target contains a NUL byte", async () => {
+    await expect(
+      copyWindowsConfigSecurityDescriptors("C:\\config\\source.json", [
+        "C:\\config\\backup.json\u0000unexpected",
+        "C:\\config\\candidate.json"
+      ])
+    ).resolves.toBe(false);
+    await expect(
+      copyWindowsConfigSecurityDescriptors("C:\\config\\source.json", [
+        "C:\\config\\backup.json",
+        "C:\\config\\candidate.json\u0000unexpected"
+      ])
+    ).resolves.toBe(false);
+
+    expect(windowsAclMocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("fails closed rather than replacing malformed Unicode in a private directory path", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();
