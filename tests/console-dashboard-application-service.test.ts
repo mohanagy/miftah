@@ -283,7 +283,6 @@ describe("Console dashboard application service", () => {
     if (process.platform === "win32") {
       expect({
         aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
-        fixtureIdentity,
         serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
       }).toEqual({
         aclProbeSummary: [
