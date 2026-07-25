@@ -228,24 +228,44 @@ describe("audit journal integrity", () => {
       }
     }
 
+    class ProbeServer extends EventEmitter {
+      listen(_options: { host: string; port: number; exclusive: boolean }, callback?: () => void): this {
+        queueMicrotask(() => {
+          bindOutcome = "listening";
+          this.emit("listening");
+          callback?.();
+        });
+        return this;
+      }
+
+      close(callback?: (error?: Error) => void): this {
+        queueMicrotask(() => {
+          listenerCloseCount += 1;
+          callback?.();
+        });
+        return this;
+      }
+    }
+
     const socket = new ProbeSocket();
-    const serverPrototype = Object.getPrototypeOf(createServer()) as {
-      listen: (
-        this: Server,
-        options: { host: string; port: number; exclusive: boolean },
-        callback?: () => void
-      ) => Server;
-    };
-    const originalListen = serverPrototype.listen;
     const originalSetTimeout = global.setTimeout;
     let probeTimedOut = false;
     let probeTimerIntercepted = false;
     let refusalDelivered = false;
     let bindOutcome: DelayedLocalRefusalBindOutcome = "not-attempted";
+    let listenerStartCount = 0;
+    let listenerCloseCount = 0;
     vi.resetModules();
     vi.doMock("node:net", async () => {
       const actual = await vi.importActual<typeof import("node:net")>("node:net");
-      return { ...actual, connect: () => socket };
+      return {
+        ...actual,
+        connect: () => socket,
+        createServer: () => {
+          listenerStartCount += 1;
+          return new ProbeServer() as unknown as Server;
+        }
+      };
     });
     const { AuditLogger: IsolatedAuditLogger } = await import("../src/audit/audit-logger.js");
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (probeTimedOut ? 5_000 : 0));
@@ -265,25 +285,6 @@ describe("audit journal integrity", () => {
         return originalSetTimeout(callback, delay, ...args);
       }) as unknown as typeof setTimeout
     );
-    const listenSpy = vi.spyOn(serverPrototype, "listen").mockImplementation(function (
-      this: Server,
-      options: { host: string; port: number; exclusive: boolean },
-      callback?: () => void
-    ) {
-      this.once("listening", () => {
-        bindOutcome = "listening";
-      });
-      this.once("error", (error: NodeJS.ErrnoException) => {
-        bindOutcome =
-          error.code === "EADDRINUSE"
-            ? "error:EADDRINUSE"
-            : error.code === "EACCES"
-              ? "error:EACCES"
-              : "error:other";
-      });
-      return originalListen.call(this, options, callback);
-    });
-
     try {
       const logger = new IsolatedAuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
       await logger.log({
@@ -304,8 +305,12 @@ describe("audit journal integrity", () => {
         );
       });
       expect(probeTimerIntercepted).toBe(true);
+      expect(probeTimedOut).toBe(true);
+      expect(refusalDelivered).toBe(true);
+      expect(bindOutcome).toBe("listening");
+      expect(listenerStartCount).toBe(1);
+      expect(listenerCloseCount).toBe(1);
     } finally {
-      listenSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       nowSpy.mockRestore();
       vi.doUnmock("node:net");
