@@ -18,6 +18,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 import {
   copyWindowsConfigSecurityDescriptor,
+  copyWindowsConfigSecurityDescriptors,
   createWindowsPrivateMigrationDirectory,
   secureWindowsConfigFile,
   verifyWindowsConfigPathSecurity
@@ -139,6 +140,31 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("$verifiedAcl.GetAccessRules");
     expect(command).toContain("$sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value");
     expect(command).not.toContain("$verifiedAcl.GetSecurityDescriptorBinaryForm");
+  });
+
+  it("copies a source descriptor onto both exclusively created migration files in one helper", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(
+      copyWindowsConfigSecurityDescriptors("C:\\config\\source.json", [
+        "C:\\config\\backup.json",
+        "C:\\config\\candidate.json"
+      ])
+    ).resolves.toBe(true);
+
+    expect(windowsAclMocks.spawn).toHaveBeenCalledOnce();
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "copy-file-security-batch\u0000C:\\config\\source.json\u0000C:\\config\\backup.json\u0000C:\\config\\candidate.json"
+    );
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("copy-file-security-batch");
+    expect(command).toContain("foreach ($target in $targets)");
   });
 
   it("fails closed rather than replacing malformed Unicode in a private directory path", async () => {

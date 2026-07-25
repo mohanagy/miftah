@@ -7,7 +7,7 @@ import { planConfigMigration, type ConfigMigrationPlan } from "../config/migrate
 import { validateConfig } from "../config/validate-config.js";
 import { MiftahError } from "../utils/errors.js";
 import {
-  copyWindowsConfigSecurityDescriptor,
+  copyWindowsConfigSecurityDescriptors,
   createWindowsPrivateMigrationDirectory,
   secureWindowsConfigFile
 } from "./windows-config-acl.js";
@@ -58,6 +58,19 @@ class MigrationTransactionError extends Error {
   ) {
     super("The migration transaction could not safely complete.");
     this.name = "MigrationTransactionError";
+  }
+}
+
+class MigrationFilePreparationError extends Error {
+  readonly code: string | undefined;
+
+  constructor(
+    readonly phase: "backup" | "candidate" | "descriptor",
+    cause: unknown
+  ) {
+    super("The migration files could not be prepared.");
+    this.name = "MigrationFilePreparationError";
+    this.code = errorCode(cause);
   }
 }
 
@@ -180,13 +193,16 @@ async function writeSyncedExclusive(
   path: string,
   content: string | Uint8Array,
   mode: number,
-  beforeWrite?: (path: string) => Promise<void>
+  beforeWrite?: (path: string) => Promise<void>,
+  preopenedHandle?: Awaited<ReturnType<typeof open>>
 ): Promise<void> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  let created = false;
+  let handle = preopenedHandle;
+  let created = preopenedHandle !== undefined;
   try {
-    handle = await open(path, "wx", mode);
-    created = true;
+    if (handle === undefined) {
+      handle = await open(path, "wx", mode);
+      created = true;
+    }
     if (beforeWrite !== undefined) await beforeWrite(path);
     await handle.writeFile(content);
     await handle.sync();
@@ -218,17 +234,46 @@ export async function writeNewConfigFile(path: string, content: string): Promise
   });
 }
 
-async function writeMigrationFile(
-  path: string,
-  content: string | Uint8Array,
+interface PreparedMigrationFiles {
+  readonly backupHandle: Awaited<ReturnType<typeof open>>;
+  readonly candidateHandle: Awaited<ReturnType<typeof open>>;
+}
+
+/**
+ * Creates both migration targets exclusively before one descriptor copy. The
+ * files remain empty until the descriptor copy has been verified.
+ */
+async function prepareMigrationFiles(
+  transaction: MigrationTransaction,
   mode: number,
   sourcePath: string
-): Promise<void> {
-  await writeSyncedExclusive(path, content, mode, async (targetPath) => {
-    if (!(await copyWindowsConfigSecurityDescriptor(sourcePath, targetPath))) {
+): Promise<PreparedMigrationFiles> {
+  let backupHandle: Awaited<ReturnType<typeof open>> | undefined;
+  let candidateHandle: Awaited<ReturnType<typeof open>> | undefined;
+  let backupCreated = false;
+  let candidateCreated = false;
+  let phase: MigrationFilePreparationError["phase"] = "backup";
+  try {
+    backupHandle = await open(transaction.backupPath, "wx", mode);
+    backupCreated = true;
+    phase = "candidate";
+    candidateHandle = await open(transaction.candidatePath, "wx", mode);
+    candidateCreated = true;
+    phase = "descriptor";
+    if (!(await copyWindowsConfigSecurityDescriptors(sourcePath, [transaction.backupPath, transaction.candidatePath]))) {
       throw migrationWriteError("could not preserve and verify the source Windows security descriptor");
     }
-  });
+    return { backupHandle, candidateHandle };
+  } catch (error) {
+    const cleanup: Promise<void>[] = [];
+    if (candidateCreated) cleanup.push(closeAndRemove(candidateHandle, transaction.candidatePath));
+    if (backupCreated) cleanup.push(closeAndRemove(backupHandle, transaction.backupPath));
+    const cleanupResults = await Promise.allSettled(cleanup);
+    if (cleanupResults.some((result) => result.status === "rejected")) {
+      throw migrationWriteError("could not clean up an incomplete migration file");
+    }
+    throw new MigrationFilePreparationError(phase, error);
+  }
 }
 
 interface MigrationTransaction {
@@ -411,8 +456,16 @@ async function installWithoutOverwriting(
     await restoreSourceChangedOrEscalate(transaction, path);
   }
 
+  let preparedFiles: PreparedMigrationFiles | undefined;
   try {
-    await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
+    preparedFiles = await prepareMigrationFiles(transaction, source.fingerprint.mode, transaction.holdingPath);
+    await writeSyncedExclusive(
+      transaction.backupPath,
+      source.originalBytes,
+      source.fingerprint.mode,
+      undefined,
+      preparedFiles.backupHandle
+    );
     await link(transaction.backupPath, publishedBackupPath);
     const [privateBackup, publishedBackup] = await Promise.all([
       lstat(transaction.backupPath, { bigint: true }),
@@ -422,6 +475,24 @@ async function installWithoutOverwriting(
       throw new Error("migration backup publication did not retain the private backup file");
     }
   } catch (error) {
+    if (preparedFiles !== undefined) {
+      try {
+        await closeAndRemove(preparedFiles.candidateHandle, transaction.candidatePath);
+      } catch {
+        await restoreAndEscalate(
+          transaction,
+          () => restoreHeldSource(transaction, path, heldFingerprint),
+          migrationWriteError("could not clean up an incomplete migration file")
+        );
+      }
+    }
+    if (error instanceof MigrationFilePreparationError && error.phase === "candidate") {
+      await restoreAndEscalate(
+        transaction,
+        () => restoreHeldSource(transaction, path, heldFingerprint),
+        migrationWriteError("could not create the synced migration candidate; the original configuration was restored")
+      );
+    }
     const restoredError = errorCode(error) === "EEXIST"
       ? new MiftahError(
         "CONFIG_MIGRATION_BACKUP_EXISTS",
@@ -432,7 +503,16 @@ async function installWithoutOverwriting(
   }
 
   try {
-    await writeMigrationFile(transaction.candidatePath, candidateContent, source.fingerprint.mode, transaction.holdingPath);
+    if (preparedFiles === undefined) {
+      throw new Error("migration files were not prepared");
+    }
+    await writeSyncedExclusive(
+      transaction.candidatePath,
+      candidateContent,
+      source.fingerprint.mode,
+      undefined,
+      preparedFiles.candidateHandle
+    );
   } catch {
     await restoreAndEscalate(
       transaction,

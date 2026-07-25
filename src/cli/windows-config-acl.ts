@@ -16,6 +16,12 @@ interface CopyFileSecurityRequest {
   readonly target: string;
 }
 
+interface CopyFileSecurityBatchRequest {
+  readonly operation: "copy-file-security-batch";
+  readonly source: string;
+  readonly targets: readonly [string, string];
+}
+
 interface CreatePrivateDirectoryRequest {
   readonly operation: "create-private-directory";
   readonly directory: string;
@@ -34,6 +40,7 @@ interface VerifyPrivatePathRequest {
 
 type WindowsConfigAclRequest =
   | CopyFileSecurityRequest
+  | CopyFileSecurityBatchRequest
   | CreatePrivateDirectoryRequest
   | SecurePrivateFileRequest
   | VerifyPrivatePathRequest;
@@ -44,6 +51,17 @@ type WindowsConfigAclRequest =
  */
 export async function copyWindowsConfigSecurityDescriptor(source: string, target: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "copy-file-security", source, target });
+}
+
+/**
+ * Copies and verifies the source file's non-null owner, group, and DACL onto
+ * a fixed pair of exclusively created migration files in one trusted helper.
+ */
+export async function copyWindowsConfigSecurityDescriptors(
+  source: string,
+  targets: readonly [string, string]
+): Promise<boolean> {
+  return runWindowsAclRequest({ operation: "copy-file-security-batch", source, targets });
 }
 
 /** Creates a current-user-only directory with its DACL applied at creation time. */
@@ -86,6 +104,9 @@ function requestHasNul(request: WindowsConfigAclRequest): boolean {
   if (request.operation === "copy-file-security") {
     return request.source.includes("\u0000") || request.target.includes("\u0000");
   }
+  if (request.operation === "copy-file-security-batch") {
+    return request.source.includes("\u0000") || request.targets.some((target) => target.includes("\u0000"));
+  }
   if (request.operation === "create-private-directory") return request.directory.includes("\u0000");
   return request.path.includes("\u0000");
 }
@@ -93,6 +114,8 @@ function requestHasNul(request: WindowsConfigAclRequest): boolean {
 function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
   const fields = request.operation === "copy-file-security"
     ? [request.operation, request.source, request.target]
+    : request.operation === "copy-file-security-batch"
+      ? [request.operation, request.source, ...request.targets]
     : request.operation === "create-private-directory"
       ? [request.operation, request.directory]
       : request.operation === "secure-private-file"
@@ -251,30 +274,36 @@ try {
   $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
   [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
 
-  if ($fields.Count -eq 3 -and $fields[0] -eq 'copy-file-security') {
+  if (
+    ($fields.Count -eq 3 -and $fields[0] -eq 'copy-file-security') -or
+    ($fields.Count -eq 4 -and $fields[0] -eq 'copy-file-security-batch')
+  ) {
     $sourceAcl = [System.IO.File]::GetAccessControl($fields[1], $accessSections)
     $sourceDescriptor = $sourceAcl.GetSecurityDescriptorBinaryForm()
     $sourceRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new($sourceDescriptor, 0)
     if ($null -eq $sourceRaw.DiscretionaryAcl) { exit 1 }
-    $targetAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
-    $targetAcl.SetSecurityDescriptorBinaryForm($sourceDescriptor, $accessSections)
-    [System.IO.File]::SetAccessControl($fields[2], $targetAcl)
-    $verifiedAcl = [System.IO.File]::GetAccessControl($fields[2], $accessSections)
-    if ($null -eq $verifiedAcl) { exit 1 }
     $sourceRules = @($sourceAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-    $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-    if ($sourceRules.Count -ne $verifiedRules.Count) { exit 1 }
-    for ($index = 0; $index -lt $sourceRules.Count; $index++) {
-      $sourceRule = $sourceRules[$index]
-      $verifiedRule = $verifiedRules[$index]
-      if (
-        $sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value -or
-        ([int]$sourceRule.FileSystemRights) -ne ([int]$verifiedRule.FileSystemRights) -or
-        ([int]$sourceRule.AccessControlType) -ne ([int]$verifiedRule.AccessControlType) -or
-        $sourceRule.IsInherited -ne $verifiedRule.IsInherited -or
-        ([int]$sourceRule.InheritanceFlags) -ne ([int]$verifiedRule.InheritanceFlags) -or
-        ([int]$sourceRule.PropagationFlags) -ne ([int]$verifiedRule.PropagationFlags)
-      ) { exit 1 }
+    $targets = if ($fields[0] -eq 'copy-file-security') { @($fields[2]) } else { @($fields[2], $fields[3]) }
+    foreach ($target in $targets) {
+      $targetAcl = [System.IO.File]::GetAccessControl($target, $accessSections)
+      $targetAcl.SetSecurityDescriptorBinaryForm($sourceDescriptor, $accessSections)
+      [System.IO.File]::SetAccessControl($target, $targetAcl)
+      $verifiedAcl = [System.IO.File]::GetAccessControl($target, $accessSections)
+      if ($null -eq $verifiedAcl) { exit 1 }
+      $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+      if ($sourceRules.Count -ne $verifiedRules.Count) { exit 1 }
+      for ($index = 0; $index -lt $sourceRules.Count; $index++) {
+        $sourceRule = $sourceRules[$index]
+        $verifiedRule = $verifiedRules[$index]
+        if (
+          $sourceRule.IdentityReference.Value -cne $verifiedRule.IdentityReference.Value -or
+          ([int]$sourceRule.FileSystemRights) -ne ([int]$verifiedRule.FileSystemRights) -or
+          ([int]$sourceRule.AccessControlType) -ne ([int]$verifiedRule.AccessControlType) -or
+          $sourceRule.IsInherited -ne $verifiedRule.IsInherited -or
+          ([int]$sourceRule.InheritanceFlags) -ne ([int]$verifiedRule.InheritanceFlags) -or
+          ([int]$sourceRule.PropagationFlags) -ne ([int]$verifiedRule.PropagationFlags)
+        ) { exit 1 }
+      }
     }
     exit 0
   }

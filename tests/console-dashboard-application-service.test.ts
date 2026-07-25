@@ -22,7 +22,6 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
-const migrationDiagnostic = vi.hoisted(() => ({ operation: "idle" }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
@@ -37,21 +36,6 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
         ...(observer === undefined ? {} : { candidateStageObserver: observer })
       };
       return actual.discoverConsoleConfigCatalog(instrumentedOptions);
-    }
-  };
-});
-
-vi.mock("../src/cli/migrate-config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/cli/migrate-config.js")>();
-  return {
-    ...actual,
-    applyConfigReplacement: async (...args: Parameters<typeof actual.applyConfigReplacement>) => {
-      migrationDiagnostic.operation = "apply-config-replacement";
-      try {
-        return await actual.applyConfigReplacement(...args);
-      } finally {
-        migrationDiagnostic.operation = "idle";
-      }
     }
   };
 });
@@ -81,7 +65,6 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
-  migrationDiagnostic.operation = "idle";
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -412,25 +395,6 @@ describe("Console dashboard application service", () => {
   it("adds endpoint-first native OAuth only after an explicit configuration selection", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-discovered-oauth-"));
     temporaryDirectories.push(root);
-    let phase = "fixture";
-    let aclOperation = "idle";
-    if (process.platform === "win32") {
-      catalogAclDiagnostic.verifier = async (path, kind) => {
-        aclOperation = `${kind}:start`;
-        try {
-          return await verifyWindowsConfigPathSecurity(path, kind);
-        } finally {
-          aclOperation = "idle";
-        }
-      };
-    }
-    const slowPhaseMarker = process.platform === "win32"
-      ? setTimeout(() => {
-          process.stderr.write(
-            `[miftah-test] console-dashboard-native-oauth-connection phase=${phase} acl=${aclOperation} migration=${migrationDiagnostic.operation}\n`
-          );
-        }, 4_500)
-      : undefined;
     const directory = await createPrivateConsoleDirectory(root);
     const configPath = join(directory, "posthog.json");
     await writeConfig(configPath, {
@@ -449,35 +413,25 @@ describe("Console dashboard application service", () => {
     });
 
     try {
-      phase = "preselection-rejection";
       await expect(service.addDiscoveredNativeOAuthConnection({
         profile: "production",
         upstream: "default"
       })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
-      phase = "catalog";
       const metadata = await service.configMetadata();
       const selected = metadata.catalog?.configurations.find((configuration) => configuration.name === "posthog-work");
       if (selected === undefined) throw new Error("Expected PostHog configuration.");
-      phase = "selection";
       await service.selectConfiguration(selected.id);
 
-      phase = "connection-addition";
       await expect(service.addDiscoveredNativeOAuthConnection({
         profile: "production",
         upstream: "default"
       })).resolves.toMatchObject({ profile: "production", upstream: "default" });
-      phase = "assertions";
       expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
         oauth: { connections: expect.any(Object) }
       });
       expect(upstream.registrationRequests()).toEqual([]);
     } finally {
-      phase = "cleanup";
-      try {
-        await upstream.close();
-      } finally {
-        if (slowPhaseMarker !== undefined) clearTimeout(slowPhaseMarker);
-      }
+      await upstream.close();
     }
   });
 
