@@ -17,6 +17,7 @@ const migrationRace = vi.hoisted(() => ({
   mutatedHeldAfterPublish: false,
   replacementTargetAfterPublish: undefined as Buffer | undefined,
   replacedPublishedTarget: false,
+  maskPublishedCandidateNumberMetadata: false,
   triggered: false
 }));
 
@@ -24,6 +25,28 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const stats = await actual.lstat(...args);
+      const [path, options] = args;
+      const usesBigIntIdentity =
+        typeof options === "object" && options !== null && "bigint" in options && options.bigint === true;
+      const isPublishedCandidateOrTargetWithAliasedNumberMetadata =
+        migrationRace.maskPublishedCandidateNumberMetadata &&
+        migrationRace.replacedPublishedTarget &&
+        typeof path === "string" &&
+        (path === migrationRace.configPath || path.endsWith("candidate.miftah-migrate.tmp"));
+      if (!isPublishedCandidateOrTargetWithAliasedNumberMetadata || usesBigIntIdentity) return stats;
+      return Object.assign(Object.create(stats), {
+        dev: 1,
+        ino: 1,
+        size: 1,
+        mtimeMs: 1,
+        ctimeMs: 1,
+        mode: 0o600,
+        isFile: stats.isFile.bind(stats),
+        isSymbolicLink: stats.isSymbolicLink.bind(stats)
+      });
+    },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
       const [from, to] = args;
       const isSourceMove =
@@ -279,6 +302,7 @@ afterEach(async () => {
   migrationRace.mutatedHeldAfterPublish = false;
   migrationRace.replacementTargetAfterPublish = undefined;
   migrationRace.replacedPublishedTarget = false;
+  migrationRace.maskPublishedCandidateNumberMetadata = false;
   migrationRace.triggered = false;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -541,7 +565,7 @@ describe("migrate-config command", () => {
     expect(await readFile(join(directory, recoveryDirectory, "source.miftah-migrate-hold"))).toEqual(concurrent);
   });
 
-  it("retains the held source when a concurrent target replaces the published candidate", async () => {
+  it("retains the held source when a concurrent target replaces the published candidate with aliased number metadata", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-config-migration-"));
     temporaryDirectories.push(directory);
     const configPath = join(directory, "miftah.json");
@@ -552,6 +576,7 @@ describe("migrate-config command", () => {
     const plan = planConfigMigration(legacyConfig());
     migrationRace.configPath = configPath;
     migrationRace.replacementTargetAfterPublish = concurrent;
+    migrationRace.maskPublishedCandidateNumberMetadata = true;
 
     await expect(applyConfigMigration(configPath, source, plan)).rejects.toMatchObject({
       code: "CONFIG_MIGRATION_WRITE_FAILED"

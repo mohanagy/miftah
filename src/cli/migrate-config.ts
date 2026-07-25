@@ -1,5 +1,5 @@
 import { chmod, link, lstat, mkdtemp, open, readFile, rename, rm, rmdir, unlink } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { resolvePath } from "../config/path-resolve.js";
@@ -91,7 +91,7 @@ function transactionWriteError(path: string, error: MigrationTransactionError): 
   return migrationWriteError(`could not safely complete the non-overwriting migration transaction${recovery}`);
 }
 
-function isRegularNonSymlink(stats: Stats): boolean {
+function isRegularNonSymlink(stats: Pick<Stats, "isFile" | "isSymbolicLink">): boolean {
   return stats.isFile() && !stats.isSymbolicLink();
 }
 
@@ -147,8 +147,16 @@ function sameRegularFile(first: Stats, second: Stats): boolean {
   return isRegularNonSymlink(first) && isRegularNonSymlink(second) && matchesFingerprint(second, fingerprint(first));
 }
 
-function sameRegularFileIdentity(first: Stats, second: Stats): boolean {
-  return isRegularNonSymlink(first) && isRegularNonSymlink(second) && first.dev === second.dev && first.ino === second.ino;
+/** Uses exact-width file IDs because default-number IDs can be lossy on Windows. */
+function sameRegularBigIntFileIdentity(first: BigIntStats, second: BigIntStats): boolean {
+  return (
+    isRegularNonSymlink(first) &&
+    isRegularNonSymlink(second) &&
+    first.ino !== 0n &&
+    second.ino !== 0n &&
+    first.dev === second.dev &&
+    first.ino === second.ino
+  );
 }
 
 async function closeAndRemove(handle: Awaited<ReturnType<typeof open>> | undefined, path: string): Promise<void> {
@@ -406,8 +414,11 @@ async function installWithoutOverwriting(
   try {
     await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
     await link(transaction.backupPath, publishedBackupPath);
-    const [privateBackup, publishedBackup] = await Promise.all([lstat(transaction.backupPath), lstat(publishedBackupPath)]);
-    if (!sameRegularFileIdentity(privateBackup, publishedBackup)) {
+    const [privateBackup, publishedBackup] = await Promise.all([
+      lstat(transaction.backupPath, { bigint: true }),
+      lstat(publishedBackupPath, { bigint: true })
+    ]);
+    if (!sameRegularBigIntFileIdentity(privateBackup, publishedBackup)) {
       throw new Error("migration backup publication did not retain the private backup file");
     }
   } catch (error) {
@@ -445,14 +456,17 @@ async function installWithoutOverwriting(
     );
   }
 
-  let privateCandidate: Stats;
-  let publishedCandidate: Stats;
+  let privateCandidate: BigIntStats;
+  let publishedCandidate: BigIntStats;
   try {
-    [privateCandidate, publishedCandidate] = await Promise.all([lstat(transaction.candidatePath), lstat(path)]);
+    [privateCandidate, publishedCandidate] = await Promise.all([
+      lstat(transaction.candidatePath, { bigint: true }),
+      lstat(path, { bigint: true })
+    ]);
   } catch {
     throw new MigrationTransactionError(transaction.directory);
   }
-  if (!sameRegularFileIdentity(privateCandidate, publishedCandidate)) {
+  if (!sameRegularBigIntFileIdentity(privateCandidate, publishedCandidate)) {
     throw new MigrationTransactionError(transaction.directory);
   }
 
