@@ -348,7 +348,7 @@ describe("setup command", () => {
     });
 
     await answer(streams, "Name [miftah-wrapper]", "guided");
-    await answer(streams, "Catalog preset", "generic-docker");
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
     await answer(
       streams,
       "Docker image (digest-pinned)",
@@ -372,7 +372,6 @@ describe("setup command", () => {
     const localCommand = process.platform === "win32" ? process.execPath : "node";
     const command = runSetupCommand({
       name: "local-tools",
-      preset: "local-stdio",
       output: "local-tools.json",
       localCommand,
       args: ["server.mjs", "--stdio", "$pageview"],
@@ -388,6 +387,7 @@ describe("setup command", () => {
       }
     });
 
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "LOCAL");
     await answer(
       streams,
       "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
@@ -447,6 +447,49 @@ describe("setup command", () => {
       profiles: { default: { policy: "readonly" } }
     });
     expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it("accepts a remote MCP source without making native OAuth assumptions", async () => {
+    const output = resolve(outputRoot, "remote-tools.json");
+    const streams = createStreams();
+    const nativeOAuthFetch = vi.fn(async (): Promise<Response> => {
+      throw new Error("generic remote setup must not attempt OAuth discovery");
+    });
+
+    const command = runSetupCommand({
+      name: "remote-tools",
+      output: "remote-tools.json",
+      client: "claude-desktop"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch
+    });
+
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "REMOTE");
+    await answer(streams, "Streamable HTTPS URL", "https://mcp.example.test/mcp");
+    await answer(streams, "Credential environment variable name (optional)", "");
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+    expect(config).toMatchObject({
+      name: "remote-tools",
+      defaultProfile: "default",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { default: {} }
+    });
+    expect(config).not.toHaveProperty("oauth");
+    expect(nativeOAuthFetch).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain("Created");
+    expect(streams.transcript.contents).toContain("Remote endpoint setup did not discover OAuth or call the upstream.");
+    expect(streams.transcript.contents).not.toContain("OAuth discovery completed");
+    expect(streams.transcript.contents).not.toContain("fixture-access-token");
   });
 
   it.each([
@@ -974,7 +1017,7 @@ describe("setup command", () => {
     });
 
     await answer(streams, "Name [miftah-wrapper]", "gsc");
-    await answer(streams, "Catalog preset", "google-search-console");
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");
     await answer(streams, "Google account description (optional)", "GoValidate Google account");
     await answer(streams, "Google OAuth client-secrets file (absolute path)", govalidateSecrets);

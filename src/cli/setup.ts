@@ -135,6 +135,15 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
   const created = await runInitCommand({ ...options, interactive: true }, context);
+  if (
+    created.config.version === "3" &&
+    created.config.upstream?.transport === "streamable-http" &&
+    created.config.oauth === undefined
+  ) {
+    context.output.write(
+      "Remote endpoint setup did not discover OAuth or call the upstream. If this server uses standards-based OAuth, use 'miftah setup --native-oauth'.\n"
+    );
+  }
   if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }

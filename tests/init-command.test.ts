@@ -208,7 +208,7 @@ describe("init command", () => {
     const command = runInitCommand({ interactive: true }, commandContext(streams));
 
     await answer(streams, "Name [miftah-wrapper]", "wizard-generic");
-    await answer(streams, "Catalog preset [generic]", "");
+    await answer(streams, "What do you want to set up? (connector name, remote, or local) [generic]", "");
     await answer(streams, "Output location [wizard-generic.miftah.json]", "wizard-generic.json");
     await answer(streams, "Client", "claude-code");
     await command;
