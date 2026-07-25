@@ -175,6 +175,10 @@ export const CLI_COMMANDS = {
       "verify"
     ]
   },
+  "profile set-default": {
+    description: "Change the durable default profile for future MCP sessions.",
+    options: ["config", "profile"]
+  },
   "list-tools": {
     description: "List tools available for a profile.",
     options: ["config", "profile"]
@@ -635,7 +639,7 @@ function parseFlag(token: string): { readonly flag: string; readonly assignedVal
 export function parseCli(argv: readonly string[]): CliInvocation {
   const options: { [name: string]: unknown } = {};
   let command: CliCommand | undefined;
-  let commandGroup: "connection" | "auth" | undefined;
+  let commandGroup: "connection" | "auth" | "profile" | undefined;
   let help = false;
   let version = false;
 
@@ -675,7 +679,7 @@ export function parseCli(argv: readonly string[]): CliInvocation {
     }
 
     if (command === undefined) {
-      if (commandGroup === undefined && (token === "connection" || token === "auth")) {
+      if (commandGroup === undefined && (token === "connection" || token === "auth" || token === "profile")) {
         commandGroup = token;
         continue;
       }

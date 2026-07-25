@@ -309,6 +309,22 @@ describe("CLI parser", () => {
     expectUsageError(["validate", "--local-command", "node"]);
   });
 
+  it("parses an explicit durable default-profile change", () => {
+    expect(parseCli([
+      "profile",
+      "set-default",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-default",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal"
+      }
+    });
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

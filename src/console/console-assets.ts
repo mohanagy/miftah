@@ -165,6 +165,18 @@ const page = `<!doctype html>
         </section>
         <p class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Restart Claude Desktop or open a new client connection before expecting the new default or connection to be active.</p>
 
+        <section id="default-profile-editor" class="work-section" hidden aria-labelledby="default-profile-title">
+          <div class="section-heading">
+            <div><p class="step">Account selection</p><h2 id="default-profile-title">Choose the default account</h2></div>
+            <p>Choose which account new MCP sessions start with. This does not change an active client session, account data, OAuth bindings, or provider-owned token caches.</p>
+          </div>
+          <div class="input-row">
+            <label class="grow">Durable default profile<select id="default-profile-selection" required></select></label>
+            <button id="set-default-profile" type="button">Set durable default</button>
+          </div>
+          <p id="default-profile-result" class="field-note" role="status" aria-live="polite"></p>
+        </section>
+
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -731,6 +743,21 @@ const script = `(() => {
     syncProfileReadinessUpstreams();
   }
 
+  function renderDefaultProfileEditor(profiles, defaultProfile) {
+    const editor = byId("default-profile-editor");
+    const profile = byId("default-profile-selection");
+    const button = byId("set-default-profile");
+    const result = byId("default-profile-result");
+    if (!(profile instanceof HTMLSelectElement)) return;
+    setOptions(profile, profiles);
+    if (profiles.includes(defaultProfile)) profile.value = defaultProfile;
+    const canChange = profiles.length > 1;
+    profile.disabled = !canChange;
+    if (button instanceof HTMLButtonElement) button.disabled = !canChange;
+    if (editor) editor.hidden = !canChange;
+    if (result) result.textContent = "";
+  }
+
   function profileReadinessMessage(value) {
     const report = record(value);
     const profile = typeof report.profile === "string" ? report.profile : "selected profile";
@@ -907,6 +934,7 @@ const script = `(() => {
     if (defaultProfile) defaultProfile.textContent = configuredDefaultProfile || "—";
     const profiles = Array.isArray(metadata.profiles) ? metadata.profiles.map((item) => String(record(item).name || "")).filter(Boolean) : [];
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
+    renderDefaultProfileEditor(profiles, configuredDefaultProfile);
     setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);
     setOptions(byId("connection-upstream"), upstreams);
@@ -1230,6 +1258,31 @@ const script = `(() => {
         if (readinessGeneration === profileReadinessGeneration) message(errorMessage(error));
       }
       finally { runProfileReadiness.disabled = false; }
+    });
+  }
+
+  const setDefaultProfile = byId("set-default-profile");
+  if (setDefaultProfile instanceof HTMLButtonElement) {
+    setDefaultProfile.addEventListener("click", async () => {
+      const profile = byId("default-profile-selection");
+      const result = byId("default-profile-result");
+      if (!(profile instanceof HTMLSelectElement) || !profile.value) return;
+      const selectedProfile = profile.value;
+      setDefaultProfile.disabled = true;
+      message("Saving the durable default profile…");
+      try {
+        const report = record(await api("/api/v1/profiles/default", {
+          method: "POST",
+          body: { profile: profile.value }
+        }));
+        const publicResult = report.changed === true
+          ? "Durable default profile set to " + selectedProfile + "."
+          : "This profile is already the durable default.";
+        if (result) result.textContent = publicResult;
+        await refresh();
+        message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
+      } catch (error) { message(errorMessage(error)); }
+      finally { setDefaultProfile.disabled = false; }
     });
   }
 

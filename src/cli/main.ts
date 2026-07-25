@@ -16,6 +16,7 @@ import { exitCodeForError } from "./exit-codes.js";
 import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
 import { runSetupCommand } from "./setup.js";
+import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 import { runMigrateConfigCommand } from "./migrate-config.js";
@@ -212,6 +213,14 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "migrate-config") {
     const report = await runMigrateConfigCommand({ configPath: args.config, write: args.write === true });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile set-default") {
+    const report = await runDefaultProfileChange({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile)
+    });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;
   }

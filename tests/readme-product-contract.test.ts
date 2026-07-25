@@ -107,6 +107,10 @@ describe("product README", () => {
     expect(readme).toContain("miftah setup --add-profile");
     expect(readme).toContain("The new account receives its own `GSC_CONFIG_DIR`");
     expect(readme).toContain("Add another provider account");
+    expect(readme).toContain("### Change the durable default later");
+    expect(readme).toContain("miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal");
+    expect(readme).toContain("does not switch an already-running MCP client");
+    expect(readme).toContain("Choose the default account");
     expect(readme).toContain("Miftah does not invent a probe or show the provider output");
     expect(readme).toContain("A non-ready readiness result leaves the configuration in place and exits 1.");
     expect(readme).toContain("If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1.");
@@ -210,7 +214,9 @@ describe("product README", () => {
       const match = /^miftah\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/u.exec(line);
       expect(match, `could not parse README command: ${line}`).not.toBeNull();
       const primary = match![1]!;
-      const command = (primary === "connection" || primary === "auth" ? `${primary} ${match![2]}` : primary) as CliCommand;
+      const command = (primary === "connection" || primary === "auth" || primary === "profile"
+        ? `${primary} ${match![2]}`
+        : primary) as CliCommand;
       expect(Object.keys(CLI_COMMANDS), `unknown README command: ${command}`).toContain(command);
       const help = renderCommandHelp(command);
       const supportedFlags = new Set(help.match(/--[a-z][a-z-]*/gu) ?? []);

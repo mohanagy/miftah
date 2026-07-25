@@ -56,6 +56,11 @@ import {
   type ProviderAccountAdditionReport
 } from "../setup/provider-account-onboarding.js";
 import {
+  runDefaultProfileChange,
+  type DefaultProfileChangeAuditSink,
+  type DefaultProfileChangeReport
+} from "../setup/profile-default-onboarding.js";
+import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
@@ -132,6 +137,17 @@ export interface ConsoleProviderAccountAdditionRequest {
 export type ConsoleProviderAccountAdditionReport = Pick<
   ProviderAccountAdditionReport,
   "changed" | "write" | "adapter" | "profile" | "actions"
+>;
+
+/** Changes only the durable default for an already configured profile. */
+export interface ConsoleDefaultProfileChangeRequest {
+  readonly profile: string;
+}
+
+/** Console responses intentionally omit recovery paths and configuration bytes. */
+export type ConsoleDefaultProfileChangeReport = Pick<
+  DefaultProfileChangeReport,
+  "changed" | "write" | "profile" | "actions"
 >;
 
 /** Non-secret input accepted for a known connector during first-run setup. */
@@ -212,6 +228,10 @@ export interface ConsoleControlApplication {
   addProviderAccount?(
     request: ConsoleProviderAccountAdditionRequest
   ): Promise<ConsoleProviderAccountAdditionReport>;
+  /** Available when an initialized configuration has an existing profile to make durable. */
+  setDefaultProfile?(
+    request: ConsoleDefaultProfileChangeRequest
+  ): Promise<ConsoleDefaultProfileChangeReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -366,6 +386,32 @@ class ConsoleProviderAccountAuditSink implements ProviderAccountAdditionAuditSin
   record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
     return this.trail.writeRequiredLifecycle({
       operation: "console/provider-profile-add",
+      name: "profile",
+      profile: event.profile,
+      status: event.status
+    });
+  }
+}
+
+class ConsoleDefaultProfileAuditSink implements DefaultProfileChangeAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  intent(event: { readonly profile: string }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/default-profile-set-intent",
+      name: "profile",
+      profile: event.profile,
+      status: "success"
+    });
+  }
+
+  record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/default-profile-set",
       name: "profile",
       profile: event.profile,
       status: event.status
@@ -739,6 +785,23 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       changed: result.changed,
       write: result.write,
       adapter: result.adapter,
+      profile: result.profile,
+      actions: result.actions
+    };
+  }
+
+  async setDefaultProfile(
+    request: ConsoleDefaultProfileChangeRequest
+  ): Promise<ConsoleDefaultProfileChangeReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runDefaultProfileChange({ configPath, profile: request.profile }, {
+      trustedSource: source,
+      audit: new ConsoleDefaultProfileAuditSink(this.audit)
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
       profile: result.profile,
       actions: result.actions
     };

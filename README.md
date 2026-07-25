@@ -441,6 +441,18 @@ This works only for an unchanged reviewed provider-adapter configuration whose e
 
 The local dashboard offers the same returning-user flow: run `miftah dashboard --config ~/.config/miftah/gsc.json`, then choose **Add another provider account**. The form appears only when the selected configuration meets the reviewed provider-adapter boundary. It asks for a new profile, optional description, and credential-file path; it never shows an existing path or provider cache, and it does not replace native OAuth controls for other kinds of MCP.
 
+### Change the durable default later
+
+Once two or more profiles already exist, you can choose which one new Miftah sessions start with without adding an account or editing JSON:
+
+```bash
+miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal
+```
+
+The profile must already exist. Miftah changes only `defaultProfile`, validates the resulting configuration, and uses a guarded replacement with a recovery backup; when auditing is configured, it also finalizes that fail-closed audit record. It does not start an upstream, open OAuth, read a credential file, or alter a provider token cache. It does not switch an already-running MCP client; restart or reconnect that client for the new durable default to take effect.
+
+In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Choose the default account**. When using the dashboard's configuration catalog, select the configuration again after the write before making another Console change; that protects against using stale configuration bytes.
+
 ## Everyday commands
 
 These are shell commands. Profile switching and identity tools such as `miftah_use_profile` are MCP management tools used from the connected client.
@@ -458,6 +470,7 @@ These are shell commands. Profile switching and identity tools such as `miftah_u
 | Print the JSON Schema | `miftah schema` |
 | Review a supported config migration | `miftah migrate-config --config service.json` |
 | Apply the reviewed migration | `miftah migrate-config --config service.json --write` |
+| Set the durable default for future sessions | `miftah profile set-default --config service.json --profile personal` |
 
 Use `miftah --help` or `miftah <command> --help` for the installed version's exact grammar. The complete compatibility contract is in the [CLI reference](docs/cli.md).
 

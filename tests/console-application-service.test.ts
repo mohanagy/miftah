@@ -670,6 +670,39 @@ describe("Console application service", () => {
     expect(JSON.stringify(await service.auditRecords(10))).not.toContain(thirdSecrets);
   });
 
+  it("changes the durable default profile without altering existing provider accounts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-default-profile-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "gsc.json");
+    const firstSecrets = join(root, "google-work-client-secrets.json");
+    const secondSecrets = join(root, "google-personal-client-secrets.json");
+    const original = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: firstSecrets },
+        { name: "google-personal", oauthClientSecretsFile: secondSecrets }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+    await writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.setDefaultProfile({ profile: "google-personal" })).resolves.toEqual({
+      changed: true,
+      write: true,
+      profile: "google-personal",
+      actions: ["Set durable default profile to 'google-personal'."]
+    });
+
+    const updated = JSON.parse(await readFile(configPath, "utf8")) as typeof original;
+    expect(updated.defaultProfile).toBe("google-personal");
+    expect(updated.profiles).toEqual(original.profiles);
+    await expect(service.auditRecords(10)).resolves.toContainEqual(expect.objectContaining({
+      operation: "console/default-profile-set",
+      profile: "google-personal",
+      status: "success"
+    }));
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();

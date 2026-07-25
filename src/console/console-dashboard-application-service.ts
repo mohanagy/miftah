@@ -10,6 +10,8 @@ import {
   type ConsoleConnectionAddReport,
   type ConsoleConnectionAddRequest,
   type ConsoleControlApplication,
+  type ConsoleDefaultProfileChangeReport,
+  type ConsoleDefaultProfileChangeRequest,
   type ConsoleDiscoveredNativeOAuthAccountRequest,
   type ConsoleDiscoveredNativeOAuthConnectionRequest,
   type ConsoleDiscoveredNativeOAuthOnboardingRequest,
@@ -204,6 +206,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     // The guarded commit changes the file contents; require a fresh explicit
     // selection instead of retaining a stale trusted snapshot.
     this.active = undefined;
+    return result;
+  }
+
+  async setDefaultProfile(
+    request: ConsoleDefaultProfileChangeRequest
+  ): Promise<ConsoleDefaultProfileChangeReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.setDefaultProfile(request);
+    // A successful guarded write changes the configuration digest. Never let a
+    // later Console operation reuse the pre-write trusted source snapshot.
+    if (result.write) this.active = undefined;
     return result;
   }
 
