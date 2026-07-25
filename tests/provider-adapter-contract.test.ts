@@ -314,4 +314,24 @@ describe("provider adapter contract", () => {
       expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile })).toThrow(ProviderAdapterAccountProfileError);
     }
   });
+
+  it("reports the direct account-profile validation cause without misdescribing it as a credential path", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      profile: "google-work",
+      credentialFile: privatePath("client-secrets.json")
+    };
+    const unsupported: ProviderAdapterDefinition = { ...adapter, accountProvisioning: undefined };
+
+    expect(() => buildProviderAdapterAccountProfile(adapter, {
+      ...request,
+      credentialFile: "client-secrets.json"
+    })).toThrow("requires an absolute literal credential-file path");
+    expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile: "../outside" }))
+      .toThrow("requires a safe profile name");
+    expect(() => buildProviderAdapterAccountProfile(unsupported, request))
+      .toThrow("does not support adding provider-owned accounts");
+  });
 });

@@ -207,8 +207,12 @@ export interface ProviderAdapterAccountProfileRequest {
 
 /** Bounded, non-secret input failure for a provider-owned account profile. */
 export class ProviderAdapterAccountProfileError extends Error {
-  constructor() {
-    super("Provider account setup requires an absolute literal credential-file path.");
+  constructor(reason: "credential-file" | "profile" | "unsupported" = "credential-file") {
+    super(reason === "credential-file"
+      ? "Provider account setup requires an absolute literal credential-file path."
+      : reason === "profile"
+        ? "Provider account setup requires a safe profile name."
+        : "Provider account setup does not support adding provider-owned accounts.");
     this.name = "ProviderAdapterAccountProfileError";
   }
 }
@@ -233,7 +237,7 @@ export function isLiteralAbsolutePath(value: unknown): value is string {
 
 function requireCredentialFile(value: unknown): string {
   if (!isLiteralAbsolutePath(value)) {
-    throw new ProviderAdapterAccountProfileError();
+    throw new ProviderAdapterAccountProfileError("credential-file");
   }
   return value;
 }
@@ -254,7 +258,7 @@ function adapterStateDirectory(
   profile: string
 ): string {
   if (!isSafeStateDirectoryProfile(profile)) {
-    throw new ProviderAdapterAccountProfileError();
+    throw new ProviderAdapterAccountProfileError("profile");
   }
   const configurationIdentity = configurationPath === undefined
     ? configurationName
@@ -274,7 +278,7 @@ export function buildProviderAdapterAccountProfile(
 ): ProfileConfig {
   const provisioning = adapter.accountProvisioning;
   if (provisioning === undefined) {
-    throw new ProviderAdapterAccountProfileError();
+    throw new ProviderAdapterAccountProfileError("unsupported");
   }
   const credentialFile = requireCredentialFile(request.credentialFile);
   return {
