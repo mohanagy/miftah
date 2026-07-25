@@ -461,7 +461,7 @@ describe("Console dashboard application service", () => {
           process.stderr.write(
             `[miftah-test] console-dashboard-native-oauth-account phase=${phase} migration=${migrationDiagnostic.operation}\n`
           );
-        }, 4_500)
+        }, 4_000)
       : undefined;
     const directory = await createPrivateConsoleDirectory(root);
     const configPath = join(directory, "posthog.json");
