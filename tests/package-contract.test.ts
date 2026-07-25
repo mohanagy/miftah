@@ -883,19 +883,59 @@ describe("packed artifact contract", () => {
   });
 
   it("contains required runtime, documentation, and example files from a real dry run", async () => {
-    const packed = await runNpm(["pack", "--dry-run", "--json"]);
+    const lifecycle = {
+      spawned: false,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      close: "pending"
+    };
+    const spawnWithLifecycleDiagnostic: NpmSpawner = (command, args, options) => {
+      const child = spawnNpm(command, args, options);
+      lifecycle.spawned = true;
+      child.stdout.on("data", (chunk: string | Buffer) => {
+        lifecycle.stdoutBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+      });
+      child.stderr.on("data", (chunk: string | Buffer) => {
+        lifecycle.stderrBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+      });
+      child.once("error", () => {
+        lifecycle.close = "error";
+      });
+      child.once("close", (status, signal) => {
+        lifecycle.close = status === null ? `signal:${signal ?? "unknown"}` : `exit:${status}`;
+      });
+      return child;
+    };
+    const slowLifecycleMarker = process.platform === "win32"
+      ? setTimeout(() => {
+          process.stderr.write(
+            `[miftah-test] package-dry-run spawned=${lifecycle.spawned} stdoutBytes=${lifecycle.stdoutBytes} stderrBytes=${lifecycle.stderrBytes} closed=${lifecycle.close}\n`
+          );
+        }, 4_000)
+      : undefined;
 
-    expect(packed.status, packed.stderr).toBe(0);
-    const result = (await loadPackVerifier()).parsePackResult(packed.stdout);
-    const paths = result.files.map(({ path }) => path);
-    expect(paths).toEqual(expect.arrayContaining([...requiredPackPaths]));
-    expect(
-      paths.filter(
-        (path) =>
-          !["LICENSE", "README.md", "package.json"].includes(path) &&
-          !/^(dist|docs|examples)\//u.test(path)
-      )
-    ).toEqual([]);
+    try {
+      const packed = await runNpm(
+        ["pack", "--dry-run", "--json"],
+        repositoryRoot,
+        npmCommandTimeoutMs,
+        process.platform === "win32" ? spawnWithLifecycleDiagnostic : spawnNpm
+      );
+
+      expect(packed.status, packed.stderr).toBe(0);
+      const result = (await loadPackVerifier()).parsePackResult(packed.stdout);
+      const paths = result.files.map(({ path }) => path);
+      expect(paths).toEqual(expect.arrayContaining([...requiredPackPaths]));
+      expect(
+        paths.filter(
+          (path) =>
+            !["LICENSE", "README.md", "package.json"].includes(path) &&
+            !/^(dist|docs|examples)\//u.test(path)
+        )
+      ).toEqual([]);
+    } finally {
+      if (slowLifecycleMarker !== undefined) clearTimeout(slowLifecycleMarker);
+    }
   });
 
   it("accepts the critical package paths", async () => {
