@@ -12,6 +12,7 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
 import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
 import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
+import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
@@ -689,6 +690,66 @@ describe("setup command", () => {
     expect(streams.transcript.contents).toContain("Profile 'google-craftmyletter': safe read-only check succeeded; identity is unavailable.");
     expect(streams.transcript.contents).not.toContain(govalidateSecrets);
     expect(streams.transcript.contents).not.toContain(craftmyletterSecrets);
+  });
+
+  it("adds one provider-owned GSC account to an existing configuration and verifies only that account", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "gsc-existing.json");
+    const firstSecrets = resolve(outputRoot, "google-work-client-secrets.json");
+    const secondSecrets = resolve(outputRoot, "google-personal-client-secrets.json");
+    const thirdSecrets = resolve(outputRoot, "google-third-client-secrets.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: firstSecrets },
+        { name: "google-personal", oauthClientSecretsFile: secondSecrets }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`, { mode: 0o600 });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    let transcript = "";
+    output.on("data", (chunk: Buffer) => { transcript += chunk.toString(); });
+    profileReadinessMocks.run.mockResolvedValue({
+      status: "ready",
+      profile: "google-third",
+      upstream: "default",
+      adapter: "Google Search Console",
+      safeRead: { status: "passed", tool: "get_capabilities" },
+      identity: { status: "unavailable" }
+    });
+
+    await expect(runSetupCommand({
+      addProfile: true,
+      config: configPath,
+      profile: "google-third",
+      description: "Third Google account",
+      oauthClientSecretsFile: thirdSecrets,
+      makeDefault: true,
+      verify: true
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).resolves.toMatchObject({ verification: "complete", exitCode: 0 });
+
+    const config = validateConfig(JSON.parse(await readFile(configPath, "utf8")));
+    expect(config).toMatchObject({
+      defaultProfile: "google-third",
+      profiles: {
+        "google-third": {
+          description: "Third Google account",
+          env: { GSC_OAUTH_CLIENT_SECRETS_FILE: thirdSecrets },
+          policy: "readonly"
+        }
+      }
+    });
+    const stateDirectories = Object.values(config.profiles).map((profile) => profile.env?.GSC_CONFIG_DIR);
+    expect(new Set(stateDirectories).size).toBe(3);
+    expect(profileReadinessMocks.run).toHaveBeenCalledTimes(1);
+    expect(profileReadinessMocks.run).toHaveBeenCalledWith(configPath, { profile: "google-third" });
+    expect(transcript).toContain("Added provider-owned account profile 'google-third'");
+    expect(transcript).not.toContain(thirdSecrets);
   });
 
   it("keeps the written config and returns an incomplete nonzero outcome when the post-write readiness prompt is cancelled", async () => {

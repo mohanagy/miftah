@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import type { MiftahConfig, ProfileConfig, ProfileUpstreamOverride, UpstreamConfig } from "./types.js";
 
 export type ProviderAdapterOwner = "miftah" | "upstream" | "manual-only";
@@ -67,6 +70,31 @@ export interface ProviderAdapterDefinition {
     readonly isolation: "none";
   };
   readonly authentication: ProviderAuthenticationContract;
+  /**
+   * A reviewed, non-secret account-profile shape the setup workflow may add
+   * to an already trusted provider-adapter configuration. This deliberately
+   * models only provider-owned credential files and private adapter state;
+   * generic Miftah code never reads, copies, or manages the resulting cache.
+   */
+  readonly accountProvisioning?: {
+    readonly credentialFile: {
+      /** The non-secret environment key consumed by the upstream adapter. */
+      readonly environment: string;
+      /** Browser-visible label; it never exposes an existing path. */
+      readonly label: string;
+      readonly placeholder: string;
+    };
+    readonly stateDirectory: {
+      /** The profile-scoped upstream-private state directory environment key. */
+      readonly environment: string;
+      /** Stable adapter-owned namespace below Miftah's local state root. */
+      readonly namespace: string;
+    };
+    readonly defaultProfile: {
+      readonly description: string;
+      readonly policy: "readonly";
+    };
+  };
   readonly lifecycle: {
     readonly health: ProviderAdapterOperation;
     readonly reauth: ProviderAdapterOperation;
@@ -122,6 +150,21 @@ export const PROVIDER_ADAPTER_CATALOG = {
         browserHandoff: "upstream",
         tokenStore: "upstream-private"
       },
+      accountProvisioning: {
+        credentialFile: {
+          environment: "GSC_OAUTH_CLIENT_SECRETS_FILE",
+          label: "Google OAuth client-secrets file",
+          placeholder: "/Users/you/gsc-client-secrets.json"
+        },
+        stateDirectory: {
+          environment: "GSC_CONFIG_DIR",
+          namespace: "gsc-oauth"
+        },
+        defaultProfile: {
+          description: "Google Search Console account (OAuth owned by upstream)",
+          policy: "readonly"
+        }
+      },
       lifecycle: {
         health: { owner: "upstream", mechanism: "mcp-tool", name: "get_capabilities" },
         reauth: { owner: "upstream", mechanism: "mcp-tool", name: "reauthenticate" },
@@ -152,8 +195,152 @@ export const PROVIDER_ADAPTER_CATALOG = {
 
 export type ProviderAdapterName = keyof typeof PROVIDER_ADAPTER_CATALOG.adapters;
 
+export interface ProviderAdapterAccountProfileRequest {
+  /** Configuration name remains a stable namespace for plan-only callers. */
+  readonly configurationName: string;
+  /** A resolved config path gives installed configurations a machine-local namespace. */
+  readonly configurationPath?: string;
+  readonly profile: string;
+  readonly description?: string;
+  readonly credentialFile: string;
+}
+
+/** Bounded, non-secret input failure for a provider-owned account profile. */
+export class ProviderAdapterAccountProfileError extends Error {
+  constructor() {
+    super("Provider account setup requires an absolute literal credential-file path.");
+    this.name = "ProviderAdapterAccountProfileError";
+  }
+}
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
+}
+
+function isLiteralAbsolutePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.trim() === value &&
+    isAbsolute(value) &&
+    !/\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(value) &&
+    !hasControlCharacter(value)
+  );
+}
+
+function requireCredentialFile(value: unknown): string {
+  if (
+    !isLiteralAbsolutePath(value)
+  ) {
+    throw new ProviderAdapterAccountProfileError();
+  }
+  return value;
+}
+
+function adapterStateDirectory(
+  namespace: string,
+  configurationName: string,
+  configurationPath: string | undefined,
+  profile: string
+): string {
+  const configurationIdentity = configurationPath === undefined
+    ? configurationName
+    : resolve(configurationPath);
+  const configurationNamespace = createHash("sha256").update(configurationIdentity).digest("hex");
+  return join(homedir(), ".config", "miftah", namespace, configurationNamespace, profile);
+}
+
+/**
+ * Builds one reviewed profile from the adapter contract. It contains only a
+ * credential-file path and an isolated adapter-state directory; no token or
+ * provider cache is read or returned.
+ */
+export function buildProviderAdapterAccountProfile(
+  adapter: ProviderAdapterDefinition,
+  request: ProviderAdapterAccountProfileRequest
+): ProfileConfig {
+  const provisioning = adapter.accountProvisioning;
+  if (provisioning === undefined) {
+    throw new ProviderAdapterAccountProfileError();
+  }
+  const credentialFile = requireCredentialFile(request.credentialFile);
+  return {
+    description: request.description === undefined || request.description.length === 0
+      ? provisioning.defaultProfile.description
+      : request.description,
+    env: {
+      [provisioning.credentialFile.environment]: credentialFile,
+      [provisioning.stateDirectory.environment]: adapterStateDirectory(
+        provisioning.stateDirectory.namespace,
+        request.configurationName,
+        request.configurationPath,
+        request.profile
+      )
+    },
+    policy: provisioning.defaultProfile.policy
+  };
+}
+
 export function getProviderAdapterForPreset(preset: string): ProviderAdapterDefinition | undefined {
   return Object.values(PROVIDER_ADAPTER_CATALOG.adapters).find((adapter) => adapter.preset === preset);
+}
+
+/**
+ * Returns one adapter only when every effective profile/upstream target is
+ * inside the same reviewed adapter envelope. Account lifecycle mutations must
+ * not infer ownership from a partial or mixed configuration.
+ */
+export function getProviderAdapterForConfiguration(config: MiftahConfig): ProviderAdapterDefinition | undefined {
+  const upstreamNames = config.upstreams === undefined
+    ? config.upstream === undefined ? [] : ["default"]
+    : Object.keys(config.upstreams);
+  const targets = Object.keys(config.profiles).flatMap((profile) =>
+    upstreamNames.map((upstream) => getProviderAdapterForProfileTarget(config, profile, upstream))
+  );
+  const adapter = targets[0];
+  return adapter !== undefined && targets.length === Object.keys(config.profiles).length * upstreamNames.length &&
+    targets.every((candidate) => candidate === adapter)
+    ? adapter
+    : undefined;
+}
+
+/**
+ * Returns an adapter only when every existing profile has the reviewed
+ * non-secret credential-file and unique private-state bindings required to
+ * add another account safely. This deliberately does not inspect the state
+ * directories themselves.
+ */
+export function getProviderAdapterForAccountProvisioning(config: MiftahConfig): ProviderAdapterDefinition | undefined {
+  const adapter = getProviderAdapterForConfiguration(config);
+  const provisioning = adapter?.accountProvisioning;
+  if (provisioning === undefined) return undefined;
+  const directories = new Set<string>();
+  for (const profile of Object.values(config.profiles)) {
+    // Account provisioning creates one root-profile binding. A named upstream
+    // can supersede either binding at launch time, so do not infer account
+    // isolation from the root profile when such an override exists.
+    if (Object.values(profile.upstreams ?? {}).some((override) =>
+      Object.hasOwn(override.env ?? {}, provisioning.credentialFile.environment) ||
+      Object.hasOwn(override.env ?? {}, provisioning.stateDirectory.environment)
+    )) {
+      return undefined;
+    }
+    const credentialFile = profile.env?.[provisioning.credentialFile.environment];
+    const stateDirectory = profile.env?.[provisioning.stateDirectory.environment];
+    if (
+      !isLiteralAbsolutePath(credentialFile) ||
+      !isLiteralAbsolutePath(stateDirectory) ||
+      stateDirectory !== resolve(stateDirectory) ||
+      directories.has(resolve(stateDirectory))
+    ) {
+      return undefined;
+    }
+    directories.add(resolve(stateDirectory));
+  }
+  return adapter;
 }
 
 /**

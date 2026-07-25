@@ -6,11 +6,12 @@ import type { CliOptions } from "./parse.js";
 import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
 import { runClientEntryImportSetup } from "./setup-client-entry-import.js";
 import { runNativeOAuthSetup } from "./setup-native-oauth.js";
+import { runProviderAccountSetup } from "./setup-provider-account.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
 export type SetupCommandOptions = InitCommandOptions & Pick<
   CliOptions,
-  "config" | "description" | "makeDefault" | "upstream" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "profile"
+  "config" | "description" | "makeDefault" | "upstream" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "addProfile" | "profile"
 >;
 
 export interface SetupCommandResult {
@@ -28,6 +29,57 @@ type ReadinessDecision = "verify" | "skip" | "cancelled";
  * validation, config writer, and client-handoff implementation.
  */
 export async function runSetupCommand(options: SetupCommandOptions, context: InitCommandContext): Promise<SetupCommandResult> {
+  if (options.addProfile === true) {
+    if (options.nativeOAuth === true) {
+      throw new CliUsageError("Choose either '--add-profile' for a reviewed provider adapter or '--native-oauth' for endpoint-first OAuth.");
+    }
+    if (options.importFile !== undefined || options.importEntry !== undefined) {
+      throw new CliUsageError("Provider-owned account addition cannot import a local client entry.");
+    }
+    const incompatible = [
+      "name",
+      "preset",
+      "output",
+      "client",
+      "credentialEnv",
+      "npmPackage",
+      "dockerImage",
+      "url",
+      "headerName",
+      "headerPrefix",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand",
+      "upstream"
+    ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
+    if (incompatible !== undefined) {
+      throw new CliUsageError(`Option '--${incompatible}' is unavailable when adding a provider-owned account.`);
+    }
+    const added = await runProviderAccountSetup(options, context);
+    const decision = options.verify === true ? "verify" : await confirmReadiness(context, "the new account now");
+    if (decision === "skip") {
+      context.output.write("First-success verification was skipped; the new account was added but has not been tested with the provider.\n");
+      return { verification: "skipped", exitCode: 0, reports: [] };
+    }
+    if (decision === "cancelled") {
+      context.output.write("First-success verification was cancelled after the account was added; the configuration remains available.\n");
+      return { verification: "incomplete", exitCode: 1, reports: [] };
+    }
+    try {
+      const report = await runProfileReadiness(added.configPath, { profile: added.report.profile });
+      writeReadinessReport(context, report);
+      return {
+        verification: report.status === "ready" ? "complete" : "incomplete",
+        exitCode: report.status === "ready" ? 0 : 1,
+        reports: [report]
+      };
+    } catch (error) {
+      const code = error instanceof MiftahError ? error.code : "UPSTREAM_CALL_FAILED";
+      context.output.write(`Profile '${added.report.profile}': readiness did not complete (${code}).\n`);
+      return { verification: "incomplete", exitCode: 1, reports: [] };
+    }
+  }
   if (options.nativeOAuth === true) {
     if (options.importFile !== undefined || options.importEntry !== undefined) {
       throw new CliUsageError("Native OAuth setup cannot import an existing local client entry.");
@@ -78,7 +130,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
   if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
-  const decision = options.verify === true ? "verify" : await confirmReadiness(context);
+  const decision = options.verify === true ? "verify" : await confirmReadiness(context, "every account now");
   if (decision === "skip") {
     context.output.write("First-success verification was skipped; the configuration was created but has not been tested with the provider.\n");
     return { verification: "skipped", exitCode: 0, reports: [] };
@@ -105,7 +157,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
   return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
 }
 
-async function confirmReadiness(context: InitCommandContext): Promise<ReadinessDecision> {
+async function confirmReadiness(context: InitCommandContext, target: string): Promise<ReadinessDecision> {
   const line = createInterface({ input: context.input, output: context.output, terminal: true });
   let cancelled = false;
   let resolveCancellation: (decision: "cancelled") => void = () => undefined;
@@ -120,7 +172,7 @@ async function confirmReadiness(context: InitCommandContext): Promise<ReadinessD
   line.once("SIGINT", cancel);
   try {
     return await Promise.race([
-      line.question("Run the reviewed safe readiness check for every account now? (yes/no) [no]: ").then((value): ReadinessDecision => {
+      line.question(`Run the reviewed safe readiness check for ${target}? (yes/no) [no]: `).then((value): ReadinessDecision => {
         const answer = value.trim().toLowerCase();
         if (answer === "" || answer === "n" || answer === "no") return "skip";
         if (answer === "y" || answer === "yes") return "verify";

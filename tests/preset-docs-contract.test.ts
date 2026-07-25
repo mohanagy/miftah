@@ -98,7 +98,8 @@ describe("preset documentation contract", () => {
       "--arg",
       "--cwd",
       "--accept-local-command",
-      "--verify"
+      "--verify",
+      "--add-profile"
     ]) {
       expect(cli).toContain(option);
     }
@@ -120,6 +121,7 @@ describe("preset documentation contract", () => {
     expect(issue98).not.toContain("runtime construction");
     expect(issue87).toContain("upstream-owned");
     expect(issue204).toContain("local STDIO");
+    expect(issue204).toContain("returning provider-owned account");
     expect(providerAdapters).toContain("## Google Search Console pilot");
     expect(providerAdapters).toContain("Credential ownership | Upstream");
     expect(providerAdapters).toContain("Each generated Miftah configuration/profile pair passes a distinct `GSC_CONFIG_DIR`");
@@ -130,6 +132,8 @@ describe("preset documentation contract", () => {
     expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
     expect(providerAdapters).toContain("get_capabilities");
     expect(providerAdapters).toContain("`setup --verify`");
+    expect(providerAdapters).toContain("`miftah setup --add-profile`");
+    expect(providerAdapters).toContain("Add another provider account");
     expect(providerAdapters).toContain("Console action");
     expect(providerAdapters).toContain("`PROFILE_READINESS_UNSUPPORTED`");
     expect(providerAdapters).toContain("configuration-controlled `PATH`");
@@ -140,5 +144,6 @@ describe("preset documentation contract", () => {
     expect(oauthSupport).toContain("Google Search Console pilot");
     expect(cli).toContain("If the post-write readiness prompt is cancelled, Miftah keeps the configuration, reports incomplete verification, and exits 1.");
     expect(cli).toContain("A non-ready `setup --verify` result also keeps the configuration and exits 1.");
+    expect(cli).toContain("`miftah setup --add-profile --config <file>`");
   });
 });

@@ -1,6 +1,7 @@
 import {
+  getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
-  type ProviderAdapterDefinition
+  getProviderAdapterForConfiguration
 } from "../config/provider-adapters.js";
 import type { MiftahConfig } from "../config/types.js";
 
@@ -19,6 +20,11 @@ export interface ConsoleAuthenticationMetadata {
   readonly identityEvidence?: "verified-probe" | "upstream-reported" | "unavailable";
   /** Exact non-secret profile/upstream pairs that remain inside a reviewed safe-read adapter envelope. */
   readonly readinessTargets?: readonly ConsoleProfileReadinessTarget[];
+  /** Present only when an existing provider-owned configuration can safely add another account. */
+  readonly accountAddition?: {
+    readonly credentialFileLabel: string;
+    readonly credentialFilePlaceholder: string;
+  };
 }
 
 export interface ConsoleProfileReadinessTarget {
@@ -104,26 +110,6 @@ function readinessTargets(config: MiftahConfig): readonly ConsoleProfileReadines
       .map(({ name: upstream }) => ({ profile, upstream })));
 }
 
-/**
- * A base upstream may carry an older argument default while every effective
- * profile launch is the reviewed adapter. In that case the Console can still
- * accurately describe the configuration as provider-owned. A partial target
- * set is never enough: one outside-envelope target makes provider ownership
- * and native OAuth both inaccurate for the configuration as a whole.
- */
-function adapterForEffectiveTargets(
-  config: MiftahConfig,
-  targets: readonly ConsoleProfileReadinessTarget[]
-): ProviderAdapterDefinition | undefined {
-  const upstreams = configuredUpstreams(config);
-  const expectedTargetCount = Object.keys(config.profiles).length * upstreams.length;
-  if (targets.length === 0 || targets.length !== expectedTargetCount) return undefined;
-
-  const adapters = targets.map(({ profile, upstream }) => getProviderAdapterForProfileTarget(config, profile, upstream));
-  const adapter = adapters[0];
-  return adapter !== undefined && adapters.every((candidate) => candidate === adapter) ? adapter : undefined;
-}
-
 function supportsNativeOAuth(upstreams: readonly ConfiguredUpstream[]): boolean {
   return upstreams.length > 0 && upstreams.every(({ transport }) => transport === "streamable-http");
 }
@@ -131,7 +117,8 @@ function supportsNativeOAuth(upstreams: readonly ConfiguredUpstream[]): boolean 
 export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuthenticationMetadata {
   const upstreams = configuredUpstreams(config);
   const targets = readinessTargets(config);
-  const adapter = adapterForEffectiveTargets(config, targets);
+  const adapter = getProviderAdapterForConfiguration(config);
+  const provisioningAdapter = getProviderAdapterForAccountProvisioning(config);
   if (adapter !== undefined) {
     return {
       mode: "provider-adapter",
@@ -142,7 +129,15 @@ export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuth
       reauthOwner: adapter.lifecycle.reauth.owner,
       disconnectOwner: adapter.lifecycle.disconnect.owner,
       identityEvidence: adapter.identity.evidence,
-      readinessTargets: targets
+      readinessTargets: targets,
+      ...(provisioningAdapter?.accountProvisioning === undefined
+        ? {}
+        : {
+            accountAddition: {
+              credentialFileLabel: provisioningAdapter.accountProvisioning.credentialFile.label,
+              credentialFilePlaceholder: provisioningAdapter.accountProvisioning.credentialFile.placeholder
+            }
+          })
     };
   }
 

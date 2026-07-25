@@ -383,7 +383,7 @@ async function installWithoutOverwriting(
   path: string,
   transaction: MigrationTransaction,
   source: ConfigMigrationSource,
-  candidateContent: string,
+  candidateContent: string | Uint8Array,
   publishedBackupPath: string
 ): Promise<void> {
   try {
@@ -585,6 +585,39 @@ export async function applyConfigReplacement(
       `${JSON.stringify(config, null, 2)}\n`,
       backupPath
     );
+    return backupPath;
+  } catch (error) {
+    if (error instanceof MigrationSourceChangedError) {
+      throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);
+    }
+    if (error instanceof MigrationTransactionError) {
+      throw transactionWriteError(path, error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Restores an already validated configuration snapshot through the same
+ * guarded, non-overwriting transaction used for forward replacements. The
+ * original bytes are retained exactly so a failed dependent durability step
+ * can leave no rewritten configuration behind.
+ */
+export async function restoreConfigReplacement(
+  path: string,
+  source: ConfigMigrationSource,
+  original: ConfigMigrationSource
+): Promise<string> {
+  try {
+    await assertMigrationSourceUnchanged(path, source);
+  } catch (error) {
+    if (error instanceof MigrationSourceChangedError) throw sourceChangedWriteError();
+    throw error;
+  }
+  const transaction = await createMigrationTransaction(path);
+  const backupPath = join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`);
+  try {
+    await installWithoutOverwriting(path, transaction, source, original.originalBytes, backupPath);
     return backupPath;
   } catch (error) {
     if (error instanceof MigrationSourceChangedError) {

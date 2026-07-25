@@ -420,6 +420,24 @@ miftah setup gsc --preset google-search-console --verify
 
 The wizard asks for one or more named Google accounts, an optional description and client-secrets path for each, then the default profile. Each generated profile gets a different `GSC_CONFIG_DIR`, and Miftah namespaces that directory by the generated configuration file as well as the profile. The exact-pinned upstream therefore keeps its token cache separate even when two configuration files use the same Miftah name. `--verify` replaces the final yes/no prompt and runs the adapter's declared `get_capabilities` check once for every named profile. Miftah does not invent a probe or show the provider output; it reports only the bounded readiness status. A non-ready readiness result leaves the configuration in place and exits 1. If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1. The automatic check intentionally applies only while the reviewed GSC launch shape is unchanged; custom commands, process `PATH`, working directories, isolation, or unknown provider environment settings remain supported for manual use but are not auto-probed. Because Google login is upstream-owned, the provider may still open its own browser flow when it has no session. Complete the upstream browser flow separately for every account, then run `miftah validate` and `miftah doctor` against the generated configuration. Separate caches do not verify Google-account identity or property access; confirm those in the upstream before relying on a profile. See the [Google Search Console provider-adapter pilot](docs/provider-adapters.md#google-search-console-pilot).
 
+### Add another Google Search Console account
+
+You do not need to rerun the initial wizard or hand-edit JSON when a second, third, or later Google account is needed. Give the trusted existing configuration, a new profile name, and the absolute path to that account's Google OAuth desktop client-secrets file:
+
+```bash
+miftah setup --add-profile \
+  --config ~/.config/miftah/gsc.json \
+  --profile google-personal \
+  --description "Personal Google account" \
+  --oauth-client-secrets-file "$HOME/.config/gsc/personal-client-secrets.json" \
+  --make-default \
+  --verify
+```
+
+This works only for an unchanged reviewed provider-adapter configuration whose existing accounts already have literal, distinct provider state directories. The new account receives its own `GSC_CONFIG_DIR`, while Miftah stores only the client-secrets file reference and never reads, copies, exports, or removes the upstream token cache. `--make-default` changes the durable default for future MCP connections; it does not switch an already-running client. `--verify` runs the one declared read-only check for the new account only. If it is not ready, the account remains configured and the command exits `1` with a bounded status.
+
+The local dashboard offers the same returning-user flow: run `miftah dashboard --config ~/.config/miftah/gsc.json`, then choose **Add another provider account**. The form appears only when the selected configuration meets the reviewed provider-adapter boundary. It asks for a new profile, optional description, and credential-file path; it never shows an existing path or provider cache, and it does not replace native OAuth controls for other kinds of MCP.
+
 ## Everyday commands
 
 These are shell commands. Profile switching and identity tools such as `miftah_use_profile` are MCP management tools used from the connected client.

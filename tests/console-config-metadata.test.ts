@@ -48,4 +48,43 @@ describe("Console configuration metadata", () => {
       readinessTargets: [{ profile: "work", upstream: "default" }]
     });
   });
+
+  it("offers provider-owned account addition only for fully isolated existing account bindings", () => {
+    const config: MiftahConfig = {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstream: {
+        transport: "stdio",
+        command: "uvx",
+        args: ["mcp-search-console@0.3.2"]
+      },
+      profiles: {
+        work: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
+            GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+          }
+        },
+        personal: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
+            GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+          }
+        }
+      }
+    };
+
+    expect(consoleAuthenticationMetadata(config)).toMatchObject({
+      mode: "provider-adapter",
+      accountAddition: {
+        credentialFileLabel: "Google OAuth client-secrets file",
+        credentialFilePlaceholder: "/Users/you/gsc-client-secrets.json"
+      }
+    });
+
+    const sharedState = structuredClone(config);
+    sharedState.profiles.personal!.env!.GSC_CONFIG_DIR = "/private/miftah/gsc/work";
+    expect(consoleAuthenticationMetadata(sharedState)).not.toHaveProperty("accountAddition");
+  });
 });

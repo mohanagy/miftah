@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
   PROVIDER_ADAPTER_CATALOG
 } from "../src/config/provider-adapters.js";
@@ -88,6 +89,21 @@ describe("provider adapter contract", () => {
       credentialOwnership: "upstream",
       browserHandoff: "upstream",
       tokenStore: "upstream-private"
+    });
+    expect(adapter.accountProvisioning).toEqual({
+      credentialFile: {
+        environment: "GSC_OAUTH_CLIENT_SECRETS_FILE",
+        label: "Google OAuth client-secrets file",
+        placeholder: "/Users/you/gsc-client-secrets.json"
+      },
+      stateDirectory: {
+        environment: "GSC_CONFIG_DIR",
+        namespace: "gsc-oauth"
+      },
+      defaultProfile: {
+        description: "Google Search Console account (OAuth owned by upstream)",
+        policy: "readonly"
+      }
     });
     expect(adapter.lifecycle).toEqual({
       health: { owner: "upstream", mechanism: "mcp-tool", name: "get_capabilities" },
@@ -197,5 +213,85 @@ describe("provider adapter contract", () => {
     const namedIsolation = namedGscConfig();
     namedIsolation.profiles.work!.upstreams!.analytics!.isolation = { files: [] };
     expect(getProviderAdapterForProfileTarget(namedIsolation, "work", "analytics")).toBeUndefined();
+  });
+
+  it("allows provider-account addition only when every existing account has literal isolated provider state", () => {
+    const safe = gscConfig();
+    safe.profiles.work!.env = {
+      GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
+      GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+    };
+    safe.profiles.personal = {
+      env: {
+        GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
+        GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+      }
+    };
+    expect(getProviderAdapterForAccountProvisioning(safe)).toBeDefined();
+
+    const relativeCredential = structuredClone(safe);
+    relativeCredential.profiles.work!.env!.GSC_OAUTH_CLIENT_SECRETS_FILE = "client-secrets.json";
+    expect(getProviderAdapterForAccountProvisioning(relativeCredential)).toBeUndefined();
+
+    const interpolatedCredential = structuredClone(safe);
+    interpolatedCredential.profiles.work!.env!.GSC_OAUTH_CLIENT_SECRETS_FILE = "${HOME}/client-secrets.json";
+    expect(getProviderAdapterForAccountProvisioning(interpolatedCredential)).toBeUndefined();
+
+    const relativeStateDirectory = structuredClone(safe);
+    relativeStateDirectory.profiles.work!.env!.GSC_CONFIG_DIR = ".miftah/gsc/work";
+    expect(getProviderAdapterForAccountProvisioning(relativeStateDirectory)).toBeUndefined();
+
+    const sharedStateDirectory = structuredClone(safe);
+    sharedStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = "/private/miftah/gsc/work";
+    expect(getProviderAdapterForAccountProvisioning(sharedStateDirectory)).toBeUndefined();
+  });
+
+  it("fails closed when a named upstream can override an otherwise isolated account binding", () => {
+    const safe: MiftahConfig = {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstreams: {
+        primary: {
+          transport: "stdio",
+          command: "uvx",
+          args: ["mcp-search-console@0.3.2"]
+        },
+        secondary: {
+          transport: "stdio",
+          command: "uvx",
+          args: ["mcp-search-console@0.3.2"]
+        }
+      },
+      profiles: {
+        work: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
+            GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+          },
+          upstreams: { primary: {}, secondary: {} }
+        },
+        personal: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
+            GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+          },
+          upstreams: { primary: {}, secondary: {} }
+        }
+      }
+    };
+
+    for (const [environment, value] of [
+      ["GSC_CONFIG_DIR", "/private/miftah/gsc/shared"],
+      ["GSC_OAUTH_CLIENT_SECRETS_FILE", "/private/other-client-secrets.json"]
+    ] as const) {
+      const overridden = structuredClone(safe);
+      overridden.profiles.work!.upstreams!.secondary!.env = { [environment]: value };
+
+      // The upstream target is still a reviewed launch shape, but the account
+      // provisioning flow must not infer isolation from the base profile alone.
+      expect(getProviderAdapterForProfileTarget(overridden, "work", "secondary")).toBeDefined();
+      expect(getProviderAdapterForAccountProvisioning(overridden), environment).toBeUndefined();
+    }
   });
 });

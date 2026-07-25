@@ -50,6 +50,12 @@ const discoveredNativeOAuthAccountSchema = z.object({
   upstream: z.string().min(1).max(256),
   makeDefault: z.literal(true).optional()
 }).strict();
+const providerAccountAdditionSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().max(1_024).optional(),
+  credentialFile: z.string().min(1).max(4_096),
+  makeDefault: z.literal(true).optional()
+}).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
@@ -299,6 +305,20 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   }
   if (error.code === "PROFILE_ALREADY_EXISTS") {
     return new ConsoleHttpError(422, "profile_already_exists", "That account profile already exists.");
+  }
+  if (error.code === "PROVIDER_ACCOUNT_ADDITION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "provider_account_addition_unsupported",
+      "This configuration does not support reviewed provider-owned account addition."
+    );
+  }
+  if (error.code === "PROVIDER_ACCOUNT_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "provider_account_input_invalid",
+      "Choose an absolute literal credential-file path."
+    );
   }
   if (
     error.code.startsWith("CONFIG_") ||
@@ -675,6 +695,25 @@ class LocalConsoleServer implements ConsoleServer {
         const result = await this.application.addDiscoveredNativeOAuthAccount(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/provider-account") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = providerAccountAdditionSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addProviderAccount === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addProviderAccount(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
       } catch (error) {
         throw publicApplicationError(error);
       }
