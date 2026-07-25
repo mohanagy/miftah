@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoverConsoleConfigCatalog,
+  sameBigIntFileIdentity,
   type ConsoleConfigCatalogCandidateIdentityDiagnosticEvent,
   type ConsoleConfigCatalogCandidateStageEvent
 } from "../src/console/console-config-catalog.js";
@@ -155,6 +156,14 @@ function catalogStageSummary(
 }
 
 describe("Console dashboard application service", () => {
+  it("keeps distinct lossless file identities separate when Number coercion collides", () => {
+    const first = { dev: 1n, ino: 9_007_199_254_740_992n };
+    const second = { dev: 1n, ino: 9_007_199_254_740_993n };
+
+    expect(Number(first.ino)).toBe(Number(second.ino));
+    expect(sameBigIntFileIdentity(first, second)).toBe(false);
+  });
+
   it.runIf(process.platform === "win32")("creates fixture files that pass the production Windows ACL verifier", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-acl-"));
     temporaryDirectories.push(root);
@@ -247,9 +256,7 @@ describe("Console dashboard application service", () => {
       catalogStageDiagnostic.observer = undefined;
     });
     expect({
-      stageSummary: catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name)),
-      identitySummary: candidateIdentities,
-      ...(process.platform === "win32" ? { fixtureIdentity, openedFixtureIdentity } : {})
+      stageSummary: catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name))
     }).toEqual({
       stageSummary: [
         {
@@ -288,19 +295,18 @@ describe("Console dashboard application service", () => {
           ],
           accepted: true
         }
-      ],
-      identitySummary: process.platform === "win32"
-        ? [
-            { candidateIndex: 0, bigintDuplicate: false, numberDuplicate: false },
-            { candidateIndex: 1, bigintDuplicate: false, numberDuplicate: false }
-          ]
-        : [],
-      ...(process.platform === "win32" ? {
-        fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
-        openedFixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" }
-      } : {})
+      ]
     });
     if (process.platform === "win32") {
+      // Number identities are diagnostic only: Windows may legitimately collapse
+      // these distinct files. The catalog must retain both through BigInt IDs.
+      expect(fixtureIdentity?.bigintIdentity).toBe("different");
+      expect(openedFixtureIdentity?.bigintIdentity).toBe("different");
+      expect(candidateIdentities).toHaveLength(2);
+      expect(candidateIdentities[0]).toEqual({ candidateIndex: 0, bigintDuplicate: false, numberDuplicate: false });
+      expect(candidateIdentities[1]?.candidateIndex).toBe(1);
+      expect(candidateIdentities[1]?.bigintDuplicate).toBe(false);
+      expect(typeof candidateIdentities[1]?.numberDuplicate).toBe("boolean");
       expect({
         aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
         serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
