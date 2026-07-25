@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import { buildSafeStandardConfig } from "../config/presets.js";
+import { buildPresetConfig, buildSafeStandardConfig } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 
@@ -18,6 +18,9 @@ const staticFlag = /^--?[A-Za-z][A-Za-z0-9-]*$/u;
 const staticPackageSpecifier = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@v?\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/u;
 const staticScriptPath = /^[A-Za-z0-9._~@%+\\/-]+$/u;
 const staticScriptExtension = /\.(?:cjs|cts|js|mjs|mts|php|pl|py|rb|ts)$/iu;
+const remotePathSegment = /^[A-Za-z0-9._~-]+$/u;
+/** A long opaque URL path component is commonly a capability token; do not copy it into Miftah configuration. */
+const opaqueRemotePathSegment = /^[A-Za-z0-9._~-]{24,}$/u;
 interface PackageRunnerGrammar {
   readonly prefixFlags: ReadonlySet<string>;
   readonly mutuallyExclusivePrefixFlags?: ReadonlySet<string>;
@@ -84,6 +87,12 @@ interface ImportedStdioEntry {
   readonly cwd?: string;
 }
 
+interface ImportedRemoteEntry {
+  readonly url: string;
+}
+
+type ImportedClientEntry = ImportedStdioEntry | ImportedRemoteEntry;
+
 function importError(message: string, reason: ClientEntryImportErrorReason = "invalid"): never {
   throw new ClientEntryImportError(message, reason);
 }
@@ -120,6 +129,18 @@ function safeArgument(value: unknown): string {
     importError("The selected MCP entry arguments must be strings without controls.");
   }
   return value;
+}
+
+function safeRemotePathSegment(value: string): boolean {
+  if (value.length === 0) return true;
+  try {
+    const decoded = decodeURIComponent(value);
+    return remotePathSegment.test(decoded)
+      && !credentialBearingArgument(decoded)
+      && !opaqueRemotePathSegment.test(decoded);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeCredentialText(value: string): string {
@@ -315,23 +336,79 @@ function selectedStdioEntry(value: unknown, container: ClientEntryContainer): Im
   return { command, args, cwd };
 }
 
-function safeImportedConfig(name: string, upstream: ImportedStdioEntry): MiftahConfig {
+function selectedRemoteEntry(value: unknown): ImportedRemoteEntry {
+  if (!isRecord(value)) importError("The selected MCP entry must be an object.");
+
+  if (Object.hasOwn(value, "env") || Object.hasOwn(value, "headers")) {
+    importError("Credential-bearing environment or header values cannot be imported. Configure a Miftah secret reference separately.");
+  }
+  if (Object.hasOwn(value, "shell")) {
+    importError("Shell execution settings cannot be imported. Use a canonical HTTPS MCP endpoint instead.");
+  }
+  for (const key of Object.keys(value)) {
+    if (!["type", "url"].includes(key)) {
+      importError("The selected MCP entry contains unsupported or credential-bearing fields.");
+    }
+  }
+
+  const type = value.type;
+  if (type !== undefined && type !== "http" && type !== "streamable-http") {
+    importError("Only canonical HTTPS Streamable HTTP MCP entries can be imported in this setup flow.");
+  }
+  if (type === undefined) {
+    importError("Remote MCP entries must declare type 'http' or 'streamable-http' for this setup flow.");
+  }
+
+  const url = safeText(value.url, "The selected remote MCP entry requires a literal HTTPS URL.");
   try {
-    const baseline = buildSafeStandardConfig(name, {
-      transport: "stdio",
-      command: upstream.command,
-      args: [...upstream.args],
-      ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
-    });
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:"
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+      || !parsed.pathname.split("/").every(safeRemotePathSegment)) {
+      importError("The selected remote MCP entry requires an HTTPS URL without userinfo, query, fragment, or opaque credential-shaped path segments.");
+    }
+  } catch (error) {
+    if (error instanceof ClientEntryImportError) throw error;
+    importError("The selected remote MCP entry requires a valid HTTPS URL without userinfo, query, fragment, or opaque credential-shaped path segments.");
+  }
+  return { url };
+}
+
+function selectedClientEntry(value: unknown, container: ClientEntryContainer): ImportedClientEntry {
+  if (!isRecord(value)) importError("The selected MCP entry must be an object.");
+  const hasCommand = Object.hasOwn(value, "command");
+  const hasUrl = Object.hasOwn(value, "url");
+  if (hasCommand && hasUrl) {
+    importError("The selected MCP entry must describe either a local executable or one remote HTTPS URL, not both.");
+  }
+  return hasUrl ? selectedRemoteEntry(value) : selectedStdioEntry(value, container);
+}
+
+function safeImportedConfig(name: string, upstream: ImportedClientEntry): MiftahConfig {
+  try {
+    const baseline = "command" in upstream
+      ? buildSafeStandardConfig(name, {
+          transport: "stdio",
+          command: upstream.command,
+          args: [...upstream.args],
+          ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
+        })
+      : buildPresetConfig(name, "streamable-http", { url: upstream.url });
+    const serializedUpstream = "command" in upstream
+      ? {
+          transport: "stdio" as const,
+          command: upstream.command,
+          args: [...upstream.args],
+          ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
+        }
+      : { transport: "streamable-http" as const, url: upstream.url };
     return validateConfig({
       ...baseline,
       description: `${name} imported from an existing MCP client entry`,
-      upstream: {
-        transport: "stdio",
-        command: upstream.command,
-        args: [...upstream.args],
-        ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
-      },
+      upstream: serializedUpstream,
       profiles: {
         default: {
           description: "Imported MCP entry; configure authentication separately when required.",
@@ -350,11 +427,11 @@ function safeImportedConfig(name: string, upstream: ImportedStdioEntry): MiftahC
 }
 
 /**
- * Converts one explicitly selected, non-secret local stdio entry into a safe-default Miftah configuration.
+ * Converts one explicitly selected, credential-free local stdio or canonical HTTPS remote entry into a safe-default Miftah configuration.
  * This function is pure: it does not read files, start a process, write configuration, or mutate a client.
  */
 export function createImportedClientConfiguration(request: ImportedClientConfigurationRequest): MiftahConfig {
   const parsed = parseClientConfiguration(request.document);
-  const entry = selectedStdioEntry(selectEntry(request, parsed), parsed.container);
+  const entry = selectedClientEntry(selectEntry(request, parsed), parsed.container);
   return safeImportedConfig(request.configurationName, entry);
 }

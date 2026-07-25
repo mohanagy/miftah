@@ -525,6 +525,40 @@ describe("Console application service", () => {
     });
   });
 
+  it("creates a first-run configuration from one explicitly selected HTTPS remote client entry without OAuth discovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-remote-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.onboardClientEntry({
+      name: "remote-analytics",
+      entry: "analytics",
+      document: JSON.stringify({
+        servers: {
+          analytics: { type: "http", url: "https://mcp.example.test/mcp" }
+        }
+      })
+    })).resolves.toEqual({
+      changed: true,
+      write: true,
+      name: "remote-analytics",
+      defaultProfile: "default",
+      profileCount: 1,
+      actions: [
+        "Created Miftah configuration 'remote-analytics' from one selected HTTPS remote client entry without OAuth discovery or an upstream call."
+      ]
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      name: "remote-analytics",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { default: { policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+  });
+
   it("gives a bounded advanced-manual recovery code for an entry outside the static launch grammar", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-static-launch-"));
     temporaryDirectories.push(root);

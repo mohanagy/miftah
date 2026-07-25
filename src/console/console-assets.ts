@@ -125,16 +125,16 @@ const page = `<!doctype html>
       <section id="client-entry-onboarding-view" class="work-section" hidden aria-labelledby="client-entry-onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">03 / Existing local entry</p>
-            <h2 id="client-entry-onboarding-title">Import one local stdio MCP</h2>
+            <p class="step">03 / Existing client entry</p>
+            <h2 id="client-entry-onboarding-title">Import one MCP client entry</h2>
           </div>
-          <p>Paste an existing Claude, Cursor, or VS Code JSON entry only when you want to reuse its executable and argument array. Miftah never scans or changes client settings.</p>
+          <p>Paste one existing Claude, Cursor, or VS Code JSON entry when you want to reuse a supported local executable or explicitly typed HTTPS remote endpoint. Miftah never scans or changes client settings.</p>
         </div>
         <form id="client-entry-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
           <label>Selected MCP entry name<input name="entry" required maxlength="256" placeholder="posthog"></label>
           <label class="wide">Existing client JSON<textarea name="document" required maxlength="65536" rows="12" spellcheck="false" autocomplete="off" placeholder='{"mcpServers":{"posthog":{"command":"npx","args":["--yes","@posthog/mcp@1.2.3"]}}}'></textarea></label>
-          <p class="field-note wide">The pasted text is parsed only for this request and cleared from the page afterwards. This flow accepts one selected local <code>stdio</code> entry only when it fits Miftah's static launch grammar: a direct executable, a pinned package runner, or a script path with non-sensitive flags. For custom arguments or credentials, use advanced manual setup and configure authentication separately.</p>
+          <p class="field-note wide">The pasted text is parsed only for this request and cleared from the page afterwards. This flow accepts one selected local <code>stdio</code> entry only when it fits Miftah's static launch grammar: a direct executable, a pinned package runner, or a script path with non-sensitive flags. It also accepts one credential-free HTTPS remote entry explicitly marked <code>type: "http"</code> or <code>"streamable-http"</code>. Remote import does not discover OAuth or call the endpoint. For custom arguments, headers, credentials, or authentication, use advanced manual setup and configure authentication separately.</p>
           <div class="wide form-action"><button type="submit">Import selected entry</button></div>
         </form>
       </section>
@@ -1059,7 +1059,7 @@ const script = `(() => {
     clientEntryOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const documentInput = clientEntryOnboardingForm.querySelector("textarea[name='document']");
-      message("Importing one selected local stdio MCP entry…");
+      message("Importing one selected MCP entry…");
       try {
         const data = new FormData(clientEntryOnboardingForm);
         await api("/api/v1/onboarding/client-entry", {

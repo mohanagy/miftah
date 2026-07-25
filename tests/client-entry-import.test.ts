@@ -54,6 +54,124 @@ describe("client entry import", () => {
     });
   });
 
+  it("imports one selected canonical HTTPS remote entry without importing authentication", () => {
+    const config = createImportedClientConfiguration({
+      configurationName: "remote-analytics",
+      document: JSON.stringify({
+        mcpServers: {
+          analytics: {
+            type: "http",
+            url: "https://mcp.example.test/mcp"
+          }
+        }
+      }),
+      entry: "analytics"
+    });
+
+    expect(validateConfig(config)).toEqual(config);
+    expect(config).toMatchObject({
+      version: "3",
+      name: "remote-analytics",
+      defaultProfile: "default",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { default: { policy: "readonly" } },
+      tooling: { unknownToolRisk: "destructive" }
+    });
+    expect(config).not.toHaveProperty("oauth");
+  });
+
+  it.each([
+    {
+      label: "a typed mcpServers HTTP entry",
+      document: {
+        mcpServers: { remote: { type: "http", url: "https://mcp.example.test/mcp" } }
+      }
+    },
+    {
+      label: "a typed VS Code HTTP entry",
+      document: {
+        servers: { remote: { type: "http", url: "https://mcp.example.test/mcp" } }
+      }
+    },
+    {
+      label: "a typed Streamable HTTP entry",
+      document: {
+        mcpServers: { remote: { type: "streamable-http", url: "https://mcp.example.test/mcp" } }
+      }
+    }
+  ])("imports $label through the same credential-free remote boundary", ({ document }) => {
+    const config = createImportedClientConfiguration({
+      configurationName: "remote-import",
+      document: JSON.stringify(document),
+      entry: "remote"
+    });
+
+    expect(config.upstream).toEqual({ transport: "streamable-http", url: "https://mcp.example.test/mcp" });
+    expect(config.profiles.default).toMatchObject({ policy: "readonly" });
+  });
+
+  it.each([
+    { type: "http", url: "https://user:gF7r2Uv9Qx@example.test/mcp" },
+    { type: "http", url: "https://example.test/mcp?token=gF7r2Uv9Qx" },
+    { type: "http", url: "https://example.test/mcp#token" },
+    { type: "http", url: "http://example.test/mcp" },
+    { type: "http", url: "https://mcp.example.test/mcp", headers: { Authorization: "Bearer gF7r2Uv9Qx" } },
+    { type: "http", url: "https://mcp.example.test/mcp", env: { MCP_TOKEN: "gF7r2Uv9Qx" } },
+    { type: "sse", url: "https://mcp.example.test/mcp" },
+    { type: "http", command: "node", url: "https://mcp.example.test/mcp" },
+    { type: "http", url: "https://mcp.example.test/mcp", metadata: "safe-looking-but-unsupported" }
+  ])("rejects a non-canonical or credential-bearing remote entry without echoing values", (entry) => {
+    const secret = "gF7r2Uv9Qx";
+    let error: unknown;
+    try {
+      createImportedClientConfiguration({
+        configurationName: "unsafe-remote",
+        document: JSON.stringify({ mcpServers: { remote: entry } }),
+        entry: "remote"
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ClientEntryImportError);
+    expect(error).toHaveProperty("message", expect.not.stringContaining(secret));
+  });
+
+  it.each([
+    "gF7r2Uv9QxL5nK3pR8sT6wY4zA1bC0dE",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.gF7r2Uv9QxL5nK3p",
+    "abcdefghijklmnopqrstuvwxyzabcdef",
+    "12345678901234567890123456789012"
+  ])("rejects an opaque credential-shaped endpoint path segment without echoing it", (secret) => {
+    let error: unknown;
+    try {
+      createImportedClientConfiguration({
+        configurationName: "path-credential",
+        document: JSON.stringify({
+          mcpServers: {
+            remote: { type: "http", url: `https://mcp.example.test/api/mcp/s/${secret}/mcp` }
+          }
+        }),
+        entry: "remote"
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ClientEntryImportError);
+    expect(error).toHaveProperty("message", expect.not.stringContaining(secret));
+  });
+
+  it.each(["mcpServers", "servers"] as const)("requires an explicit HTTP transport type for a %s remote entry", (container) => {
+    expect(() => createImportedClientConfiguration({
+      configurationName: "missing-vscode-transport",
+      document: JSON.stringify({
+        [container]: { remote: { url: "https://mcp.example.test/mcp" } }
+      }),
+      entry: "remote"
+    })).toThrow("must declare type 'http' or 'streamable-http'");
+  });
+
   it("imports an exact-version pnpm dlx launch without treating dlx as the package", () => {
     const request = {
       configurationName: "posthog-work",

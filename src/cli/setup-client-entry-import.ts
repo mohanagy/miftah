@@ -93,7 +93,7 @@ function writeClientHandoff(options: ClientEntryImportSetupOptions, result: Init
 }
 
 /**
- * Publishes a safe Miftah configuration from one explicitly selected, local stdio client entry.
+ * Publishes a safe Miftah configuration from one explicitly selected local stdio or HTTPS remote client entry.
  * It never edits, launches, or otherwise trusts the source MCP client configuration.
  */
 export async function runClientEntryImportSetup(
@@ -134,7 +134,13 @@ export async function runClientEntryImportSetup(
 
   const result: InitCommandResult = { output: plan.path, config };
   context.output.write(`Created ${plan.path}\n`);
-  context.output.write("Imported one local stdio MCP entry without copying credentials. Configure authentication separately when required.\n");
+  if (config.upstream?.transport === "streamable-http") {
+    context.output.write(
+      "Imported one HTTPS remote MCP entry without copying credentials. Miftah did not discover OAuth or call the upstream. Configure authentication separately when required.\n"
+    );
+  } else {
+    context.output.write("Imported one local stdio MCP entry without copying credentials. Configure authentication separately when required.\n");
+  }
   writeClientHandoff(options, result, context);
   return result;
 }

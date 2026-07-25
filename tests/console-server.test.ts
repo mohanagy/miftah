@@ -744,7 +744,12 @@ describe("local Console control server", () => {
       expect(html).toContain('id="preset-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-form"');
+      expect(html).toContain("Import one MCP client entry");
+      expect(html).not.toContain("Import one local stdio MCP");
       expect(html).toContain("static launch grammar");
+      expect(html).toContain("credential-free HTTPS remote entry");
+      expect(html).toContain("explicitly marked <code>type:");
+      expect(html).toContain("Remote import does not discover OAuth or call the endpoint.");
       expect(html).toContain("advanced manual setup");
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
@@ -1395,6 +1400,56 @@ describe("local Console control server", () => {
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
           name: "posthog-work",
           profiles: { default: { policy: "readonly" } }
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("imports one selected HTTPS remote client entry through the same CSRF-protected no-secret endpoint", async () => {
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const response = await fetch(new URL("/api/v1/onboarding/client-entry", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "remote-analytics",
+            entry: "analytics",
+            document: JSON.stringify({
+              mcpServers: {
+                analytics: { type: "http", url: "https://mcp.example.test/mcp" }
+              }
+            })
+          })
+        });
+
+        expect(response.status).toBe(201);
+        expect(await response.json()).toEqual({
+          data: {
+            changed: true,
+            write: true,
+            name: "remote-analytics",
+            defaultProfile: "default",
+            profileCount: 1,
+            actions: [
+              "Created Miftah configuration 'remote-analytics' from one selected HTTPS remote client entry without OAuth discovery or an upstream call."
+            ]
+          }
+        });
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+          profiles: { default: { policy: "readonly" } },
+          tooling: { unknownToolRisk: "destructive" }
         });
       } finally {
         await server.close();
