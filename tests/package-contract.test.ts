@@ -214,6 +214,11 @@ type NpmSpawner = (
   options: NpmSpawnOptions
 ) => NpmProcess;
 
+function npmProcessEnvironment(): NodeJS.ProcessEnv {
+  // Node propagates V8 coverage to descendants unless an explicit empty value opts out.
+  return { ...process.env, NODE_V8_COVERAGE: "", npm_config_loglevel: "silent" };
+}
+
 const spawnNpm: NpmSpawner = (command, args, options) =>
   spawn(command, args, {
     cwd: options.cwd,
@@ -233,7 +238,7 @@ async function runNpm(
   return new Promise<NpmCommandResult>((resolve, reject) => {
     const child = spawnProcess(invocation.command, invocation.args, {
       cwd,
-      env: { ...process.env, npm_config_loglevel: "silent" },
+      env: npmProcessEnvironment(),
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
@@ -834,6 +839,31 @@ describe("packed artifact contract", () => {
       status: 0,
       stdout: "still-building"
     });
+  });
+
+  it("does not pass test-only V8 coverage collection to npm subprocesses", async () => {
+    const coverageDirectory = await mkdtemp(join(tmpdir(), "miftah-npm-coverage-"));
+    const previousCoverageDirectory = process.env.NODE_V8_COVERAGE;
+    process.env.NODE_V8_COVERAGE = coverageDirectory;
+
+    try {
+      const child = await runNpm([
+        "exec",
+        "--",
+        process.execPath,
+        "--eval",
+        "process.stdout.write(process.env.NODE_V8_COVERAGE ?? '')"
+      ]);
+
+      expect(child.stdout).toBe("");
+    } finally {
+      if (previousCoverageDirectory === undefined) {
+        delete process.env.NODE_V8_COVERAGE;
+      } else {
+        process.env.NODE_V8_COVERAGE = previousCoverageDirectory;
+      }
+      await rm(coverageDirectory, { recursive: true, force: true });
+    }
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
