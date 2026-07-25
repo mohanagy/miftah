@@ -22,6 +22,7 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
+const migrationDiagnostic = vi.hoisted(() => ({ operation: "idle" }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
@@ -36,6 +37,21 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
         ...(observer === undefined ? {} : { candidateStageObserver: observer })
       };
       return actual.discoverConsoleConfigCatalog(instrumentedOptions);
+    }
+  };
+});
+
+vi.mock("../src/cli/migrate-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/cli/migrate-config.js")>();
+  return {
+    ...actual,
+    async applyConfigReplacement(...args: Parameters<typeof actual.applyConfigReplacement>) {
+      migrationDiagnostic.operation = "apply-config-replacement";
+      try {
+        return await actual.applyConfigReplacement(...args);
+      } finally {
+        migrationDiagnostic.operation = "idle";
+      }
     }
   };
 });
@@ -65,6 +81,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
+  migrationDiagnostic.operation = "idle";
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -441,7 +458,9 @@ describe("Console dashboard application service", () => {
     let phase = "fixture";
     const slowPhaseMarker = process.platform === "win32"
       ? setTimeout(() => {
-          process.stderr.write(`[miftah-test] console-dashboard-native-oauth-account phase=${phase}\n`);
+          process.stderr.write(
+            `[miftah-test] console-dashboard-native-oauth-account phase=${phase} migration=${migrationDiagnostic.operation}\n`
+          );
         }, 4_500)
       : undefined;
     const directory = await createPrivateConsoleDirectory(root);
