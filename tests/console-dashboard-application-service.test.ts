@@ -1,9 +1,10 @@
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoverConsoleConfigCatalog,
+  type ConsoleConfigCatalogCandidateIdentityDiagnosticEvent,
   type ConsoleConfigCatalogCandidateStageEvent
 } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
@@ -22,6 +23,9 @@ const catalogAclDiagnostic = vi.hoisted(() => ({
 const catalogStageDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateStageEvent) => void)
 }));
+const catalogIdentityDiagnostic = vi.hoisted(() => ({
+  observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent) => void)
+}));
 const catalogDiscoveryDiagnostic = vi.hoisted(() => ({ invocations: 0 }));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
@@ -31,10 +35,12 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
     async discoverConsoleConfigCatalog(options: Parameters<typeof actual.discoverConsoleConfigCatalog>[0]) {
       const verifier = catalogAclDiagnostic.verifier;
       const observer = catalogStageDiagnostic.observer;
+      const identityObserver = catalogIdentityDiagnostic.observer;
       const instrumentedOptions = {
         ...options,
         ...(verifier === undefined ? {} : { windowsAclVerifier: verifier }),
-        ...(observer === undefined ? {} : { candidateStageObserver: observer })
+        ...(observer === undefined ? {} : { candidateStageObserver: observer }),
+        ...(identityObserver === undefined ? {} : { candidateIdentityObserver: identityObserver })
       };
       catalogDiscoveryDiagnostic.invocations += 1;
       return actual.discoverConsoleConfigCatalog(instrumentedOptions);
@@ -67,6 +73,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 afterEach(async () => {
   catalogAclDiagnostic.verifier = undefined;
   catalogStageDiagnostic.observer = undefined;
+  catalogIdentityDiagnostic.observer = undefined;
   catalogDiscoveryDiagnostic.invocations = 0;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -105,6 +112,27 @@ async function compareFileIdentities(first: string, second: string): Promise<{
     numberIdentity: firstNumber.dev === secondNumber.dev && firstNumber.ino === secondNumber.ino ? "same" : "different",
     bigintIdentity: firstBigInt.dev === secondBigInt.dev && firstBigInt.ino === secondBigInt.ino ? "same" : "different"
   };
+}
+
+async function compareOpenedFileIdentities(first: string, second: string): Promise<{
+  readonly bigintIdentity: "same" | "different";
+  readonly numberIdentity: "same" | "different";
+}> {
+  const [firstHandle, secondHandle] = await Promise.all([open(first, "r"), open(second, "r")]);
+  try {
+    const [firstNumber, secondNumber, firstBigInt, secondBigInt] = await Promise.all([
+      firstHandle.stat(),
+      secondHandle.stat(),
+      firstHandle.stat({ bigint: true }),
+      secondHandle.stat({ bigint: true })
+    ]);
+    return {
+      numberIdentity: firstNumber.dev === secondNumber.dev && firstNumber.ino === secondNumber.ino ? "same" : "different",
+      bigintIdentity: firstBigInt.dev === secondBigInt.dev && firstBigInt.ino === secondBigInt.ino ? "same" : "different"
+    };
+  } finally {
+    await Promise.all([firstHandle.close(), secondHandle.close()]);
+  }
 }
 
 function catalogStageSummary(
@@ -172,10 +200,19 @@ describe("Console dashboard application service", () => {
     const fixtureIdentity = process.platform === "win32"
       ? await compareFileIdentities(gscPath, sentryPath)
       : undefined;
+    const openedFixtureIdentity = process.platform === "win32"
+      ? await compareOpenedFileIdentities(gscPath, sentryPath)
+      : undefined;
     const candidateStages: ConsoleConfigCatalogCandidateStageEvent[] = [];
     catalogStageDiagnostic.observer = (event) => {
       candidateStages.push(event);
     };
+    const candidateIdentities: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent[] = [];
+    if (process.platform === "win32") {
+      catalogIdentityDiagnostic.observer = (event) => {
+        candidateIdentities.push(event);
+      };
+    }
 
     // Instrument the exact dashboard catalog invocation on Windows. The mock
     // delegates to the real catalog and real verifier; it only records safe
@@ -209,48 +246,63 @@ describe("Console dashboard application service", () => {
       catalogAclDiagnostic.verifier = undefined;
       catalogStageDiagnostic.observer = undefined;
     });
-    expect(catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name))).toEqual([
-      {
-        candidate: "gsc",
-        stages: [
-          { stage: "acl", outcome: "success" },
-          { stage: "open", outcome: "success" },
-          { stage: "opened-validation", outcome: "success" },
-          { stage: "read", outcome: "success" },
-          { stage: "after-read-validation", outcome: "success" },
-          { stage: "decode", outcome: "success" },
-          { stage: "parse", outcome: "success" },
-          { stage: "migration-source", outcome: "success" },
-          { stage: "close", outcome: "success" },
-          { stage: "dedupe", outcome: "success" },
-          { stage: "metadata", outcome: "success" },
-          { stage: "accepted", outcome: "success" }
-        ],
-        accepted: true
-      },
-      {
-        candidate: "sentry",
-        stages: [
-          { stage: "acl", outcome: "success" },
-          { stage: "open", outcome: "success" },
-          { stage: "opened-validation", outcome: "success" },
-          { stage: "read", outcome: "success" },
-          { stage: "after-read-validation", outcome: "success" },
-          { stage: "decode", outcome: "success" },
-          { stage: "parse", outcome: "success" },
-          { stage: "migration-source", outcome: "success" },
-          { stage: "close", outcome: "success" },
-          { stage: "dedupe", outcome: "success" },
-          { stage: "metadata", outcome: "success" },
-          { stage: "accepted", outcome: "success" }
-        ],
-        accepted: true
-      }
-    ]);
+    expect({
+      stageSummary: catalogStageSummary(candidateStages, initial.catalog?.configurations.map((configuration) => configuration.name)),
+      identitySummary: candidateIdentities,
+      ...(process.platform === "win32" ? { fixtureIdentity, openedFixtureIdentity } : {})
+    }).toEqual({
+      stageSummary: [
+        {
+          candidate: "gsc",
+          stages: [
+            { stage: "acl", outcome: "success" },
+            { stage: "open", outcome: "success" },
+            { stage: "opened-validation", outcome: "success" },
+            { stage: "read", outcome: "success" },
+            { stage: "after-read-validation", outcome: "success" },
+            { stage: "decode", outcome: "success" },
+            { stage: "parse", outcome: "success" },
+            { stage: "migration-source", outcome: "success" },
+            { stage: "close", outcome: "success" },
+            { stage: "dedupe", outcome: "success" },
+            { stage: "metadata", outcome: "success" },
+            { stage: "accepted", outcome: "success" }
+          ],
+          accepted: true
+        },
+        {
+          candidate: "sentry",
+          stages: [
+            { stage: "acl", outcome: "success" },
+            { stage: "open", outcome: "success" },
+            { stage: "opened-validation", outcome: "success" },
+            { stage: "read", outcome: "success" },
+            { stage: "after-read-validation", outcome: "success" },
+            { stage: "decode", outcome: "success" },
+            { stage: "parse", outcome: "success" },
+            { stage: "migration-source", outcome: "success" },
+            { stage: "close", outcome: "success" },
+            { stage: "dedupe", outcome: "success" },
+            { stage: "metadata", outcome: "success" },
+            { stage: "accepted", outcome: "success" }
+          ],
+          accepted: true
+        }
+      ],
+      identitySummary: process.platform === "win32"
+        ? [
+            { candidateIndex: 0, bigintDuplicate: false, numberDuplicate: false },
+            { candidateIndex: 1, bigintDuplicate: false, numberDuplicate: false }
+          ]
+        : [],
+      ...(process.platform === "win32" ? {
+        fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
+        openedFixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" }
+      } : {})
+    });
     if (process.platform === "win32") {
       expect({
         aclProbeSummary: [...aclProbes].sort((left, right) => left.candidate.localeCompare(right.candidate)),
-        fixtureIdentity,
         serviceConfigurationNames: initial.catalog?.configurations.map((configuration) => configuration.name)
       }).toEqual({
         aclProbeSummary: [
@@ -258,7 +310,6 @@ describe("Console dashboard application service", () => {
           { candidate: "gsc", kind: "file", outcome: "trusted" },
           { candidate: "sentry", kind: "file", outcome: "trusted" }
         ],
-        fixtureIdentity: { bigintIdentity: "different", numberIdentity: "different" },
         serviceConfigurationNames: ["gsc", "sentry"]
       });
     }
