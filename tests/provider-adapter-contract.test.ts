@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import {
   getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
@@ -10,6 +11,10 @@ import type {
   ProviderAuthenticationContract
 } from "../src/config/provider-adapters.js";
 import type { MiftahConfig } from "../src/config/types.js";
+
+function privatePath(...segments: readonly string[]): string {
+  return resolve("/private", ...segments);
+}
 
 // @ts-expect-error Upstream-owned credentials cannot claim Miftah's browser or vault.
 const invalidMixedOwnership: ProviderAuthenticationContract = {
@@ -218,13 +223,13 @@ describe("provider adapter contract", () => {
   it("allows provider-account addition only when every existing account has literal isolated provider state", () => {
     const safe = gscConfig();
     safe.profiles.work!.env = {
-      GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
-      GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+      GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("work-client-secrets.json"),
+      GSC_CONFIG_DIR: privatePath("miftah", "gsc", "work")
     };
     safe.profiles.personal = {
       env: {
-        GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
-        GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+        GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("personal-client-secrets.json"),
+        GSC_CONFIG_DIR: privatePath("miftah", "gsc", "personal")
       }
     };
     expect(getProviderAdapterForAccountProvisioning(safe)).toBeDefined();
@@ -242,7 +247,7 @@ describe("provider adapter contract", () => {
     expect(getProviderAdapterForAccountProvisioning(relativeStateDirectory)).toBeUndefined();
 
     const sharedStateDirectory = structuredClone(safe);
-    sharedStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = "/private/miftah/gsc/work";
+    sharedStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work");
     expect(getProviderAdapterForAccountProvisioning(sharedStateDirectory)).toBeUndefined();
   });
 
@@ -266,15 +271,15 @@ describe("provider adapter contract", () => {
       profiles: {
         work: {
           env: {
-            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
-            GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("work-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "work")
           },
           upstreams: { primary: {}, secondary: {} }
         },
         personal: {
           env: {
-            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
-            GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("personal-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "personal")
           },
           upstreams: { primary: {}, secondary: {} }
         }
@@ -282,8 +287,8 @@ describe("provider adapter contract", () => {
     };
 
     for (const [environment, value] of [
-      ["GSC_CONFIG_DIR", "/private/miftah/gsc/shared"],
-      ["GSC_OAUTH_CLIENT_SECRETS_FILE", "/private/other-client-secrets.json"]
+      ["GSC_CONFIG_DIR", privatePath("miftah", "gsc", "shared")],
+      ["GSC_OAUTH_CLIENT_SECRETS_FILE", privatePath("other-client-secrets.json")]
     ] as const) {
       const overridden = structuredClone(safe);
       overridden.profiles.work!.upstreams!.secondary!.env = { [environment]: value };

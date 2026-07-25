@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import { consoleAuthenticationMetadata } from "../src/console/console-config-metadata.js";
 import type { MiftahConfig } from "../src/config/types.js";
+
+function privatePath(...segments: readonly string[]): string {
+  return resolve("/private", ...segments);
+}
 
 describe("Console configuration metadata", () => {
   it("keeps a mixed adapter configuration out of both provider-owned and native OAuth states", () => {
@@ -62,14 +67,14 @@ describe("Console configuration metadata", () => {
       profiles: {
         work: {
           env: {
-            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/work-client-secrets.json",
-            GSC_CONFIG_DIR: "/private/miftah/gsc/work"
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("work-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "work")
           }
         },
         personal: {
           env: {
-            GSC_OAUTH_CLIENT_SECRETS_FILE: "/private/personal-client-secrets.json",
-            GSC_CONFIG_DIR: "/private/miftah/gsc/personal"
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("personal-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "personal")
           }
         }
       }
@@ -84,7 +89,7 @@ describe("Console configuration metadata", () => {
     });
 
     const sharedState = structuredClone(config);
-    sharedState.profiles.personal!.env!.GSC_CONFIG_DIR = "/private/miftah/gsc/work";
+    sharedState.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work");
     expect(consoleAuthenticationMetadata(sharedState)).not.toHaveProperty("accountAddition");
   });
 });
