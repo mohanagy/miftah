@@ -397,14 +397,10 @@ function safeImportedConfig(name: string, upstream: ImportedClientEntry): Miftah
           ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
         })
       : buildPresetConfig(name, "streamable-http", { url: upstream.url });
-    const serializedUpstream = "command" in upstream
-      ? {
-          transport: "stdio" as const,
-          command: upstream.command,
-          args: [...upstream.args],
-          ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
-        }
-      : { transport: "streamable-http" as const, url: upstream.url };
+    const serializedUpstream = baseline.upstream;
+    if (serializedUpstream === undefined) {
+      importError("The imported MCP entry could not be converted into a valid Miftah configuration.");
+    }
     return validateConfig({
       ...baseline,
       description: `${name} imported from an existing MCP client entry`,
