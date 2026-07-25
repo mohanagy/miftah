@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import {
+  buildProviderAdapterAccountProfile,
+  getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
-  PROVIDER_ADAPTER_CATALOG
+  PROVIDER_ADAPTER_CATALOG,
+  ProviderAdapterAccountProfileError
 } from "../src/config/provider-adapters.js";
 import type {
   ProviderAdapterDefinition,
@@ -9,6 +13,10 @@ import type {
   ProviderAuthenticationContract
 } from "../src/config/provider-adapters.js";
 import type { MiftahConfig } from "../src/config/types.js";
+
+function privatePath(...segments: readonly string[]): string {
+  return resolve("/private", ...segments);
+}
 
 // @ts-expect-error Upstream-owned credentials cannot claim Miftah's browser or vault.
 const invalidMixedOwnership: ProviderAuthenticationContract = {
@@ -88,6 +96,21 @@ describe("provider adapter contract", () => {
       credentialOwnership: "upstream",
       browserHandoff: "upstream",
       tokenStore: "upstream-private"
+    });
+    expect(adapter.accountProvisioning).toEqual({
+      credentialFile: {
+        environment: "GSC_OAUTH_CLIENT_SECRETS_FILE",
+        label: "Google OAuth client-secrets file",
+        placeholder: "/Users/you/gsc-client-secrets.json"
+      },
+      stateDirectory: {
+        environment: "GSC_CONFIG_DIR",
+        namespace: "gsc-oauth"
+      },
+      defaultProfile: {
+        description: "Google Search Console account (OAuth owned by upstream)",
+        policy: "readonly"
+      }
     });
     expect(adapter.lifecycle).toEqual({
       health: { owner: "upstream", mechanism: "mcp-tool", name: "get_capabilities" },
@@ -197,5 +220,150 @@ describe("provider adapter contract", () => {
     const namedIsolation = namedGscConfig();
     namedIsolation.profiles.work!.upstreams!.analytics!.isolation = { files: [] };
     expect(getProviderAdapterForProfileTarget(namedIsolation, "work", "analytics")).toBeUndefined();
+  });
+
+  it("allows provider-account addition only when every existing account has literal isolated provider state", () => {
+    const safe = gscConfig();
+    safe.profiles.work!.env = {
+      GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("work-client-secrets.json"),
+      GSC_CONFIG_DIR: privatePath("miftah", "gsc", "work")
+    };
+    safe.profiles.personal = {
+      env: {
+        GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("personal-client-secrets.json"),
+        GSC_CONFIG_DIR: privatePath("miftah", "gsc", "personal")
+      }
+    };
+    expect(getProviderAdapterForAccountProvisioning(safe)).toBeDefined();
+
+    const relativeCredential = structuredClone(safe);
+    relativeCredential.profiles.work!.env!.GSC_OAUTH_CLIENT_SECRETS_FILE = "client-secrets.json";
+    expect(getProviderAdapterForAccountProvisioning(relativeCredential)).toBeUndefined();
+
+    const interpolatedCredential = structuredClone(safe);
+    interpolatedCredential.profiles.work!.env!.GSC_OAUTH_CLIENT_SECRETS_FILE = "${HOME}/client-secrets.json";
+    expect(getProviderAdapterForAccountProvisioning(interpolatedCredential)).toBeUndefined();
+
+    const relativeStateDirectory = structuredClone(safe);
+    relativeStateDirectory.profiles.work!.env!.GSC_CONFIG_DIR = ".miftah/gsc/work";
+    expect(getProviderAdapterForAccountProvisioning(relativeStateDirectory)).toBeUndefined();
+
+    const sharedStateDirectory = structuredClone(safe);
+    sharedStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work");
+    expect(getProviderAdapterForAccountProvisioning(sharedStateDirectory)).toBeUndefined();
+
+    const caseVariantStateDirectory = structuredClone(safe);
+    caseVariantStateDirectory.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "WORK");
+    expect(getProviderAdapterForAccountProvisioning(caseVariantStateDirectory)).toBeUndefined();
+
+    const trailingWindowsAlias = structuredClone(safe);
+    trailingWindowsAlias.profiles.personal!.env!.GSC_CONFIG_DIR = privatePath("miftah", "gsc", "work. ");
+    expect(getProviderAdapterForAccountProvisioning(trailingWindowsAlias)).toBeUndefined();
+  });
+
+  it("fails closed when a named upstream can override an otherwise isolated account binding", () => {
+    const safe: MiftahConfig = {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstreams: {
+        primary: {
+          transport: "stdio",
+          command: "uvx",
+          args: ["mcp-search-console@0.3.2"]
+        },
+        secondary: {
+          transport: "stdio",
+          command: "uvx",
+          args: ["mcp-search-console@0.3.2"]
+        }
+      },
+      profiles: {
+        work: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("work-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "work")
+          },
+          upstreams: { primary: {}, secondary: {} }
+        },
+        personal: {
+          env: {
+            GSC_OAUTH_CLIENT_SECRETS_FILE: privatePath("personal-client-secrets.json"),
+            GSC_CONFIG_DIR: privatePath("miftah", "gsc", "personal")
+          },
+          upstreams: { primary: {}, secondary: {} }
+        }
+      }
+    };
+
+    for (const [environment, value] of [
+      ["GSC_CONFIG_DIR", privatePath("miftah", "gsc", "shared")],
+      ["GSC_OAUTH_CLIENT_SECRETS_FILE", privatePath("other-client-secrets.json")]
+    ] as const) {
+      const overridden = structuredClone(safe);
+      overridden.profiles.work!.upstreams!.secondary!.env = { [environment]: value };
+
+      // The upstream target is still a reviewed launch shape, but the account
+      // provisioning flow must not infer isolation from the base profile alone.
+      expect(getProviderAdapterForProfileTarget(overridden, "work", "secondary")).toBeDefined();
+      expect(getProviderAdapterForAccountProvisioning(overridden), environment).toBeUndefined();
+    }
+  });
+
+  it("keeps provider-owned state inside its adapter namespace for every direct account-profile caller", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      credentialFile: privatePath("client-secrets.json")
+    };
+
+    for (const profile of [
+      ".",
+      "..",
+      "../outside",
+      "nested/account",
+      "nested\\account",
+      "google\0work",
+      "__proto__",
+      "constructor",
+      "prototype"
+    ]) {
+      expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile })).toThrow(ProviderAdapterAccountProfileError);
+    }
+  });
+
+  it("uses one canonical provider-state directory for case-variant account names", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      credentialFile: privatePath("client-secrets.json")
+    };
+
+    const lowercase = buildProviderAdapterAccountProfile(adapter, { ...request, profile: "google-work" });
+    const uppercase = buildProviderAdapterAccountProfile(adapter, { ...request, profile: "Google-Work" });
+
+    expect(uppercase.env?.GSC_CONFIG_DIR).toBe(lowercase.env?.GSC_CONFIG_DIR);
+  });
+
+  it("reports the direct account-profile validation cause without misdescribing it as a credential path", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      profile: "google-work",
+      credentialFile: privatePath("client-secrets.json")
+    };
+    const unsupported: ProviderAdapterDefinition = { ...adapter, accountProvisioning: undefined };
+
+    expect(() => buildProviderAdapterAccountProfile(adapter, {
+      ...request,
+      credentialFile: "client-secrets.json"
+    })).toThrow("requires an absolute literal credential-file path");
+    expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile: "../outside" }))
+      .toThrow("requires a safe profile name");
+    expect(() => buildProviderAdapterAccountProfile(unsupported, request))
+      .toThrow("does not support adding provider-owned accounts");
   });
 });

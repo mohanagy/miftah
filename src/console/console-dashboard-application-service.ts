@@ -16,6 +16,8 @@ import {
   type ConsoleHealth,
   type ConsoleNativeOAuthOnboardingRequest,
   type ConsoleProfileReadinessRequest,
+  type ConsoleProviderAccountAdditionRequest,
+  type ConsoleProviderAccountAdditionReport,
   type ConsolePresetOnboardingReport,
   type ConsolePresetOnboardingRequest
 } from "./console-application-service.js";
@@ -188,6 +190,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): Promise<ConsoleConnectionAddReport> {
     const selected = await this.selectedApplication();
     const result = await selected.application.addDiscoveredNativeOAuthAccount(request);
+    // The guarded commit changes the file contents; require a fresh explicit
+    // selection instead of retaining a stale trusted snapshot.
+    this.active = undefined;
+    return result;
+  }
+
+  async addProviderAccount(
+    request: ConsoleProviderAccountAdditionRequest
+  ): Promise<ConsoleProviderAccountAdditionReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.addProviderAccount(request);
     // The guarded commit changes the file contents; require a fresh explicit
     // selection instead of retaining a stale trusted snapshot.
     this.active = undefined;

@@ -4,7 +4,7 @@ Provider adapters describe a narrow, reviewed integration with an MCP server who
 
 Every adapter declares one credential owner: Miftah, the upstream, or manual-only. The typed ownership union prevents an upstream-owned adapter from claiming Miftah's browser callback or OS vault. Adapter diagnostics are metadata-only. They never inspect arbitrary credential files or token caches, and an adapter cannot turn a provider-specific flow into a native `oauth.connections` binding.
 
-When the local Console opens a recognized adapter configuration, it displays this ownership boundary and removes the native OAuth editor for that configuration. It can show that the provider owns login and reauthentication, but it never reads the adapter's cache, credentials, client-secrets path, or browser state.
+When the local Console opens a recognized adapter configuration, it displays this ownership boundary and removes the native OAuth editor for that configuration. It can show that the provider owns login and reauthentication, but it never reads the adapter's cache, credentials, client-secrets path, or browser state. For an adapter that declares reviewed account provisioning, the Console can show **Add another provider account** only after the whole selected configuration proves it has safe, isolated existing account bindings. The form accepts a new account's credential-file reference but never shows existing references or cache content.
 
 ## Google Search Console pilot
 
@@ -43,6 +43,18 @@ miftah setup gsc --preset google-search-console
 ```
 
 It asks for each profile name, optional description, and client-secrets path, then asks which profile should be the durable default. It generates a distinct `GSC_CONFIG_DIR` for every generated configuration file and named profile. The upstream creates its own cache in that directory, and Miftah still never opens or manages it.
+
+For a returning configuration, add one account without replaying first-run setup:
+
+```sh
+miftah setup --add-profile \
+  --config ~/.config/miftah/gsc.json \
+  --profile google-personal \
+  --oauth-client-secrets-file "$HOME/.config/gsc/personal-client-secrets.json" \
+  --verify
+```
+
+`miftah setup --add-profile` is available only when every existing profile still matches the exact reviewed GSC launch and has an absolute literal client-secrets reference plus a distinct canonical `GSC_CONFIG_DIR`. It creates the new profile through the adapter contract, gives it a new isolated state directory, records a redacted lifecycle event, and never reads or copies the credential file or provider cache. `--verify` runs `get_capabilities` once for the new profile only. The Console exposes the same flow under **Add another provider account**; it is hidden rather than guessed for manual, mixed, changed, or shared-state configurations.
 
 Manual configuration remains supported. If `uvx` is installed at an absolute path, or the upstream needs another documented environment value, edit the generated config and run `miftah validate` followed by `miftah doctor`. Do not add the upstream token-cache path as a Miftah secret provider and do not copy a cache between profiles.
 

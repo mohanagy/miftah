@@ -10,6 +10,7 @@ import {
 } from "../src/console/console-server.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import { buildPresetConfig } from "../src/config/presets.js";
 import { MiftahError } from "../src/utils/errors.js";
 import {
   createPrivateConsoleDirectory,
@@ -736,6 +737,8 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah checks this exact HTTPS endpoint for standards-based OAuth before it creates the configuration.");
       expect(html).toContain("Discover OAuth from configured upstream");
       expect(html).toContain("Add another native OAuth account");
+      expect(html).toContain('id="provider-account-editor"');
+      expect(html).toContain("Add another provider account");
       expect(html).toContain("Advanced manual OAuth registration");
       expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
@@ -764,6 +767,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
+      expect(javascript).toContain("/api/v1/profiles/provider-account");
       expect(javascript).toContain("/api/v1/onboarding/preset");
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
@@ -854,6 +858,9 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value, upstream: upstream.value }');
       expect(javascript).toContain("provider-adapter");
       expect(javascript).toContain("This provider owns its browser login");
+      expect(javascript).toContain('const providerAccountEditor = byId("provider-account-editor");');
+      expect(javascript).toContain("authentication.accountAddition");
+      expect(javascript).toContain("Adding the provider-owned account");
       expect(javascript).toContain('const nativeOAuthAccountEditor = byId("native-oauth-account-editor");');
       expect(javascript).toContain("if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
@@ -2068,6 +2075,76 @@ describe("local Console control server", () => {
     } finally {
       await server.close();
       await upstream.close();
+    }
+  });
+
+  it("adds a provider-owned account only through a strict CSRF-protected GSC lifecycle request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-provider-account-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "gsc.json");
+    const firstSecrets = join(directory, "google-work-client-secrets.json");
+    const secondSecrets = join(directory, "google-personal-client-secrets.json");
+    const thirdSecrets = join(directory, "google-third-client-secrets.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: firstSecrets },
+        { name: "google-personal", oauthClientSecretsFile: secondSecrets }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`, { mode: 0o600 });
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/provider-account", server.url);
+      const request = {
+        profile: "google-third",
+        description: "Third Google account",
+        credentialFile: thirdSecrets,
+        makeDefault: true
+      };
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
+      });
+      expect(rejected.status).toBe(422);
+      expect(await readFile(configPath, "utf8")).not.toContain("google-third");
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(created.status).toBe(201);
+      const payload = await created.json() as { readonly data: Record<string, unknown> };
+      expect(payload.data).toMatchObject({
+        adapter: "Google Search Console",
+        profile: "google-third",
+        actions: [
+          "Created provider-owned account profile 'google-third'.",
+          "Set durable default profile to 'google-third'."
+        ]
+      });
+      expect(JSON.stringify(payload)).not.toContain(thirdSecrets);
+      const config = JSON.parse(await readFile(configPath, "utf8")) as {
+        readonly defaultProfile: string;
+        readonly profiles: Record<string, { readonly env: { readonly GSC_CONFIG_DIR: string } }>;
+      };
+      expect(config.defaultProfile).toBe("google-third");
+      expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(3);
+    } finally {
+      await server.close();
     }
   });
 

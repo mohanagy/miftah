@@ -51,6 +51,11 @@ import {
   type ProfileReadinessReport
 } from "../setup/profile-readiness.js";
 import {
+  runProviderAccountAddition,
+  type ProviderAccountAdditionAuditSink,
+  type ProviderAccountAdditionReport
+} from "../setup/provider-account-onboarding.js";
+import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
@@ -113,6 +118,21 @@ export interface ConsoleDiscoveredNativeOAuthAccountRequest {
   readonly upstream: string;
   readonly makeDefault?: boolean;
 }
+
+/** Adds one account through a recognized upstream-owned provider adapter. */
+export interface ConsoleProviderAccountAdditionRequest {
+  readonly profile: string;
+  readonly description?: string;
+  /** Non-secret credential-file path; the adapter retains its own token cache. */
+  readonly credentialFile: string;
+  readonly makeDefault?: boolean;
+}
+
+/** Console responses intentionally omit config bytes, local paths, and backup paths. */
+export type ConsoleProviderAccountAdditionReport = Pick<
+  ProviderAccountAdditionReport,
+  "changed" | "write" | "adapter" | "profile" | "actions"
+>;
 
 /** Non-secret input accepted for a known connector during first-run setup. */
 export interface ConsolePresetOnboardingRequest extends PresetBuildOptions {
@@ -188,6 +208,10 @@ export interface ConsoleControlApplication {
   addDiscoveredNativeOAuthAccount?(
     request: ConsoleDiscoveredNativeOAuthAccountRequest
   ): Promise<ConsoleConnectionAddReport>;
+  /** Available when an initialized configuration supports a reviewed provider-owned account addition. */
+  addProviderAccount?(
+    request: ConsoleProviderAccountAdditionRequest
+  ): Promise<ConsoleProviderAccountAdditionReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -318,6 +342,32 @@ class ConsoleNativeOAuthAccountAuditSink implements NativeOAuthAccountAdditionAu
       name: "profile",
       profile: event.profile,
       upstream: event.upstream,
+      status: event.status
+    });
+  }
+}
+
+class ConsoleProviderAccountAuditSink implements ProviderAccountAdditionAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  intent(event: { readonly profile: string }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/provider-profile-add-intent",
+      name: "profile",
+      profile: event.profile,
+      status: "success"
+    });
+  }
+
+  record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/provider-profile-add",
+      name: "profile",
+      profile: event.profile,
       status: event.status
     });
   }
@@ -662,6 +712,30 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       profile: result.profile,
       upstream: result.upstream,
       resource: result.resource,
+      actions: result.actions
+    };
+  }
+
+  async addProviderAccount(
+    request: ConsoleProviderAccountAdditionRequest
+  ): Promise<ConsoleProviderAccountAdditionReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runProviderAccountAddition({
+      configPath,
+      profile: request.profile,
+      ...(request.description === undefined ? {} : { description: request.description }),
+      credentialFile: request.credentialFile,
+      ...(request.makeDefault === true ? { makeDefault: true } : {})
+    }, {
+      trustedSource: source,
+      audit: new ConsoleProviderAccountAuditSink(this.audit)
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
+      adapter: result.adapter,
+      profile: result.profile,
       actions: result.actions
     };
   }

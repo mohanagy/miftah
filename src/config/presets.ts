@@ -1,8 +1,11 @@
-import { createHash } from "node:crypto";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 import type { MiftahConfig, ProfileConfig } from "./types.js";
-import { PROVIDER_ADAPTER_CATALOG } from "./provider-adapters.js";
+import {
+  buildProviderAdapterAccountProfile,
+  isLiteralAbsolutePath,
+  PROVIDER_ADAPTER_CATALOG,
+  ProviderAdapterAccountProfileError
+} from "./provider-adapters.js";
 import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 /** Pinned GitHub MCP server image used by the GitHub preset. */
@@ -216,16 +219,7 @@ function requireOAuthClientSecretsFile(value: unknown): string {
   if (typeof value !== "string") {
     catalogError("Preset option 'oauthClientSecretsFile' must be a string.");
   }
-  if (
-    !value ||
-    value.trim() !== value ||
-    !isAbsolute(value) ||
-    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(value) ||
-    Array.from(value).some((character) => {
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
-    })
-  ) {
+  if (!isLiteralAbsolutePath(value)) {
     catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
   }
   return value;
@@ -256,16 +250,30 @@ function requireGoogleSearchConsoleDescription(value: unknown): string | undefin
   return value;
 }
 
-function googleSearchConsoleStateDirectory(
+function buildGoogleSearchConsoleProfile(
   configurationName: string,
   profile: string,
+  description: string | undefined,
+  oauthClientSecretsFile: string,
   context: PresetBuildContext
-): string {
-  const configurationIdentity = context.configurationPath === undefined
-    ? configurationName
-    : resolve(context.configurationPath);
-  const configurationNamespace = createHash("sha256").update(configurationIdentity).digest("hex");
-  return join(homedir(), ".config", "miftah", "gsc-oauth", configurationNamespace, profile);
+): ProfileConfig {
+  try {
+    return buildProviderAdapterAccountProfile(
+      PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"],
+      {
+        configurationName,
+        ...(context.configurationPath === undefined ? {} : { configurationPath: context.configurationPath }),
+        profile,
+        ...(description === undefined ? {} : { description }),
+        credentialFile: oauthClientSecretsFile
+      }
+    );
+  } catch (error) {
+    if (error instanceof ProviderAdapterAccountProfileError) {
+      catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
+    }
+    throw error;
+  }
 }
 
 function buildGoogleSearchConsoleProfiles(
@@ -285,14 +293,13 @@ function buildGoogleSearchConsoleProfiles(
     return {
       defaultProfile: profile,
       profiles: {
-        [profile]: {
-          description: "Google Search Console account (OAuth owned by upstream)",
-          env: {
-            GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
-            GSC_CONFIG_DIR: googleSearchConsoleStateDirectory(configurationName, profile, context)
-          },
-          policy: "readonly"
-        }
+        [profile]: buildGoogleSearchConsoleProfile(
+          configurationName,
+          profile,
+          undefined,
+          requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
+          context
+        )
       }
     };
   }
@@ -314,14 +321,13 @@ function buildGoogleSearchConsoleProfiles(
       catalogError(`Google Search Console profile '${profile}' is duplicated.`);
     }
     const description = requireGoogleSearchConsoleDescription(configuredProfile.description);
-    profiles[profile] = {
-      description: description ?? "Google Search Console account (OAuth owned by upstream)",
-      env: {
-        GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
-        GSC_CONFIG_DIR: googleSearchConsoleStateDirectory(configurationName, profile, context)
-      },
-      policy: "readonly"
-    };
+    profiles[profile] = buildGoogleSearchConsoleProfile(
+      configurationName,
+      profile,
+      description,
+      requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
+      context
+    );
   }
 
   if (configuredProfiles.length > 1 && options.defaultProfile === undefined) {

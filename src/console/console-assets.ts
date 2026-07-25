@@ -191,6 +191,17 @@ const page = `<!doctype html>
             <p>Connect and reauthorize may open the provider in your system browser. Disconnect removes only Miftah's local vault credential; revoke provider access separately.</p>
           </div>
           <div id="connection-list" class="connection-list"></div>
+          <details id="provider-account-editor" hidden>
+            <summary>Add another provider account</summary>
+            <form id="provider-account-form" class="form-grid compact">
+              <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
+              <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal provider account"></label>
+              <label class="wide"><span id="provider-account-credential-label">Provider credential-file path</span><input id="provider-account-credential-file" name="credentialFile" required maxlength="4096" autocomplete="off"></label>
+              <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
+              <p class="field-note wide">Miftah stores only the configured credential-file reference and a separate profile. The provider owns browser login and its private token cache; Miftah never reads, copies, or removes that cache.</p>
+              <div class="wide form-action"><button type="submit">Add provider account</button></div>
+            </form>
+          </details>
           <details id="native-oauth-account-editor">
             <summary>Add another native OAuth account</summary>
             <form id="native-oauth-account-form" class="form-grid compact">
@@ -389,6 +400,9 @@ const script = `(() => {
   const configurationCatalog = byId("configuration-catalog");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
+  const providerAccountEditor = byId("provider-account-editor");
+  const providerAccountCredentialLabel = byId("provider-account-credential-label");
+  const providerAccountCredentialFile = byId("provider-account-credential-file");
   const nativeOAuthEditor = byId("native-oauth-editor");
   const nativeOAuthAccountEditor = byId("native-oauth-account-editor");
   const presetInputNames = Object.freeze({
@@ -637,7 +651,23 @@ const script = `(() => {
     const providerAdapter = authentication.mode === "provider-adapter";
     const manualOnly = authentication.mode === "manual-only";
     const nativeOAuth = authentication.mode === "miftah-native-oauth";
+    const accountAddition = record(authentication.accountAddition);
+    const credentialFileLabel = typeof accountAddition.credentialFileLabel === "string"
+      ? accountAddition.credentialFileLabel
+      : "";
+    const credentialFilePlaceholder = typeof accountAddition.credentialFilePlaceholder === "string"
+      ? accountAddition.credentialFilePlaceholder
+      : "";
+    const providerAccount = providerAdapter && credentialFileLabel.length > 0 && credentialFilePlaceholder.length > 0;
     if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter && !manualOnly;
+    if (providerAccountEditor) providerAccountEditor.hidden = !providerAccount;
+    if (providerAccountCredentialLabel) {
+      providerAccountCredentialLabel.textContent = providerAccount ? credentialFileLabel : "Provider credential-file path";
+    }
+    if (providerAccountCredentialFile instanceof HTMLInputElement) {
+      providerAccountCredentialFile.placeholder = providerAccount ? credentialFilePlaceholder : "";
+      if (!providerAccount) providerAccountCredentialFile.value = "";
+    }
     if (nativeOAuthEditor) nativeOAuthEditor.hidden = !nativeOAuth;
     if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;
     if (!providerAuthenticationCopy) return;
@@ -1086,6 +1116,28 @@ const script = `(() => {
           }
         });
         nativeOAuthAccountForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const providerAccountForm = byId("provider-account-form");
+  if (providerAccountForm instanceof HTMLFormElement) {
+    providerAccountForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(providerAccountForm);
+      message("Adding the provider-owned account without reading its OAuth cache…");
+      try {
+        await api("/api/v1/profiles/provider-account", {
+          method: "POST",
+          body: {
+            profile: String(data.get("profile") || "").trim(),
+            description: String(data.get("description") || "").trim() || undefined,
+            credentialFile: String(data.get("credentialFile") || "").trim(),
+            ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
+          }
+        });
+        providerAccountForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
     });

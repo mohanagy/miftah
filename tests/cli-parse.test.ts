@@ -233,6 +233,31 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--native-oauth"]);
   });
 
+  it("offers reviewed provider-owned account addition only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--add-profile",
+      "--config", "gsc.json",
+      "--profile", "google-third",
+      "--oauth-client-secrets-file", "/Users/example/gsc-client-secrets.json",
+      "--make-default",
+      "--verify"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        addProfile: true,
+        config: "gsc.json",
+        profile: "google-third",
+        oauthClientSecretsFile: "/Users/example/gsc-client-secrets.json",
+        makeDefault: true,
+        verify: true
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--add-profile");
+    expectUsageError(["init", "--add-profile"]);
+  });
+
   it("accepts explicit client-entry import only from guided setup", () => {
     expect(parseCli([
       "setup",

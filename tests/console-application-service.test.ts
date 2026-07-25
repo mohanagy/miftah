@@ -590,6 +590,52 @@ describe("Console application service", () => {
     }));
   });
 
+  it("adds a provider-owned GSC account through the shared guarded lifecycle", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-add-provider-account-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "gsc.json");
+    const firstSecrets = join(root, "google-work-client-secrets.json");
+    const secondSecrets = join(root, "google-personal-client-secrets.json");
+    const thirdSecrets = join(root, "google-third-client-secrets.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: firstSecrets },
+        { name: "google-personal", oauthClientSecretsFile: secondSecrets }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.addProviderAccount({
+      profile: "google-third",
+      description: "Third Google account",
+      credentialFile: thirdSecrets,
+      makeDefault: true
+    })).resolves.toEqual({
+      changed: true,
+      write: true,
+      adapter: "Google Search Console",
+      profile: "google-third",
+      actions: [
+        "Created provider-owned account profile 'google-third'.",
+        "Set durable default profile to 'google-third'."
+      ]
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      readonly defaultProfile: string;
+      readonly profiles: Record<string, { readonly env: { readonly GSC_CONFIG_DIR: string } }>;
+    };
+    expect(config.defaultProfile).toBe("google-third");
+    expect(Object.keys(config.profiles)).toHaveLength(3);
+    expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(3);
+    await expect(service.auditRecords(10)).resolves.toContainEqual(expect.objectContaining({
+      operation: "console/provider-profile-add",
+      profile: "google-third",
+      status: "success"
+    }));
+    expect(JSON.stringify(await service.auditRecords(10))).not.toContain(thirdSecrets);
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();

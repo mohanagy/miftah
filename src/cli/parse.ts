@@ -35,6 +35,7 @@ type BooleanOptionName =
   | "noOpen"
   | "verify"
   | "nativeOAuth"
+  | "addProfile"
   | "makeDefault"
   | "acceptLocalCommand";
 type CliOptionName = ValueOptionName | BooleanOptionName;
@@ -84,6 +85,8 @@ export interface CliOptions {
   readonly verify?: true;
   /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
   readonly nativeOAuth?: true;
+  /** Adds one reviewed provider-owned account to an existing trusted adapter configuration. */
+  readonly addProfile?: true;
   /** Makes the newly added endpoint-first OAuth account the durable default profile. */
   readonly makeDefault?: true;
 }
@@ -167,6 +170,7 @@ export const CLI_COMMANDS = {
       "cwd",
       "acceptLocalCommand",
       "nativeOAuth",
+      "addProfile",
       "makeDefault",
       "verify"
     ]
@@ -463,6 +467,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--native-oauth",
     description: "Discover standards-based OAuth from a remote HTTPS MCP endpoint before creating its configuration."
   },
+  addProfile: {
+    name: "addProfile",
+    takesValue: false,
+    usage: "--add-profile",
+    description: "Add one reviewed provider-owned account to an existing configuration."
+  },
   makeDefault: {
     name: "makeDefault",
     takesValue: false,
@@ -513,6 +523,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--no-open": OPTION_DEFINITIONS.noOpen,
   "--verify": OPTION_DEFINITIONS.verify,
   "--native-oauth": OPTION_DEFINITIONS.nativeOAuth,
+  "--add-profile": OPTION_DEFINITIONS.addProfile,
   "--make-default": OPTION_DEFINITIONS.makeDefault,
   "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",

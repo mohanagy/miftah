@@ -99,6 +99,10 @@ describe("product README", () => {
     expect(readme).toContain("--preset google-search-console");
     expect(readme).toContain("miftah setup gsc --preset google-search-console");
     expect(readme).toContain("miftah setup gsc --preset google-search-console --verify");
+    expect(readme).toContain("### Add another Google Search Console account");
+    expect(readme).toContain("miftah setup --add-profile");
+    expect(readme).toContain("The new account receives its own `GSC_CONFIG_DIR`");
+    expect(readme).toContain("Add another provider account");
     expect(readme).toContain("Miftah does not invent a probe or show the provider output");
     expect(readme).toContain("A non-ready readiness result leaves the configuration in place and exits 1.");
     expect(readme).toContain("If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1.");
