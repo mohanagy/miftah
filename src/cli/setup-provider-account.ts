@@ -106,6 +106,7 @@ export async function runProviderAccountSetup(
   context: InitCommandContext
 ): Promise<ProviderAccountSetupResult> {
   const values = await collectValues(options, context);
+  if (values.profile.includes("\0")) usageError("Profile name must not contain a NUL character.");
   const configPath = resolveConfigPath(values.configPath, context.cwd);
   const report = await runProviderAccountAddition({
     configPath,

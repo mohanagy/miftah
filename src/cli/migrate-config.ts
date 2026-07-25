@@ -384,7 +384,7 @@ async function installWithoutOverwriting(
   transaction: MigrationTransaction,
   source: ConfigMigrationSource,
   candidateContent: string | Uint8Array,
-  publishedBackupPath: string
+  publishedBackupPath?: string
 ): Promise<void> {
   try {
     await rename(path, transaction.holdingPath);
@@ -413,13 +413,15 @@ async function installWithoutOverwriting(
 
   try {
     await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
-    await link(transaction.backupPath, publishedBackupPath);
-    const [privateBackup, publishedBackup] = await Promise.all([
-      lstat(transaction.backupPath, { bigint: true }),
-      lstat(publishedBackupPath, { bigint: true })
-    ]);
-    if (!sameRegularBigIntFileIdentity(privateBackup, publishedBackup)) {
-      throw new Error("migration backup publication did not retain the private backup file");
+    if (publishedBackupPath !== undefined) {
+      await link(transaction.backupPath, publishedBackupPath);
+      const [privateBackup, publishedBackup] = await Promise.all([
+        lstat(transaction.backupPath, { bigint: true }),
+        lstat(publishedBackupPath, { bigint: true })
+      ]);
+      if (!sameRegularBigIntFileIdentity(privateBackup, publishedBackup)) {
+        throw new Error("migration backup publication did not retain the private backup file");
+      }
     }
   } catch (error) {
     const restoredError = errorCode(error) === "EEXIST"
@@ -563,12 +565,12 @@ export async function applyConfigMigration(
  * Applies an already planned, schema-valid configuration replacement through the same guarded
  * transaction as migration while publishing a unique recovery backup for repeatable mutations.
  */
-export async function applyConfigReplacement(
+async function replaceConfigContent(
   path: string,
   source: ConfigMigrationSource,
-  config: unknown
-): Promise<string> {
-  validateConfig(config);
+  candidateContent: string | Uint8Array,
+  publishBackup = true
+): Promise<string | undefined> {
   try {
     await assertMigrationSourceUnchanged(path, source);
   } catch (error) {
@@ -576,25 +578,28 @@ export async function applyConfigReplacement(
     throw error;
   }
   const transaction = await createMigrationTransaction(path);
-  const backupPath = join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`);
+  const backupPath = publishBackup ? join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`) : undefined;
   try {
-    await installWithoutOverwriting(
-      path,
-      transaction,
-      source,
-      `${JSON.stringify(config, null, 2)}\n`,
-      backupPath
-    );
+    await installWithoutOverwriting(path, transaction, source, candidateContent, backupPath);
     return backupPath;
   } catch (error) {
     if (error instanceof MigrationSourceChangedError) {
       throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);
     }
-    if (error instanceof MigrationTransactionError) {
-      throw transactionWriteError(path, error);
-    }
+    if (error instanceof MigrationTransactionError) throw transactionWriteError(path, error);
     throw error;
   }
+}
+
+export async function applyConfigReplacement(
+  path: string,
+  source: ConfigMigrationSource,
+  config: unknown
+): Promise<string> {
+  validateConfig(config);
+  const backupPath = await replaceConfigContent(path, source, `${JSON.stringify(config, null, 2)}\n`);
+  if (backupPath === undefined) throw migrationWriteError("could not publish the required recovery backup");
+  return backupPath;
 }
 
 /**
@@ -608,26 +613,18 @@ export async function restoreConfigReplacement(
   source: ConfigMigrationSource,
   original: ConfigMigrationSource
 ): Promise<string> {
-  try {
-    await assertMigrationSourceUnchanged(path, source);
-  } catch (error) {
-    if (error instanceof MigrationSourceChangedError) throw sourceChangedWriteError();
-    throw error;
-  }
-  const transaction = await createMigrationTransaction(path);
-  const backupPath = join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`);
-  try {
-    await installWithoutOverwriting(path, transaction, source, original.originalBytes, backupPath);
-    return backupPath;
-  } catch (error) {
-    if (error instanceof MigrationSourceChangedError) {
-      throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);
-    }
-    if (error instanceof MigrationTransactionError) {
-      throw transactionWriteError(path, error);
-    }
-    throw error;
-  }
+  const backupPath = await replaceConfigContent(path, source, original.originalBytes);
+  if (backupPath === undefined) throw migrationWriteError("could not publish the required recovery backup");
+  return backupPath;
+}
+
+/** Restores an internal failed replacement without retaining a second rejected-candidate backup. */
+export async function restoreConfigReplacementWithoutPublishingBackup(
+  path: string,
+  source: ConfigMigrationSource,
+  original: ConfigMigrationSource
+): Promise<void> {
+  await replaceConfigContent(path, source, original.originalBytes, false);
 }
 
 async function readConfigBytes(path: string): Promise<Buffer> {

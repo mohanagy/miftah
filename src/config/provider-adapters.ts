@@ -220,7 +220,7 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
-function isLiteralAbsolutePath(value: unknown): value is string {
+export function isLiteralAbsolutePath(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
@@ -232,12 +232,19 @@ function isLiteralAbsolutePath(value: unknown): value is string {
 }
 
 function requireCredentialFile(value: unknown): string {
-  if (
-    !isLiteralAbsolutePath(value)
-  ) {
+  if (!isLiteralAbsolutePath(value)) {
     throw new ProviderAdapterAccountProfileError();
   }
   return value;
+}
+
+function isSafeStateDirectoryProfile(profile: string): boolean {
+  return profile.length > 0 &&
+    profile !== "." &&
+    profile !== ".." &&
+    !profile.includes("/") &&
+    !profile.includes("\\") &&
+    !hasControlCharacter(profile);
 }
 
 function adapterStateDirectory(
@@ -246,6 +253,9 @@ function adapterStateDirectory(
   configurationPath: string | undefined,
   profile: string
 ): string {
+  if (!isSafeStateDirectoryProfile(profile)) {
+    throw new ProviderAdapterAccountProfileError();
+  }
   const configurationIdentity = configurationPath === undefined
     ? configurationName
     : resolve(configurationPath);

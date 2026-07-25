@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import type { MiftahConfig, ProfileConfig } from "./types.js";
 import {
   buildProviderAdapterAccountProfile,
+  isLiteralAbsolutePath,
   PROVIDER_ADAPTER_CATALOG,
   ProviderAdapterAccountProfileError
 } from "./provider-adapters.js";
@@ -218,16 +219,7 @@ function requireOAuthClientSecretsFile(value: unknown): string {
   if (typeof value !== "string") {
     catalogError("Preset option 'oauthClientSecretsFile' must be a string.");
   }
-  if (
-    !value ||
-    value.trim() !== value ||
-    !isAbsolute(value) ||
-    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(value) ||
-    Array.from(value).some((character) => {
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
-    })
-  ) {
+  if (!isLiteralAbsolutePath(value)) {
     catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
   }
   return value;

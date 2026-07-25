@@ -12,6 +12,7 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
 import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
 import { runSetupCommand } from "../src/cli/setup.js";
 import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
+import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
@@ -78,6 +79,18 @@ describe("setup command", () => {
   it("makes the guided setup flow a first-class command", () => {
     expect(parseCli(["setup"])).toEqual({ kind: "run", command: "setup", options: {} });
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
+  });
+
+  it("renders incompatible provider-account flags exactly as users pass them", async () => {
+    await expect(runSetupCommand({
+      addProfile: true,
+      credentialEnv: "GSC_TOKEN"
+    }, {
+      input: new PassThrough(),
+      output: new PassThrough(),
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Option '--credential-env' is unavailable when adding a provider-owned account.");
   });
 
   it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {
@@ -750,6 +763,66 @@ describe("setup command", () => {
     expect(profileReadinessMocks.run).toHaveBeenCalledWith(configPath, { profile: "google-third" });
     expect(transcript).toContain("Added provider-owned account profile 'google-third'");
     expect(transcript).not.toContain(thirdSecrets);
+  });
+
+  it("skips readiness without prompting after a scripted provider-account addition", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "gsc-noninteractive-account.json");
+    const firstSecrets = resolve(outputRoot, "google-work-client-secrets.json");
+    const secondSecrets = resolve(outputRoot, "google-personal-client-secrets.json");
+    const original = `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-work", oauthClientSecretsFile: firstSecrets }],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+    const streams = createStreams();
+    Object.assign(streams.input, { isTTY: false });
+    Object.assign(streams.output, { isTTY: false });
+
+    const command = runSetupCommand({
+      addProfile: true,
+      config: configPath,
+      profile: "google-personal",
+      oauthClientSecretsFile: secondSecrets
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    });
+    setImmediate(() => streams.input.end());
+
+    await expect(command).resolves.toEqual({ verification: "skipped", exitCode: 0, reports: [] });
+    expect(profileReadinessMocks.run).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain("First-success verification was skipped");
+    expect(streams.transcript.contents).not.toContain("Run the reviewed safe readiness check for the new account now?");
+  });
+
+  it("rejects a NUL profile before it can become provider state or mutate the configuration", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "gsc-nul-profile.json");
+    const firstSecrets = resolve(outputRoot, "google-work-client-secrets.json");
+    const secondSecrets = resolve(outputRoot, "google-personal-client-secrets.json");
+    const original = `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-work", oauthClientSecretsFile: firstSecrets }],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath }), null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+
+    await expect(runProviderAccountSetup({
+      config: configPath,
+      profile: "google\0personal",
+      oauthClientSecretsFile: secondSecrets
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Profile name must not contain a NUL character.");
+
+    expect(await readFile(configPath, "utf8")).toBe(original);
   });
 
   it("keeps the written config and returns an incomplete nonzero outcome when the post-write readiness prompt is cancelled", async () => {

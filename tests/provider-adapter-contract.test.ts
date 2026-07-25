@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import {
+  buildProviderAdapterAccountProfile,
   getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
-  PROVIDER_ADAPTER_CATALOG
+  PROVIDER_ADAPTER_CATALOG,
+  ProviderAdapterAccountProfileError
 } from "../src/config/provider-adapters.js";
 import type {
   ProviderAdapterDefinition,
@@ -297,6 +299,19 @@ describe("provider adapter contract", () => {
       // provisioning flow must not infer isolation from the base profile alone.
       expect(getProviderAdapterForProfileTarget(overridden, "work", "secondary")).toBeDefined();
       expect(getProviderAdapterForAccountProvisioning(overridden), environment).toBeUndefined();
+    }
+  });
+
+  it("keeps provider-owned state inside its adapter namespace for every direct account-profile caller", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const request = {
+      configurationName: "gsc",
+      configurationPath: privatePath("miftah", "gsc.json"),
+      credentialFile: privatePath("client-secrets.json")
+    };
+
+    for (const profile of ["..", "../outside", "nested/account", "nested\\account", "google\0work"]) {
+      expect(() => buildProviderAdapterAccountProfile(adapter, { ...request, profile })).toThrow(ProviderAdapterAccountProfileError);
     }
   });
 });

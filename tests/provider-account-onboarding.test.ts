@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
@@ -120,11 +120,31 @@ describe("provider-owned account onboarding", () => {
     };
 
     try {
-      await expect(runProviderAccountAddition({
+      const failure = await runProviderAccountAddition({
         configPath,
         profile: "google-third",
         credentialFile: thirdSecrets
-      }, { audit })).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+      }, { audit }).then(
+        () => {
+          throw new Error("Expected provider-owned account addition to fail when the audit record cannot be written.");
+        },
+        (error: unknown) => error
+      );
+
+      expect(failure).toMatchObject({
+        code: "AUDIT_WRITE_FAILED",
+        message: expect.stringContaining("configuration was restored")
+      });
+      if (!(failure instanceof MiftahError)) throw failure;
+      const backupPaths = failure.details?.backupPaths;
+      expect(backupPaths).toHaveLength(1);
+      if (!Array.isArray(backupPaths) || !backupPaths.every((path): path is string => typeof path === "string")) {
+        throw new Error("Expected audit recovery failure details to retain the original configuration backup path.");
+      }
+      expect(await readFile(backupPaths[0]!, "utf8")).toBe(original);
+      const backups = (await readdir(directory))
+        .filter((entry) => entry.startsWith("gsc.json.miftah-backup-"));
+      expect(backups).toHaveLength(1);
 
       expect(audit.intent).toHaveBeenCalledWith({ profile: "google-third" });
       expect(audit.record).toHaveBeenCalledWith({ profile: "google-third", status: "success" });
@@ -133,6 +153,51 @@ describe("provider-owned account onboarding", () => {
       const resulting = JSON.parse(restored) as { profiles: Record<string, unknown> };
       expect(resulting.profiles).not.toHaveProperty("google-third");
       expect(resulting).toEqual(originalConfig);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects provider-account addition for a configuration outside a reviewed adapter without changing it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-provider-account-unsupported-"));
+    const configPath = join(directory, "generic.json");
+    const original = `${JSON.stringify(buildPresetConfig("generic", "generic"), null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+
+    try {
+      await expect(runProviderAccountAddition({
+        configPath,
+        profile: "other-account",
+        credentialFile: join(directory, "client-secrets.json")
+      })).rejects.toMatchObject({ code: "PROVIDER_ACCOUNT_ADDITION_UNSUPPORTED" });
+
+      expect(await readFile(configPath, "utf8")).toBe(original);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-literal provider credential paths without changing the selected configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-provider-account-input-"));
+    const configPath = join(directory, "gsc.json");
+    const existingSecrets = join(directory, "existing-client-secrets.json");
+    const originalConfig = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [{ name: "google-work", oauthClientSecretsFile: existingSecrets }],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+    const original = `${JSON.stringify(originalConfig, null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+
+    try {
+      for (const credentialFile of ["relative-client-secrets.json", "${HOME}/client-secrets.json"]) {
+        await expect(runProviderAccountAddition({
+          configPath,
+          profile: "google-personal",
+          credentialFile
+        })).rejects.toMatchObject({ code: "PROVIDER_ACCOUNT_INPUT_INVALID" });
+
+        expect(await readFile(configPath, "utf8")).toBe(original);
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

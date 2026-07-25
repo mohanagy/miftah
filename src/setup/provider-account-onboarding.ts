@@ -4,7 +4,7 @@ import { AuditTrail } from "../audit/audit-trail.js";
 import {
   applyConfigReplacement,
   readConfigMigrationSource,
-  restoreConfigReplacement,
+  restoreConfigReplacementWithoutPublishingBackup,
   type ConfigMigrationSource
 } from "../cli/migrate-config.js";
 import {
@@ -197,7 +197,23 @@ async function restoreAfterAuditFailure(
       "AUDIT_WRITE_FAILED: required audit finalization failed and configuration recovery could not be confirmed"
     );
   }
-  await restoreConfigReplacement(configPath, replacement, source);
+  await restoreConfigReplacementWithoutPublishingBackup(configPath, replacement, source);
+}
+
+function auditFailureAfterRestoration(backupPath: string): MiftahError {
+  return new MiftahError(
+    "AUDIT_WRITE_FAILED",
+    `AUDIT_WRITE_FAILED: required audit finalization failed; configuration was restored and the original configuration backup was retained at '${backupPath}'`,
+    { backupPaths: [backupPath] }
+  );
+}
+
+function auditFailureWithUnconfirmedRecovery(backupPath: string): MiftahError {
+  return new MiftahError(
+    "AUDIT_WRITE_FAILED",
+    `AUDIT_WRITE_FAILED: required audit finalization failed and configuration recovery could not be confirmed; the original configuration backup was retained at '${backupPath}'`,
+    { backupPaths: [backupPath] }
+  );
 }
 
 /** Performs one fail-closed, guarded account-profile replacement with a recovery backup when needed. */
@@ -214,16 +230,13 @@ export async function runProviderAccountAddition(
   const backupPath = await applyConfigReplacement(configPath, source, plan.config);
   try {
     await audit?.record({ profile: plan.profile, status: "success" });
-  } catch (error) {
+  } catch {
     try {
       await restoreAfterAuditFailure(configPath, source, plan.config);
     } catch {
-      throw new MiftahError(
-        "AUDIT_WRITE_FAILED",
-        "AUDIT_WRITE_FAILED: required audit finalization failed and configuration recovery could not be confirmed"
-      );
+      throw auditFailureWithUnconfirmedRecovery(backupPath);
     }
-    throw error;
+    throw auditFailureAfterRestoration(backupPath);
   }
   return {
     changed: true,

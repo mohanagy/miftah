@@ -23,6 +23,14 @@ export interface SetupCommandResult {
 
 type ReadinessDecision = "verify" | "skip" | "cancelled";
 
+function flagName(option: string): string {
+  return option.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function isTty(context: InitCommandContext): boolean {
+  return context.input.isTTY === true && context.output.isTTY === true;
+}
+
 /**
  * Starts the human-first setup journey while retaining `init` for scripts and
  * existing automation. Both entry points deliberately use the same planner,
@@ -54,10 +62,10 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "upstream"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
     if (incompatible !== undefined) {
-      throw new CliUsageError(`Option '--${incompatible}' is unavailable when adding a provider-owned account.`);
+      throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when adding a provider-owned account.`);
     }
     const added = await runProviderAccountSetup(options, context);
-    const decision = options.verify === true ? "verify" : await confirmReadiness(context, "the new account now");
+    const decision = options.verify === true ? "verify" : !isTty(context) ? "skip" : await confirmReadiness(context, "the new account now");
     if (decision === "skip") {
       context.output.write("First-success verification was skipped; the new account was added but has not been tested with the provider.\n");
       return { verification: "skipped", exitCode: 0, reports: [] };
@@ -101,7 +109,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "acceptLocalCommand"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
     if (incompatible !== undefined) {
-      throw new CliUsageError(`Option '--${incompatible}' is unavailable for endpoint-first native OAuth setup.`);
+      throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable for endpoint-first native OAuth setup.`);
     }
     await runNativeOAuthSetup(options, context, {
       ...(context.nativeOAuthFetch === undefined ? {} : { fetch: context.nativeOAuthFetch })
