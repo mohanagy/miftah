@@ -80,6 +80,39 @@ describe("durable default-profile onboarding", () => {
     }
   });
 
+  it("does not write or audit when the requested durable default is already selected", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-default-profile-noop-"));
+    const configPath = join(directory, "analytics.json");
+    const original = `\n${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { work: {}, personal: {} }
+    }, null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+    const audit = {
+      ensureWritable: vi.fn().mockResolvedValue(undefined),
+      intent: vi.fn().mockResolvedValue(undefined),
+      record: vi.fn().mockResolvedValue(undefined)
+    };
+
+    try {
+      await expect(runDefaultProfileChange({ configPath, profile: "work" }, { audit })).resolves.toEqual({
+        changed: false,
+        profile: "work",
+        actions: ["Durable default profile is already 'work'."],
+        write: false
+      });
+      expect(await readFile(configPath, "utf8")).toBe(original);
+      expect(audit.ensureWritable).not.toHaveBeenCalled();
+      expect(audit.intent).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("restores the original configuration when the final required audit record fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-default-profile-audit-recovery-"));
     const configPath = join(directory, "gsc.json");

@@ -73,14 +73,13 @@ export function planDefaultProfileChange(input: unknown, options: DefaultProfile
   if (!Object.hasOwn(config.profiles, options.profile)) profileNotFound();
 
   const defaultChanged = config.defaultProfile !== options.profile;
-  const candidate = structuredClone(config) as MiftahConfig;
-  candidate.defaultProfile = options.profile;
-  validateConfig(candidate);
+  config.defaultProfile = options.profile;
+  validateConfig(config);
 
   return {
     changed: migrated.changed || defaultChanged,
     profile: options.profile,
-    config: candidate,
+    config,
     actions: [
       ...migrated.actions,
       defaultChanged
