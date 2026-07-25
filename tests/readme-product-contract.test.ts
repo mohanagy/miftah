@@ -55,6 +55,10 @@ describe("product README", () => {
   it("gives a first-time user complete setup and profile-selection journeys", () => {
     expect(readme).toContain("## Choose your setup path");
     expect(readme).toContain("miftah setup");
+    expect(readme).toContain("enter `remote` for a remote HTTPS endpoint");
+    expect(readme).toContain("`local` for a reviewed executable and argument array");
+    expect(readme).toContain("The plain `remote` path does not discover OAuth or call the upstream");
+    expect(readme).toContain("use `--native-oauth` when the server advertises standards-based OAuth");
     expect(readme).toContain("never asks for a token, password, or browser cookie");
     expect(readme).toContain("## First setup: GitHub with Claude Desktop");
     expect(readme).toContain("Developer → Edit Config");

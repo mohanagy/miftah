@@ -106,6 +106,18 @@ function requirePresetSelection(preset: string | undefined): string {
   return "generic";
 }
 
+/** Maps the small set of outcome-first guided answers onto the strict preset catalog. */
+function resolveGuidedPreset(preset: string | undefined): string | undefined {
+  switch (preset?.toLocaleLowerCase("en-US")) {
+    case "remote":
+      return "streamable-http";
+    case "local":
+      return "local-stdio";
+    default:
+      return preset;
+  }
+}
+
 function isTty(context: InitCommandContext): boolean {
   return context.input.isTTY === true && context.output.isTTY === true;
 }
@@ -378,9 +390,14 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   const cancellation = createCancellation(line);
   try {
     const name = options.name ?? (await prompt(line, cancellation, "Name", "miftah-wrapper"));
-    const preset = requirePresetSelection(
-      options.preset ?? (await prompt(line, cancellation, "Catalog preset", defaultPresetForPlatform()))
-    );
+    const preset = requirePresetSelection(resolveGuidedPreset(
+      options.preset ?? (await prompt(
+        line,
+        cancellation,
+        "What do you want to set up? (connector name, remote, or local)",
+        defaultPresetForPlatform()
+      ))
+    ));
     const presetOptions = await collectPresetOptions(line, cancellation, preset, options, context.output);
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
