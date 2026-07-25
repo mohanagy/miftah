@@ -387,6 +387,19 @@ function selectedClientEntry(value: unknown, container: ClientEntryContainer): I
   return hasUrl ? selectedRemoteEntry(value) : selectedStdioEntry(value, container);
 }
 
+function credentialFreeBaselineUpstream(baseline: MiftahConfig): NonNullable<MiftahConfig["upstream"]> {
+  const upstream = baseline.upstream;
+  if (
+    upstream === undefined
+    || Object.hasOwn(upstream, "env")
+    || Object.hasOwn(upstream, "headers")
+    || upstream.trustToolAnnotations === true
+  ) {
+    importError("The imported MCP entry could not be converted into a credential-free Miftah configuration.");
+  }
+  return upstream;
+}
+
 function safeImportedConfig(name: string, upstream: ImportedClientEntry): MiftahConfig {
   try {
     const baseline = "command" in upstream
@@ -397,10 +410,7 @@ function safeImportedConfig(name: string, upstream: ImportedClientEntry): Miftah
           ...(upstream.cwd === undefined ? {} : { cwd: upstream.cwd })
         })
       : buildPresetConfig(name, "streamable-http", { url: upstream.url });
-    const serializedUpstream = baseline.upstream;
-    if (serializedUpstream === undefined) {
-      importError("The imported MCP entry could not be converted into a valid Miftah configuration.");
-    }
+    const serializedUpstream = credentialFreeBaselineUpstream(baseline);
     return validateConfig({
       ...baseline,
       description: `${name} imported from an existing MCP client entry`,
@@ -415,6 +425,7 @@ function safeImportedConfig(name: string, upstream: ImportedClientEntry): Miftah
       tooling: { ...baseline.tooling, unknownToolRisk: "destructive" }
     });
   } catch (error) {
+    if (error instanceof ClientEntryImportError) throw error;
     if (error instanceof Error) {
       importError("The imported MCP entry could not be converted into a valid Miftah configuration.");
     }
