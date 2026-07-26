@@ -154,7 +154,12 @@ export function renderClientSnippet(client: ClientName, input: ClientSnippetInpu
   };
 }
 
-/** Formats non-secret client handoff copy consistently across every CLI setup path. */
+/**
+ * Formats a generated client entry with its non-secret multi-profile handoff guidance.
+ *
+ * @param snippet - A generated client entry whose JSON has already been validated for display.
+ * @returns Copy-ready text for a client configuration handoff; it never adds credential values.
+ */
 export function formatClientSnippetHandoff(snippet: ClientSnippet): string {
   return `${snippet.target.label} (${snippet.client}):\n${snippet.guidance}\n${snippet.json}\n`;
 }
