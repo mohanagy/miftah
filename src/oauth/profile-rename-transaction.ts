@@ -538,6 +538,20 @@ async function prepareTargetCredentials(
   }
 }
 
+async function assertDestinationCredentialsAbsent(
+  bindings: readonly OAuthProfileRenameBindingPair[],
+  store: OAuthCredentialStore
+): Promise<void> {
+  for (const binding of bindings) {
+    if (await store.load(binding.to) !== undefined) {
+      throw new MiftahError(
+        "OAUTH_CONNECTION_INVALID",
+        "OAUTH_CONNECTION_INVALID: the renamed OAuth connection already has a destination credential"
+      );
+    }
+  }
+}
+
 async function completeForward(
   journal: OAuthProfileRenameJournal,
   dependencies: OAuthProfileRenameDependencies
@@ -591,10 +605,10 @@ async function completeRollback(
       } else if (to !== undefined && !credentialsEqual(from, to)) {
         recoveryRequired();
       }
-    } else if (from !== undefined) {
+    } else if (from !== undefined || to !== undefined) {
       recoveryRequired();
     }
-    if (to !== undefined) await dependencies.credentialStore.delete(binding.to);
+    if (binding.originalCredentialPresent && to !== undefined) await dependencies.credentialStore.delete(binding.to);
     await dependencies.registry.restoreProfileBinding(binding.from, binding.to, binding.originalMetadata);
   }
 }
@@ -744,6 +758,7 @@ export async function runOAuthProfileRenameTransaction(
     return withOAuthConnectionBindingLocks(
       request.bindings.flatMap((binding) => [binding.from, binding.to]),
       async () => {
+        await assertDestinationCredentialsAbsent(request.bindings, dependencies.credentialStore);
         const journal = await captureJournal(
           configPath,
           request.source,

@@ -203,6 +203,41 @@ describe("native OAuth profile rename transaction", () => {
     await expect(readFile(configPath)).resolves.toEqual(originalBytes);
   });
 
+  it("rejects a pre-existing destination credential before creating recovery state or altering either vault key", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-profile-rename-destination-collision-"));
+    directories.push(directory);
+    const configPath = join(directory, "remote-analytics.json");
+    await writeOAuthConfig(configPath);
+    const originalBytes = await readFile(configPath);
+    const source = await readConfigMigrationSource(configPath);
+    const candidate = planProfileRename(JSON.parse(originalBytes.toString("utf8")), {
+      configPath,
+      profile: "work",
+      newProfile: "studio"
+    }).config;
+    const canonicalConfigPath = await canonicalOAuthProfileRenameConfigPath(configPath);
+    const credentials = new MemoryCredentialStore();
+    const registry = new OAuthConnectionRegistry(new MemoryMetadataStore(), () => "2030-01-02T03:04:05.000Z");
+    const oldBinding = binding(canonicalConfigPath, "work");
+    const newBinding = binding(canonicalConfigPath, "studio");
+    const credential = { accessToken: "fixture-access-token" };
+    const create = vi.fn(async () => undefined);
+    const journalStore = { load: async () => undefined, create, remove: async () => undefined };
+    await credentials.save(oldBinding, credential);
+    await credentials.save(newBinding, credential);
+    await registry.create(oldBinding);
+
+    await expect(runOAuthProfileRenameTransaction(
+      { configPath, source, candidate, bindings: [{ from: oldBinding, to: newBinding }] },
+      { credentialStore: credentials, registry, journalStore }
+    )).rejects.toMatchObject({ code: "OAUTH_CONNECTION_INVALID" });
+
+    expect(create).not.toHaveBeenCalled();
+    await expect(credentials.load(oldBinding)).resolves.toEqual(credential);
+    await expect(credentials.load(newBinding)).resolves.toEqual(credential);
+    await expect(readFile(configPath)).resolves.toEqual(originalBytes);
+  });
+
   it("moves the exact vault key and non-secret metadata only with the guarded config rename", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-profile-rename-"));
     directories.push(directory);
@@ -488,6 +523,46 @@ describe("native OAuth profile rename transaction", () => {
     await expect(registry.get(newBinding.connectionRef, newBinding)).resolves.toMatchObject({ identityState: "verified" });
     await expect(readFile(oauthProfileRenameJournalPath(canonicalConfigPath), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(sourceBackupPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails closed and retains a destination credential that a credential-less source transaction could not have created during rollback", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-profile-rename-credential-less-rollback-"));
+    directories.push(directory);
+    const configPath = join(directory, "remote-analytics.json");
+    await writeOAuthConfig(configPath);
+    const canonicalConfigPath = await canonicalOAuthProfileRenameConfigPath(configPath);
+    const originalBytes = await readFile(configPath);
+    const plan = planProfileRename(JSON.parse(originalBytes.toString("utf8")), {
+      configPath,
+      profile: "work",
+      newProfile: "studio"
+    });
+    const targetBytes = Buffer.from(`${JSON.stringify(plan.config, null, 2)}\n`);
+    const oldBinding = binding(canonicalConfigPath, "work");
+    const newBinding = binding(canonicalConfigPath, "studio");
+    const credentials = new MemoryCredentialStore();
+    const registry = new OAuthConnectionRegistry(new MemoryMetadataStore(), () => "2030-01-02T03:04:05.000Z");
+    await credentials.save(newBinding, { accessToken: "fixture-destination-token" });
+    const sourceBackupPath = join(dirname(canonicalConfigPath), ".remote-analytics.json.miftah-oauth-profile-rename-source-credential-less");
+    await writeFile(sourceBackupPath, originalBytes, { mode: 0o600 });
+    const journal: OAuthProfileRenameJournal = {
+      version: 1,
+      configIdentity: createOAuthConfigIdentity(canonicalConfigPath),
+      sourceHash: hash(originalBytes),
+      targetHash: hash(targetBytes),
+      auditRequired: false,
+      sourceBackupPath,
+      bindings: [{ from: oldBinding, to: newBinding, originalCredentialPresent: false }]
+    };
+    await new FileOAuthProfileRenameJournalStore().create(canonicalConfigPath, journal);
+
+    await expect(recoverOAuthProfileRename(configPath, { credentialStore: credentials, registry }))
+      .rejects.toMatchObject({ code: "OAUTH_PROFILE_RENAME_RECOVERY_REQUIRED" });
+
+    await expect(credentials.load(oldBinding)).resolves.toBeUndefined();
+    await expect(credentials.load(newBinding)).resolves.toEqual({ accessToken: "fixture-destination-token" });
+    await expect(readFile(oauthProfileRenameJournalPath(canonicalConfigPath), "utf8")).resolves.toContain('"version":1');
+    await expect(readFile(sourceBackupPath)).resolves.toEqual(originalBytes);
   });
 
   it("fails closed instead of following a symbolic-link source backup during recovery", async () => {
