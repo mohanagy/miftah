@@ -6,6 +6,7 @@ import {
   createSetupConfigurationPlan,
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
+import { createSetupCompletion } from "../setup/setup-completion.js";
 import {
   planNativeOAuthFirstRunConfiguration,
   runNativeOAuthAccountAddition
@@ -207,6 +208,21 @@ function writeClientHandoff(
   }
 }
 
+function writeFirstRunCompletion(
+  context: InitCommandContext,
+  selection: string | undefined,
+  configPath: string
+): void {
+  const completion = createSetupCompletion({
+    surface: "cli",
+    verification: "authorization-pending",
+    clientHandoff: selection === undefined ? "not-generated" : "shown",
+    configPath
+  });
+  context.output.write(`${completion.verification.message}\n`);
+  context.output.write(`${completion.clientHandoff.message}\n`);
+}
+
 /**
  * Performs endpoint-first OAuth planning before any configuration path is created.
  * It does not launch a browser, dynamically register a client, or create a credential.
@@ -267,4 +283,5 @@ export async function runNativeOAuthSetup(
   }
   context.output.write(`Created ${configuration.path}\n`);
   writeClientHandoff(context, values.client, plan.config.name, configuration.path);
+  writeFirstRunCompletion(context, values.client, configuration.path);
 }

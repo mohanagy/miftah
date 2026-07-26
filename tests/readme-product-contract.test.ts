@@ -60,6 +60,9 @@ describe("product README", () => {
     expect(readme).toContain("enter `remote` for a remote HTTPS endpoint");
     expect(readme).toContain("`local` for a reviewed executable and argument array");
     expect(readme).toContain("can print an optional client JSON snippet for manual review");
+    expect(readme).toContain("When setup finishes, Miftah tells you whether it ran a reviewed check, skipped one, or had no declared safe check at all.");
+    expect(readme).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
+    expect(readme).toContain("You still review and merge any client JSON yourself, then restart or reconnect the client.");
     expect(readme).toContain("The generic `remote` path does not discover authentication or call the endpoint");
     expect(readme).toContain("Choose `browser sign-in` when the remote MCP opens a browser to authenticate you");
     expect(readme).toContain("Keep `miftah setup --native-oauth` for scripted or repeatable setup");
@@ -85,6 +88,8 @@ describe("product README", () => {
     expect(cliDocs).toContain(
       "With a bare TTY invocation, it asks what you already have: `connector`, `remote`, `local`, `browser sign-in`, or `import`."
     );
+    expect(cliDocs).toContain("The completion handoff prints the actual configuration path in any later `miftah profile test` command.");
+    expect(cliDocs).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
     expect(cliDocs).not.toContain("it first offers `new` or `import`");
   });
 

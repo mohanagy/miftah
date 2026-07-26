@@ -36,6 +36,7 @@ import {
   createSetupConfigurationPlan,
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
+import { createSetupCompletion, type SetupCompletion } from "../setup/setup-completion.js";
 import {
   planNativeOAuthFirstRunConfiguration,
   runNativeOAuthAccountAddition,
@@ -106,6 +107,11 @@ export interface ConsoleConnectionAddRequest extends OAuthConnectionAddRequest {
 
 /** Console responses never expose local configuration or recovery-file paths. */
 export type ConsoleConnectionAddReport = Omit<ConnectionAddCommandReport, "backupPath">;
+
+/** First-run native OAuth returns a truthful local handoff without exposing configuration paths. */
+export type ConsoleFirstRunNativeOAuthOnboardingReport = ConsoleConnectionAddReport & {
+  readonly completion: SetupCompletion;
+};
 
 export interface ConsoleNativeOAuthOnboardingRequest {
   readonly name: string;
@@ -219,6 +225,8 @@ export interface ConsolePresetOnboardingReport {
   readonly defaultProfile: string;
   readonly profileCount: number;
   readonly actions: readonly string[];
+  /** Present for the built-in first-run flow; optional for custom ConsoleControlApplication implementations. */
+  readonly completion?: SetupCompletion;
 }
 
 /** Non-secret, explicitly selected local stdio or canonical HTTPS MCP entry pasted into first-run Console setup. */
@@ -394,6 +402,16 @@ function safeAuditRecord(value: unknown): ConsoleAuditRecord | undefined {
     if (typeof input[key] === "string") output[key] = input[key];
   }
   return output;
+}
+
+function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
+  const metadata = consoleInitializedConfigMetadata(config);
+  const hasDeclaredSafeCheck = (metadata.authentication?.readinessTargets?.length ?? 0) > 0;
+  return createSetupCompletion({
+    surface: "console",
+    verification: hasDeclaredSafeCheck ? "available" : "not-declared",
+    clientHandoff: "available"
+  });
 }
 
 class ConsoleConnectionAuditSink implements ConnectionApplicationAuditSink {
@@ -619,7 +637,9 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     return consoleInitializedConfigMetadata(config);
   }
 
-  async onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport> {
+  async onboardNativeOAuth(
+    request: ConsoleNativeOAuthOnboardingRequest
+  ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     const connectionRef = parseOAuthConnectionRef(`oauthconn:${this.generateConnectionRef()}`);
     const profile = {
       ...(request.description === undefined || request.description.length === 0
@@ -663,13 +683,18 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       actions: [
         `Created profile '${request.profile}'.`,
         `Added OAuth connection for profile '${request.profile}' and upstream 'default'.`
-      ]
+      ],
+      completion: createSetupCompletion({
+        surface: "console",
+        verification: "authorization-pending",
+        clientHandoff: "available"
+      })
     };
   }
 
   async onboardDiscoveredNativeOAuth(
     request: ConsoleDiscoveredNativeOAuthOnboardingRequest
-  ): Promise<ConsoleConnectionAddReport> {
+  ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     const plan = await planNativeOAuthFirstRunConfiguration(request, {
       generateConnectionRef: this.generateConnectionRef,
       ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch })
@@ -688,7 +713,12 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       profile: request.profile,
       upstream: "default",
       resource: plan.discovery.resource,
-      actions: [...plan.actions]
+      actions: [...plan.actions],
+      completion: createSetupCompletion({
+        surface: "console",
+        verification: "authorization-pending",
+        clientHandoff: "available"
+      })
     };
   }
 
@@ -737,7 +767,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       name: config.name,
       defaultProfile: config.defaultProfile,
       profileCount: Object.keys(config.profiles).length,
-      actions: [`Created Miftah configuration '${config.name}' from preset '${request.preset}'.`]
+      actions: [`Created Miftah configuration '${config.name}' from preset '${request.preset}'.`],
+      completion: firstRunSetupCompletion(config)
     };
   }
 
@@ -781,7 +812,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
         config.upstream?.transport === "streamable-http"
           ? `Created Miftah configuration '${config.name}' from one selected HTTPS remote client entry without OAuth discovery or an upstream call.`
           : `Created Miftah configuration '${config.name}' from one selected local stdio client entry.`
-      ]
+      ],
+      completion: firstRunSetupCompletion(config)
     };
   }
 

@@ -8,6 +8,7 @@ import {
   type ConsoleAuditRecord,
   type ConsoleClientEntryOnboardingRequest,
   type ConsoleConnectionAddReport,
+  type ConsoleFirstRunNativeOAuthOnboardingReport,
   type ConsoleConnectionAddRequest,
   type ConsoleControlApplication,
   type ConsoleDefaultProfileChangeReport,
@@ -131,7 +132,9 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     return (await this.selectedApplication()).application.health();
   }
 
-  async onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport> {
+  async onboardNativeOAuth(
+    request: ConsoleNativeOAuthOnboardingRequest
+  ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardNativeOAuth(request);
     await this.confirmCreatedFirstRunConfiguration();
@@ -140,7 +143,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
 
   async onboardDiscoveredNativeOAuth(
     request: ConsoleDiscoveredNativeOAuthOnboardingRequest
-  ): Promise<ConsoleConnectionAddReport> {
+  ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardDiscoveredNativeOAuth(request);
     await this.confirmCreatedFirstRunConfiguration();

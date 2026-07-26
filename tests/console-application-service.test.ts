@@ -47,6 +47,26 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
     : { command: "npx", args: ["--yes", "@posthog/mcp@1.2.3"] };
 }
 
+const manualFirstRunCompletion = {
+  verification: {
+    state: "not-declared",
+    message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+  },
+  clientHandoff: {
+    state: "available",
+    message:
+      "Next: generate a copy-only client snippet below, review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file."
+  }
+} as const;
+
+const reviewedFirstRunCompletion = {
+  verification: {
+    state: "available",
+    message: "A provider-declared read-only check is available, but it has not run yet."
+  },
+  clientHandoff: manualFirstRunCompletion.clientHandoff
+} as const;
+
 afterEach(async () => {
   if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   await Promise.all(oauthUpstreams.splice(0).map((upstream) => upstream.close()));
@@ -176,7 +196,14 @@ describe("Console application service", () => {
       connectionRef,
       profile: "production",
       upstream: "default",
-      resource: "https://mcp.example.test/mcp"
+      resource: "https://mcp.example.test/mcp",
+      completion: {
+        verification: {
+          state: "authorization-pending",
+          message: "No browser authorization completed during setup. Connect later to begin the provider's authorization flow."
+        },
+        clientHandoff: manualFirstRunCompletion.clientHandoff
+      }
     });
 
     const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -251,7 +278,14 @@ describe("Console application service", () => {
         "Created profile 'production'.",
         "Discovered standards-based OAuth for profile 'production'.",
         "Added OAuth connection for profile 'production' and upstream 'default'."
-      ]
+      ],
+      completion: {
+        verification: {
+          state: "authorization-pending",
+          message: "No browser authorization completed during setup. Connect later to begin the provider's authorization flow."
+        },
+        clientHandoff: manualFirstRunCompletion.clientHandoff
+      }
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       oauth: {
@@ -431,7 +465,8 @@ describe("Console application service", () => {
       name: "support-tools",
       defaultProfile: "default",
       profileCount: 1,
-      actions: [`Created Miftah configuration 'support-tools' from preset '${preset}'.`]
+      actions: [`Created Miftah configuration 'support-tools' from preset '${preset}'.`],
+      completion: manualFirstRunCompletion
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(
       buildPresetConfig("support-tools", preset, options)
@@ -483,7 +518,8 @@ describe("Console application service", () => {
       name: "local-tools",
       defaultProfile: "default",
       profileCount: 1,
-      actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."]
+      actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."],
+      completion: manualFirstRunCompletion
     });
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -515,7 +551,8 @@ describe("Console application service", () => {
       name: "posthog-work",
       defaultProfile: "default",
       profileCount: 1,
-      actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."]
+      actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."],
+      completion: manualFirstRunCompletion
     });
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -549,7 +586,8 @@ describe("Console application service", () => {
       profileCount: 1,
       actions: [
         "Created Miftah configuration 'remote-analytics' from one selected HTTPS remote client entry without OAuth discovery or an upstream call."
-      ]
+      ],
+      completion: manualFirstRunCompletion
     });
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -617,7 +655,8 @@ describe("Console application service", () => {
       name: "gsc",
       defaultProfile: "google-craftmyletter",
       profileCount: 2,
-      actions: ["Created Miftah configuration 'gsc' from preset 'google-search-console'."]
+      actions: ["Created Miftah configuration 'gsc' from preset 'google-search-console'."],
+      completion: reviewedFirstRunCompletion
     });
     const { name, preset, ...options } = request;
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(buildPresetConfig(name, preset, options, {

@@ -907,6 +907,9 @@ describe("local Console control server", () => {
       expect(html).toContain('id="profile-readiness-upstream"');
       expect(html).toContain('id="run-profile-readiness"');
       expect(html).toContain("Run reviewed safe check");
+      expect(html).toContain('id="setup-completion-view"');
+      expect(html).toContain("Finish setup without guessing");
+      expect(html).toContain('role="status" aria-live="polite" aria-atomic="true"');
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 
@@ -922,6 +925,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/profiles/provider-account");
       expect(javascript).toContain("/api/v1/profiles/environment-account");
       expect(javascript).toContain("/api/v1/onboarding/preset");
+      expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");
       expect(javascript).toContain('querySelectorAll("input[data-setup-source]")');
@@ -1315,7 +1319,18 @@ describe("local Console control server", () => {
             name: "support-tools",
             defaultProfile: "default",
             profileCount: 1,
-            actions: [`Created Miftah configuration 'support-tools' from preset '${request.preset}'.`]
+            actions: [`Created Miftah configuration 'support-tools' from preset '${request.preset}'.`],
+            completion: {
+              verification: {
+                state: "not-declared",
+                message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              clientHandoff: {
+                state: "available",
+                message:
+                  "Next: generate a copy-only client snippet below, review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file."
+              }
+            }
           }
         });
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -1378,7 +1393,18 @@ describe("local Console control server", () => {
             name: "local-tools",
             defaultProfile: "default",
             profileCount: 1,
-            actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."]
+            actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."],
+            completion: {
+              verification: {
+                state: "not-declared",
+                message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              clientHandoff: {
+                state: "available",
+                message:
+                  "Next: generate a copy-only client snippet below, review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file."
+              }
+            }
           }
         });
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -1566,7 +1592,18 @@ describe("local Console control server", () => {
             name: "posthog-work",
             defaultProfile: "default",
             profileCount: 1,
-            actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."]
+            actions: ["Created Miftah configuration 'posthog-work' from one selected local stdio client entry."],
+            completion: {
+              verification: {
+                state: "not-declared",
+                message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              clientHandoff: {
+                state: "available",
+                message:
+                  "Next: generate a copy-only client snippet below, review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file."
+              }
+            }
           }
         });
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
@@ -1615,7 +1652,18 @@ describe("local Console control server", () => {
             profileCount: 1,
             actions: [
               "Created Miftah configuration 'remote-analytics' from one selected HTTPS remote client entry without OAuth discovery or an upstream call."
-            ]
+            ],
+            completion: {
+              verification: {
+                state: "not-declared",
+                message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              clientHandoff: {
+                state: "available",
+                message:
+                  "Next: generate a copy-only client snippet below, review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file."
+              }
+            }
           }
         });
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
