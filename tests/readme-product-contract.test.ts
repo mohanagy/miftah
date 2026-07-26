@@ -128,6 +128,11 @@ describe("product README", () => {
     expect(readme).toContain("miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --clear-description");
     expect(readme).toContain("does not change credentials, OAuth bindings, routing, provider token caches, or the durable default");
     expect(readme).toContain("Edit a non-secret account label");
+    expect(readme).toContain("### Remove an account later");
+    expect(readme).toContain("miftah profile remove --config ~/.config/miftah/gsc.json --profile google-personal --replacement-profile google-work");
+    expect(readme).toContain("does not resolve or delete an underlying secret");
+    expect(readme).toContain("Remove an account safely");
+    expect(readme).toContain("native OAuth binding");
     expect(readme).toContain("Miftah does not invent a probe or show the provider output");
     expect(readme).toContain("A non-ready readiness result leaves the configuration in place and exits 1.");
     expect(readme).toContain("If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1.");

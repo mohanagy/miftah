@@ -538,6 +538,47 @@ describe("Console dashboard application service", () => {
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
+  it("removes an existing profile only after selection and clears the stale selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-profile-removal-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "analytics.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+
+    await expect(service.removeProfile({ profile: "personal" })).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
+    const initial = await service.configMetadata();
+    const selected = initial.catalog?.configurations.find((configuration) => configuration.name === "analytics");
+    if (selected === undefined) throw new Error("Expected discovered analytics configuration.");
+    await service.selectConfiguration(selected.id);
+
+    await expect(service.removeProfile({ profile: "personal" })).resolves.toMatchObject({
+      changed: true,
+      write: true,
+      profile: "personal",
+      actions: ["Removed profile 'personal'."]
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "work",
+      profiles: { work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } } }
+    });
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
   it("adds a static environment-backed account only after selection and clears the stale selection", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-environment-account-"));
     temporaryDirectories.push(root);

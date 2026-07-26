@@ -824,6 +824,12 @@ describe("local Console control server", () => {
       expect(html).toContain('id="set-profile-description"');
       expect(html).toContain('id="clear-profile-description"');
       expect(html).toContain("Edit a non-secret account label");
+      expect(html).toContain('id="profile-removal-editor"');
+      expect(html).toContain('id="profile-removal-selection"');
+      expect(html).toContain('id="profile-removal-replacement"');
+      expect(html).toContain('id="confirm-profile-removal"');
+      expect(html).toContain('id="remove-profile"');
+      expect(html).toContain("Remove an account safely");
       expect(html).toContain('id="profile-inventory-list"');
       expect(html).toContain("Configured accounts");
       expect(html).toContain('id="configuration-catalog-view"');
@@ -926,6 +932,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value }');
       expect(javascript).toContain("/api/v1/profiles/description");
       expect(javascript).toContain("renderProfileDescriptionEditor");
+      expect(javascript).toContain("/api/v1/profiles/remove");
+      expect(javascript).toContain("renderProfileRemovalEditor");
       expect(preserveProfileDescriptionSelectionAcrossRefresh(javascript)).toEqual({
         profile: "personal",
         description: "Personal account"
@@ -2529,6 +2537,118 @@ describe("local Console control server", () => {
           personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
         }
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("removes a profile only through a strict CSRF-protected Console request and keeps OAuth-bound profiles fail-closed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-removal-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const before = JSON.parse(await readFile(configPath, "utf8"));
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/remove", server.url);
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", credential: "never-accepted" })
+      });
+      expect(rejected.status).toBe(422);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(before);
+
+      const changed = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal" })
+      });
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toEqual({
+        data: {
+          changed: true,
+          write: true,
+          profile: "personal",
+          actions: ["Removed profile 'personal'."]
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "work",
+        profiles: { work: { env: { API_KEY: "${WORK_API_KEY}" } } }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns a safe explicit refusal when a requested removal has a configured native OAuth binding", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-removal-oauth-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.com/mcp" },
+      profiles: { work: {}, personal: {} },
+      oauth: {
+        connections: {
+          "oauthconn:11111111-1111-4111-8111-111111111111": {
+            profile: "work",
+            upstream: "default",
+            resource: "https://mcp.example.com/mcp",
+            issuer: "https://auth.example.com",
+            clientRegistration: "dynamic",
+            scopes: ["openid"]
+          }
+        }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const original = await readFile(configPath, "utf8");
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/profiles/remove", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "work", replacementProfile: "personal" })
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "profile_removal_oauth_connection",
+          message: "This account has a native OAuth binding. Miftah refuses to split configuration removal from OS-vault cleanup."
+        }
+      });
+      expect(await readFile(configPath, "utf8")).toBe(original);
     } finally {
       await server.close();
     }

@@ -411,6 +411,26 @@ describe("CLI parser", () => {
     expectUsageError(["profile", "list", "--description", "not-allowed"]);
   });
 
+  it("parses explicit safe profile removal with an optional replacement", () => {
+    expect(parseCli([
+      "profile",
+      "remove",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--replacement-profile=google-work"
+    ])).toEqual({
+      kind: "run",
+      command: "profile remove",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        replacementProfile: "google-work"
+      }
+    });
+    expect(renderCommandHelp("profile remove")).toContain("--replacement-profile <name>");
+    expectUsageError(["profile", "remove", "--description", "not-allowed"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

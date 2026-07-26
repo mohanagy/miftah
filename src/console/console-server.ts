@@ -83,6 +83,13 @@ const profileDescriptionChangeSchema = z.object({
     context.addIssue({ code: "custom", message: "Provide a description or explicitly clear it." });
   }
 });
+const profileRemovalSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence and any durable references in the guarded
+  // configuration transaction rather than imposing preset-onboarding grammar.
+  profile: z.string().min(1),
+  replacementProfile: z.string().min(1).optional()
+}).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
@@ -366,6 +373,33 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       422,
       "profile_description_input_invalid",
       "Choose a trimmed non-secret profile description or explicitly clear it."
+    );
+  }
+  if (error.code === "PROFILE_REMOVAL_INPUT_INVALID") {
+    return new ConsoleHttpError(422, "profile_removal_input_invalid", "Choose an existing configured account.");
+  }
+  if (error.code === "PROFILE_LAST_PROFILE") {
+    return new ConsoleHttpError(422, "profile_last_profile", "At least one configured account must remain.");
+  }
+  if (error.code === "PROFILE_REPLACEMENT_REQUIRED") {
+    return new ConsoleHttpError(
+      422,
+      "profile_replacement_required",
+      "Choose a different configured account to receive the durable references."
+    );
+  }
+  if (error.code === "PROFILE_REPLACEMENT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "profile_replacement_invalid",
+      "Choose a different existing configured account as the replacement."
+    );
+  }
+  if (error.code === "PROFILE_REMOVAL_OAUTH_CONNECTION") {
+    return new ConsoleHttpError(
+      422,
+      "profile_removal_oauth_connection",
+      "This account has a native OAuth binding. Miftah refuses to split configuration removal from OS-vault cleanup."
     );
   }
   if (
@@ -732,6 +766,25 @@ class LocalConsoleServer implements ConsoleServer {
       }
       try {
         const result = await this.application.setProfileDescription(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/remove") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileRemovalSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.removeProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.removeProfile(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 200, { data: result });
       } catch (error) {

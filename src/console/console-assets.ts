@@ -199,6 +199,21 @@ const page = `<!doctype html>
           <p id="profile-description-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 
+        <section id="profile-removal-editor" class="work-section" hidden aria-labelledby="profile-removal-title">
+          <div class="section-heading">
+            <div><p class="step">Account lifecycle</p><h2 id="profile-removal-title">Remove an account safely</h2></div>
+            <p>Removal changes only Miftah configuration. It never reads or deletes credentials, provider token caches, or OS-vault data. A different account receives any durable default, routing, plugin, or lock reference.</p>
+          </div>
+          <div class="input-row">
+            <label class="grow">Account to remove<select id="profile-removal-selection" required></select></label>
+            <label class="grow">Replacement account<select id="profile-removal-replacement" required></select></label>
+            <label class="checkbox"><input id="confirm-profile-removal" type="checkbox"> I understand this removes the selected account from this configuration.</label>
+            <button id="remove-profile" type="button" class="danger">Remove account</button>
+          </div>
+          <p class="field-note">Profiles with native OAuth bindings stay protected: Miftah will not split configuration deletion from OS-vault cleanup until it can do both atomically.</p>
+          <p id="profile-removal-result" class="field-note" role="status" aria-live="polite"></p>
+        </section>
+
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -842,6 +857,41 @@ const script = `(() => {
     updateDescription();
   }
 
+  function renderProfileRemovalEditor(profiles, defaultProfile) {
+    const editor = byId("profile-removal-editor");
+    const profile = byId("profile-removal-selection");
+    const replacement = byId("profile-removal-replacement");
+    const confirmation = byId("confirm-profile-removal");
+    const button = byId("remove-profile");
+    const result = byId("profile-removal-result");
+    if (!(profile instanceof HTMLSelectElement) || !(replacement instanceof HTMLSelectElement)) return;
+    const previousProfile = profile.value;
+    const previousReplacement = replacement.value;
+    const canRemove = profiles.length > 1;
+    setOptions(profile, profiles);
+    if (profiles.includes(previousProfile)) profile.value = previousProfile;
+    else if (profiles.includes(defaultProfile) && profiles.length > 1) {
+      profile.value = profiles.find((name) => name !== defaultProfile) || defaultProfile;
+    }
+    const syncReplacement = () => {
+      const currentReplacement = replacement.value;
+      const choices = profiles.filter((name) => name !== profile.value);
+      setOptions(replacement, choices);
+      if (choices.includes(currentReplacement)) replacement.value = currentReplacement;
+      else if (choices.includes(previousReplacement)) replacement.value = previousReplacement;
+      else if (choices.includes(defaultProfile)) replacement.value = defaultProfile;
+      if (confirmation instanceof HTMLInputElement) confirmation.checked = false;
+    };
+    profile.disabled = !canRemove;
+    replacement.disabled = !canRemove;
+    if (confirmation instanceof HTMLInputElement) confirmation.disabled = !canRemove;
+    if (button instanceof HTMLButtonElement) button.disabled = !canRemove;
+    if (editor) editor.hidden = !canRemove;
+    if (result) result.textContent = "";
+    profile.onchange = syncReplacement;
+    syncReplacement();
+  }
+
   function renderProfileInventory(value, defaultProfile) {
     const list = byId("profile-inventory-list");
     if (!list) return;
@@ -1062,6 +1112,7 @@ const script = `(() => {
     renderProfileInventory(profileMetadata, configuredDefaultProfile);
     renderDefaultProfileEditor(profiles, configuredDefaultProfile);
     renderProfileDescriptionEditor(profileMetadata);
+    renderProfileRemovalEditor(profiles, configuredDefaultProfile);
     setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);
     setOptions(byId("connection-upstream"), upstreams);
@@ -1477,6 +1528,41 @@ const script = `(() => {
   }
   if (clearProfileDescription instanceof HTMLButtonElement) {
     clearProfileDescription.addEventListener("click", () => void saveProfileDescription(true));
+  }
+
+  const removeProfile = byId("remove-profile");
+  if (removeProfile instanceof HTMLButtonElement) {
+    removeProfile.addEventListener("click", async () => {
+      const profile = byId("profile-removal-selection");
+      const replacement = byId("profile-removal-replacement");
+      const confirmation = byId("confirm-profile-removal");
+      const result = byId("profile-removal-result");
+      if (!(profile instanceof HTMLSelectElement) || !profile.value || !(replacement instanceof HTMLSelectElement) || !replacement.value) return;
+      if (!(confirmation instanceof HTMLInputElement) || !confirmation.checked) {
+        message("Confirm that you want to remove this account from the Miftah configuration.");
+        return;
+      }
+      const selectedProfile = profile.value;
+      const replacementProfile = replacement.value;
+      removeProfile.disabled = true;
+      message("Removing the selected account from Miftah configuration…");
+      try {
+        const report = record(await api("/api/v1/profiles/remove", {
+          method: "POST",
+          body: { profile: selectedProfile, replacementProfile }
+        }));
+        const publicResult = report.changed === true
+          ? "Removed account " + selectedProfile + "."
+          : "This account was not changed.";
+        if (result) result.textContent = publicResult;
+        await refresh();
+        message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
+      } catch (error) { message(errorMessage(error)); }
+      finally {
+        const editor = byId("profile-removal-editor");
+        if (editor instanceof HTMLElement && !editor.hidden) removeProfile.disabled = false;
+      }
+    });
   }
 
   const generateSnippet = byId("generate-snippet");

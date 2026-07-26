@@ -793,6 +793,49 @@ describe("Console application service", () => {
     expect(JSON.stringify(audit)).not.toContain("Personal analytics");
   });
 
+  it("removes an unreferenced profile through the shared audited lifecycle without exposing its credential reference", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-profile-removal-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    const report = await service.removeProfile({ profile: "personal" });
+
+    expect(report).toEqual({
+      changed: true,
+      write: true,
+      profile: "personal",
+      actions: ["Removed profile 'personal'."]
+    });
+    expect(JSON.stringify(report)).not.toContain("PERSONAL_API_KEY");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "work",
+      profiles: { work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } } }
+    });
+    const audit = await service.auditRecords(10);
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-remove-intent",
+      profile: "personal",
+      status: "success"
+    }));
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-remove",
+      profile: "personal",
+      status: "success"
+    }));
+    expect(JSON.stringify(audit)).not.toContain("PERSONAL_API_KEY");
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();

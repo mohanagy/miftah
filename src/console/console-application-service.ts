@@ -71,6 +71,11 @@ import {
   type ProfileDescriptionChangeReport
 } from "../setup/profile-description-onboarding.js";
 import {
+  runProfileRemoval,
+  type ProfileRemovalAuditSink,
+  type ProfileRemovalReport
+} from "../setup/profile-removal-onboarding.js";
+import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
@@ -188,6 +193,18 @@ export type ConsoleProfileDescriptionChangeReport = Pick<
   "changed" | "write" | "profile" | "actions"
 >;
 
+/** Removes one existing profile after any required durable references are explicitly reassigned. */
+export interface ConsoleProfileRemovalRequest {
+  readonly profile: string;
+  readonly replacementProfile?: string;
+}
+
+/** Console responses intentionally omit profile contents, recovery paths, and configuration bytes. */
+export type ConsoleProfileRemovalReport = Pick<
+  ProfileRemovalReport,
+  "changed" | "write" | "profile" | "replacementProfile" | "actions"
+>;
+
 /** Non-secret input accepted for a known connector during first-run setup. */
 export interface ConsolePresetOnboardingRequest extends PresetBuildOptions {
   readonly name: string;
@@ -278,6 +295,8 @@ export interface ConsoleControlApplication {
   setProfileDescription?(
     request: ConsoleProfileDescriptionChangeRequest
   ): Promise<ConsoleProfileDescriptionChangeReport>;
+  /** Available when an initialized configuration has more than one removable profile. */
+  removeProfile?(request: ConsoleProfileRemovalRequest): Promise<ConsoleProfileRemovalReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -511,6 +530,32 @@ class ConsoleProfileDescriptionAuditSink implements ProfileDescriptionChangeAudi
     return this.trail.writeRequiredLifecycle({
       operation: "console/profile-description-set",
       name: event.cleared ? "profile description clear" : "profile description set",
+      profile: event.profile,
+      status: event.status
+    });
+  }
+}
+
+class ConsoleProfileRemovalAuditSink implements ProfileRemovalAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  intent(event: { readonly profile: string }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/profile-remove-intent",
+      name: "profile",
+      profile: event.profile,
+      status: "success"
+    });
+  }
+
+  record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/profile-remove",
+      name: "profile",
       profile: event.profile,
       status: event.status
     });
@@ -946,6 +991,26 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       changed: result.changed,
       write: result.write,
       profile: result.profile,
+      actions: result.actions
+    };
+  }
+
+  async removeProfile(request: ConsoleProfileRemovalRequest): Promise<ConsoleProfileRemovalReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runProfileRemoval({
+      configPath,
+      profile: request.profile,
+      ...(request.replacementProfile === undefined ? {} : { replacementProfile: request.replacementProfile })
+    }, {
+      trustedSource: source,
+      audit: new ConsoleProfileRemovalAuditSink(this.audit)
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
+      profile: result.profile,
+      ...(result.replacementProfile === undefined ? {} : { replacementProfile: result.replacementProfile }),
       actions: result.actions
     };
   }
