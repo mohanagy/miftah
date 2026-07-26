@@ -15,6 +15,7 @@ import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
@@ -494,7 +495,7 @@ describe("Console dashboard application service", () => {
     temporaryDirectories.push(root);
     const directory = await createPrivateConsoleDirectory(root);
     const configPath = join(directory, "sentry.json");
-    await writeConfig(configPath, buildPresetConfig("sentry", "sentry"));
+    await writeConfig(configPath, environmentProfileConfig("sentry"));
     const service = new ConsoleDashboardApplicationService({
       defaultConfigPath: join(directory, "miftah.json"),
       configDirectory: directory
@@ -502,7 +503,7 @@ describe("Console dashboard application service", () => {
     const request = {
       profile: "govalidate",
       description: "GoValidate Sentry account",
-      credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
       makeDefault: true
     };
 
@@ -521,7 +522,7 @@ describe("Console dashboard application service", () => {
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       defaultProfile: "govalidate",
-      profiles: { govalidate: { env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" } } }
+      profiles: { govalidate: { env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" } } }
     });
     await expect(service.addEnvironmentProfile(request)).rejects.toMatchObject({
       code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"

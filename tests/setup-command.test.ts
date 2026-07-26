@@ -15,6 +15,7 @@ import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
@@ -96,7 +97,7 @@ describe("setup command", () => {
   it("adds a named environment-backed account to an existing standard configuration without launching its upstream", async () => {
     await mkdir(outputRoot, { recursive: true });
     const configPath = resolve(outputRoot, "sentry.json");
-    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("sentry", "sentry"), null, 2)}\n`, { mode: 0o600 });
+    await writeFile(configPath, `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`, { mode: 0o600 });
     const input = Object.assign(new PassThrough(), { isTTY: false });
     const output = Object.assign(new PassThrough(), { isTTY: false });
     let transcript = "";
@@ -107,7 +108,7 @@ describe("setup command", () => {
       config: configPath,
       profile: "govalidate",
       description: "GoValidate Sentry account",
-      credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
       makeDefault: true
     }, {
       input,
@@ -122,7 +123,7 @@ describe("setup command", () => {
       profiles: {
         govalidate: {
           description: "GoValidate Sentry account",
-          env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" },
+          env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" },
           policy: "readonly"
         }
       }

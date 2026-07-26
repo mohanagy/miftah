@@ -11,6 +11,7 @@ import {
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import {
   startOAuthCompatibilityProbe,
   type OAuthCompatibilityProbe
@@ -674,13 +675,13 @@ describe("Console application service", () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-add-environment-account-"));
     temporaryDirectories.push(root);
     const configPath = join(root, "sentry.json");
-    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("sentry", "sentry"), null, 2)}\n`, { mode: 0o600 });
+    await writeFile(configPath, `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`, { mode: 0o600 });
     const service = new ConsoleApplicationService(configPath);
 
     await expect(service.addEnvironmentProfile({
       profile: "govalidate",
       description: "GoValidate Sentry account",
-      credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
       makeDefault: true
     })).resolves.toEqual({
       changed: true,
@@ -698,7 +699,7 @@ describe("Console application service", () => {
     expect(config.defaultProfile).toBe("govalidate");
     expect(config.profiles.govalidate).toEqual({
       description: "GoValidate Sentry account",
-      env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" },
+      env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" },
       policy: "readonly"
     });
     await expect(service.auditRecords(10)).resolves.toContainEqual(expect.objectContaining({

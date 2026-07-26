@@ -16,6 +16,7 @@ import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
@@ -2220,7 +2221,7 @@ describe("local Console control server", () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-environment-account-"));
     temporaryDirectories.push(directory);
     const configPath = join(directory, "sentry.json");
-    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("sentry", "sentry"), null, 2)}\n`, { mode: 0o600 });
+    await writeFile(configPath, `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`, { mode: 0o600 });
     const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
 
     try {
@@ -2229,7 +2230,7 @@ describe("local Console control server", () => {
       const request = {
         profile: "govalidate",
         description: "GoValidate Sentry account",
-        credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+        credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
         makeDefault: true
       };
       const rejected = await fetch(endpoint, {
@@ -2266,13 +2267,13 @@ describe("local Console control server", () => {
           "Set durable default profile to 'govalidate'."
         ]
       });
-      expect(JSON.stringify(payload)).not.toContain("SENTRY_GOVALIDATE_ACCESS_TOKEN");
+      expect(JSON.stringify(payload)).not.toContain("STATIC_GOVALIDATE_ACCESS_TOKEN");
       expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
         defaultProfile: "govalidate",
         profiles: {
           govalidate: {
             description: "GoValidate Sentry account",
-            env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" },
+            env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" },
             policy: "readonly"
           }
         }
