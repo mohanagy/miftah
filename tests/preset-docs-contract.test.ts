@@ -76,6 +76,7 @@ describe("preset documentation contract", () => {
 
     expect(readme).toContain("[Preset and client compatibility](docs/presets-and-clients.md)");
     expect(cli).toContain("[preset and client compatibility](presets-and-clients.md)");
+    expect(cli).toContain("except `--interactive`, plus `--native-oauth` and `--verify`");
     expect(claudeDesktop).toContain("Merge the generated top-level `mcpServers` property");
     expect(claudeDesktop).toMatch(/merge the generated server entry into that object instead of nesting/iu);
     expect(claudeDesktop).not.toContain("Paste the generated JSON into the `mcpServers` object");

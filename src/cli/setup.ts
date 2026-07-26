@@ -67,7 +67,7 @@ function createInteractivePromptSession(
   return {
     async prompt(label: string, defaultValue?: string): Promise<string | undefined> {
       const suffix = defaultValue === undefined ? ": " : ` [${defaultValue}]: `;
-      const answer = await Promise.race([line.question(`${label}${suffix}`), cancellation]);
+      const answer = await Promise.race([cancellation, line.question(`${label}${suffix}`)]);
       if (answer === cancelled) throw new CliUsageError(cancellationMessage);
       const value = answer.trim();
       return value === "" ? defaultValue : value;

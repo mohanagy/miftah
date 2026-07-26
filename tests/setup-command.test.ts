@@ -701,6 +701,31 @@ describe("setup command", () => {
     }
   });
 
+  it("reports guided client-entry cancellation safely between prompts", async () => {
+    const source = resolve(outputRoot, "cancel-between-prompts.json");
+    const original = JSON.stringify({ mcpServers: { analytics: importableClientEntry() } });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, original, { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    streams.input.end();
+
+    await expect(command).rejects.toThrow("Guided client-entry import was cancelled.");
+    expect(await readFile(source, "utf8")).toBe(original);
+    await expect(readFile(resolve(outputRoot, "miftah-import.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("cancels the initial guided setup choice on EOF or SIGINT before any configuration write", async () => {
     for (const cancel of [
       (streams: ReturnType<typeof createStreams>) => streams.input.end(),
