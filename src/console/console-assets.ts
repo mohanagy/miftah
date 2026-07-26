@@ -185,6 +185,20 @@ const page = `<!doctype html>
           <p id="default-profile-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 
+        <section id="profile-description-editor" class="work-section" hidden aria-labelledby="profile-description-title">
+          <div class="section-heading">
+            <div><p class="step">Account label</p><h2 id="profile-description-title">Edit a non-secret account label</h2></div>
+            <p>Labels help you recognize accounts in Miftah. They do not change credentials, OAuth bindings, routing, provider token caches, or the durable default.</p>
+          </div>
+          <div class="input-row">
+            <label class="grow">Account profile<select id="profile-description-selection" required></select></label>
+            <label class="grow">Account label<input id="profile-description-input" maxlength="1024" autocomplete="off" placeholder="Production analytics account"></label>
+            <button id="set-profile-description" type="button">Save label</button>
+            <button id="clear-profile-description" type="button" class="secondary">Clear label</button>
+          </div>
+          <p id="profile-description-result" class="field-note" role="status" aria-live="polite"></p>
+        </section>
+
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -800,6 +814,32 @@ const script = `(() => {
     if (result) result.textContent = "";
   }
 
+  function renderProfileDescriptionEditor(profileMetadata) {
+    const editor = byId("profile-description-editor");
+    const profile = byId("profile-description-selection");
+    const input = byId("profile-description-input");
+    const save = byId("set-profile-description");
+    const clear = byId("clear-profile-description");
+    const result = byId("profile-description-result");
+    if (!(profile instanceof HTMLSelectElement) || !(input instanceof HTMLInputElement)) return;
+    const profiles = Array.isArray(profileMetadata) ? profileMetadata.map(record) : [];
+    const names = profiles.map((item) => typeof item.name === "string" ? item.name : "").filter(Boolean);
+    setOptions(profile, names);
+    const canChange = names.length > 0;
+    const updateDescription = () => {
+      const selected = profiles.find((item) => item.name === profile.value);
+      input.value = selected && typeof selected.description === "string" ? selected.description : "";
+    };
+    profile.disabled = !canChange;
+    input.disabled = !canChange;
+    if (save instanceof HTMLButtonElement) save.disabled = !canChange;
+    if (clear instanceof HTMLButtonElement) clear.disabled = !canChange;
+    if (editor) editor.hidden = !canChange;
+    if (result) result.textContent = "";
+    profile.onchange = updateDescription;
+    updateDescription();
+  }
+
   function renderProfileInventory(value, defaultProfile) {
     const list = byId("profile-inventory-list");
     if (!list) return;
@@ -1019,6 +1059,7 @@ const script = `(() => {
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
     renderProfileInventory(profileMetadata, configuredDefaultProfile);
     renderDefaultProfileEditor(profiles, configuredDefaultProfile);
+    renderProfileDescriptionEditor(profileMetadata);
     setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);
     setOptions(byId("connection-upstream"), upstreams);
@@ -1390,6 +1431,50 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally { setDefaultProfile.disabled = false; }
     });
+  }
+
+  const setProfileDescription = byId("set-profile-description");
+  const clearProfileDescription = byId("clear-profile-description");
+  async function saveProfileDescription(clearDescription) {
+    const profile = byId("profile-description-selection");
+    const input = byId("profile-description-input");
+    const result = byId("profile-description-result");
+    if (!(profile instanceof HTMLSelectElement) || !profile.value || !(input instanceof HTMLInputElement)) return;
+    const selectedProfile = profile.value;
+    const description = input.value.trim();
+    if (!clearDescription && !description) {
+      message("Enter a non-secret account label or use Clear label.");
+      input.focus();
+      return;
+    }
+    if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = true;
+    if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = true;
+    message(clearDescription ? "Clearing the account label…" : "Saving the account label…");
+    try {
+      const report = record(await api("/api/v1/profiles/description", {
+        method: "POST",
+        body: clearDescription
+          ? { profile: selectedProfile, clearDescription: true }
+          : { profile: selectedProfile, description }
+      }));
+      const publicResult = report.changed === true
+        ? clearDescription ? "Account label cleared for " + selectedProfile + "." : "Account label saved for " + selectedProfile + "."
+        : clearDescription ? "This account label is already clear." : "This account label is already current.";
+      if (result) result.textContent = publicResult;
+      await refresh();
+      message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
+    } catch (error) { message(errorMessage(error)); }
+    finally {
+      if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = false;
+      if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = false;
+    }
+  }
+
+  if (setProfileDescription instanceof HTMLButtonElement) {
+    setProfileDescription.addEventListener("click", () => void saveProfileDescription(false));
+  }
+  if (clearProfileDescription instanceof HTMLButtonElement) {
+    clearProfileDescription.addEventListener("click", () => void saveProfileDescription(true));
   }
 
   const generateSnippet = byId("generate-snippet");

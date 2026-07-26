@@ -744,6 +744,55 @@ describe("Console application service", () => {
     }));
   });
 
+  it("changes a non-secret profile label without exposing it in the Console report or lifecycle audit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-profile-description-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    const report = await service.setProfileDescription({
+      profile: "personal",
+      description: "Personal analytics"
+    });
+
+    expect(report).toEqual({
+      changed: true,
+      write: true,
+      profile: "personal",
+      actions: ["Set profile description for 'personal'."]
+    });
+    expect(JSON.stringify(report)).not.toContain("Personal analytics");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "work",
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal analytics", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    });
+    const audit = await service.auditRecords(10);
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-description-set-intent",
+      profile: "personal",
+      status: "success"
+    }));
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-description-set",
+      profile: "personal",
+      status: "success"
+    }));
+    expect(JSON.stringify(audit)).not.toContain("Personal analytics");
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();

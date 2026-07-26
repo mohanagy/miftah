@@ -376,6 +376,41 @@ describe("CLI parser", () => {
     expect(renderCommandHelp("profile list")).toContain("configured account profiles");
   });
 
+  it("parses an explicit set or clear profile-description change", () => {
+    expect(parseCli([
+      "profile",
+      "set-description",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--description=Personal Search Console"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-description",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        description: "Personal Search Console"
+      }
+    });
+    expect(parseCli([
+      "profile",
+      "set-description",
+      "--config", "/Users/example/.config/miftah/gsc.json",
+      "--profile", "google-personal",
+      "--clear-description"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-description",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        clearDescription: true
+      }
+    });
+    expect(renderCommandHelp("profile set-description")).toContain("--clear-description");
+    expectUsageError(["profile", "list", "--description", "not-allowed"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

@@ -66,6 +66,11 @@ import {
   type DefaultProfileChangeReport
 } from "../setup/profile-default-onboarding.js";
 import {
+  runProfileDescriptionChange,
+  type ProfileDescriptionChangeAuditSink,
+  type ProfileDescriptionChangeReport
+} from "../setup/profile-description-onboarding.js";
+import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
@@ -170,6 +175,19 @@ export type ConsoleDefaultProfileChangeReport = Pick<
   "changed" | "write" | "profile" | "actions"
 >;
 
+/** Sets or explicitly clears only one existing non-secret account label. */
+export interface ConsoleProfileDescriptionChangeRequest {
+  readonly profile: string;
+  readonly description?: string;
+  readonly clearDescription?: true;
+}
+
+/** Console responses intentionally omit descriptions, recovery paths, and configuration bytes. */
+export type ConsoleProfileDescriptionChangeReport = Pick<
+  ProfileDescriptionChangeReport,
+  "changed" | "write" | "profile" | "actions"
+>;
+
 /** Non-secret input accepted for a known connector during first-run setup. */
 export interface ConsolePresetOnboardingRequest extends PresetBuildOptions {
   readonly name: string;
@@ -256,6 +274,10 @@ export interface ConsoleControlApplication {
   setDefaultProfile?(
     request: ConsoleDefaultProfileChangeRequest
   ): Promise<ConsoleDefaultProfileChangeReport>;
+  /** Available when an initialized configuration has an existing profile label to change. */
+  setProfileDescription?(
+    request: ConsoleProfileDescriptionChangeRequest
+  ): Promise<ConsoleProfileDescriptionChangeReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
   listConnections(): Promise<unknown>;
@@ -463,6 +485,32 @@ class ConsoleDefaultProfileAuditSink implements DefaultProfileChangeAuditSink {
     return this.trail.writeRequiredLifecycle({
       operation: "console/default-profile-set",
       name: "profile",
+      profile: event.profile,
+      status: event.status
+    });
+  }
+}
+
+class ConsoleProfileDescriptionAuditSink implements ProfileDescriptionChangeAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  intent(event: { readonly profile: string; readonly cleared: boolean }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/profile-description-set-intent",
+      name: event.cleared ? "profile description clear" : "profile description set",
+      profile: event.profile,
+      status: "success"
+    });
+  }
+
+  record(event: { readonly profile: string; readonly cleared: boolean; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/profile-description-set",
+      name: event.cleared ? "profile description clear" : "profile description set",
       profile: event.profile,
       status: event.status
     });
@@ -871,6 +919,28 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     const result = await runDefaultProfileChange({ configPath, profile: request.profile }, {
       trustedSource: source,
       audit: new ConsoleDefaultProfileAuditSink(this.audit)
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
+      profile: result.profile,
+      actions: result.actions
+    };
+  }
+
+  async setProfileDescription(
+    request: ConsoleProfileDescriptionChangeRequest
+  ): Promise<ConsoleProfileDescriptionChangeReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runProfileDescriptionChange({
+      configPath,
+      profile: request.profile,
+      ...(request.description === undefined ? {} : { description: request.description }),
+      ...(request.clearDescription === true ? { clearDescription: true } : {})
+    }, {
+      trustedSource: source,
+      audit: new ConsoleProfileDescriptionAuditSink(this.audit)
     });
     return {
       changed: result.changed,

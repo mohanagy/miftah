@@ -37,6 +37,7 @@ type BooleanOptionName =
   | "nativeOAuth"
   | "addProfile"
   | "makeDefault"
+  | "clearDescription"
   | "acceptLocalCommand";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
@@ -89,6 +90,8 @@ export interface CliOptions {
   readonly addProfile?: true;
   /** Makes the newly added endpoint-first OAuth account the durable default profile. */
   readonly makeDefault?: true;
+  /** Explicitly removes a non-secret profile description. */
+  readonly clearDescription?: true;
 }
 
 interface CliCommandMetadata {
@@ -178,6 +181,10 @@ export const CLI_COMMANDS = {
   "profile set-default": {
     description: "Change the durable default profile for future MCP sessions.",
     options: ["config", "profile"]
+  },
+  "profile set-description": {
+    description: "Set or explicitly clear a non-secret account profile description.",
+    options: ["config", "profile", "description", "clearDescription"]
   },
   "profile test": {
     description: "Run one reviewed safe readiness check for an explicit account profile.",
@@ -491,6 +498,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--make-default",
     description: "Make the newly added account the durable default profile."
   },
+  clearDescription: {
+    name: "clearDescription",
+    takesValue: false,
+    usage: "--clear-description",
+    description: "Explicitly remove the selected profile's non-secret description."
+  },
   acceptLocalCommand: {
     name: "acceptLocalCommand",
     takesValue: false,
@@ -537,6 +550,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--native-oauth": OPTION_DEFINITIONS.nativeOAuth,
   "--add-profile": OPTION_DEFINITIONS.addProfile,
   "--make-default": OPTION_DEFINITIONS.makeDefault,
+  "--clear-description": OPTION_DEFINITIONS.clearDescription,
   "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",
   "-h": "help",

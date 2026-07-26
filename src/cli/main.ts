@@ -19,6 +19,7 @@ import { runSetupCommand } from "./setup.js";
 import { runProfileReadinessCommand } from "./profile-readiness-command.js";
 import { runProfileListCommand } from "./profile-list-command.js";
 import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
+import { runProfileDescriptionChange } from "../setup/profile-description-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 import { runMigrateConfigCommand } from "./migrate-config.js";
@@ -222,6 +223,16 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     const report = await runDefaultProfileChange({
       configPath: args.config,
       profile: requireOption(command, "profile", args.profile)
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile set-description") {
+    const report = await runProfileDescriptionChange({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      ...(args.description === undefined ? {} : { description: args.description }),
+      ...(args.clearDescription === true ? { clearDescription: true } : {})
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;
