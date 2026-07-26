@@ -25,6 +25,13 @@ interface EnvironmentProfileValues {
   readonly makeDefault: boolean;
 }
 
+interface Cancellation {
+  readonly promise: Promise<never>;
+  dispose(): void;
+}
+
+type PromptInterface = ReturnType<typeof createInterface>;
+
 function usageError(message: string): never {
   throw new CliUsageError(message);
 }
@@ -39,13 +46,39 @@ function resolveConfigPath(configPath: string, cwd: string): string {
 }
 
 async function prompt(
-  line: ReturnType<typeof createInterface>,
+  line: PromptInterface,
+  cancellation: Cancellation,
   label: string,
   defaultValue?: string
 ): Promise<string | undefined> {
   const suffix = defaultValue === undefined ? ": " : ` [${defaultValue}]: `;
-  const answer = (await line.question(`${label}${suffix}`)).trim();
+  const answer = (await Promise.race([line.question(`${label}${suffix}`), cancellation.promise])).trim();
   return answer.length === 0 ? defaultValue : answer;
+}
+
+function createCancellation(line: PromptInterface): Cancellation {
+  let rejectCancellation: (reason: CliUsageError) => void = () => undefined;
+  let cancelled = false;
+  const promise = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = reject;
+  });
+  void promise.catch(() => undefined);
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    rejectCancellation(new CliUsageError("Environment-backed account setup was cancelled."));
+  };
+  line.once("close", cancel);
+  line.once("SIGINT", cancel);
+
+  return {
+    promise,
+    dispose() {
+      cancelled = true;
+      line.removeListener("close", cancel);
+      line.removeListener("SIGINT", cancel);
+    }
+  };
 }
 
 function parseYesNo(value: string | undefined): boolean {
@@ -80,16 +113,18 @@ async function collectValues(
   }
 
   const line = createInterface({ input: context.input, output: context.output, terminal: true });
+  const cancellation = createCancellation(line);
   try {
-    const profile = options.profile ?? await prompt(line, "New account profile name");
-    const description = options.description ?? await prompt(line, "Account profile description (optional)");
+    const profile = options.profile ?? await prompt(line, cancellation, "New account profile name");
+    const description = options.description ?? await prompt(line, cancellation, "Account profile description (optional)");
     const credentialEnv = options.credentialEnv ?? await prompt(
       line,
+      cancellation,
       "Environment variable that holds this account's credential"
     );
     const defaultAnswer = options.makeDefault === true
       ? "yes"
-      : await prompt(line, "Make this the durable default profile? (yes/no)", "no");
+      : await prompt(line, cancellation, "Make this the durable default profile? (yes/no)", "no");
     if (profile === undefined || credentialEnv === undefined || defaultAnswer === undefined) {
       usageError("Adding an environment-backed account requires a profile and environment variable name.");
     }
@@ -104,6 +139,7 @@ async function collectValues(
     if (error instanceof CliUsageError) throw error;
     throw new CliUsageError("Environment-backed account setup was cancelled.");
   } finally {
+    cancellation.dispose();
     line.close();
   }
 }
@@ -127,7 +163,7 @@ export async function runEnvironmentProfileSetup(
     credentialEnv: values.credentialEnv,
     ...(values.makeDefault ? { makeDefault: true } : {})
   });
-  context.output.write(`Added environment-backed account profile '${report.profile}' to ${configPath}.\n`);
+  for (const action of report.actions) context.output.write(`${action}\n`);
   context.output.write("Miftah saved only an environment-variable reference; it did not read or store a credential value.\n");
   if (values.makeDefault) {
     context.output.write("The durable default changed. Restart or open a new MCP client connection before expecting it to take effect.\n");

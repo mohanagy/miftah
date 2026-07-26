@@ -42,11 +42,33 @@ describe("environment credential profile onboarding", () => {
       },
       actions: [
         "Created environment-backed account profile 'govalidate'.",
+        "Enabled required profile-switch confirmation.",
+        "Required explicit selection for destructive tools.",
         "Set durable default profile to 'govalidate'."
       ]
     });
     expect(JSON.stringify(plan.actions)).not.toContain("STATIC_GOVALIDATE_ACCESS_TOKEN");
     expect(input).toEqual(original);
+  });
+
+  it("reports only the security safeguards that account onboarding must enable", () => {
+    const hardened = {
+      ...environmentProfileConfig("sentry"),
+      security: {
+        requireProfileSwitchConfirmation: true,
+        requireExplicitSelectionForDestructive: true
+      }
+    };
+
+    const plan = planEnvironmentProfileAddition(hardened, {
+      configPath: "/Users/example/.config/miftah/sentry.json",
+      profile: "govalidate",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN"
+    });
+
+    expect(plan.actions).toEqual([
+      "Created environment-backed account profile 'govalidate'."
+    ]);
   });
 
   it("refuses a remote MCP because profile environment does not authenticate HTTP requests", () => {

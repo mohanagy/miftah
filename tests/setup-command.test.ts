@@ -129,7 +129,38 @@ describe("setup command", () => {
       }
     });
     expect(profileReadinessMocks.run).not.toHaveBeenCalled();
-    expect(transcript).toContain("Added environment-backed account profile 'govalidate'");
+    expect(transcript).toContain("Created environment-backed account profile 'govalidate'.");
+    expect(transcript).toContain("Enabled required profile-switch confirmation.");
+    expect(transcript).toContain("Required explicit selection for destructive tools.");
+  });
+
+  it("cancels an interactive environment-backed account setup on EOF or SIGINT before changing the configuration", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "environment-account-cancelled.json");
+    const original = `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+
+    for (const cancel of [
+      (streams: ReturnType<typeof createStreams>) => streams.input.end(),
+      (streams: ReturnType<typeof createStreams>) => streams.input.write("\u0003")
+    ]) {
+      const streams = createStreams();
+      const command = runSetupCommand({
+        addProfile: true,
+        config: configPath
+      }, {
+        input: streams.input,
+        output: streams.output,
+        cwd: outputRoot,
+        launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+      });
+
+      await streams.transcript.waitFor("New account profile name");
+      cancel(streams);
+      await expect(command).rejects.toThrow("Environment-backed account setup was cancelled.");
+      streams.input.end();
+      expect(await readFile(configPath, "utf8")).toBe(original);
+    }
   });
 
   it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {

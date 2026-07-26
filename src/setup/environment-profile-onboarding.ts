@@ -194,6 +194,8 @@ export function planEnvironmentProfileAddition(
   const candidate = structuredClone(config) as MiftahConfig;
   candidate.profiles[options.profile] = environmentProfile(template.profile, template.target, options);
   if (options.makeDefault === true) candidate.defaultProfile = options.profile;
+  const requireProfileSwitchConfirmation = candidate.security?.requireProfileSwitchConfirmation !== true;
+  const requireExplicitSelectionForDestructive = candidate.security?.requireExplicitSelectionForDestructive !== true;
   candidate.security = {
     ...candidate.security,
     requireProfileSwitchConfirmation: true,
@@ -207,6 +209,8 @@ export function planEnvironmentProfileAddition(
     actions: [
       ...migrated.actions,
       `Created environment-backed account profile '${options.profile}'.`,
+      ...(requireProfileSwitchConfirmation ? ["Enabled required profile-switch confirmation."] : []),
+      ...(requireExplicitSelectionForDestructive ? ["Required explicit selection for destructive tools."] : []),
       ...(options.makeDefault === true ? [`Set durable default profile to '${options.profile}'.`] : [])
     ]
   };

@@ -2264,6 +2264,8 @@ describe("local Console control server", () => {
         profile: "govalidate",
         actions: [
           "Created environment-backed account profile 'govalidate'.",
+          "Enabled required profile-switch confirmation.",
+          "Required explicit selection for destructive tools.",
           "Set durable default profile to 'govalidate'."
         ]
       });
