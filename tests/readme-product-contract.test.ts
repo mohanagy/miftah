@@ -107,6 +107,10 @@ describe("product README", () => {
     expect(readme).toContain("miftah setup --add-profile");
     expect(readme).toContain("The new account receives its own `GSC_CONFIG_DIR`");
     expect(readme).toContain("Add another provider account");
+    expect(readme).toContain("### Add another local environment-backed account");
+    expect(readme).toContain("--credential-env SENTRY_PERSONAL_ACCESS_TOKEN");
+    expect(readme).toContain("Remote HTTP MCPs are refused because profile environments do not authenticate HTTP requests.");
+    expect(readme).toContain("Add another environment-backed account");
     expect(readme).toContain("### Change the durable default later");
     expect(readme).toContain("miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal");
     expect(readme).toContain("does not switch an already-running MCP client");

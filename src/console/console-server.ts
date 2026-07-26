@@ -56,6 +56,12 @@ const providerAccountAdditionSchema = z.object({
   credentialFile: z.string().min(1).max(4_096),
   makeDefault: z.literal(true).optional()
 }).strict();
+const environmentProfileAdditionSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().min(1).max(1_024).optional(),
+  credentialEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
+  makeDefault: z.literal(true).optional()
+}).strict();
 const defaultProfileChangeSchema = z.object({
   // Profile keys are compatibility data owned by the selected configuration.
   // Validate their existence in the guarded configuration transaction rather
@@ -324,6 +330,20 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       422,
       "provider_account_input_invalid",
       "Choose an absolute literal credential-file path."
+    );
+  }
+  if (error.code === "ENVIRONMENT_PROFILE_ADDITION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "environment_profile_addition_unsupported",
+      "This configuration does not have one simple local environment credential binding to copy safely."
+    );
+  }
+  if (error.code === "ENVIRONMENT_PROFILE_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "environment_profile_input_invalid",
+      "Choose a safe profile name and an environment variable name, not a credential value."
     );
   }
   if (
@@ -737,6 +757,27 @@ class LocalConsoleServer implements ConsoleServer {
       }
       try {
         const result = await this.application.addProviderAccount(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/environment-account") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = environmentProfileAdditionSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addEnvironmentProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addEnvironmentProfile(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result });
       } catch (error) {

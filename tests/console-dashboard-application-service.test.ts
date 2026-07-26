@@ -489,6 +489,45 @@ describe("Console dashboard application service", () => {
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
+  it("adds a static environment-backed account only after selection and clears the stale selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-environment-account-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "sentry.json");
+    await writeConfig(configPath, buildPresetConfig("sentry", "sentry"));
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const request = {
+      profile: "govalidate",
+      description: "GoValidate Sentry account",
+      credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+      makeDefault: true
+    };
+
+    await expect(service.addEnvironmentProfile(request)).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
+    const initial = await service.configMetadata();
+    const selected = initial.catalog?.configurations.find((configuration) => configuration.name === "sentry");
+    if (selected === undefined) throw new Error("Expected discovered Sentry configuration.");
+    await service.selectConfiguration(selected.id);
+
+    await expect(service.addEnvironmentProfile(request)).resolves.toMatchObject({
+      changed: true,
+      write: true,
+      profile: "govalidate"
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "govalidate",
+      profiles: { govalidate: { env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" } } }
+    });
+    await expect(service.addEnvironmentProfile(request)).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
+  });
+
   it("rejects an unselected Console operation before scanning its catalog", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-unselected-"));
     temporaryDirectories.push(root);

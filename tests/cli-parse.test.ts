@@ -233,7 +233,7 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--native-oauth"]);
   });
 
-  it("offers reviewed provider-owned account addition only from guided setup", () => {
+  it("offers safe provider-owned and environment-backed account addition only from guided setup", () => {
     expect(parseCli([
       "setup",
       "--add-profile",
@@ -254,7 +254,26 @@ describe("CLI parser", () => {
         verify: true
       }
     });
+    expect(parseCli([
+      "setup",
+      "--add-profile",
+      "--config", "sentry.json",
+      "--profile", "personal",
+      "--credential-env", "SENTRY_PERSONAL_ACCESS_TOKEN",
+      "--make-default"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        addProfile: true,
+        config: "sentry.json",
+        profile: "personal",
+        credentialEnv: "SENTRY_PERSONAL_ACCESS_TOKEN",
+        makeDefault: true
+      }
+    });
     expect(renderCommandHelp("setup")).toContain("--add-profile");
+    expect(renderCommandHelp("setup")).toContain("environment-backed account");
     expectUsageError(["init", "--add-profile"]);
   });
 

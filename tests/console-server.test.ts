@@ -739,6 +739,9 @@ describe("local Console control server", () => {
       expect(html).toContain("Add another native OAuth account");
       expect(html).toContain('id="provider-account-editor"');
       expect(html).toContain("Add another provider account");
+      expect(html).toContain('id="environment-profile-editor"');
+      expect(html).toContain("Add another environment-backed account");
+      expect(html).toContain("It does not read the credential, start this upstream, or copy a provider token cache.");
       expect(html).toContain("Advanced manual OAuth registration");
       expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
@@ -777,6 +780,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/profiles/provider-account");
+      expect(javascript).toContain("/api/v1/profiles/environment-account");
       expect(javascript).toContain("/api/v1/onboarding/preset");
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
@@ -872,6 +876,9 @@ describe("local Console control server", () => {
       expect(javascript).toContain('const providerAccountEditor = byId("provider-account-editor");');
       expect(javascript).toContain("authentication.accountAddition");
       expect(javascript).toContain("Adding the provider-owned account");
+      expect(javascript).toContain('const environmentProfileEditor = byId("environment-profile-editor");');
+      expect(javascript).toContain("authentication.environmentProfileAddition");
+      expect(javascript).toContain("Adding the environment-backed account without reading its credential or launching the upstream");
       expect(javascript).toContain('const nativeOAuthAccountEditor = byId("native-oauth-account-editor");');
       expect(javascript).toContain("if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;");
       expect(javascript).toContain('action === "credential" ? "DELETE" : "POST"');
@@ -2204,6 +2211,72 @@ describe("local Console control server", () => {
       };
       expect(config.defaultProfile).toBe("google-third");
       expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("adds a static environment-backed account only through a strict CSRF-protected Console request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-environment-account-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "sentry.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("sentry", "sentry"), null, 2)}\n`, { mode: 0o600 });
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/environment-account", server.url);
+      const request = {
+        profile: "govalidate",
+        description: "GoValidate Sentry account",
+        credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+        makeDefault: true
+      };
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
+      });
+      expect(rejected.status).toBe(422);
+      expect(await readFile(configPath, "utf8")).not.toContain("govalidate");
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+      expect(created.status).toBe(201);
+      const payload = await created.json() as { readonly data: Record<string, unknown> };
+      expect(payload.data).toEqual({
+        changed: true,
+        write: true,
+        profile: "govalidate",
+        actions: [
+          "Created environment-backed account profile 'govalidate'.",
+          "Set durable default profile to 'govalidate'."
+        ]
+      });
+      expect(JSON.stringify(payload)).not.toContain("SENTRY_GOVALIDATE_ACCESS_TOKEN");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "govalidate",
+        profiles: {
+          govalidate: {
+            description: "GoValidate Sentry account",
+            env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" },
+            policy: "readonly"
+          }
+        }
+      });
     } finally {
       await server.close();
     }

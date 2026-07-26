@@ -214,6 +214,17 @@ const page = `<!doctype html>
               <div class="wide form-action"><button type="submit">Add provider account</button></div>
             </form>
           </details>
+          <details id="environment-profile-editor" hidden>
+            <summary>Add another environment-backed account</summary>
+            <form id="environment-profile-form" class="form-grid compact">
+              <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
+              <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal account"></label>
+              <label class="wide"><span id="environment-profile-credential-label">Environment variable that holds this account's credential</span><input id="environment-profile-credential-env" name="credentialEnv" required maxlength="256" pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off" placeholder="SERVICE_PERSONAL_TOKEN"></label>
+              <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
+              <p class="field-note wide">Miftah stores only an environment-variable reference. It does not read the credential, start this upstream, or copy a provider token cache. This path is available only when the current local MCP has one simple credential environment binding.</p>
+              <div class="wide form-action"><button type="submit">Add environment-backed account</button></div>
+            </form>
+          </details>
           <details id="native-oauth-account-editor">
             <summary>Add another native OAuth account</summary>
             <form id="native-oauth-account-form" class="form-grid compact">
@@ -415,6 +426,9 @@ const script = `(() => {
   const providerAccountEditor = byId("provider-account-editor");
   const providerAccountCredentialLabel = byId("provider-account-credential-label");
   const providerAccountCredentialFile = byId("provider-account-credential-file");
+  const environmentProfileEditor = byId("environment-profile-editor");
+  const environmentProfileCredentialLabel = byId("environment-profile-credential-label");
+  const environmentProfileCredentialEnv = byId("environment-profile-credential-env");
   const nativeOAuthEditor = byId("native-oauth-editor");
   const nativeOAuthAccountEditor = byId("native-oauth-account-editor");
   const presetInputNames = Object.freeze({
@@ -664,6 +678,7 @@ const script = `(() => {
     const manualOnly = authentication.mode === "manual-only";
     const nativeOAuth = authentication.mode === "miftah-native-oauth";
     const accountAddition = record(authentication.accountAddition);
+    const environmentProfileAddition = record(authentication.environmentProfileAddition);
     const credentialFileLabel = typeof accountAddition.credentialFileLabel === "string"
       ? accountAddition.credentialFileLabel
       : "";
@@ -671,8 +686,13 @@ const script = `(() => {
       ? accountAddition.credentialFilePlaceholder
       : "";
     const providerAccount = providerAdapter && credentialFileLabel.length > 0 && credentialFilePlaceholder.length > 0;
+    const credentialEnvironment = typeof environmentProfileAddition.credentialEnvironment === "string"
+      ? environmentProfileAddition.credentialEnvironment
+      : "";
+    const environmentProfile = manualOnly && credentialEnvironment.length > 0;
     if (providerAuthenticationView) providerAuthenticationView.hidden = !providerAdapter && !manualOnly;
     if (providerAccountEditor) providerAccountEditor.hidden = !providerAccount;
+    if (environmentProfileEditor) environmentProfileEditor.hidden = !environmentProfile;
     if (providerAccountCredentialLabel) {
       providerAccountCredentialLabel.textContent = providerAccount ? credentialFileLabel : "Provider credential-file path";
     }
@@ -680,11 +700,21 @@ const script = `(() => {
       providerAccountCredentialFile.placeholder = providerAccount ? credentialFilePlaceholder : "";
       if (!providerAccount) providerAccountCredentialFile.value = "";
     }
+    if (environmentProfileCredentialLabel) {
+      environmentProfileCredentialLabel.textContent = environmentProfile
+        ? "Environment variable that holds this account's credential for " + credentialEnvironment
+        : "Environment variable that holds this account's credential";
+    }
+    if (environmentProfileCredentialEnv instanceof HTMLInputElement && !environmentProfile) {
+      environmentProfileCredentialEnv.value = "";
+    }
     if (nativeOAuthEditor) nativeOAuthEditor.hidden = !nativeOAuth;
     if (nativeOAuthAccountEditor) nativeOAuthAccountEditor.hidden = !nativeOAuth;
     if (!providerAuthenticationCopy) return;
     if (manualOnly) {
-      providerAuthenticationCopy.textContent = "This configuration includes local upstream settings outside Miftah's reviewed adapter envelope. Miftah will not take over OAuth here; use each upstream's documented authentication setup.";
+      providerAuthenticationCopy.textContent = environmentProfile
+        ? "This local MCP uses one environment credential binding. Add another named account by choosing a different environment variable; Miftah stores only that reference and does not launch the upstream."
+        : "This configuration includes local upstream settings outside Miftah's reviewed adapter envelope. Miftah will not take over OAuth here; use each upstream's documented authentication setup.";
       return;
     }
     if (!providerAdapter) return;
@@ -1166,6 +1196,28 @@ const script = `(() => {
           }
         });
         providerAccountForm.reset();
+        await refresh();
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const environmentProfileForm = byId("environment-profile-form");
+  if (environmentProfileForm instanceof HTMLFormElement) {
+    environmentProfileForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(environmentProfileForm);
+      message("Adding the environment-backed account without reading its credential or launching the upstream…");
+      try {
+        await api("/api/v1/profiles/environment-account", {
+          method: "POST",
+          body: {
+            profile: String(data.get("profile") || "").trim(),
+            description: String(data.get("description") || "").trim() || undefined,
+            credentialEnv: String(data.get("credentialEnv") || "").trim(),
+            ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
+          }
+        });
+        environmentProfileForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
     });

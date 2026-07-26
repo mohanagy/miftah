@@ -1,5 +1,8 @@
 import { createInterface } from "node:readline/promises";
+import { resolve } from "node:path";
 import { runProfileReadiness, type ProfileReadinessReport } from "../setup/profile-readiness.js";
+import { loadConfig } from "../config/load-config.js";
+import { getProviderAdapterForAccountProvisioning } from "../config/provider-adapters.js";
 import { MiftahError } from "../utils/errors.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
@@ -7,6 +10,7 @@ import { runInitCommand, type InitCommandContext, type InitCommandOptions } from
 import { runClientEntryImportSetup } from "./setup-client-entry-import.js";
 import { runNativeOAuthSetup } from "./setup-native-oauth.js";
 import { runProviderAccountSetup } from "./setup-provider-account.js";
+import { runEnvironmentProfileSetup } from "./setup-environment-profile.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
 export type SetupCommandOptions = InitCommandOptions & Pick<
@@ -22,6 +26,7 @@ export interface SetupCommandResult {
 }
 
 type ReadinessDecision = "verify" | "skip" | "cancelled";
+type AccountAdditionKind = "provider" | "environment";
 
 function flagName(option: string): string {
   return option.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -29,6 +34,17 @@ function flagName(option: string): string {
 
 function isTty(context: InitCommandContext): boolean {
   return context.input.isTTY === true && context.output.isTTY === true;
+}
+
+async function accountAdditionKind(options: SetupCommandOptions, context: InitCommandContext): Promise<AccountAdditionKind> {
+  if (options.config === undefined) {
+    throw new CliUsageError("Adding an account profile requires --config.");
+  }
+  if (options.config.includes("\0")) {
+    throw new CliUsageError("Configuration path must not contain a NUL character.");
+  }
+  const config = await loadConfig(resolve(context.cwd, options.config));
+  return getProviderAdapterForAccountProvisioning(config)?.accountProvisioning === undefined ? "environment" : "provider";
 }
 
 /**
@@ -49,7 +65,6 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "preset",
       "output",
       "client",
-      "credentialEnv",
       "npmPackage",
       "dockerImage",
       "url",
@@ -62,7 +77,23 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "upstream"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
     if (incompatible !== undefined) {
-      throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when adding a provider-owned account.`);
+      throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when adding an account profile.`);
+    }
+    const kind = await accountAdditionKind(options, context);
+    if (kind === "environment") {
+      if (options.oauthClientSecretsFile !== undefined) {
+        throw new CliUsageError("Option '--oauth-client-secrets-file' is unavailable when adding an environment-backed account.");
+      }
+      if (options.verify === true) {
+        throw new CliUsageError(
+          "Option '--verify' is unavailable when adding an environment-backed account because this configuration has no provider-declared readiness check."
+        );
+      }
+      await runEnvironmentProfileSetup(options, context);
+      return { verification: "not-applicable", exitCode: 0, reports: [] };
+    }
+    if (options.credentialEnv !== undefined) {
+      throw new CliUsageError("Option '--credential-env' is unavailable when adding a provider-owned account.");
     }
     const added = await runProviderAccountSetup(options, context);
     const decision = options.verify === true ? "verify" : !isTty(context) ? "skip" : await confirmReadiness(context, "the new account now");

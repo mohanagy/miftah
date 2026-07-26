@@ -81,7 +81,7 @@ describe("setup command", () => {
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
   });
 
-  it("renders incompatible provider-account flags exactly as users pass them", async () => {
+  it("requires a configuration before classifying account-addition flags", async () => {
     await expect(runSetupCommand({
       addProfile: true,
       credentialEnv: "GSC_TOKEN"
@@ -90,7 +90,45 @@ describe("setup command", () => {
       output: new PassThrough(),
       cwd: outputRoot,
       launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
-    })).rejects.toThrow("Option '--credential-env' is unavailable when adding a provider-owned account.");
+    })).rejects.toThrow("Adding an account profile requires --config.");
+  });
+
+  it("adds a named environment-backed account to an existing standard configuration without launching its upstream", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "sentry.json");
+    await writeFile(configPath, `${JSON.stringify(buildPresetConfig("sentry", "sentry"), null, 2)}\n`, { mode: 0o600 });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    let transcript = "";
+    output.on("data", (chunk: Buffer) => { transcript += chunk.toString(); });
+
+    await expect(runSetupCommand({
+      addProfile: true,
+      config: configPath,
+      profile: "govalidate",
+      description: "GoValidate Sentry account",
+      credentialEnv: "SENTRY_GOVALIDATE_ACCESS_TOKEN",
+      makeDefault: true
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    const config = validateConfig(JSON.parse(await readFile(configPath, "utf8")));
+    expect(config).toMatchObject({
+      defaultProfile: "govalidate",
+      profiles: {
+        govalidate: {
+          description: "GoValidate Sentry account",
+          env: { SENTRY_ACCESS_TOKEN: "${SENTRY_GOVALIDATE_ACCESS_TOKEN}" },
+          policy: "readonly"
+        }
+      }
+    });
+    expect(profileReadinessMocks.run).not.toHaveBeenCalled();
+    expect(transcript).toContain("Added environment-backed account profile 'govalidate'");
   });
 
   it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {
