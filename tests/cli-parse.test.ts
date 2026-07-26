@@ -363,6 +363,19 @@ describe("CLI parser", () => {
     expect(renderCommandHelp("profile test")).toContain("reviewed safe readiness check");
   });
 
+  it("parses a read-only configured-profile inventory", () => {
+    expect(parseCli([
+      "profile",
+      "list",
+      "--config=/Users/example/.config/miftah/gsc.json"
+    ])).toEqual({
+      kind: "run",
+      command: "profile list",
+      options: { config: "/Users/example/.config/miftah/gsc.json" }
+    });
+    expect(renderCommandHelp("profile list")).toContain("configured account profiles");
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

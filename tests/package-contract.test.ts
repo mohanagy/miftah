@@ -1359,6 +1359,18 @@ describe("packed artifact contract", () => {
           "Command 'profile test' requires '--profile <value>'"
         );
 
+        const profileList = runInstalledBinary(
+          binary,
+          ["profile", "list", "--config", httpServeConfigPath],
+          cliContractDirectory
+        );
+        expect(profileList.status, profileList.stderr || profileList.stdout).toBe(0);
+        expect(profileList.stderr).toBe("");
+        expect(JSON.parse(profileList.stdout)).toEqual({
+          defaultProfile: "work",
+          profiles: [{ name: "work" }]
+        });
+
         const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
         const dashboardServe = await startInstalledCli(
           installedCliEntry,
@@ -1381,6 +1393,7 @@ describe("packed artifact contract", () => {
         expect(rootHelp.stderr).toBe("");
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
         expect(rootHelp.stdout).toContain("profile test");
+        expect(rootHelp.stdout).toContain("profile list");
         const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
         expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
         expect(profileTestHelp.stderr).toBe("");
@@ -1388,6 +1401,11 @@ describe("packed artifact contract", () => {
         expect(profileTestHelp.stdout).toContain("--config <file>");
         expect(profileTestHelp.stdout).toContain("--profile <name>");
         expect(profileTestHelp.stdout).toContain("--upstream <name>");
+        const profileListHelp = runInstalledBinary(binary, ["profile", "list", "--help"], cliContractDirectory);
+        expect(profileListHelp.status, profileListHelp.stderr || profileListHelp.stdout).toBe(0);
+        expect(profileListHelp.stderr).toBe("");
+        expect(profileListHelp.stdout).toContain("Usage: miftah profile list");
+        expect(profileListHelp.stdout).toContain("--config <file>");
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],

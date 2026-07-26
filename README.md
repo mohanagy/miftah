@@ -468,6 +468,16 @@ miftah profile test --config ~/.config/miftah/gsc.json --profile google-personal
 
 When a configuration has more than one upstream, add `--upstream <name>`. Miftah runs only the adapter's declared read-only probe for that exact profile and returns a redacted status report. It does not run an arbitrary tool or expose provider output. It does not change configuration, read a provider token cache, or open a browser; a non-ready report exits `1` so automation can detect it.
 
+### Review configured accounts
+
+Before choosing a default or asking a connected client to switch accounts, list the account profiles Miftah has for this configuration:
+
+```bash
+miftah profile list --config ~/.config/miftah/gsc.json
+```
+
+The output includes the durable default and each profile's name, optional description, tags, policy name, and overridden upstream names. It never resolves a secret reference, reads a credential file, header, OAuth vault entry, or provider token cache, and it never starts an upstream. In the browser, the same safe information appears under **Configured accounts** after `miftah dashboard --config ~/.config/miftah/gsc.json`.
+
 ### Change the durable default later
 
 Once two or more profiles already exist, you can choose which one new Miftah sessions start with without adding an account or editing JSON:
@@ -489,6 +499,7 @@ These are shell commands. Profile switching and identity tools such as `miftah_u
 | Validate JSON only | `miftah validate --config service.json` |
 | Check secrets, executable, upstream startup, discovery, and shutdown | `miftah doctor --config service.json` |
 | Start one profile and verify initialization | `miftah test-profile --config service.json --profile work` |
+| Review configured account profiles without starting an upstream | `miftah profile list --config service.json` |
 | Run the reviewed safe check for one provider-backed account | `miftah profile test --config service.json --profile work` |
 | Discover one profile's upstream tools | `miftah list-tools --config service.json --profile work` |
 | Read redacted audit events | `miftah logs --config service.json` |

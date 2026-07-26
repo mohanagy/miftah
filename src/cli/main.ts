@@ -17,6 +17,7 @@ import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
 import { runSetupCommand } from "./setup.js";
 import { runProfileReadinessCommand } from "./profile-readiness-command.js";
+import { runProfileListCommand } from "./profile-list-command.js";
 import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
@@ -233,6 +234,10 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     });
     process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
     process.exitCode = result.exitCode;
+    return;
+  }
+  if (command === "profile list") {
+    process.stdout.write(`${JSON.stringify(await runProfileListCommand({ configPath: args.config }), null, 2)}\n`);
     return;
   }
   if (command === "connection add") {

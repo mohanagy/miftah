@@ -3,6 +3,7 @@ import {
   getProviderAdapterForProfileTarget,
   getProviderAdapterForConfiguration
 } from "../config/provider-adapters.js";
+import { profileInventory, type ProfileInventoryEntry } from "../profiles/profile-inventory.js";
 import { environmentProfileCredentialDestination } from "../setup/environment-profile-onboarding.js";
 import type { MiftahConfig } from "../config/types.js";
 
@@ -61,13 +62,7 @@ export interface ConsoleInitializedConfigMetadata {
   readonly name: string;
   readonly version: string;
   readonly defaultProfile: string;
-  readonly profiles: readonly {
-    readonly name: string;
-    readonly description?: string;
-    readonly tags?: readonly string[];
-    readonly policy?: string;
-    readonly upstreams?: readonly string[];
-  }[];
+  readonly profiles: readonly ProfileInventoryEntry[];
   readonly upstreams: readonly { readonly name: string; readonly transport: string }[];
   readonly oauthConnectionCount: number;
   /** Present for live Console services; optional for embedding compatibility. */
@@ -171,20 +166,13 @@ export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuth
 /** Builds the fixed allowlist of configuration data safe for the local Console response. */
 export function consoleInitializedConfigMetadata(config: MiftahConfig): ConsoleInitializedConfigMetadata {
   const upstreams = configuredUpstreams(config);
+  const inventory = profileInventory(config);
   return {
     initialized: true,
     name: config.name,
     version: config.version,
-    defaultProfile: config.defaultProfile,
-    profiles: Object.entries(config.profiles)
-      .map(([name, profile]) => ({
-        name,
-        ...(profile.description === undefined ? {} : { description: profile.description }),
-        ...(profile.tags === undefined ? {} : { tags: [...profile.tags] }),
-        ...(profile.policy === undefined ? {} : { policy: profile.policy }),
-        ...(profile.upstreams === undefined ? {} : { upstreams: Object.keys(profile.upstreams).sort() })
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
+    defaultProfile: inventory.defaultProfile,
+    profiles: inventory.profiles,
     upstreams: upstreams.map(({ name, transport }) => ({ name, transport })),
     oauthConnectionCount: config.version === "3" ? Object.keys(config.oauth?.connections ?? {}).length : 0,
     authentication: consoleAuthenticationMetadata(config),

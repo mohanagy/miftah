@@ -183,6 +183,10 @@ export const CLI_COMMANDS = {
     description: "Run one reviewed safe readiness check for an explicit account profile.",
     options: ["config", "profile", "upstream"]
   },
+  "profile list": {
+    description: "List configured account profiles without reading credentials or starting an upstream.",
+    options: ["config"]
+  },
   "list-tools": {
     description: "List tools available for a profile.",
     options: ["config", "profile"]
