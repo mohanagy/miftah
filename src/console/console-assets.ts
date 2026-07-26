@@ -822,9 +822,11 @@ const script = `(() => {
     const clear = byId("clear-profile-description");
     const result = byId("profile-description-result");
     if (!(profile instanceof HTMLSelectElement) || !(input instanceof HTMLInputElement)) return;
+    const previouslySelected = profile.value;
     const profiles = Array.isArray(profileMetadata) ? profileMetadata.map(record) : [];
     const names = profiles.map((item) => typeof item.name === "string" ? item.name : "").filter(Boolean);
     setOptions(profile, names);
+    if (names.includes(previouslySelected)) profile.value = previouslySelected;
     const canChange = names.length > 0;
     const updateDescription = () => {
       const selected = profiles.find((item) => item.name === profile.value);

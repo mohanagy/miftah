@@ -68,12 +68,9 @@ const defaultProfileChangeSchema = z.object({
   // than imposing the narrower preset-onboarding slug grammar here.
   profile: z.string().min(1)
 }).strict();
-const profileDescriptionTextSchema = z.string().min(1).max(1_024).refine((value) => (
-  value.trim() === value && Array.from(value).every((character) => {
-    const codePoint = character.codePointAt(0);
-    return codePoint !== undefined && codePoint > 0x1f && codePoint !== 0x7f;
-  })
-));
+// Keep the HTTP boundary bounded, while the guarded configuration change owns
+// all description-format rules and its safe public error mapping.
+const profileDescriptionTextSchema = z.string().max(1_024);
 const profileDescriptionChangeSchema = z.object({
   // Profile keys are compatibility data owned by the selected configuration.
   // Validate their existence in the guarded configuration transaction rather

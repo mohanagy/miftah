@@ -277,6 +277,63 @@ function clearProfileReadinessResultOnTargetChange(javascript: string): {
   return { afterProfileChange, afterUpstreamChange: result.textContent };
 }
 
+function preserveProfileDescriptionSelectionAcrossRefresh(javascript: string): {
+  readonly profile: string;
+  readonly description: string;
+} {
+  const start = javascript.indexOf("function renderProfileDescriptionEditor");
+  const end = javascript.indexOf("\n  function renderProfileInventory", start);
+  if (start < 0 || end < 0) throw new Error("Expected the profile-description editor renderer.");
+
+  class FakeElement {
+    hidden = false;
+    disabled = false;
+    textContent = "";
+  }
+  class FakeInput extends FakeElement {
+    value = "";
+  }
+  class FakeSelect extends FakeElement {
+    value = "";
+    onchange: (() => void) | undefined;
+  }
+  class FakeButton extends FakeElement {}
+
+  const profile = new FakeSelect();
+  const input = new FakeInput();
+  const elements: Record<string, FakeElement> = {
+    "profile-description-editor": new FakeElement(),
+    "profile-description-selection": profile,
+    "profile-description-input": input,
+    "set-profile-description": new FakeButton(),
+    "clear-profile-description": new FakeButton(),
+    "profile-description-result": new FakeElement()
+  };
+  const render = runInNewContext(`${javascript.slice(start, end)}\nrenderProfileDescriptionEditor`, {
+    byId(id: string): unknown {
+      return elements[id];
+    },
+    record(value: unknown): Record<string, unknown> {
+      return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+    },
+    setOptions(select: FakeSelect, options: readonly string[]): void {
+      select.value = options[0] ?? "";
+    },
+    HTMLSelectElement: FakeSelect,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton
+  }) as (metadata: unknown) => void;
+  const metadata = [
+    { name: "work", description: "Work account" },
+    { name: "personal", description: "Personal account" }
+  ];
+
+  render(metadata);
+  profile.value = "personal";
+  render(metadata);
+  return { profile: profile.value, description: input.value };
+}
+
 async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascript: string): Promise<{
   readonly visibleAfterSelection: boolean;
   readonly hiddenAfterUnselection: boolean;
@@ -869,6 +926,10 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value }');
       expect(javascript).toContain("/api/v1/profiles/description");
       expect(javascript).toContain("renderProfileDescriptionEditor");
+      expect(preserveProfileDescriptionSelectionAcrossRefresh(javascript)).toEqual({
+        profile: "personal",
+        description: "Personal account"
+      });
       expect(clearProfileReadinessResultOnTargetChange(javascript)).toEqual({
         afterProfileChange: "",
         afterUpstreamChange: ""
@@ -2377,6 +2438,25 @@ describe("local Console control server", () => {
     try {
       const session = await bootstrapSession(server);
       const endpoint = new URL("/api/v1/profiles/description", server.url);
+      const formattingRejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", description: " Personal Search Console " })
+      });
+      expect(formattingRejected.status).toBe(422);
+      expect(await formattingRejected.json()).toEqual({
+        error: {
+          code: "profile_description_input_invalid",
+          message: "Choose a trimmed non-secret profile description or explicitly clear it."
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(before);
+
       const rejected = await fetch(endpoint, {
         method: "POST",
         headers: {
