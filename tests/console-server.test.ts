@@ -909,6 +909,7 @@ describe("local Console control server", () => {
       expect(html).toContain("Run reviewed safe check");
       expect(html).toContain('id="setup-completion-view"');
       expect(html).toContain("Finish setup without guessing");
+      expect(html).toContain('role="status" aria-live="polite" aria-atomic="true"');
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 

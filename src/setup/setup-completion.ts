@@ -35,9 +35,29 @@ export interface SetupCompletion {
   };
 }
 
+function quoteForPosixShell(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function quoteForPowerShell(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/** Windows completion commands target PowerShell; both forms keep every dynamic value literal. */
+function quoteShellArgument(value: string): string {
+  return process.platform === "win32" ? quoteForPowerShell(value) : quoteForPosixShell(value);
+}
+
 function displayConfigPath(configPath: string | undefined): string {
-  const value = configPath ?? "CONFIG_PATH";
-  return /[\s"]/u.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
+  return quoteShellArgument(configPath ?? "CONFIG_PATH");
+}
+
+function displayProfile(profile: string): string {
+  return quoteShellArgument(profile);
+}
+
+function commandInstruction(action: string, command: string): string {
+  return `${action}${process.platform === "win32" ? " in PowerShell" : ""}: ${command}`;
 }
 
 function verificationCompletion(input: SetupCompletionInput): SetupCompletion["verification"] {
@@ -57,7 +77,12 @@ function verificationCompletion(input: SetupCompletionInput): SetupCompletion["v
         state: "skipped",
         message: "The reviewed safe check was skipped. The configuration is saved but not yet verified.",
         ...(input.surface === "cli" && input.profile !== undefined
-          ? { nextAction: `When ready, run 'miftah profile test --config ${displayConfigPath(input.configPath)} --profile ${input.profile}'.` }
+          ? {
+              nextAction: `${commandInstruction(
+                "When ready, run",
+                `miftah profile test --config ${displayConfigPath(input.configPath)} --profile ${displayProfile(input.profile)}`
+              )}.`
+            }
           : {})
       };
     case "complete":
@@ -70,7 +95,12 @@ function verificationCompletion(input: SetupCompletionInput): SetupCompletion["v
         state: "incomplete",
         message: "The reviewed safe check did not complete. The configuration remains saved.",
         ...(input.surface === "cli" && input.profile !== undefined
-          ? { nextAction: `Resolve the reported boundary, then run 'miftah profile test --config ${displayConfigPath(input.configPath)} --profile ${input.profile}'.` }
+          ? {
+              nextAction: `${commandInstruction(
+                "Resolve the reported boundary, then run",
+                `miftah profile test --config ${displayConfigPath(input.configPath)} --profile ${displayProfile(input.profile)}`
+              )}.`
+            }
           : {})
       };
     case "authorization-pending":
@@ -93,7 +123,10 @@ function handoffCompletion(input: SetupCompletionInput): SetupCompletion["client
       return {
         state: "not-generated",
         message:
-          `Next: generate a copy-only client snippet with 'miftah connection list --config ${displayConfigPath(input.configPath)} --client claude-desktop', review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file.`
+          `${commandInstruction(
+            "Next: generate a copy-only client snippet",
+            `miftah connection list --config ${displayConfigPath(input.configPath)} --client ${quoteShellArgument("claude-desktop")}`
+          )}; review it, merge it manually, then restart or reconnect the client. Miftah did not modify any client file.`
       };
     case "available":
       return {

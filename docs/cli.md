@@ -83,7 +83,7 @@ For a static local account, noninteractive use requires `--profile` and `--crede
 
 ### Setup completion
 
-After it publishes a first configuration, `miftah setup` prints a truthful completion handoff: whether a provider-declared safe check was unavailable, available but not run, skipped, completed, or incomplete; and whether client JSON was shown or still needs generating. It never treats the config write as proof that an MCP client adopted it. The completion handoff prints the actual configuration path in any later `miftah profile test` command. Review any generated client JSON, merge it yourself, then restart or reconnect the client.
+After it publishes a first configuration, `miftah setup` prints a truthful completion handoff: whether a provider-declared safe check was unavailable, available but not run, skipped, completed, or incomplete; and whether client JSON was shown or still needs generating. Browser sign-in setup can finish with browser authorization still outstanding. The configuration records a discovered connection plan, not a credential, until the later connect action starts the provider flow. It never treats the config write as proof that an MCP client adopted it. The completion handoff prints the actual configuration path in any later `miftah profile test` command. Review any generated client JSON, merge it yourself, then restart or reconnect the client.
 
 ### `migrate-config`
 

@@ -401,7 +401,7 @@ describe("setup command", () => {
       expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
       expect(streams.transcript.contents).toContain("Server-advertised scopes: mcp:tools.");
       expect(streams.transcript.contents).toContain(
-        `miftah connection list --config ${output} --client claude-desktop`
+        `miftah connection list --config '${output}' --client 'claude-desktop'`
       );
       expect(streams.transcript.contents).not.toContain("OAuth issuer URL");
       expect(streams.transcript.contents).not.toContain("client secret");
@@ -503,7 +503,7 @@ describe("setup command", () => {
       "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
     );
     expect(streams.transcript.contents).toContain(
-      `Next: generate a copy-only client snippet with 'miftah connection list --config ${output} --client claude-desktop'`
+      `Next: generate a copy-only client snippet: miftah connection list --config '${output}' --client 'claude-desktop'`
     );
   });
 
@@ -1365,7 +1365,7 @@ describe("setup command", () => {
     expect(profileReadinessMocks.run).not.toHaveBeenCalled();
     expect(streams.transcript.contents).toContain("First-success verification was skipped");
     expect(streams.transcript.contents).toContain(
-      `When ready, run 'miftah profile test --config ${configPath} --profile google-personal'.`
+      `When ready, run: miftah profile test --config '${configPath}' --profile 'google-personal'.`
     );
     expect(streams.transcript.contents).not.toContain("Run the reviewed safe readiness check for the new account now?");
   });

@@ -86,7 +86,7 @@ const page = `<!doctype html>
           </div>
           <p>Miftah shows only the checks it actually ran or can safely run. It never treats configuration publication as client adoption.</p>
         </div>
-        <div class="setup-completion-copy">
+        <div class="setup-completion-copy" role="status" aria-live="polite" aria-atomic="true">
           <p id="setup-completion-verification"></p>
           <p id="setup-completion-next-action"></p>
           <p id="setup-completion-handoff"></p>
