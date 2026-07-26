@@ -13,6 +13,7 @@ import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
 import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
 import {
+  ClientEntryImportSetupError,
   runClientEntryImportSetup,
   runClientEntryImportSetupFromDocument
 } from "./setup-client-entry-import.js";
@@ -41,6 +42,10 @@ export interface SetupCommandResult {
 type ReadinessDecision = "verify" | "skip" | "cancelled";
 type AccountAdditionKind = "provider" | "environment";
 type GuidedSetupStartingPoint = "connector" | "remote" | "local" | "remote-sign-in" | "import";
+type GuidedClientEntryImportResult = Awaited<ReturnType<typeof runClientEntryImportSetupFromDocument>>;
+type GuidedClientEntryImportOutcome =
+  | { readonly kind: "imported"; readonly result: GuidedClientEntryImportResult }
+  | { readonly kind: "manual-recovery"; readonly name: string; readonly output: string; readonly client?: string };
 
 interface InteractivePromptSession {
   prompt(label: string, defaultValue?: string): Promise<string | undefined>;
@@ -160,7 +165,7 @@ function selectedGuidedClientEntry(answer: string | undefined, entries: readonly
  */
 async function runGuidedClientEntryImport(
   context: InitCommandContext
-): Promise<Awaited<ReturnType<typeof runClientEntryImportSetupFromDocument>>> {
+): Promise<GuidedClientEntryImportOutcome> {
   const prompts = createInteractivePromptSession(context, "Guided client-entry import was cancelled.");
   try {
     const importFile = await prompts.prompt("Client configuration file (absolute path)");
@@ -188,13 +193,28 @@ async function runGuidedClientEntryImport(
       "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
     );
 
-    return runClientEntryImportSetupFromDocument({
-      name,
-      output,
-      ...(client === undefined ? {} : { client }),
-      importFile,
-      importEntry
-    }, context, document);
+    try {
+      const result = await runClientEntryImportSetupFromDocument({
+        name,
+        output,
+        ...(client === undefined ? {} : { client }),
+        importFile,
+        importEntry
+      }, context, document);
+      return { kind: "imported", result };
+    } catch (error) {
+      if (!(error instanceof ClientEntryImportSetupError) || error.importReason === undefined) throw error;
+      context.output.write(
+        "Miftah did not import this entry or write a configuration from it. It did not retain its arguments, headers, environment values, or credentials.\n" +
+          "Choose 'local' to re-enter a reviewed executable and literal arguments, or 'remote' for a canonical HTTPS endpoint. Configure authentication separately.\n"
+      );
+      return {
+        kind: "manual-recovery",
+        name,
+        output,
+        ...(client === undefined ? {} : { client })
+      };
+    }
   } finally {
     prompts.close();
   }
@@ -389,28 +409,38 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
   let guidedPreset: "streamable-http" | "local-stdio" | undefined;
+  let recoveredManualConfiguration: Awaited<ReturnType<typeof runInitCommand>> | undefined;
   if (isTty(context) && !hasExplicitNewConfigurationInput(options)) {
     const startingPoint = await chooseGuidedSetupStartingPoint(context);
     if (startingPoint === "import") {
       const imported = await runGuidedClientEntryImport(context);
-      writeCliSetupCompletion(context, {
-        verification: "not-declared",
-        clientHandoff: imported.clientHandoff ?? "not-generated",
-        configPath: imported.output
-      });
-      return { verification: "not-applicable", exitCode: 0, reports: [] };
+      if (imported.kind === "imported") {
+        writeCliSetupCompletion(context, {
+          verification: "not-declared",
+          clientHandoff: imported.result.clientHandoff ?? "not-generated",
+          configPath: imported.result.output
+        });
+        return { verification: "not-applicable", exitCode: 0, reports: [] };
+      }
+      recoveredManualConfiguration = await runInitCommand({
+        ...options,
+        name: imported.name,
+        output: imported.output,
+        interactive: true,
+        ...(imported.client === undefined ? {} : { client: imported.client })
+      }, context);
     }
-    if (startingPoint === "remote-sign-in") {
+    if (recoveredManualConfiguration === undefined && startingPoint === "remote-sign-in") {
       await runNativeOAuthSetup(options, context, {
         ...(context.nativeOAuthFetch === undefined ? {} : { fetch: context.nativeOAuthFetch })
       });
       return { verification: "not-applicable", exitCode: 0, reports: [] };
     }
-    if (startingPoint === "remote" || startingPoint === "local") {
+    if (recoveredManualConfiguration === undefined && (startingPoint === "remote" || startingPoint === "local")) {
       guidedPreset = startingPoint === "remote" ? "streamable-http" : "local-stdio";
     }
   }
-  const created = await runInitCommand({
+  const created = recoveredManualConfiguration ?? await runInitCommand({
     ...options,
     interactive: true,
     ...(guidedPreset === undefined ? {} : { preset: guidedPreset })
