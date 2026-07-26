@@ -78,6 +78,21 @@ const page = `<!doctype html>
         <div id="configuration-catalog" class="configuration-catalog"></div>
       </section>
 
+      <section id="setup-completion-view" class="work-section setup-completion" hidden aria-labelledby="setup-completion-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">Finish setup</p>
+            <h2 id="setup-completion-title">Finish setup without guessing</h2>
+          </div>
+          <p>Miftah shows only the checks it actually ran or can safely run. It never treats configuration publication as client adoption.</p>
+        </div>
+        <div class="setup-completion-copy">
+          <p id="setup-completion-verification"></p>
+          <p id="setup-completion-next-action"></p>
+          <p id="setup-completion-handoff"></p>
+        </div>
+      </section>
+
       <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
         <div class="section-heading">
           <div>
@@ -446,6 +461,9 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-card button { min-height: 2.4rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
+.setup-completion { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
+.setup-completion-copy { display: grid; gap: .75rem; max-width: 58rem; }
+.setup-completion-copy p { margin: 0; }
 .profile-readiness { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
 .profile-readiness .input-row { max-width: 42rem; }
 .profile-inventory-list { display: grid; gap: .65rem; }
@@ -482,6 +500,10 @@ const script = `(() => {
   const workspaceView = byId("workspace-view");
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
+  const setupCompletionView = byId("setup-completion-view");
+  const setupCompletionVerification = byId("setup-completion-verification");
+  const setupCompletionNextAction = byId("setup-completion-next-action");
+  const setupCompletionHandoff = byId("setup-completion-handoff");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
   const providerAccountEditor = byId("provider-account-editor");
@@ -505,6 +527,7 @@ const script = `(() => {
   let csrfToken = "";
   let profileReadinessTargets = [];
   let profileReadinessGeneration = 0;
+  let setupCompletion = undefined;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -516,6 +539,8 @@ const script = `(() => {
 
   function restoreUnlock() {
     csrfToken = "";
+    setupCompletion = undefined;
+    if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
     if (onboardingView) onboardingView.hidden = true;
     if (presetOnboardingView) presetOnboardingView.hidden = true;
@@ -684,6 +709,26 @@ const script = `(() => {
 
   function record(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
+  function renderSetupCompletion(value) {
+    const completion = record(value);
+    const verification = record(completion.verification);
+    const handoff = record(completion.clientHandoff);
+    const verificationMessage = typeof verification.message === "string" ? verification.message : "";
+    const nextAction = typeof verification.nextAction === "string" ? verification.nextAction : "";
+    const handoffMessage = typeof handoff.message === "string" ? handoff.message : "";
+    if (!verificationMessage && !handoffMessage) {
+      if (setupCompletionView) setupCompletionView.hidden = true;
+      return;
+    }
+    if (setupCompletionVerification) setupCompletionVerification.textContent = verificationMessage;
+    if (setupCompletionNextAction) {
+      setupCompletionNextAction.textContent = nextAction;
+      setupCompletionNextAction.hidden = !nextAction;
+    }
+    if (setupCompletionHandoff) setupCompletionHandoff.textContent = handoffMessage;
+    if (setupCompletionView) setupCompletionView.hidden = false;
   }
 
   function catalogConfigurations(metadata) {
@@ -1254,7 +1299,7 @@ const script = `(() => {
       const data = new FormData(onboardingForm);
       message("Checking the endpoint's OAuth setup before creating the profile…");
       try {
-        await api("/api/v1/onboarding/native-oauth/discover", {
+        const result = record(await api("/api/v1/onboarding/native-oauth/discover", {
           method: "POST",
           body: {
             name: String(data.get("name") || "").trim(),
@@ -1262,7 +1307,9 @@ const script = `(() => {
             description: String(data.get("description") || "").trim() || undefined,
             resource: String(data.get("resource") || "").trim()
           }
-        });
+        }));
+        setupCompletion = record(result.completion);
+        renderSetupCompletion(setupCompletion);
         onboardingForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
@@ -1340,7 +1387,9 @@ const script = `(() => {
           const headerPrefix = String(data.get("headerPrefix") || "");
           if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
         }
-        await api("/api/v1/onboarding/preset", { method: "POST", body: request });
+        const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
+        setupCompletion = record(result.completion);
+        renderSetupCompletion(setupCompletion);
         presetOnboardingForm.reset();
         updatePresetFields();
         await refresh();
@@ -1356,14 +1405,16 @@ const script = `(() => {
       message("Importing one selected MCP entry…");
       try {
         const data = new FormData(clientEntryOnboardingForm);
-        await api("/api/v1/onboarding/client-entry", {
+        const result = record(await api("/api/v1/onboarding/client-entry", {
           method: "POST",
           body: {
             name: String(data.get("name") || "").trim(),
             entry: String(data.get("entry") || "").trim(),
             document: String(data.get("document") || "")
           }
-        });
+        }));
+        setupCompletion = record(result.completion);
+        renderSetupCompletion(setupCompletion);
         clientEntryOnboardingForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }

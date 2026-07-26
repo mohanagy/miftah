@@ -205,6 +205,8 @@ describe("setup command", () => {
       expect(upstream.registrationRequests()).toEqual([]);
       expect(contents).toContain("OAuth discovery completed");
       expect(contents).toContain("Claude Desktop settings config");
+      expect(contents).toContain("No browser authorization completed during setup. Connect later to begin the provider's authorization flow.");
+      expect(contents).toContain("Next: review the client JSON above, merge it manually, then restart or reconnect the client.");
       expect(contents).not.toContain("fixture-access-token");
     } finally {
       await upstream.close();
@@ -398,6 +400,9 @@ describe("setup command", () => {
       });
       expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
       expect(streams.transcript.contents).toContain("Server-advertised scopes: mcp:tools.");
+      expect(streams.transcript.contents).toContain(
+        `miftah connection list --config ${output} --client claude-desktop`
+      );
       expect(streams.transcript.contents).not.toContain("OAuth issuer URL");
       expect(streams.transcript.contents).not.toContain("client secret");
     } finally {
@@ -494,6 +499,12 @@ describe("setup command", () => {
     expect(nativeOAuthFetch).not.toHaveBeenCalled();
     expect(streams.transcript.contents).toContain("Generic remote setup did not discover authentication or call the endpoint.");
     expect(streams.transcript.contents).not.toContain("--native-oauth");
+    expect(streams.transcript.contents).toContain(
+      "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+    );
+    expect(streams.transcript.contents).toContain(
+      `Next: generate a copy-only client snippet with 'miftah connection list --config ${output} --client claude-desktop'`
+    );
   });
 
   it("accepts the displayed local executable choice and saves a literal argv configuration", async () => {
@@ -1353,6 +1364,9 @@ describe("setup command", () => {
     await expect(command).resolves.toEqual({ verification: "skipped", exitCode: 0, reports: [] });
     expect(profileReadinessMocks.run).not.toHaveBeenCalled();
     expect(streams.transcript.contents).toContain("First-success verification was skipped");
+    expect(streams.transcript.contents).toContain(
+      `When ready, run 'miftah profile test --config ${configPath} --profile google-personal'.`
+    );
     expect(streams.transcript.contents).not.toContain("Run the reviewed safe readiness check for the new account now?");
   });
 

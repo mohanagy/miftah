@@ -14,6 +14,7 @@ import {
   publishSetupConfigurationPlan,
   type SetupConfigurationPlan
 } from "../setup/setup-configuration.js";
+import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
@@ -79,6 +80,8 @@ export interface InitCommandResult {
   readonly output: string;
   readonly config: MiftahConfig;
   readonly providerAdapter?: ProviderAdapterDefinition;
+  /** Whether this invocation displayed copy-only client JSON. */
+  readonly clientHandoff?: SetupCompletionClientHandoff;
 }
 
 interface Cancellation {
@@ -578,5 +581,10 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
   context.output.write(`Created ${plan.output}\n`);
   writeProviderAdapterGuidance(context.output, plan.providerAdapter);
   writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
-  return { output: plan.output, config: plan.config, providerAdapter: plan.providerAdapter };
+  return {
+    output: plan.output,
+    config: plan.config,
+    providerAdapter: plan.providerAdapter,
+    clientHandoff: plan.snippets.length === 0 ? "not-generated" : "shown"
+  };
 }

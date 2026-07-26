@@ -19,6 +19,11 @@ import {
 import { runNativeOAuthSetup } from "./setup-native-oauth.js";
 import { runProviderAccountSetup } from "./setup-provider-account.js";
 import { runEnvironmentProfileSetup } from "./setup-environment-profile.js";
+import {
+  createSetupCompletion,
+  type SetupCompletionClientHandoff,
+  type SetupCompletionVerification
+} from "../setup/setup-completion.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
 export type SetupCommandOptions = InitCommandOptions & Pick<
@@ -153,7 +158,9 @@ function selectedGuidedClientEntry(answer: string | undefined, entries: readonly
  * authority: source bytes stay private, only safe entry names are rendered,
  * and the existing shared importer performs the sole conversion and write.
  */
-async function runGuidedClientEntryImport(context: InitCommandContext): Promise<void> {
+async function runGuidedClientEntryImport(
+  context: InitCommandContext
+): Promise<Awaited<ReturnType<typeof runClientEntryImportSetupFromDocument>>> {
   const prompts = createInteractivePromptSession(context, "Guided client-entry import was cancelled.");
   try {
     const importFile = await prompts.prompt("Client configuration file (absolute path)");
@@ -181,7 +188,7 @@ async function runGuidedClientEntryImport(context: InitCommandContext): Promise<
       "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
     );
 
-    await runClientEntryImportSetupFromDocument({
+    return runClientEntryImportSetupFromDocument({
       name,
       output,
       ...(client === undefined ? {} : { client }),
@@ -202,6 +209,32 @@ async function accountAdditionKind(options: SetupCommandOptions, context: InitCo
   }
   const config = await loadConfig(resolve(context.cwd, options.config));
   return getProviderAdapterForAccountProvisioning(config)?.accountProvisioning === undefined ? "environment" : "provider";
+}
+
+function writeCliSetupCompletion(
+  context: InitCommandContext,
+  input: {
+    readonly verification: SetupCompletionVerification;
+    readonly clientHandoff: SetupCompletionClientHandoff;
+    readonly profile?: string;
+    readonly configPath?: string;
+    readonly includeClientHandoff?: boolean;
+  }
+): void {
+  const completion = createSetupCompletion({
+    surface: "cli",
+    verification: input.verification,
+    clientHandoff: input.clientHandoff,
+    ...(input.profile === undefined ? {} : { profile: input.profile }),
+    ...(input.configPath === undefined ? {} : { configPath: input.configPath })
+  });
+  context.output.write(`${completion.verification.message}\n`);
+  if (completion.verification.nextAction !== undefined) {
+    context.output.write(`${completion.verification.nextAction}\n`);
+  }
+  if (input.includeClientHandoff !== false) {
+    context.output.write(`${completion.clientHandoff.message}\n`);
+  }
 }
 
 /**
@@ -256,15 +289,36 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     const decision = options.verify === true ? "verify" : !isTty(context) ? "skip" : await confirmReadiness(context, "the new account now");
     if (decision === "skip") {
       context.output.write("First-success verification was skipped; the new account was added but has not been tested with the provider.\n");
+      writeCliSetupCompletion(context, {
+        verification: "skipped",
+        clientHandoff: "not-generated",
+        profile: added.report.profile,
+        configPath: added.configPath,
+        includeClientHandoff: false
+      });
       return { verification: "skipped", exitCode: 0, reports: [] };
     }
     if (decision === "cancelled") {
       context.output.write("First-success verification was cancelled after the account was added; the configuration remains available.\n");
+      writeCliSetupCompletion(context, {
+        verification: "incomplete",
+        clientHandoff: "not-generated",
+        profile: added.report.profile,
+        configPath: added.configPath,
+        includeClientHandoff: false
+      });
       return { verification: "incomplete", exitCode: 1, reports: [] };
     }
     try {
       const report = await runProfileReadiness(added.configPath, { profile: added.report.profile });
       writeReadinessReport(context, report);
+      writeCliSetupCompletion(context, {
+        verification: report.status === "ready" ? "complete" : "incomplete",
+        clientHandoff: "not-generated",
+        profile: added.report.profile,
+        configPath: added.configPath,
+        includeClientHandoff: false
+      });
       return {
         verification: report.status === "ready" ? "complete" : "incomplete",
         exitCode: report.status === "ready" ? 0 : 1,
@@ -273,6 +327,13 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     } catch (error) {
       const code = error instanceof MiftahError ? error.code : "UPSTREAM_CALL_FAILED";
       context.output.write(`Profile '${added.report.profile}': readiness did not complete (${code}).\n`);
+      writeCliSetupCompletion(context, {
+        verification: "incomplete",
+        clientHandoff: "not-generated",
+        profile: added.report.profile,
+        configPath: added.configPath,
+        includeClientHandoff: false
+      });
       return { verification: "incomplete", exitCode: 1, reports: [] };
     }
   }
@@ -317,16 +378,26 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     if (options.verify === true) {
       throw new CliUsageError("Option '--verify' is unavailable for imported client entries because Miftah does not infer a reviewed provider adapter.");
     }
-    await runClientEntryImportSetup(options, context);
+    const imported = await runClientEntryImportSetup(options, context);
     // Imported client entries are intentionally untrusted/manual. They do not
     // inherit a reviewed provider adapter and are never launched during import.
+    writeCliSetupCompletion(context, {
+      verification: "not-declared",
+      clientHandoff: imported.clientHandoff ?? "not-generated",
+      configPath: imported.output
+    });
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
   let guidedPreset: "streamable-http" | "local-stdio" | undefined;
   if (isTty(context) && !hasExplicitNewConfigurationInput(options)) {
     const startingPoint = await chooseGuidedSetupStartingPoint(context);
     if (startingPoint === "import") {
-      await runGuidedClientEntryImport(context);
+      const imported = await runGuidedClientEntryImport(context);
+      writeCliSetupCompletion(context, {
+        verification: "not-declared",
+        clientHandoff: imported.clientHandoff ?? "not-generated",
+        configPath: imported.output
+      });
       return { verification: "not-applicable", exitCode: 0, reports: [] };
     }
     if (startingPoint === "remote-sign-in") {
@@ -354,15 +425,32 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     );
   }
   if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
+    writeCliSetupCompletion(context, {
+      verification: "not-declared",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      configPath: created.output
+    });
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
   const decision = options.verify === true ? "verify" : await confirmReadiness(context, "every account now");
   if (decision === "skip") {
     context.output.write("First-success verification was skipped; the configuration was created but has not been tested with the provider.\n");
+    writeCliSetupCompletion(context, {
+      verification: "skipped",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      profile: created.config.defaultProfile,
+      configPath: created.output
+    });
     return { verification: "skipped", exitCode: 0, reports: [] };
   }
   if (decision === "cancelled") {
     context.output.write("First-success verification was cancelled after configuration creation; the configuration remains available.\n");
+    writeCliSetupCompletion(context, {
+      verification: "incomplete",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      profile: created.config.defaultProfile,
+      configPath: created.output
+    });
     return { verification: "incomplete", exitCode: 1, reports: [] };
   }
 
@@ -380,6 +468,12 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       context.output.write(`Profile '${profile}': readiness did not complete (${code}).\n`);
     }
   }
+  writeCliSetupCompletion(context, {
+    verification: incomplete ? "incomplete" : "complete",
+    clientHandoff: created.clientHandoff ?? "not-generated",
+    ...(incomplete ? { profile: created.config.defaultProfile } : {}),
+    configPath: created.output
+  });
   return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
 }
 

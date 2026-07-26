@@ -154,7 +154,11 @@ export async function runClientEntryImportSetupFromDocument(
     throw error;
   }
 
-  const result: InitCommandResult = { output: plan.path, config };
+  const result: InitCommandResult = {
+    output: plan.path,
+    config,
+    clientHandoff: options.client === undefined ? "not-generated" : "shown"
+  };
   context.output.write(`Created ${plan.path}\n`);
   if (config.upstream?.transport === "streamable-http") {
     context.output.write(
