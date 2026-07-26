@@ -141,6 +141,14 @@ function renderConfiguration(client: ClientName, input: ClientSnippetInput): obj
   }
 }
 
+/**
+ * Renders one client-specific MCP entry together with non-secret account-switching guidance.
+ *
+ * @param client - The supported MCP client whose configuration shape should be rendered.
+ * @param input - The validated launcher, server name, and absolute Miftah configuration path.
+ * @returns A display-safe client handoff that contains no credential values.
+ * @throws {ClientSnippetError} When the client or launcher input is not safe to render.
+ */
 export function renderClientSnippet(client: ClientName, input: ClientSnippetInput): ClientSnippet {
   if (!isClientName(client)) {
     inputError("Unsupported client.");
