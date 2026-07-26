@@ -344,6 +344,25 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses an explicit provider-declared profile readiness check", () => {
+    expect(parseCli([
+      "profile",
+      "test",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--upstream=default"
+    ])).toEqual({
+      kind: "run",
+      command: "profile test",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        upstream: "default"
+      }
+    });
+    expect(renderCommandHelp("profile test")).toContain("reviewed safe readiness check");
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

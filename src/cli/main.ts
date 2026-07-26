@@ -16,6 +16,7 @@ import { exitCodeForError } from "./exit-codes.js";
 import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
 import { runSetupCommand } from "./setup.js";
+import { runProfileReadinessCommand } from "./profile-readiness-command.js";
 import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
@@ -222,6 +223,16 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       profile: requireOption(command, "profile", args.profile)
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile test") {
+    const result = await runProfileReadinessCommand({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      ...(args.upstream === undefined ? {} : { upstream: args.upstream })
+    });
+    process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
+    process.exitCode = result.exitCode;
     return;
   }
   if (command === "connection add") {
