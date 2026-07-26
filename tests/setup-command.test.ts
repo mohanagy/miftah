@@ -437,9 +437,25 @@ describe("setup command", () => {
         defaultProfile: "production",
         profiles: { production: { description: "Production analytics" } }
       });
+      if (!("oauth" in config) || !config.oauth) {
+        throw new Error("Expected the guided browser sign-in configuration to include a native OAuth binding.");
+      }
+      expect(Object.values(config.oauth.connections)).toEqual([
+        {
+          profile: "production",
+          upstream: "default",
+          resource: "https://mcp.example.test/mcp",
+          issuer: "https://mcp.example.test",
+          clientRegistration: "dynamic",
+          scopes: ["mcp:tools"]
+        }
+      ]);
       expect(streams.transcript.contents).toContain("Start from (new, remote sign-in, import) [new]");
       expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
       expect(streams.transcript.contents).not.toContain("--native-oauth");
+      expect(upstream.registrationRequests()).toEqual([]);
+      expect(upstream.authorizationRequests()).toEqual([]);
+      expect(upstream.tokenExchanges()).toEqual([]);
     } finally {
       await upstream.close();
     }
