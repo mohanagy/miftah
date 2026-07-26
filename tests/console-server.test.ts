@@ -221,6 +221,64 @@ async function submitPresetFormWithStaleValue(
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+function selectConsoleRemoteSetupSource(javascript: string): {
+  readonly preset: string;
+  readonly updateCalls: number;
+  readonly focused: boolean;
+  readonly status: string;
+} {
+  const start = javascript.indexOf("function selectSetupSource(source)");
+  const end = javascript.indexOf("\n\n  async function refresh", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console setup-source selector.");
+
+  class FakeElement {
+    focused = false;
+
+    focus(): void {
+      this.focused = true;
+    }
+
+    scrollIntoView(): void {}
+  }
+  class FakeForm extends FakeElement {
+    querySelector(selector: string): unknown {
+      return selector === "input[name='url']" ? remoteUrl : undefined;
+    }
+  }
+  class FakeSelect extends FakeElement {
+    value = "generic";
+  }
+  class FakeInput extends FakeElement {}
+
+  const form = new FakeForm();
+  const selection = new FakeSelect();
+  const remoteUrl = new FakeInput();
+  let updateCalls = 0;
+  let status = "";
+  const selectSetupSource = runInNewContext(`${javascript.slice(start, end)}\nselectSetupSource`, {
+    byId(id: string): unknown {
+      if (id === "preset-onboarding-form") return form;
+      if (id === "preset-selection") return selection;
+      return undefined;
+    },
+    updateSetupSourceChoice(): void {},
+    updatePresetFields(): void {
+      updateCalls += 1;
+    },
+    message(value: string): void {
+      status = value;
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeElement
+  }) as (source: string) => void;
+
+  selectSetupSource("remote");
+  return { preset: selection.value, updateCalls, focused: remoteUrl.focused, status };
+}
+
 function clearProfileReadinessResultOnTargetChange(javascript: string): {
   readonly afterProfileChange: string;
   readonly afterUpstreamChange: string;
@@ -789,6 +847,14 @@ describe("local Console control server", () => {
       expect(html).toContain("Upstream-owned auth");
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Set up an MCP");
+      expect(html).toContain('id="setup-source-choice"');
+      expect(html).toContain('type="radio" name="setup-source"');
+      expect(html).toContain('data-setup-source="connector"');
+      expect(html).toContain('data-setup-source="remote"');
+      expect(html).toContain('data-setup-source="local"');
+      expect(html).toContain('data-setup-source="browser-sign-in"');
+      expect(html).toContain('data-setup-source="import"');
+      expect(html).not.toContain('aria-pressed=');
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
       expect(html).toContain('id="native-oauth-setup-link"');
@@ -856,9 +922,19 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/profiles/provider-account");
       expect(javascript).toContain("/api/v1/profiles/environment-account");
       expect(javascript).toContain("/api/v1/onboarding/preset");
+      expect(javascript).toContain("function selectSetupSource(source)");
+      expect(javascript).toContain("setup-source-choice");
+      expect(javascript).toContain('querySelectorAll("input[data-setup-source]")');
+      expect(javascript).toContain('setupSourceChoice.addEventListener("change"');
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
       expect(javascript).toContain("/api/v1/onboarding/client-entry");
+      expect(selectConsoleRemoteSetupSource(javascript)).toEqual({
+        preset: "streamable-http",
+        updateCalls: 1,
+        focused: true,
+        status: "Enter the generic HTTPS endpoint below. Miftah does not discover authentication or call it during this setup."
+      });
       await expect(submitPresetFormWithStaleValue(javascript)).resolves.toEqual({
         name: "analytics",
         preset: "generic",
