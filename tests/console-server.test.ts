@@ -791,8 +791,10 @@ describe("local Console control server", () => {
       expect(html).toContain("Set up an MCP");
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
-      expect(html).toContain("Discover OAuth and create profile");
-      expect(html).toContain("Miftah checks this exact HTTPS endpoint for standards-based OAuth before it creates the configuration.");
+      expect(html).toContain('id="native-oauth-setup-link"');
+      expect(html).toContain("Remote MCP with browser sign-in");
+      expect(html).toContain("Check sign-in and create profile");
+      expect(html).toContain("Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration.");
       expect(html).toContain("Discover OAuth from configured upstream");
       expect(html).toContain("Add another native OAuth account");
       expect(html).toContain('id="provider-account-editor"');
@@ -848,6 +850,7 @@ describe("local Console control server", () => {
       const javascript = await script.text();
       expect(javascript).toContain("/api/v1/sessions");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
+      expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/profiles/provider-account");

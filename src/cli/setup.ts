@@ -35,7 +35,7 @@ export interface SetupCommandResult {
 
 type ReadinessDecision = "verify" | "skip" | "cancelled";
 type AccountAdditionKind = "provider" | "environment";
-type GuidedSetupStartingPoint = "new" | "import";
+type GuidedSetupStartingPoint = "new" | "remote-sign-in" | "import";
 
 interface InteractivePromptSession {
   prompt(label: string, defaultValue?: string): Promise<string | undefined>;
@@ -106,10 +106,15 @@ function hasExplicitNewConfigurationInput(options: SetupCommandOptions): boolean
 async function chooseGuidedSetupStartingPoint(context: InitCommandContext): Promise<GuidedSetupStartingPoint> {
   const prompts = createInteractivePromptSession(context, "Guided setup was cancelled.");
   try {
-    const answer = (await prompts.prompt("Start from (new, import)", "new"))?.toLowerCase();
+    const answer = (await prompts.prompt("Start from (new, remote sign-in, import)", "new"))?.toLowerCase();
     if (answer === "new" || answer === "n") return "new";
+    if (answer === "remote-sign-in" || answer === "remote sign-in" || answer === "sign-in" || answer === "browser") {
+      return "remote-sign-in";
+    }
     if (answer === "import" || answer === "i") return "import";
-    throw new CliUsageError("Choose 'new' to configure an MCP or 'import' to select an existing client entry.");
+    throw new CliUsageError(
+      "Choose 'new' to configure an MCP, 'remote-sign-in' when the MCP signs you in in a browser, or 'import' to select an existing client entry."
+    );
   } finally {
     prompts.close();
   }
@@ -305,6 +310,12 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     const startingPoint = await chooseGuidedSetupStartingPoint(context);
     if (startingPoint === "import") {
       await runGuidedClientEntryImport(context);
+      return { verification: "not-applicable", exitCode: 0, reports: [] };
+    }
+    if (startingPoint === "remote-sign-in") {
+      await runNativeOAuthSetup(options, context, {
+        ...(context.nativeOAuthFetch === undefined ? {} : { fetch: context.nativeOAuthFetch })
+      });
       return { verification: "not-applicable", exitCode: 0, reports: [] };
     }
   }

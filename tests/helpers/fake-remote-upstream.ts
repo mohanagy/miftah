@@ -57,6 +57,10 @@ export interface OAuthCompatibilityProbe {
     readonly redirectUri: string;
     readonly scope: string;
   }[];
+  authorizationRequests(): readonly {
+    readonly redirectUri: string;
+    readonly scope: string;
+  }[];
   tokenExchanges(): readonly {
     readonly clientId: string;
     readonly codeWasExpected: boolean;
@@ -271,6 +275,7 @@ export async function startOAuthCompatibilityProbe(
 ): Promise<OAuthCompatibilityProbe> {
   const discoveryRequests: string[] = [];
   const registrationRequests: Array<{ clientName: string; redirectUri: string; scope: string }> = [];
+  const authorizationRequests: Array<{ redirectUri: string; scope: string }> = [];
   const authorizationCodes = new Map<string, { codeChallenge: string; redirectUri: string }>();
   const tokenExchanges: Array<{
     clientId: string;
@@ -368,6 +373,10 @@ export async function startOAuthCompatibilityProbe(
     if (requestUrl.pathname === "/oauth/authorize" && request.method === "GET") {
       const codeChallenge = requestUrl.searchParams.get("code_challenge");
       const redirectUri = requestUrl.searchParams.get("redirect_uri");
+      authorizationRequests.push({
+        redirectUri: redirectUri ?? "",
+        scope: requestUrl.searchParams.get("scope") ?? ""
+      });
       if (!codeChallenge || requestUrl.searchParams.get("code_challenge_method") !== "S256" || !redirectUri) {
         sendJson(response, 400, { error: "invalid_request" });
         return;
@@ -533,6 +542,7 @@ export async function startOAuthCompatibilityProbe(
     fetch: rewriteFetch,
     discoveryRequests: () => [...discoveryRequests],
     registrationRequests: () => registrationRequests.map((request) => ({ ...request })),
+    authorizationRequests: () => authorizationRequests.map((request) => ({ ...request })),
     tokenExchanges: () => tokenExchanges.map((exchange) => ({ ...exchange })),
     authenticatedMcpRequests: () => authenticatedMcpRequests,
     unauthenticatedMcpRequests: () => unauthenticatedMcpRequests,

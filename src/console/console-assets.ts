@@ -84,7 +84,7 @@ const page = `<!doctype html>
             <p class="step">02 / First connection</p>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
-          <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here.</p>
+          <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
@@ -119,6 +119,7 @@ const page = `<!doctype html>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
           <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache. For a local executable, use the environment-variable field for a secret reference; never put a token in an argument.</p>
           <div class="wide form-action"><button type="submit">Create configuration</button></div>
+          <div class="wide form-action"><button id="native-oauth-setup-link" type="button" class="secondary">Remote MCP with browser sign-in</button></div>
         </form>
       </section>
 
@@ -143,9 +144,9 @@ const page = `<!doctype html>
         <div class="section-heading">
           <div>
             <p class="step">02 / First connection</p>
-            <h2 id="onboarding-title">Create a native OAuth profile</h2>
+            <h2 id="onboarding-title">Set up remote MCP with browser sign-in</h2>
           </div>
-          <p>Miftah checks this exact HTTPS endpoint for standards-based OAuth before it creates the configuration. It uses dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
+          <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It uses standards-based OAuth with dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
         </div>
         <form id="onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
@@ -153,7 +154,7 @@ const page = `<!doctype html>
           <label class="wide">Profile description<input name="description" maxlength="1024" placeholder="Production analytics account"></label>
           <label class="wide">Remote MCP resource URL<input name="resource" type="url" required maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
           <p class="field-note wide">Miftah will stop without writing anything if this endpoint does not publish one supported OAuth authorization server with dynamic client registration. Advanced manual OAuth remains available for provider-specific registrations.</p>
-          <div class="wide form-action"><button type="submit">Discover OAuth and create profile</button></div>
+          <div class="wide form-action"><button type="submit">Check sign-in and create profile</button></div>
         </form>
       </section>
 
@@ -1195,6 +1196,18 @@ const script = `(() => {
         onboardingForm.reset();
         await refresh();
       } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  const nativeOAuthSetupLink = byId("native-oauth-setup-link");
+  if (nativeOAuthSetupLink instanceof HTMLButtonElement) {
+    nativeOAuthSetupLink.addEventListener("click", () => {
+      if (onboardingView instanceof HTMLElement) onboardingView.scrollIntoView({ block: "start" });
+      const name = onboardingForm instanceof HTMLFormElement
+        ? onboardingForm.querySelector("input[name='name']")
+        : undefined;
+      if (name instanceof HTMLInputElement) name.focus();
+      message("Enter the remote MCP details below. Miftah checks supported browser sign-in before it writes a configuration.");
     });
   }
 
