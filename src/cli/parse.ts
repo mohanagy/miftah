@@ -22,6 +22,7 @@ type ValueOptionName =
   | "connection"
   | "upstream"
   | "replacementProfile"
+  | "newProfile"
   | "issuer"
   | "clientRegistration"
   | "scopes"
@@ -74,6 +75,8 @@ export interface CliOptions {
   readonly upstream?: string;
   /** Existing profile that should receive durable references before a removal. */
   readonly replacementProfile?: string;
+  /** New safe identifier for a durable profile rename. */
+  readonly newProfile?: string;
   readonly issuer?: string;
   readonly clientRegistration?: string;
   readonly scopes?: readonly string[];
@@ -188,6 +191,10 @@ export const CLI_COMMANDS = {
   "profile set-description": {
     description: "Set or explicitly clear a non-secret account profile description.",
     options: ["config", "profile", "description", "clearDescription"]
+  },
+  "profile rename": {
+    description: "Safely rename one account profile and its durable configuration references.",
+    options: ["config", "profile", "newProfile"]
   },
   "profile remove": {
     description: "Safely remove one account profile and explicitly reassign any durable references.",
@@ -421,6 +428,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--replacement-profile <name>",
     description: "Existing profile that receives durable references before removal."
   },
+  newProfile: {
+    name: "newProfile",
+    takesValue: true,
+    usage: "--new-profile <name>",
+    description: "New safe identifier for a durable profile rename."
+  },
   issuer: {
     name: "issuer",
     takesValue: true,
@@ -549,6 +562,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--connection": OPTION_DEFINITIONS.connection,
   "--upstream": OPTION_DEFINITIONS.upstream,
   "--replacement-profile": OPTION_DEFINITIONS.replacementProfile,
+  "--new-profile": OPTION_DEFINITIONS.newProfile,
   "--issuer": OPTION_DEFINITIONS.issuer,
   "--client-registration": OPTION_DEFINITIONS.clientRegistration,
   "--scope": OPTION_DEFINITIONS.scopes,

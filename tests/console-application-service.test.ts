@@ -875,6 +875,55 @@ describe("Console application service", () => {
     expect(JSON.stringify(audit)).not.toContain("PERSONAL_API_KEY");
   });
 
+  it("renames a profile through the shared audited lifecycle without exposing its credential reference", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-profile-rename-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    const report = await service.renameProfile({ profile: "work", newProfile: "studio" });
+
+    expect(report).toEqual({
+      changed: true,
+      write: true,
+      profile: "work",
+      newProfile: "studio",
+      actions: ["Renamed profile 'work' to 'studio'."]
+    });
+    expect(JSON.stringify(report)).not.toContain("WORK_API_KEY");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "studio",
+      profiles: {
+        studio: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    });
+    const audit = await service.auditRecords(10);
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-rename-intent",
+      profile: "work",
+      name: "studio",
+      status: "success"
+    }));
+    expect(audit).toContainEqual(expect.objectContaining({
+      operation: "console/profile-rename",
+      profile: "work",
+      name: "studio",
+      status: "success"
+    }));
+    expect(JSON.stringify(audit)).not.toContain("WORK_API_KEY");
+  });
+
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {
     const calls: string[] = [];
     const configPath = await writeConfig();

@@ -37,6 +37,8 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(consoleApi).toContain("`POST /api/v1/sessions`");
     expect(consoleApi).toContain("`POST /api/v1/onboarding/native-oauth`");
     expect(consoleApi).toContain("`POST /api/v1/profile-readiness`");
+    expect(consoleApi).toContain("`POST /api/v1/profiles/rename`");
+    expect(consoleApi).toContain("OS-vault credential migration");
     expect(consoleApi).toContain("provider-declared safe read-only check");
     expect(consoleApi).toContain("GSC accepts only structured account names/descriptions/client-secrets paths");
     expect(consoleApi).toContain("`GET /api/v1/client-snippets?client=<name>`");

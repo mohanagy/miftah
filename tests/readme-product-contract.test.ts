@@ -144,6 +144,10 @@ describe("product README", () => {
     expect(readme).toContain("miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --clear-description");
     expect(readme).toContain("does not change credentials, OAuth bindings, routing, provider token caches, or the durable default");
     expect(readme).toContain("Edit a non-secret account label");
+    expect(readme).toContain("### Rename an account later");
+    expect(readme).toContain("miftah profile rename --config ~/.config/miftah/gsc.json --profile google-personal --new-profile google-studio");
+    expect(readme).toContain("Rename an account profile");
+    expect(readme).toContain("Miftah refuses to rename a profile with a native OAuth binding");
     expect(readme).toContain("### Remove an account later");
     expect(readme).toContain("miftah profile remove --config ~/.config/miftah/gsc.json --profile google-personal --replacement-profile google-work");
     expect(readme).toContain("does not resolve or delete an underlying secret");
@@ -163,6 +167,8 @@ describe("product README", () => {
     expect(readme).toContain("oauthconn:UUID_FROM_PLAN");
     expect(readme).not.toContain("oauthconn:<uuid>");
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
+    expect(cliDocs).toContain("miftah profile rename --config <file> --profile <name> --new-profile <name>");
+    expect(cliDocs).toContain("PROFILE_RENAME_OAUTH_CONNECTION");
   });
 
   it("documents the explicit no-secret local and remote client-entry import paths", () => {

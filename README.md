@@ -520,6 +520,20 @@ Use exactly one of `--description` or `--clear-description`. Miftah changes only
 
 In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Edit a non-secret account label**. In catalog mode, select the configuration again after a successful write before making another Console change.
 
+### Rename an account later
+
+Rename a profile without hand-editing every configuration reference:
+
+```bash
+miftah profile rename --config ~/.config/miftah/gsc.json --profile google-personal --new-profile google-studio
+```
+
+The selected profile must already exist and the new name must be distinct and safe. Miftah atomically renames the profile and every configuration-owned reference to it: the durable default, routing rules, routing-plugin bindings, and a configured profile lock. It validates the complete candidate, keeps a recovery backup, and finalizes the configured fail-closed audit lifecycle.
+
+It does not read, move, copy, or delete credentials, provider token caches, profile state, identity records, or OS-vault data, and it does not change an active MCP client session. Miftah refuses to rename a profile with a native OAuth binding because moving its OS-vault credential requires one future atomic lifecycle rather than a configuration-only rename.
+
+In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Rename an account profile**. In catalog mode, select the configuration again after the write before making another Console change.
+
 ### Remove an account later
 
 When an account should no longer be part of this Miftah configuration, remove it through the same guarded lifecycle instead of hand-editing JSON:
@@ -547,6 +561,7 @@ These are shell commands. Profile switching and identity tools such as `miftah_u
 | Start one profile and verify initialization | `miftah test-profile --config service.json --profile work` |
 | Review configured account profiles without starting an upstream | `miftah profile list --config service.json` |
 | Set or clear a non-secret account label | `miftah profile set-description --config service.json --profile personal --description "Personal account"` |
+| Rename an account and its durable configuration references | `miftah profile rename --config service.json --profile personal --new-profile studio` |
 | Remove one account with explicit durable-reference replacement | `miftah profile remove --config service.json --profile personal --replacement-profile work` |
 | Run the reviewed safe check for one provider-backed account | `miftah profile test --config service.json --profile work` |
 | Discover one profile's upstream tools | `miftah list-tools --config service.json --profile work` |

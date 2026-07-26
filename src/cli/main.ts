@@ -20,6 +20,7 @@ import { runProfileReadinessCommand } from "./profile-readiness-command.js";
 import { runProfileListCommand } from "./profile-list-command.js";
 import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
 import { runProfileDescriptionChange } from "../setup/profile-description-onboarding.js";
+import { runProfileRename } from "../setup/profile-rename-onboarding.js";
 import { runProfileRemoval } from "../setup/profile-removal-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
@@ -234,6 +235,15 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       profile: requireOption(command, "profile", args.profile),
       ...(args.description === undefined ? {} : { description: args.description }),
       ...(args.clearDescription === true ? { clearDescription: true } : {})
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile rename") {
+    const report = await runProfileRename({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      newProfile: requireOption(command, "new-profile", args.newProfile)
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;

@@ -431,6 +431,26 @@ describe("CLI parser", () => {
     expectUsageError(["profile", "remove", "--description", "not-allowed"]);
   });
 
+  it("parses an explicit guarded profile rename", () => {
+    expect(parseCli([
+      "profile",
+      "rename",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--new-profile=google-studio"
+    ])).toEqual({
+      kind: "run",
+      command: "profile rename",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        newProfile: "google-studio"
+      }
+    });
+    expect(renderCommandHelp("profile rename")).toContain("--new-profile <name>");
+    expectUsageError(["profile", "rename", "--replacement-profile", "not-allowed"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

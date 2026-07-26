@@ -945,6 +945,11 @@ describe("local Console control server", () => {
       expect(html).toContain('id="set-profile-description"');
       expect(html).toContain('id="clear-profile-description"');
       expect(html).toContain("Edit a non-secret account label");
+      expect(html).toContain('id="profile-rename-editor"');
+      expect(html).toContain('id="profile-rename-selection"');
+      expect(html).toContain('id="profile-rename-input"');
+      expect(html).toContain('id="rename-profile"');
+      expect(html).toContain("Rename an account profile");
       expect(html).toContain('id="profile-removal-editor"');
       expect(html).toContain('id="profile-removal-selection"');
       expect(html).toContain('id="profile-removal-replacement"');
@@ -1078,6 +1083,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain('body: { profile: profile.value }');
       expect(javascript).toContain("/api/v1/profiles/description");
       expect(javascript).toContain("renderProfileDescriptionEditor");
+      expect(javascript).toContain("/api/v1/profiles/rename");
+      expect(javascript).toContain("renderProfileRenameEditor");
       expect(javascript).toContain("/api/v1/profiles/remove");
       expect(javascript).toContain("renderProfileRemovalEditor");
       expect(preserveProfileDescriptionSelectionAcrossRefresh(javascript)).toEqual({
@@ -2793,6 +2800,71 @@ describe("local Console control server", () => {
     }
   });
 
+  it("renames a profile only through a strict CSRF-protected Console request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-rename-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const before = JSON.parse(await readFile(configPath, "utf8"));
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/rename", server.url);
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "work", newProfile: "studio", credential: "never-accepted" })
+      });
+      expect(rejected.status).toBe(422);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(before);
+
+      const changed = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "work", newProfile: "studio" })
+      });
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toEqual({
+        data: {
+          changed: true,
+          write: true,
+          profile: "work",
+          newProfile: "studio",
+          actions: ["Renamed profile 'work' to 'studio'."]
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "studio",
+        profiles: {
+          studio: { env: { API_KEY: "${WORK_API_KEY}" } },
+          personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+        }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns a safe explicit refusal when a requested removal has a configured native OAuth binding", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-removal-oauth-"));
     temporaryDirectories.push(directory);
@@ -2836,6 +2908,57 @@ describe("local Console control server", () => {
         error: {
           code: "profile_removal_oauth_connection",
           message: "This account has a native OAuth binding. Miftah refuses to split configuration removal from OS-vault cleanup."
+        }
+      });
+      expect(await readFile(configPath, "utf8")).toBe(original);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns a safe explicit refusal when a requested rename has a configured native OAuth binding", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-rename-oauth-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.com/mcp" },
+      profiles: { work: {}, personal: {} },
+      oauth: {
+        connections: {
+          "oauthconn:11111111-1111-4111-8111-111111111111": {
+            profile: "work",
+            upstream: "default",
+            resource: "https://mcp.example.com/mcp",
+            issuer: "https://auth.example.com",
+            clientRegistration: "dynamic",
+            scopes: ["openid"]
+          }
+        }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const original = await readFile(configPath, "utf8");
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/profiles/rename", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "work", newProfile: "studio" })
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "profile_rename_oauth_connection",
+          message: "This account has a native OAuth binding. Miftah refuses to split the rename from OS-vault credential migration."
         }
       });
       expect(await readFile(configPath, "utf8")).toBe(original);

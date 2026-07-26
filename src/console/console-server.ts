@@ -90,6 +90,13 @@ const profileRemovalSchema = z.object({
   profile: z.string().min(1),
   replacementProfile: z.string().min(1).optional()
 }).strict();
+const profileRenameSchema = z.object({
+  // Preserve compatibility with existing profile keys for the selected source
+  // profile. The guarded lifecycle owns existence checks; a new profile name
+  // is bounded here and fully safety-validated before it becomes an object key.
+  profile: z.string().min(1),
+  newProfile: z.string().min(1).max(256)
+}).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
@@ -378,6 +385,9 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   if (error.code === "PROFILE_REMOVAL_INPUT_INVALID") {
     return new ConsoleHttpError(422, "profile_removal_input_invalid", "Choose an existing configured account.");
   }
+  if (error.code === "PROFILE_RENAME_INPUT_INVALID") {
+    return new ConsoleHttpError(422, "profile_rename_input_invalid", "Choose a distinct safe account name.");
+  }
   if (error.code === "PROFILE_LAST_PROFILE") {
     return new ConsoleHttpError(422, "profile_last_profile", "At least one configured account must remain.");
   }
@@ -400,6 +410,13 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       422,
       "profile_removal_oauth_connection",
       "This account has a native OAuth binding. Miftah refuses to split configuration removal from OS-vault cleanup."
+    );
+  }
+  if (error.code === "PROFILE_RENAME_OAUTH_CONNECTION") {
+    return new ConsoleHttpError(
+      422,
+      "profile_rename_oauth_connection",
+      "This account has a native OAuth binding. Miftah refuses to split the rename from OS-vault credential migration."
     );
   }
   if (
@@ -785,6 +802,25 @@ class LocalConsoleServer implements ConsoleServer {
       }
       try {
         const result = await this.application.removeProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/rename") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileRenameSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.renameProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.renameProfile(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 200, { data: result });
       } catch (error) {
