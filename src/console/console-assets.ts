@@ -91,11 +91,11 @@ const page = `<!doctype html>
             <legend>What do you already have?</legend>
             <p class="field-note">Choose a starting point first. Nothing is saved, launched, discovered, or sent to an MCP until you review and submit the matching setup form.</p>
             <div class="setup-source-grid">
-              <button type="button" data-setup-source="connector" aria-pressed="true">Known connector or pinned package</button>
-              <button type="button" data-setup-source="remote" aria-pressed="false">Remote HTTPS endpoint</button>
-              <button type="button" data-setup-source="local" aria-pressed="false">Local executable</button>
-              <button type="button" data-setup-source="browser-sign-in" aria-pressed="false">Remote MCP with browser sign-in</button>
-              <button type="button" data-setup-source="import" aria-pressed="false">Existing client entry</button>
+              <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Known connector or pinned package</span></label>
+              <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
+              <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
+              <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
+              <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
             </div>
           </fieldset>
           <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
@@ -410,8 +410,11 @@ fieldset { min-inline-size: 0; margin: 0; }
 .setup-source-choice { padding: 1rem; border: 1px solid var(--line); background: var(--ground); }
 .setup-source-choice legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
 .setup-source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; margin-top: 1rem; }
-.setup-source-grid button { min-height: 3.3rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); text-align: left; }
-.setup-source-grid button[aria-pressed="true"] { color: #19150d; background: var(--key); border-color: var(--key); }
+.setup-source-option { position: relative; display: block; margin: 0; color: var(--ink); }
+.setup-source-option input { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; opacity: 0; }
+.setup-source-option span { display: flex; align-items: center; min-height: 3.3rem; padding: .78rem .85rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); }
+.setup-source-option input:checked + span { color: #19150d; background: var(--key); border-color: var(--key); }
+.setup-source-option input:focus-visible + span { outline: 2px solid var(--key); outline-offset: 2px; }
 .gsc-accounts { border: 1px solid var(--line); padding: 1rem; }
 .gsc-accounts legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
 .gsc-account-list { display: grid; gap: 1rem; margin: 1rem 0; }
@@ -1082,9 +1085,9 @@ const script = `(() => {
   function updateSetupSourceChoice(source) {
     const choice = byId("setup-source-choice");
     if (!(choice instanceof HTMLElement)) return;
-    choice.querySelectorAll("button[data-setup-source]").forEach((button) => {
-      if (!(button instanceof HTMLButtonElement)) return;
-      button.setAttribute("aria-pressed", String(button.dataset.setupSource === source));
+    choice.querySelectorAll("input[data-setup-source]").forEach((input) => {
+      if (!(input instanceof HTMLInputElement)) return;
+      input.checked = input.dataset.setupSource === source;
     });
   }
 
@@ -1273,10 +1276,10 @@ const script = `(() => {
 
   const setupSourceChoice = byId("setup-source-choice");
   if (setupSourceChoice instanceof HTMLElement) {
-    setupSourceChoice.addEventListener("click", (event) => {
-      const button = event.target instanceof Element ? event.target.closest("button[data-setup-source]") : null;
-      if (!(button instanceof HTMLButtonElement)) return;
-      const source = button.dataset.setupSource;
+    setupSourceChoice.addEventListener("change", (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || input.type !== "radio") return;
+      const source = input.dataset.setupSource;
       if (source === "connector" || source === "remote" || source === "local" || source === "browser-sign-in" || source === "import") {
         selectSetupSource(source);
       }

@@ -848,11 +848,13 @@ describe("local Console control server", () => {
       expect(html).toContain("Unsupported state");
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="setup-source-choice"');
+      expect(html).toContain('type="radio" name="setup-source"');
       expect(html).toContain('data-setup-source="connector"');
       expect(html).toContain('data-setup-source="remote"');
       expect(html).toContain('data-setup-source="local"');
       expect(html).toContain('data-setup-source="browser-sign-in"');
       expect(html).toContain('data-setup-source="import"');
+      expect(html).not.toContain('aria-pressed=');
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
       expect(html).toContain('id="native-oauth-setup-link"');
@@ -922,6 +924,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/onboarding/preset");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");
+      expect(javascript).toContain('querySelectorAll("input[data-setup-source]")');
+      expect(javascript).toContain('setupSourceChoice.addEventListener("change"');
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
       expect(javascript).toContain("/api/v1/onboarding/client-entry");

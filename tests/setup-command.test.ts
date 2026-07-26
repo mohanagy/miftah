@@ -496,6 +496,44 @@ describe("setup command", () => {
     expect(streams.transcript.contents).not.toContain("--native-oauth");
   });
 
+  it("accepts the displayed local executable choice and saves a literal argv configuration", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "local-tools.json");
+    const localCommand = process.execPath;
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, guidedSourcePrompt, "local executable");
+    await answer(streams, "Name [miftah-wrapper]", "local-tools");
+    await answer(streams, "Local executable (no shell)", localCommand);
+    await answer(streams, "Add a local argument? (yes/no) [no]", "no");
+    await answer(streams, "Working directory (absolute path, optional)", "");
+    await answer(streams, "Credential environment variable name (optional)", "");
+    await answer(
+      streams,
+      "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
+      "yes"
+    );
+    await answer(streams, "Output location [local-tools.miftah.json]", "local-tools.json");
+    await answer(streams, "Client", "");
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "local-tools",
+      upstream: { transport: "stdio", command: localCommand, args: [] },
+      profiles: { default: {} }
+    });
+    expect(streams.transcript.contents).toContain("Local command review: 1 executable with 0 argument(s)");
+  });
+
   it("creates a validated owner-only configuration through the guided setup flow", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "guided.json");

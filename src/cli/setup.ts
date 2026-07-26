@@ -116,7 +116,7 @@ async function chooseGuidedSetupStartingPoint(context: InitCommandContext): Prom
     if (answer === "remote" || answer === "remote-https" || answer === "remote https" || answer === "https" || answer === "url") {
       return "remote";
     }
-    if (answer === "local" || answer === "executable" || answer === "command") return "local";
+    if (answer === "local" || answer === "local executable" || answer === "executable" || answer === "command") return "local";
     if (
       answer === "browser-sign-in" ||
       answer === "browser sign-in" ||

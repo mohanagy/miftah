@@ -7,6 +7,7 @@ import { MANAGEMENT_TOOL_NAMES } from "../src/mcp/server/management-tools.js";
 
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+const cliDocs = readFileSync(new URL("../docs/cli.md", import.meta.url), "utf8");
 
 function headingSlugs(markdown: string): Set<string> {
   const slugs = new Set<string>();
@@ -78,6 +79,13 @@ describe("product README", () => {
     expect(readme).toContain("The generated GitHub preset requires confirmation for every profile switch");
     expect(readme).toContain("form elicitation");
     expect(readme).toContain("`command` as a string and `args` as an array");
+  });
+
+  it("keeps the CLI reference aligned with the five guided setup sources", () => {
+    expect(cliDocs).toContain(
+      "With a bare TTY invocation, it asks what you already have: `connector`, `remote`, `local`, `browser sign-in`, or `import`."
+    );
+    expect(cliDocs).not.toContain("it first offers `new` or `import`");
   });
 
   it("separates generic MCP, native OAuth, and upstream-owned OAuth onboarding", () => {
