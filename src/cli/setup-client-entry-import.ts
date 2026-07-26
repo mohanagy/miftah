@@ -2,7 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   ClientEntryImportError,
-  createImportedClientConfiguration
+  createImportedClientConfiguration,
+  type ClientEntryImportErrorReason
 } from "../setup/client-entry-import.js";
 import { readClientEntryImportFile } from "../setup/client-entry-import-file.js";
 import {
@@ -22,8 +23,18 @@ import type { CliOptions } from "./parse.js";
 
 type ClientEntryImportSetupOptions = InitCommandOptions & Pick<CliOptions, "importFile" | "importEntry">;
 
-function usageError(message: string): never {
-  throw new CliUsageError(message);
+/**
+ * Preserves the safe importer reason for the guided setup flow while retaining
+ * the public CLI usage-error contract for direct imports.
+ */
+export class ClientEntryImportSetupError extends CliUsageError {
+  constructor(message: string, readonly importReason?: ClientEntryImportErrorReason) {
+    super(message);
+  }
+}
+
+function usageError(message: string, importReason?: ClientEntryImportErrorReason): never {
+  throw new ClientEntryImportSetupError(message, importReason);
 }
 
 function isClientSelection(value: string): value is ClientSelection {
@@ -107,7 +118,7 @@ export async function runClientEntryImportSetup(
   try {
     document = await readClientEntryImportFile(options.importFile);
   } catch (error) {
-    if (error instanceof ClientEntryImportError) usageError(error.message);
+    if (error instanceof ClientEntryImportError) usageError(error.message, error.reason);
     throw error;
   }
   return runClientEntryImportSetupFromDocument(options, context, document);
@@ -141,7 +152,7 @@ export async function runClientEntryImportSetupFromDocument(
       entry: options.importEntry
     });
   } catch (error) {
-    if (error instanceof ClientEntryImportError) usageError(error.message);
+    if (error instanceof ClientEntryImportError) usageError(error.message, error.reason);
     throw error;
   }
 

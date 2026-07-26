@@ -279,6 +279,57 @@ function selectConsoleRemoteSetupSource(javascript: string): {
   return { preset: selection.value, updateCalls, focused: remoteUrl.focused, status };
 }
 
+function triggerClientEntryManualRecoveryAction(
+  javascript: string,
+  id: string,
+  source: string
+): { readonly selected: readonly string[]; readonly documentCleared: boolean } {
+  const start = javascript.indexOf("function bindClientEntryManualRecoveryAction(id, source)");
+  const end = javascript.indexOf("\n\n  async function refresh", start);
+  if (start < 0 || end < 0) throw new Error("Expected the client-entry manual recovery action binder.");
+
+  class FakeButton {
+    readonly listeners = new Map<string, () => void>();
+
+    addEventListener(name: string, listener: () => void): void {
+      this.listeners.set(name, listener);
+    }
+  }
+  class FakeTextArea {
+    value = "pasted-source-that-must-not-remain";
+  }
+  class FakeForm {
+    querySelector(selector: string): unknown {
+      return selector === "textarea[name='document']" ? documentInput : undefined;
+    }
+  }
+
+  const button = new FakeButton();
+  const documentInput = new FakeTextArea();
+  const form = new FakeForm();
+  const selected: string[] = [];
+  const bindClientEntryManualRecoveryAction = runInNewContext(
+    `${javascript.slice(start, end)}\nbindClientEntryManualRecoveryAction`,
+    {
+      byId(candidate: string): unknown {
+        if (candidate === id) return button;
+        if (candidate === "client-entry-onboarding-form") return form;
+        return undefined;
+      },
+      HTMLButtonElement: FakeButton,
+      HTMLFormElement: FakeForm,
+      HTMLTextAreaElement: FakeTextArea,
+      selectSetupSource(value: string): void {
+        selected.push(value);
+      }
+    }
+  ) as (targetId: string, targetSource: string) => void;
+
+  bindClientEntryManualRecoveryAction(id, source);
+  button.listeners.get("click")?.();
+  return { selected, documentCleared: documentInput.value === "" };
+}
+
 function clearProfileReadinessResultOnTargetChange(javascript: string): {
   readonly afterProfileChange: string;
   readonly afterUpstreamChange: string;
@@ -880,6 +931,9 @@ describe("local Console control server", () => {
       expect(html).toContain("explicitly marked <code>type:");
       expect(html).toContain("Remote import does not discover OAuth or call the endpoint.");
       expect(html).toContain("advanced manual setup");
+      expect(html).toContain('id="client-entry-manual-local"');
+      expect(html).toContain('id="client-entry-manual-remote"');
+      expect(html).toContain("Miftah does not retain rejected arguments, headers, environment values, or credentials.");
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
       expect(html).toContain("Active vs durable:");
@@ -933,6 +987,16 @@ describe("local Console control server", () => {
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
       expect(javascript).toContain("/api/v1/onboarding/client-entry");
+      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-local", "local")');
+      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote")');
+      expect(triggerClientEntryManualRecoveryAction(javascript, "client-entry-manual-local", "local")).toEqual({
+        selected: ["local"],
+        documentCleared: true
+      });
+      expect(triggerClientEntryManualRecoveryAction(javascript, "client-entry-manual-remote", "remote")).toEqual({
+        selected: ["remote"],
+        documentCleared: true
+      });
       expect(selectConsoleRemoteSetupSource(javascript)).toEqual({
         preset: "streamable-http",
         updateCalls: 1,
@@ -1558,7 +1622,7 @@ describe("local Console control server", () => {
         expect(advancedManualBody).toEqual({
           error: {
             code: "client_entry_static_launch_unsupported",
-            message: "This entry needs advanced manual setup. Import supports only a static local launch; configure custom arguments or credentials separately."
+            message: "This entry needs manual transport setup. Miftah did not import it or write a configuration. It did not retain its arguments, headers, environment values, or credentials. Re-enter a reviewed executable and literal arguments, or a canonical HTTPS endpoint; configure authentication separately."
           }
         });
         expect(JSON.stringify(advancedManualBody)).not.toContain("--project");

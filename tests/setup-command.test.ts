@@ -711,6 +711,135 @@ describe("setup command", () => {
     expect(streams.transcript.contents).not.toContain(secret);
   });
 
+  it("recovers an unsupported guided client entry through a manual local setup without copying source values", async () => {
+    const source = resolve(outputRoot, "unsupported-client-entry.json");
+    const output = resolve(outputRoot, "manual-recovery.json");
+    const secret = "client-source-value-that-must-not-be-rendered";
+    const document = JSON.stringify({
+      mcpServers: {
+        analytics: {
+          command: "npx",
+          args: ["--yes", "@posthog/mcp@1.2.3", "--project", secret]
+        }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const streams = createStreams();
+    const nativeOAuthFetch = vi.fn();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch
+    });
+    await answer(streams, guidedSourcePrompt, "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await answer(streams, "MCP entry to import (number or exact name)", "analytics");
+    await answer(streams, "Configuration name [miftah-import]", "analytics");
+    await answer(streams, "Output location [analytics.miftah.json]", "manual-recovery.json");
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "local");
+    await answer(streams, "Local executable (no shell)", process.execPath);
+    await answer(streams, "Add a local argument? (yes/no) [no]", "no");
+    await answer(streams, "Working directory (absolute path, optional)", "");
+    await answer(streams, "Credential environment variable name (optional)", "");
+    await answer(
+      streams,
+      "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
+      "yes"
+    );
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "", 2);
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "analytics",
+      upstream: { transport: "stdio", command: process.execPath, args: [] },
+      profiles: { default: { policy: "readonly" } }
+    });
+    expect(await readFile(source, "utf8")).toBe(document);
+    expect(nativeOAuthFetch).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain(
+      "Miftah did not import this entry or write a configuration from it."
+    );
+    expect(streams.transcript.contents).toContain(
+      "Choose 'local' to re-enter a reviewed executable and literal arguments, or 'remote' for a canonical HTTPS endpoint."
+    );
+    expect(streams.transcript.contents).not.toContain(secret);
+    expect(streams.transcript.contents).not.toContain("--project");
+  });
+
+  it("recovers a credential-bearing guided client entry through manual local setup without copying source values", async () => {
+    const source = resolve(outputRoot, "credential-bearing-client-entry.json");
+    const output = resolve(outputRoot, "credential-manual-recovery.json");
+    const secret = "client-source-secret-that-must-not-be-rendered";
+    const credentialName = "POSTHOG_CLIENT_ENTRY_TOKEN";
+    const document = JSON.stringify({
+      mcpServers: {
+        analytics: {
+          command: process.execPath,
+          args: ["serve"],
+          env: { [credentialName]: secret }
+        }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const streams = createStreams();
+    const nativeOAuthFetch = vi.fn();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch
+    });
+    await answer(streams, guidedSourcePrompt, "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await answer(streams, "MCP entry to import (number or exact name)", "analytics");
+    await answer(streams, "Configuration name [miftah-import]", "analytics");
+    await answer(streams, "Output location [analytics.miftah.json]", "credential-manual-recovery.json");
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+    await answer(streams, "What do you want to set up? (connector name, remote, or local)", "local");
+    await answer(streams, "Local executable (no shell)", process.execPath);
+    await answer(streams, "Add a local argument? (yes/no) [no]", "no");
+    await answer(streams, "Working directory (absolute path, optional)", "");
+    await answer(streams, "Credential environment variable name (optional)", "");
+    await answer(
+      streams,
+      "Miftah will not run this during setup. It will save this executable and argument array without a shell.",
+      "yes"
+    );
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "", 2);
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "analytics",
+      upstream: { transport: "stdio", command: process.execPath, args: [] },
+      profiles: { default: { policy: "readonly" } }
+    });
+    expect(await readFile(source, "utf8")).toBe(document);
+    expect(nativeOAuthFetch).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain(
+      "Miftah did not import this entry or write a configuration from it."
+    );
+    expect(streams.transcript.contents).not.toContain(secret);
+    expect(streams.transcript.contents).not.toContain(credentialName);
+  });
+
   it("honors an exact numeric client entry name before interpreting a list position", async () => {
     const source = resolve(outputRoot, "numeric-entry.json");
     const output = resolve(outputRoot, "numeric-entry.miftah.json");

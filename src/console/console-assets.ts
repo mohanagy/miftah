@@ -163,6 +163,10 @@ const page = `<!doctype html>
           <label class="wide">Existing client JSON<textarea name="document" required maxlength="65536" rows="12" spellcheck="false" autocomplete="off" placeholder='{"mcpServers":{"posthog":{"command":"npx","args":["--yes","@posthog/mcp@1.2.3"]}}}'></textarea></label>
           <p class="field-note wide">The pasted text is parsed only for this request and cleared from the page afterwards. This flow accepts one selected local <code>stdio</code> entry only when it fits Miftah's static launch grammar: a direct executable, a pinned package runner, or a script path with non-sensitive flags. It also accepts one credential-free HTTPS remote entry explicitly marked <code>type: "http"</code> or <code>"streamable-http"</code>. Remote import does not discover OAuth or call the endpoint. For custom arguments, headers, credentials, or authentication, use advanced manual setup and configure authentication separately.</p>
           <div class="wide form-action"><button type="submit">Import selected entry</button></div>
+          <div class="wide manual-recovery">
+            <p class="field-note">If import cannot continue, Miftah does not retain rejected arguments, headers, environment values, or credentials. Re-enter a reviewed local executable and literal arguments, or a canonical HTTPS endpoint, yourself.</p>
+            <div class="form-action"><button id="client-entry-manual-local" type="button" class="secondary">Set up local executable manually</button><button id="client-entry-manual-remote" type="button" class="secondary">Set up remote HTTPS MCP manually</button></div>
+          </div>
         </form>
       </section>
 
@@ -448,6 +452,7 @@ button:disabled { cursor: wait; opacity: .55; }
 button.secondary { color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); }
 button.danger { color: #ffd7cf; background: transparent; border: 1px solid #70433a; }
 .form-action { display: flex; justify-content: flex-end; }
+.manual-recovery .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
 .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
@@ -1178,6 +1183,19 @@ const script = `(() => {
     }
   }
 
+  function bindClientEntryManualRecoveryAction(id, source) {
+    const action = byId(id);
+    if (!(action instanceof HTMLButtonElement)) return;
+    action.addEventListener("click", () => {
+      const form = byId("client-entry-onboarding-form");
+      const documentInput = form instanceof HTMLFormElement
+        ? form.querySelector("textarea[name='document']")
+        : undefined;
+      if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
+      selectSetupSource(source);
+    });
+  }
+
   async function refresh() {
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
@@ -1398,6 +1416,8 @@ const script = `(() => {
   }
 
   const clientEntryOnboardingForm = byId("client-entry-onboarding-form");
+  bindClientEntryManualRecoveryAction("client-entry-manual-local", "local");
+  bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote");
   if (clientEntryOnboardingForm instanceof HTMLFormElement) {
     clientEntryOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();

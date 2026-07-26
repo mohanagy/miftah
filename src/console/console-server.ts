@@ -313,7 +313,7 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
     return new ConsoleHttpError(
       422,
       "client_entry_static_launch_unsupported",
-      "This entry needs advanced manual setup. Import supports only a static local launch; configure custom arguments or credentials separately."
+      "This entry needs manual transport setup. Miftah did not import it or write a configuration. It did not retain its arguments, headers, environment values, or credentials. Re-enter a reviewed executable and literal arguments, or a canonical HTTPS endpoint; configure authentication separately."
     );
   }
   if (error.code === "OAUTH_DISCOVERY_UNSUPPORTED") {

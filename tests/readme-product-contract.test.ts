@@ -181,6 +181,8 @@ describe("product README", () => {
     expect(readme).toContain("exact version");
     expect(readme).toContain("On Windows, the import path accepts only a direct absolute `.exe` or `.com` executable");
     expect(readme).toContain("advanced manual setup");
+    expect(readme).toContain("Miftah does not retain rejected arguments, headers, environment values, or credentials.");
+    expect(cliDocs).toContain("If guided import refuses a selected entry, Miftah keeps no rejected source values");
   });
 
   it("describes the Claude Desktop guide without promising missing screenshots", () => {
