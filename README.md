@@ -490,6 +490,24 @@ The profile must already exist. Miftah changes only `defaultProfile`, validates 
 
 In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Choose the default account**. When using the dashboard's configuration catalog, select the configuration again after the write before making another Console change; that protects against using stale configuration bytes.
 
+### Edit an account label later
+
+Profile descriptions are non-secret labels for recognizing an account. Set one without hand-editing JSON:
+
+```bash
+miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --description "Personal Google account"
+```
+
+To remove a label, make that intent explicit:
+
+```bash
+miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --clear-description
+```
+
+Use exactly one of `--description` or `--clear-description`. Miftah changes only that profile's non-secret `description`, validates the complete candidate, and uses the same guarded replacement, recovery backup, and fail-closed audit lifecycle as the durable-default change. Its result does not echo the submitted label or configuration data. It does not change credentials, OAuth bindings, routing, provider token caches, or the durable default, and it never starts an upstream or opens a browser.
+
+In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Edit a non-secret account label**. In catalog mode, select the configuration again after a successful write before making another Console change.
+
 ## Everyday commands
 
 These are shell commands. Profile switching and identity tools such as `miftah_use_profile` are MCP management tools used from the connected client.
@@ -500,6 +518,7 @@ These are shell commands. Profile switching and identity tools such as `miftah_u
 | Check secrets, executable, upstream startup, discovery, and shutdown | `miftah doctor --config service.json` |
 | Start one profile and verify initialization | `miftah test-profile --config service.json --profile work` |
 | Review configured account profiles without starting an upstream | `miftah profile list --config service.json` |
+| Set or clear a non-secret account label | `miftah profile set-description --config service.json --profile personal --description "Personal account"` |
 | Run the reviewed safe check for one provider-backed account | `miftah profile test --config service.json --profile work` |
 | Discover one profile's upstream tools | `miftah list-tools --config service.json --profile work` |
 | Read redacted audit events | `miftah logs --config service.json` |

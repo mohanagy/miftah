@@ -1371,6 +1371,74 @@ describe("packed artifact contract", () => {
           profiles: [{ name: "work" }]
         });
 
+        const profileDescriptionConfigPath = await writeCliConfig(
+          "profile description config.json",
+          cliConfig("packed-cli-profile-description", {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          })
+        );
+        const setProfileDescription = runInstalledBinary(
+          binary,
+          [
+            "profile", "set-description",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--description", "Personal analytics"
+          ],
+          cliContractDirectory
+        );
+        expect(setProfileDescription.status, setProfileDescription.stderr || setProfileDescription.stdout).toBe(0);
+        expect(setProfileDescription.stderr).toBe("");
+        expect(JSON.parse(setProfileDescription.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          cleared: false,
+          actions: [
+            "Updated config version from 1 to 2.",
+            "Updated config version from 2 to 3.",
+            "Set profile description for 'personal'."
+          ],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(setProfileDescription.stdout).not.toContain("Personal analytics");
+        expect(setProfileDescription.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { description: "Personal analytics", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
+        const clearProfileDescription = runInstalledBinary(
+          binary,
+          [
+            "profile", "set-description",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--clear-description"
+          ],
+          cliContractDirectory
+        );
+        expect(clearProfileDescription.status, clearProfileDescription.stderr || clearProfileDescription.stdout).toBe(0);
+        expect(clearProfileDescription.stderr).toBe("");
+        expect(JSON.parse(clearProfileDescription.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          cleared: true,
+          actions: ["Cleared profile description for 'personal'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
+
         const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
         const dashboardServe = await startInstalledCli(
           installedCliEntry,
@@ -1394,6 +1462,7 @@ describe("packed artifact contract", () => {
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
         expect(rootHelp.stdout).toContain("profile test");
         expect(rootHelp.stdout).toContain("profile list");
+        expect(rootHelp.stdout).toContain("profile set-description");
         const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
         expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
         expect(profileTestHelp.stderr).toBe("");
@@ -1406,6 +1475,16 @@ describe("packed artifact contract", () => {
         expect(profileListHelp.stderr).toBe("");
         expect(profileListHelp.stdout).toContain("Usage: miftah profile list");
         expect(profileListHelp.stdout).toContain("--config <file>");
+        const profileDescriptionHelp = runInstalledBinary(
+          binary,
+          ["profile", "set-description", "--help"],
+          cliContractDirectory
+        );
+        expect(profileDescriptionHelp.status, profileDescriptionHelp.stderr || profileDescriptionHelp.stdout).toBe(0);
+        expect(profileDescriptionHelp.stderr).toBe("");
+        expect(profileDescriptionHelp.stdout).toContain("Usage: miftah profile set-description");
+        expect(profileDescriptionHelp.stdout).toContain("--description <text>");
+        expect(profileDescriptionHelp.stdout).toContain("--clear-description");
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],

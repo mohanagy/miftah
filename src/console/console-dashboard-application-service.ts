@@ -12,6 +12,8 @@ import {
   type ConsoleControlApplication,
   type ConsoleDefaultProfileChangeReport,
   type ConsoleDefaultProfileChangeRequest,
+  type ConsoleProfileDescriptionChangeReport,
+  type ConsoleProfileDescriptionChangeRequest,
   type ConsoleDiscoveredNativeOAuthAccountRequest,
   type ConsoleDiscoveredNativeOAuthConnectionRequest,
   type ConsoleDiscoveredNativeOAuthOnboardingRequest,
@@ -227,6 +229,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): Promise<ConsoleDefaultProfileChangeReport> {
     const selected = await this.selectedApplication();
     const result = await selected.application.setDefaultProfile(request);
+    // A successful guarded write changes the configuration digest. Never let a
+    // later Console operation reuse the pre-write trusted source snapshot.
+    if (result.write) this.active = undefined;
+    return result;
+  }
+
+  async setProfileDescription(
+    request: ConsoleProfileDescriptionChangeRequest
+  ): Promise<ConsoleProfileDescriptionChangeReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.setProfileDescription(request);
     // A successful guarded write changes the configuration digest. Never let a
     // later Console operation reuse the pre-write trusted source snapshot.
     if (result.write) this.active = undefined;

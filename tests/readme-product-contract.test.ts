@@ -122,6 +122,11 @@ describe("product README", () => {
     expect(readme).toContain("miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal");
     expect(readme).toContain("does not switch an already-running MCP client");
     expect(readme).toContain("Choose the default account");
+    expect(readme).toContain("### Edit an account label later");
+    expect(readme).toContain("miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --description \"Personal Google account\"");
+    expect(readme).toContain("miftah profile set-description --config ~/.config/miftah/gsc.json --profile google-personal --clear-description");
+    expect(readme).toContain("does not change credentials, OAuth bindings, routing, provider token caches, or the durable default");
+    expect(readme).toContain("Edit a non-secret account label");
     expect(readme).toContain("Miftah does not invent a probe or show the provider output");
     expect(readme).toContain("A non-ready readiness result leaves the configuration in place and exits 1.");
     expect(readme).toContain("If the final readiness prompt is cancelled after the write, the configuration remains available and setup exits 1.");

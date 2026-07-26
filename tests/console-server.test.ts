@@ -277,6 +277,63 @@ function clearProfileReadinessResultOnTargetChange(javascript: string): {
   return { afterProfileChange, afterUpstreamChange: result.textContent };
 }
 
+function preserveProfileDescriptionSelectionAcrossRefresh(javascript: string): {
+  readonly profile: string;
+  readonly description: string;
+} {
+  const start = javascript.indexOf("function renderProfileDescriptionEditor");
+  const end = javascript.indexOf("\n  function renderProfileInventory", start);
+  if (start < 0 || end < 0) throw new Error("Expected the profile-description editor renderer.");
+
+  class FakeElement {
+    hidden = false;
+    disabled = false;
+    textContent = "";
+  }
+  class FakeInput extends FakeElement {
+    value = "";
+  }
+  class FakeSelect extends FakeElement {
+    value = "";
+    onchange: (() => void) | undefined;
+  }
+  class FakeButton extends FakeElement {}
+
+  const profile = new FakeSelect();
+  const input = new FakeInput();
+  const elements: Record<string, FakeElement> = {
+    "profile-description-editor": new FakeElement(),
+    "profile-description-selection": profile,
+    "profile-description-input": input,
+    "set-profile-description": new FakeButton(),
+    "clear-profile-description": new FakeButton(),
+    "profile-description-result": new FakeElement()
+  };
+  const render = runInNewContext(`${javascript.slice(start, end)}\nrenderProfileDescriptionEditor`, {
+    byId(id: string): unknown {
+      return elements[id];
+    },
+    record(value: unknown): Record<string, unknown> {
+      return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+    },
+    setOptions(select: FakeSelect, options: readonly string[]): void {
+      select.value = options[0] ?? "";
+    },
+    HTMLSelectElement: FakeSelect,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton
+  }) as (metadata: unknown) => void;
+  const metadata = [
+    { name: "work", description: "Work account" },
+    { name: "personal", description: "Personal account" }
+  ];
+
+  render(metadata);
+  profile.value = "personal";
+  render(metadata);
+  return { profile: profile.value, description: input.value };
+}
+
 async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascript: string): Promise<{
   readonly visibleAfterSelection: boolean;
   readonly hiddenAfterUnselection: boolean;
@@ -762,6 +819,11 @@ describe("local Console control server", () => {
       expect(html).toContain('id="default-profile-selection"');
       expect(html).toContain('id="set-default-profile"');
       expect(html).toContain("Choose which account new MCP sessions start with");
+      expect(html).toContain('id="profile-description-editor"');
+      expect(html).toContain('id="profile-description-selection"');
+      expect(html).toContain('id="set-profile-description"');
+      expect(html).toContain('id="clear-profile-description"');
+      expect(html).toContain("Edit a non-secret account label");
       expect(html).toContain('id="profile-inventory-list"');
       expect(html).toContain("Configured accounts");
       expect(html).toContain('id="configuration-catalog-view"');
@@ -862,6 +924,12 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/profile-readiness");
       expect(javascript).toContain("/api/v1/profiles/default");
       expect(javascript).toContain('body: { profile: profile.value }');
+      expect(javascript).toContain("/api/v1/profiles/description");
+      expect(javascript).toContain("renderProfileDescriptionEditor");
+      expect(preserveProfileDescriptionSelectionAcrossRefresh(javascript)).toEqual({
+        profile: "personal",
+        description: "Personal account"
+      });
       expect(clearProfileReadinessResultOnTargetChange(javascript)).toEqual({
         afterProfileChange: "",
         afterUpstreamChange: ""
@@ -2345,6 +2413,122 @@ describe("local Console control server", () => {
       };
       expect(persisted.defaultProfile).toBe("google-personal");
       expect(persisted.profiles).toEqual(before.profiles);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sets or explicitly clears a profile description only through a strict CSRF-protected Console request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-description-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: ["provider.mjs"] },
+      profiles: {
+        work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const before = JSON.parse(await readFile(configPath, "utf8")) as { readonly profiles: unknown; readonly defaultProfile: string };
+    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/profiles/description", server.url);
+      const formattingRejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", description: " Personal Search Console " })
+      });
+      expect(formattingRejected.status).toBe(422);
+      expect(await formattingRejected.json()).toEqual({
+        error: {
+          code: "profile_description_input_invalid",
+          message: "Choose a trimmed non-secret profile description or explicitly clear it."
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(before);
+
+      const rejected = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", description: "Personal", clearDescription: true })
+      });
+      expect(rejected.status).toBe(422);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(before);
+
+      const changed = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", description: "Personal Search Console" })
+      });
+      expect(changed.status).toBe(200);
+      const changedPayload = await changed.json() as { readonly data: Record<string, unknown> };
+      expect(changedPayload.data).toEqual({
+        changed: true,
+        write: true,
+        profile: "personal",
+        actions: ["Set profile description for 'personal'."]
+      });
+      expect(JSON.stringify(changedPayload)).not.toContain("Personal Search Console");
+      const updated = JSON.parse(await readFile(configPath, "utf8")) as {
+        readonly defaultProfile: string;
+        readonly profiles: {
+          readonly work: unknown;
+          readonly personal: { readonly description?: string; readonly env: unknown };
+        };
+      };
+      expect(updated.defaultProfile).toBe("work");
+      expect(updated.profiles.work).toEqual((before.profiles as { readonly work: unknown }).work);
+      expect(updated.profiles.personal).toEqual({
+        description: "Personal Search Console",
+        env: { API_KEY: "${PERSONAL_API_KEY}" }
+      });
+
+      const cleared = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "personal", clearDescription: true })
+      });
+      expect(cleared.status).toBe(200);
+      expect(await cleared.json()).toEqual({
+        data: {
+          changed: true,
+          write: true,
+          profile: "personal",
+          actions: ["Cleared profile description for 'personal'."]
+        }
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "work",
+        profiles: {
+          work: (before.profiles as { readonly work: unknown }).work,
+          personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+        }
+      });
     } finally {
       await server.close();
     }

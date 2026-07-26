@@ -68,6 +68,21 @@ const defaultProfileChangeSchema = z.object({
   // than imposing the narrower preset-onboarding slug grammar here.
   profile: z.string().min(1)
 }).strict();
+// Keep the HTTP boundary bounded, while the guarded configuration change owns
+// all description-format rules and its safe public error mapping.
+const profileDescriptionTextSchema = z.string().max(1_024);
+const profileDescriptionChangeSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence in the guarded configuration transaction rather
+  // than imposing the narrower preset-onboarding slug grammar here.
+  profile: z.string().min(1),
+  description: profileDescriptionTextSchema.optional(),
+  clearDescription: z.literal(true).optional()
+}).strict().superRefine((value, context) => {
+  if ((value.description === undefined) === (value.clearDescription !== true)) {
+    context.addIssue({ code: "custom", message: "Provide a description or explicitly clear it." });
+  }
+});
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
@@ -344,6 +359,13 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       422,
       "environment_profile_input_invalid",
       "Choose a safe profile name and an environment variable name, not a credential value."
+    );
+  }
+  if (error.code === "PROFILE_DESCRIPTION_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "profile_description_input_invalid",
+      "Choose a trimmed non-secret profile description or explicitly clear it."
     );
   }
   if (
@@ -691,6 +713,25 @@ class LocalConsoleServer implements ConsoleServer {
       }
       try {
         const result = await this.application.setDefaultProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/description") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileDescriptionChangeSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.setProfileDescription === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.setProfileDescription(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 200, { data: result });
       } catch (error) {
