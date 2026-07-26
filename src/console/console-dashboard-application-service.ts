@@ -15,6 +15,8 @@ import {
   type ConsoleDiscoveredNativeOAuthAccountRequest,
   type ConsoleDiscoveredNativeOAuthConnectionRequest,
   type ConsoleDiscoveredNativeOAuthOnboardingRequest,
+  type ConsoleEnvironmentProfileAdditionReport,
+  type ConsoleEnvironmentProfileAdditionRequest,
   type ConsoleHealth,
   type ConsoleNativeOAuthOnboardingRequest,
   type ConsoleProfileReadinessRequest,
@@ -203,6 +205,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): Promise<ConsoleProviderAccountAdditionReport> {
     const selected = await this.selectedApplication();
     const result = await selected.application.addProviderAccount(request);
+    // The guarded commit changes the file contents; require a fresh explicit
+    // selection instead of retaining a stale trusted snapshot.
+    this.active = undefined;
+    return result;
+  }
+
+  async addEnvironmentProfile(
+    request: ConsoleEnvironmentProfileAdditionRequest
+  ): Promise<ConsoleEnvironmentProfileAdditionReport> {
+    const selected = await this.selectedApplication();
+    const result = await selected.application.addEnvironmentProfile(request);
     // The guarded commit changes the file contents; require a fresh explicit
     // selection instead of retaining a stale trusted snapshot.
     this.active = undefined;

@@ -15,6 +15,7 @@ import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
@@ -81,7 +82,7 @@ describe("setup command", () => {
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
   });
 
-  it("renders incompatible provider-account flags exactly as users pass them", async () => {
+  it("requires a configuration before classifying account-addition flags", async () => {
     await expect(runSetupCommand({
       addProfile: true,
       credentialEnv: "GSC_TOKEN"
@@ -90,7 +91,76 @@ describe("setup command", () => {
       output: new PassThrough(),
       cwd: outputRoot,
       launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
-    })).rejects.toThrow("Option '--credential-env' is unavailable when adding a provider-owned account.");
+    })).rejects.toThrow("Adding an account profile requires --config.");
+  });
+
+  it("adds a named environment-backed account to an existing standard configuration without launching its upstream", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "sentry.json");
+    await writeFile(configPath, `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`, { mode: 0o600 });
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    let transcript = "";
+    output.on("data", (chunk: Buffer) => { transcript += chunk.toString(); });
+
+    await expect(runSetupCommand({
+      addProfile: true,
+      config: configPath,
+      profile: "govalidate",
+      description: "GoValidate Sentry account",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
+      makeDefault: true
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    const config = validateConfig(JSON.parse(await readFile(configPath, "utf8")));
+    expect(config).toMatchObject({
+      defaultProfile: "govalidate",
+      profiles: {
+        govalidate: {
+          description: "GoValidate Sentry account",
+          env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" },
+          policy: "readonly"
+        }
+      }
+    });
+    expect(profileReadinessMocks.run).not.toHaveBeenCalled();
+    expect(transcript).toContain("Created environment-backed account profile 'govalidate'.");
+    expect(transcript).toContain("Enabled required profile-switch confirmation.");
+    expect(transcript).toContain("Required explicit selection for destructive tools.");
+  });
+
+  it("cancels an interactive environment-backed account setup on EOF or SIGINT before changing the configuration", async () => {
+    await mkdir(outputRoot, { recursive: true });
+    const configPath = resolve(outputRoot, "environment-account-cancelled.json");
+    const original = `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`;
+    await writeFile(configPath, original, { mode: 0o600 });
+
+    for (const cancel of [
+      (streams: ReturnType<typeof createStreams>) => streams.input.end(),
+      (streams: ReturnType<typeof createStreams>) => streams.input.write("\u0003")
+    ]) {
+      const streams = createStreams();
+      const command = runSetupCommand({
+        addProfile: true,
+        config: configPath
+      }, {
+        input: streams.input,
+        output: streams.output,
+        cwd: outputRoot,
+        launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+      });
+
+      await streams.transcript.waitFor("New account profile name");
+      cancel(streams);
+      await expect(command).rejects.toThrow("Environment-backed account setup was cancelled.");
+      streams.input.end();
+      expect(await readFile(configPath, "utf8")).toBe(original);
+    }
   });
 
   it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {

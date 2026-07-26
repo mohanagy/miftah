@@ -15,6 +15,7 @@ import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
@@ -487,6 +488,45 @@ describe("Console dashboard application service", () => {
       profiles: { "google-work": {}, "google-personal": {} }
     });
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
+  it("adds a static environment-backed account only after selection and clears the stale selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-environment-account-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "sentry.json");
+    await writeConfig(configPath, environmentProfileConfig("sentry"));
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const request = {
+      profile: "govalidate",
+      description: "GoValidate Sentry account",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
+      makeDefault: true
+    };
+
+    await expect(service.addEnvironmentProfile(request)).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
+    const initial = await service.configMetadata();
+    const selected = initial.catalog?.configurations.find((configuration) => configuration.name === "sentry");
+    if (selected === undefined) throw new Error("Expected discovered Sentry configuration.");
+    await service.selectConfiguration(selected.id);
+
+    await expect(service.addEnvironmentProfile(request)).resolves.toMatchObject({
+      changed: true,
+      write: true,
+      profile: "govalidate"
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      defaultProfile: "govalidate",
+      profiles: { govalidate: { env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" } } }
+    });
+    await expect(service.addEnvironmentProfile(request)).rejects.toMatchObject({
+      code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED"
+    });
   });
 
   it("rejects an unselected Console operation before scanning its catalog", async () => {

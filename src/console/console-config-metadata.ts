@@ -3,6 +3,7 @@ import {
   getProviderAdapterForProfileTarget,
   getProviderAdapterForConfiguration
 } from "../config/provider-adapters.js";
+import { environmentProfileCredentialDestination } from "../setup/environment-profile-onboarding.js";
 import type { MiftahConfig } from "../config/types.js";
 
 export interface ConsoleAuthenticationMetadata {
@@ -24,6 +25,11 @@ export interface ConsoleAuthenticationMetadata {
   readonly accountAddition?: {
     readonly credentialFileLabel: string;
     readonly credentialFilePlaceholder: string;
+  };
+  /** Present only when one local stdio static credential binding can safely add another account. */
+  readonly environmentProfileAddition?: {
+    /** The child-process environment key expected by the existing upstream. */
+    readonly credentialEnvironment: string;
   };
 }
 
@@ -119,6 +125,7 @@ export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuth
   const targets = readinessTargets(config);
   const adapter = getProviderAdapterForConfiguration(config);
   const provisioningAdapter = getProviderAdapterForAccountProvisioning(config);
+  const credentialEnvironment = environmentProfileCredentialDestination(config);
   if (adapter !== undefined) {
     return {
       mode: "provider-adapter",
@@ -147,7 +154,8 @@ export function consoleAuthenticationMetadata(config: MiftahConfig): ConsoleAuth
       credentialOwner: "manual-only",
       browserHandoff: "manual-only",
       tokenStore: "external",
-      ...(targets.length === 0 ? {} : { readinessTargets: targets })
+      ...(targets.length === 0 ? {} : { readinessTargets: targets }),
+      ...(credentialEnvironment === undefined ? {} : { environmentProfileAddition: { credentialEnvironment } })
     };
   }
 

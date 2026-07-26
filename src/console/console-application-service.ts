@@ -56,6 +56,11 @@ import {
   type ProviderAccountAdditionReport
 } from "../setup/provider-account-onboarding.js";
 import {
+  runEnvironmentProfileAddition,
+  type EnvironmentProfileAdditionAuditSink,
+  type EnvironmentProfileAdditionReport
+} from "../setup/environment-profile-onboarding.js";
+import {
   runDefaultProfileChange,
   type DefaultProfileChangeAuditSink,
   type DefaultProfileChangeReport
@@ -137,6 +142,21 @@ export interface ConsoleProviderAccountAdditionRequest {
 export type ConsoleProviderAccountAdditionReport = Pick<
   ProviderAccountAdditionReport,
   "changed" | "write" | "adapter" | "profile" | "actions"
+>;
+
+/** Adds one static-credential account from the current standard local stdio configuration. */
+export interface ConsoleEnvironmentProfileAdditionRequest {
+  readonly profile: string;
+  readonly description?: string;
+  /** An inherited environment variable name, never a credential value. */
+  readonly credentialEnv: string;
+  readonly makeDefault?: boolean;
+}
+
+/** Console responses intentionally omit configuration bytes, recovery paths, and credential references. */
+export type ConsoleEnvironmentProfileAdditionReport = Pick<
+  EnvironmentProfileAdditionReport,
+  "changed" | "write" | "profile" | "actions"
 >;
 
 /** Changes only the durable default for an already configured profile. */
@@ -228,6 +248,10 @@ export interface ConsoleControlApplication {
   addProviderAccount?(
     request: ConsoleProviderAccountAdditionRequest
   ): Promise<ConsoleProviderAccountAdditionReport>;
+  /** Available when an initialized local stdio configuration has one safe static credential binding. */
+  addEnvironmentProfile?(
+    request: ConsoleEnvironmentProfileAdditionRequest
+  ): Promise<ConsoleEnvironmentProfileAdditionReport>;
   /** Available when an initialized configuration has an existing profile to make durable. */
   setDefaultProfile?(
     request: ConsoleDefaultProfileChangeRequest
@@ -386,6 +410,32 @@ class ConsoleProviderAccountAuditSink implements ProviderAccountAdditionAuditSin
   record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
     return this.trail.writeRequiredLifecycle({
       operation: "console/provider-profile-add",
+      name: "profile",
+      profile: event.profile,
+      status: event.status
+    });
+  }
+}
+
+class ConsoleEnvironmentProfileAuditSink implements EnvironmentProfileAdditionAuditSink {
+  constructor(private readonly trail: AuditTrail) {}
+
+  ensureWritable(): Promise<void> {
+    return this.trail.ensureWritable();
+  }
+
+  intent(event: { readonly profile: string }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/environment-profile-add-intent",
+      name: "profile",
+      profile: event.profile,
+      status: "success"
+    });
+  }
+
+  record(event: { readonly profile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/environment-profile-add",
       name: "profile",
       profile: event.profile,
       status: event.status
@@ -785,6 +835,29 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       changed: result.changed,
       write: result.write,
       adapter: result.adapter,
+      profile: result.profile,
+      actions: result.actions
+    };
+  }
+
+  async addEnvironmentProfile(
+    request: ConsoleEnvironmentProfileAdditionRequest
+  ): Promise<ConsoleEnvironmentProfileAdditionReport> {
+    const configPath = resolvePath(this.configPath);
+    const source = this.trustedConfiguration?.migrationSource ?? await readConfigMigrationSource(configPath);
+    const result = await runEnvironmentProfileAddition({
+      configPath,
+      profile: request.profile,
+      ...(request.description === undefined ? {} : { description: request.description }),
+      credentialEnv: request.credentialEnv,
+      ...(request.makeDefault === true ? { makeDefault: true } : {})
+    }, {
+      trustedSource: source,
+      audit: new ConsoleEnvironmentProfileAuditSink(this.audit)
+    });
+    return {
+      changed: result.changed,
+      write: result.write,
       profile: result.profile,
       actions: result.actions
     };

@@ -85,7 +85,7 @@ export interface CliOptions {
   readonly verify?: true;
   /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
   readonly nativeOAuth?: true;
-  /** Adds one reviewed provider-owned account to an existing trusted adapter configuration. */
+  /** Adds one reviewed provider-owned or simple environment-backed account to an existing configuration. */
   readonly addProfile?: true;
   /** Makes the newly added endpoint-first OAuth account the durable default profile. */
   readonly makeDefault?: true;
@@ -475,7 +475,7 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     name: "addProfile",
     takesValue: false,
     usage: "--add-profile",
-    description: "Add one reviewed provider-owned account to an existing configuration."
+    description: "Add one reviewed provider-owned or simple environment-backed account to an existing configuration."
   },
   makeDefault: {
     name: "makeDefault",

@@ -11,6 +11,7 @@ import {
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import {
   startOAuthCompatibilityProbe,
   type OAuthCompatibilityProbe
@@ -668,6 +669,46 @@ describe("Console application service", () => {
       status: "success"
     }));
     expect(JSON.stringify(await service.auditRecords(10))).not.toContain(thirdSecrets);
+  });
+
+  it("adds an environment-backed account through the shared guarded lifecycle without reading a credential", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-add-environment-account-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "sentry.json");
+    await writeFile(configPath, `${JSON.stringify(environmentProfileConfig("sentry"), null, 2)}\n`, { mode: 0o600 });
+    const service = new ConsoleApplicationService(configPath);
+
+    await expect(service.addEnvironmentProfile({
+      profile: "govalidate",
+      description: "GoValidate Sentry account",
+      credentialEnv: "STATIC_GOVALIDATE_ACCESS_TOKEN",
+      makeDefault: true
+    })).resolves.toEqual({
+      changed: true,
+      write: true,
+      profile: "govalidate",
+      actions: [
+        "Created environment-backed account profile 'govalidate'.",
+        "Enabled required profile-switch confirmation.",
+        "Required explicit selection for destructive tools.",
+        "Set durable default profile to 'govalidate'."
+      ]
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      readonly defaultProfile: string;
+      readonly profiles: Record<string, { readonly env?: Record<string, string> }>;
+    };
+    expect(config.defaultProfile).toBe("govalidate");
+    expect(config.profiles.govalidate).toEqual({
+      description: "GoValidate Sentry account",
+      env: { STATIC_ACCESS_TOKEN: "${STATIC_GOVALIDATE_ACCESS_TOKEN}" },
+      policy: "readonly"
+    });
+    await expect(service.auditRecords(10)).resolves.toContainEqual(expect.objectContaining({
+      operation: "console/environment-profile-add",
+      profile: "govalidate",
+      status: "success"
+    }));
   });
 
   it("changes the durable default profile without altering existing provider accounts", async () => {

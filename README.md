@@ -441,6 +441,23 @@ This works only for an unchanged reviewed provider-adapter configuration whose e
 
 The local dashboard offers the same returning-user flow: run `miftah dashboard --config ~/.config/miftah/gsc.json`, then choose **Add another provider account**. The form appears only when the selected configuration meets the reviewed provider-adapter boundary. It asks for a new profile, optional description, and credential-file path; it never shows an existing path or provider cache, and it does not replace native OAuth controls for other kinds of MCP.
 
+### Add another local environment-backed account
+
+Some local STDIO MCPs use one environment variable for their credential rather than provider-owned OAuth. When the existing configuration has exactly that simple shape, add a second, third, or later account without hand-editing JSON:
+
+```bash
+miftah setup --add-profile \
+  --config ~/.config/miftah/sentry.json \
+  --profile personal \
+  --description "Personal Sentry account" \
+  --credential-env SENTRY_PERSONAL_ACCESS_TOKEN \
+  --make-default
+```
+
+`--credential-env` is the **name** of an environment variable, never its value. Miftah stores a reference such as `${SENTRY_PERSONAL_ACCESS_TOKEN}`, never reads the credential, and does not start the upstream. This deliberately applies only to one local `stdio` upstream with one direct credential binding per profile, the same destination and policy for every existing account, no provider adapter, and no native OAuth or named upstreams. Each account must use a different source environment variable. Remote HTTP MCPs are refused because profile environments do not authenticate HTTP requests.
+
+There is no generic `--verify` here: Miftah does not guess a safe command for an arbitrary upstream. Set the new environment variable in the application environment that launches Miftah, restart or reconnect the MCP client, then use the service's normal safe validation path. The local dashboard offers the same flow under **Add another environment-backed account** when the selected configuration meets this exact boundary.
+
 ### Change the durable default later
 
 Once two or more profiles already exist, you can choose which one new Miftah sessions start with without adding an account or editing JSON:
