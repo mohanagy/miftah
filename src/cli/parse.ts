@@ -179,6 +179,10 @@ export const CLI_COMMANDS = {
     description: "Change the durable default profile for future MCP sessions.",
     options: ["config", "profile"]
   },
+  "profile test": {
+    description: "Run one reviewed safe readiness check for an explicit account profile.",
+    options: ["config", "profile", "upstream"]
+  },
   "list-tools": {
     description: "List tools available for a profile.",
     options: ["config", "profile"]

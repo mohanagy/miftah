@@ -1334,6 +1334,31 @@ describe("packed artifact contract", () => {
           await consoleServe.stop();
         }
 
+        const unsupportedProfileReadiness = runInstalledBinary(
+          binary,
+          ["profile", "test", "--config", httpServeConfigPath, "--profile", "work"],
+          cliContractDirectory
+        );
+        expect(unsupportedProfileReadiness.status, unsupportedProfileReadiness.stderr || unsupportedProfileReadiness.stdout).toBe(1);
+        expect(unsupportedProfileReadiness.stderr).toBe("");
+        expect(JSON.parse(unsupportedProfileReadiness.stdout)).toEqual({
+          status: "unsupported",
+          profile: "work",
+          upstream: "default",
+          safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" },
+          identity: { status: "not-checked" }
+        });
+        const profileReadinessWithoutExplicitProfile = runInstalledBinary(
+          binary,
+          ["profile", "test", "--config", httpServeConfigPath],
+          cliContractDirectory
+        );
+        expect(profileReadinessWithoutExplicitProfile.status).toBe(2);
+        expect(profileReadinessWithoutExplicitProfile.stdout).toBe("");
+        expect(profileReadinessWithoutExplicitProfile.stderr).toContain(
+          "Command 'profile test' requires '--profile <value>'"
+        );
+
         const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
         const dashboardServe = await startInstalledCli(
           installedCliEntry,
@@ -1355,6 +1380,14 @@ describe("packed artifact contract", () => {
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
         expect(rootHelp.stderr).toBe("");
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
+        expect(rootHelp.stdout).toContain("profile test");
+        const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
+        expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
+        expect(profileTestHelp.stderr).toBe("");
+        expect(profileTestHelp.stdout).toContain("Usage: miftah profile test");
+        expect(profileTestHelp.stdout).toContain("--config <file>");
+        expect(profileTestHelp.stdout).toContain("--profile <name>");
+        expect(profileTestHelp.stdout).toContain("--upstream <name>");
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],

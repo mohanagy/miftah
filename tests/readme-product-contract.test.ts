@@ -111,6 +111,9 @@ describe("product README", () => {
     expect(readme).toContain("--credential-env SENTRY_PERSONAL_ACCESS_TOKEN");
     expect(readme).toContain("Remote HTTP MCPs are refused because profile environments do not authenticate HTTP requests.");
     expect(readme).toContain("Add another environment-backed account");
+    expect(readme).toContain("### Retest a reviewed provider account");
+    expect(readme).toContain("miftah profile test --config ~/.config/miftah/gsc.json --profile google-personal");
+    expect(readme).toContain("It does not run an arbitrary tool or expose provider output.");
     expect(readme).toContain("### Change the durable default later");
     expect(readme).toContain("miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal");
     expect(readme).toContain("does not switch an already-running MCP client");
