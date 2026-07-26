@@ -230,6 +230,20 @@ const page = `<!doctype html>
           <p id="profile-description-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 
+        <section id="profile-rename-editor" class="work-section" hidden aria-labelledby="profile-rename-title">
+          <div class="section-heading">
+            <div><p class="step">Account lifecycle</p><h2 id="profile-rename-title">Rename an account profile</h2></div>
+            <p>Renaming updates this configuration's durable default, routing, plugin, and lock references. It never moves credentials, provider token caches, profile state, identity records, or OS-vault data.</p>
+          </div>
+          <div class="input-row">
+            <label class="grow">Account to rename<select id="profile-rename-selection" required></select></label>
+            <label class="grow">New account profile<input id="profile-rename-input" maxlength="256" autocomplete="off" placeholder="production"></label>
+            <button id="rename-profile" type="button">Rename account</button>
+          </div>
+          <p class="field-note">Profiles with native OAuth bindings stay protected: Miftah will not split a configuration rename from OS-vault credential migration until it can do both atomically.</p>
+          <p id="profile-rename-result" class="field-note" role="status" aria-live="polite"></p>
+        </section>
+
         <section id="profile-removal-editor" class="work-section" hidden aria-labelledby="profile-removal-title">
           <div class="section-heading">
             <div><p class="step">Account lifecycle</p><h2 id="profile-removal-title">Remove an account safely</h2></div>
@@ -927,6 +941,29 @@ const script = `(() => {
     updateDescription();
   }
 
+  function renderProfileRenameEditor(profiles, defaultProfile) {
+    const editor = byId("profile-rename-editor");
+    const profile = byId("profile-rename-selection");
+    const input = byId("profile-rename-input");
+    const button = byId("rename-profile");
+    const result = byId("profile-rename-result");
+    if (!(profile instanceof HTMLSelectElement) || !(input instanceof HTMLInputElement)) return;
+    const previousProfile = profile.value;
+    setOptions(profile, profiles);
+    if (profiles.includes(previousProfile)) profile.value = previousProfile;
+    else if (profiles.includes(defaultProfile)) profile.value = defaultProfile;
+    const canRename = profiles.length > 0;
+    profile.disabled = !canRename;
+    input.disabled = !canRename;
+    if (button instanceof HTMLButtonElement) button.disabled = !canRename;
+    if (editor) editor.hidden = !canRename;
+    if (result) result.textContent = "";
+    profile.onchange = () => {
+      input.value = "";
+      if (result) result.textContent = "";
+    };
+  }
+
   function renderProfileRemovalEditor(profiles, defaultProfile) {
     const editor = byId("profile-removal-editor");
     const profile = byId("profile-removal-selection");
@@ -1246,6 +1283,7 @@ const script = `(() => {
     renderProfileInventory(profileMetadata, configuredDefaultProfile);
     renderDefaultProfileEditor(profiles, configuredDefaultProfile);
     renderProfileDescriptionEditor(profileMetadata);
+    renderProfileRenameEditor(profiles, configuredDefaultProfile);
     renderProfileRemovalEditor(profiles, configuredDefaultProfile);
     setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);
@@ -1687,6 +1725,46 @@ const script = `(() => {
   }
   if (clearProfileDescription instanceof HTMLButtonElement) {
     clearProfileDescription.addEventListener("click", () => void saveProfileDescription(true));
+  }
+
+  const renameProfile = byId("rename-profile");
+  if (renameProfile instanceof HTMLButtonElement) {
+    renameProfile.addEventListener("click", async () => {
+      const profile = byId("profile-rename-selection");
+      const input = byId("profile-rename-input");
+      const result = byId("profile-rename-result");
+      if (!(profile instanceof HTMLSelectElement) || !profile.value || !(input instanceof HTMLInputElement)) return;
+      const selectedProfile = profile.value;
+      const newProfile = input.value.trim();
+      if (!newProfile) {
+        message("Enter a distinct safe account profile name.");
+        input.focus();
+        return;
+      }
+      if (newProfile === selectedProfile) {
+        message("Choose a new account profile name that differs from the current one.");
+        input.focus();
+        return;
+      }
+      renameProfile.disabled = true;
+      message("Renaming the selected account in Miftah configuration…");
+      try {
+        const report = record(await api("/api/v1/profiles/rename", {
+          method: "POST",
+          body: { profile: selectedProfile, newProfile }
+        }));
+        const publicResult = report.changed === true
+          ? "Renamed account " + selectedProfile + " to " + newProfile + "."
+          : "This account was not changed.";
+        if (result) result.textContent = publicResult;
+        await refresh();
+        message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
+      } catch (error) { message(errorMessage(error)); }
+      finally {
+        const editor = byId("profile-rename-editor");
+        if (editor instanceof HTMLElement && !editor.hidden) renameProfile.disabled = false;
+      }
+    });
   }
 
   const removeProfile = byId("remove-profile");

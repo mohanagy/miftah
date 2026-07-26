@@ -1438,12 +1438,40 @@ describe("packed artifact contract", () => {
             personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
           }
         });
+        const renameProfile = runInstalledBinary(
+          binary,
+          [
+            "profile", "rename",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--new-profile", "studio"
+          ],
+          cliContractDirectory
+        );
+        expect(renameProfile.status, renameProfile.stderr || renameProfile.stdout).toBe(0);
+        expect(renameProfile.stderr).toBe("");
+        expect(JSON.parse(renameProfile.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          newProfile: "studio",
+          actions: ["Renamed profile 'personal' to 'studio'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(renameProfile.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            studio: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
         const removeProfile = runInstalledBinary(
           binary,
           [
             "profile", "remove",
             "--config", profileDescriptionConfigPath,
-            "--profile", "personal"
+            "--profile", "studio"
           ],
           cliContractDirectory
         );
@@ -1451,8 +1479,8 @@ describe("packed artifact contract", () => {
         expect(removeProfile.stderr).toBe("");
         expect(JSON.parse(removeProfile.stdout)).toEqual({
           changed: true,
-          profile: "personal",
-          actions: ["Removed profile 'personal'."],
+          profile: "studio",
+          actions: ["Removed profile 'studio'."],
           write: true,
           backupPath: expect.any(String)
         });
@@ -1486,6 +1514,7 @@ describe("packed artifact contract", () => {
         expect(rootHelp.stdout).toContain("profile test");
         expect(rootHelp.stdout).toContain("profile list");
         expect(rootHelp.stdout).toContain("profile set-description");
+        expect(rootHelp.stdout).toContain("profile rename");
         expect(rootHelp.stdout).toContain("profile remove");
         const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
         expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
@@ -1509,6 +1538,12 @@ describe("packed artifact contract", () => {
         expect(profileDescriptionHelp.stdout).toContain("Usage: miftah profile set-description");
         expect(profileDescriptionHelp.stdout).toContain("--description <text>");
         expect(profileDescriptionHelp.stdout).toContain("--clear-description");
+        const profileRenameHelp = runInstalledBinary(binary, ["profile", "rename", "--help"], cliContractDirectory);
+        expect(profileRenameHelp.status, profileRenameHelp.stderr || profileRenameHelp.stdout).toBe(0);
+        expect(profileRenameHelp.stderr).toBe("");
+        expect(profileRenameHelp.stdout).toContain("Usage: miftah profile rename");
+        expect(profileRenameHelp.stdout).toContain("--profile <name>");
+        expect(profileRenameHelp.stdout).toContain("--new-profile <name>");
         const profileRemovalHelp = runInstalledBinary(binary, ["profile", "remove", "--help"], cliContractDirectory);
         expect(profileRemovalHelp.status, profileRemovalHelp.stderr || profileRemovalHelp.stdout).toBe(0);
         expect(profileRemovalHelp.stderr).toBe("");
