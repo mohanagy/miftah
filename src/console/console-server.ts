@@ -674,6 +674,25 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
+    if (request.url === "/api/v1/onboarding/preset/preview") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = presetOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.previewPreset === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.previewPreset(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
     if (request.url === "/api/v1/onboarding/preset") {
       if (request.method !== "POST") {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });

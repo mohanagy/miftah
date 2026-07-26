@@ -29,6 +29,7 @@ import {
   type ConsoleProfileReadinessRequest,
   type ConsoleProviderAccountAdditionRequest,
   type ConsoleProviderAccountAdditionReport,
+  type ConsolePresetOnboardingPreview,
   type ConsolePresetOnboardingReport,
   type ConsolePresetOnboardingRequest
 } from "./console-application-service.js";
@@ -157,6 +158,11 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     const result = await this.firstRunApplication.onboardPreset(request);
     await this.confirmCreatedFirstRunConfiguration();
     return result;
+  }
+
+  async previewPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview> {
+    await this.assertFirstRunAvailable();
+    return this.firstRunApplication.previewPreset(request);
   }
 
   async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createSetupConfigurationPlan,
+  describeSetupConfiguration,
   publishSetupConfigurationPlan
 } from "../src/setup/setup-configuration.js";
 
@@ -15,6 +16,37 @@ afterEach(async () => {
 });
 
 describe("setup configuration plan", () => {
+  it("describes a reviewed configuration without exposing launch, credential, or path values", () => {
+    const preview = describeSetupConfiguration({
+      version: "3",
+      name: "example",
+      defaultProfile: "default",
+      upstream: {
+        transport: "stdio",
+        command: "/Users/example/private-project/server",
+        args: ["--stdio"],
+        cwd: "/Users/example/private-project"
+      },
+      profiles: {
+        default: { env: { MCP_TOKEN: "${MCP_TOKEN}" } }
+      }
+    });
+
+    expect(preview).toEqual({
+      schemaVersion: 1,
+      name: "example",
+      version: "3",
+      defaultProfile: "default",
+      profiles: ["default"],
+      profileCount: 1,
+      upstreams: [{ name: "default", transport: "stdio", kind: "local-process" }],
+      sensitiveValues: "omitted",
+      publication: "new-file-only"
+    });
+    expect(JSON.stringify(preview)).not.toContain("private-project");
+    expect(JSON.stringify(preview)).not.toContain("MCP_TOKEN");
+  });
+
   it("validates and binds serialized configuration bytes before publication", () => {
     const plan = createSetupConfigurationPlan({
       configPath: "configs/example.json",

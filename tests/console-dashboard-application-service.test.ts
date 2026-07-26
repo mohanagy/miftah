@@ -401,6 +401,34 @@ describe("Console dashboard application service", () => {
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
+  it("previews a first known connector without selecting or creating a configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-preset-preview-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+
+    await expect(service.previewPreset({
+      name: "support-tools",
+      preset,
+      ...presetOptions
+    })).resolves.toMatchObject({
+      changed: false,
+      write: false,
+      name: "support-tools",
+      defaultProfile: "default",
+      configuration: { sensitiveValues: "omitted" }
+    });
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
   it("creates one selected local stdio entry only through the first-run dashboard boundary", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-client-entry-"));
     temporaryDirectories.push(root);

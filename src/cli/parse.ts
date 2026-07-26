@@ -35,6 +35,7 @@ type BooleanOptionName =
   | "write"
   | "nonInteractive"
   | "noOpen"
+  | "plan"
   | "verify"
   | "nativeOAuth"
   | "addProfile"
@@ -88,6 +89,8 @@ export interface CliOptions {
   readonly write?: true;
   readonly nonInteractive?: true;
   readonly noOpen?: true;
+  /** Validates and prints a non-secret setup plan without creating a configuration. */
+  readonly plan?: true;
   /** Runs the provider-declared safe readiness check after `miftah setup` writes the configuration. */
   readonly verify?: true;
   /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
@@ -181,6 +184,7 @@ export const CLI_COMMANDS = {
       "nativeOAuth",
       "addProfile",
       "makeDefault",
+      "plan",
       "verify"
     ]
   },
@@ -500,6 +504,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--no-open",
     description: "Print the local dashboard URL without opening a browser."
   },
+  plan: {
+    name: "plan",
+    takesValue: false,
+    usage: "--plan",
+    description: "Validate and print a non-secret setup plan without writing a configuration."
+  },
   verify: {
     name: "verify",
     takesValue: false,
@@ -574,6 +584,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--write": OPTION_DEFINITIONS.write,
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
   "--no-open": OPTION_DEFINITIONS.noOpen,
+  "--plan": OPTION_DEFINITIONS.plan,
   "--verify": OPTION_DEFINITIONS.verify,
   "--native-oauth": OPTION_DEFINITIONS.nativeOAuth,
   "--add-profile": OPTION_DEFINITIONS.addProfile,

@@ -11,8 +11,10 @@ import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
 import {
   createSetupConfigurationPlan,
+  describeSetupConfiguration,
   publishSetupConfigurationPlan,
-  type SetupConfigurationPlan
+  type SetupConfigurationPlan,
+  type SetupConfigurationPreview
 } from "../setup/setup-configuration.js";
 import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
 import {
@@ -83,6 +85,19 @@ export interface InitCommandResult {
   readonly providerAdapter?: ProviderAdapterDefinition;
   /** Whether this invocation displayed copy-only client JSON. */
   readonly clientHandoff?: SetupCompletionClientHandoff;
+}
+
+/**
+ * A side-effect-free CLI review artifact. It deliberately keeps the resolved
+ * output path for the local caller while the nested configuration summary omits
+ * launch arguments, credential references, endpoints, and other sensitive values.
+ */
+export interface InitConfigurationPreview {
+  readonly schemaVersion: 1;
+  readonly kind: "setup-plan";
+  readonly output: string;
+  readonly configuration: SetupConfigurationPreview;
+  readonly clientHandoff: "not-requested" | "available";
 }
 
 interface Cancellation {
@@ -519,6 +534,21 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
     snippets,
     claudeCodePermissionGuidance,
     providerAdapter: getProviderAdapterForPreset(values.preset)
+  };
+}
+
+/**
+ * Validates a noninteractive setup request without creating directories, writing
+ * files, launching an upstream, or producing client-setting snippets.
+ */
+export function previewInitCommand(options: InitCommandOptions, context: InitCommandContext): InitConfigurationPreview {
+  const plan = buildInitPlan(nonInteractiveValues(options), context);
+  return {
+    schemaVersion: 1,
+    kind: "setup-plan",
+    output: plan.output,
+    configuration: describeSetupConfiguration(plan.config),
+    clientHandoff: plan.snippets.length === 0 ? "not-requested" : "available"
   };
 }
 
