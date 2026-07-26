@@ -21,6 +21,7 @@ type ValueOptionName =
   | "transport"
   | "connection"
   | "upstream"
+  | "replacementProfile"
   | "issuer"
   | "clientRegistration"
   | "scopes"
@@ -71,6 +72,8 @@ export interface CliOptions {
   readonly transport?: "stdio" | "http";
   readonly connection?: string;
   readonly upstream?: string;
+  /** Existing profile that should receive durable references before a removal. */
+  readonly replacementProfile?: string;
   readonly issuer?: string;
   readonly clientRegistration?: string;
   readonly scopes?: readonly string[];
@@ -185,6 +188,10 @@ export const CLI_COMMANDS = {
   "profile set-description": {
     description: "Set or explicitly clear a non-secret account profile description.",
     options: ["config", "profile", "description", "clearDescription"]
+  },
+  "profile remove": {
+    description: "Safely remove one account profile and explicitly reassign any durable references.",
+    options: ["config", "profile", "replacementProfile"]
   },
   "profile test": {
     description: "Run one reviewed safe readiness check for an explicit account profile.",
@@ -408,6 +415,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--upstream <name>",
     description: "Named upstream, or 'default' for a singleton upstream."
   },
+  replacementProfile: {
+    name: "replacementProfile",
+    takesValue: true,
+    usage: "--replacement-profile <name>",
+    description: "Existing profile that receives durable references before removal."
+  },
   issuer: {
     name: "issuer",
     takesValue: true,
@@ -535,6 +548,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--transport": OPTION_DEFINITIONS.transport,
   "--connection": OPTION_DEFINITIONS.connection,
   "--upstream": OPTION_DEFINITIONS.upstream,
+  "--replacement-profile": OPTION_DEFINITIONS.replacementProfile,
   "--issuer": OPTION_DEFINITIONS.issuer,
   "--client-registration": OPTION_DEFINITIONS.clientRegistration,
   "--scope": OPTION_DEFINITIONS.scopes,

@@ -1438,6 +1438,29 @@ describe("packed artifact contract", () => {
             personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
           }
         });
+        const removeProfile = runInstalledBinary(
+          binary,
+          [
+            "profile", "remove",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal"
+          ],
+          cliContractDirectory
+        );
+        expect(removeProfile.status, removeProfile.stderr || removeProfile.stdout).toBe(0);
+        expect(removeProfile.stderr).toBe("");
+        expect(JSON.parse(removeProfile.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          actions: ["Removed profile 'personal'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(removeProfile.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: { work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } } }
+        });
 
         const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
         const dashboardServe = await startInstalledCli(
@@ -1463,6 +1486,7 @@ describe("packed artifact contract", () => {
         expect(rootHelp.stdout).toContain("profile test");
         expect(rootHelp.stdout).toContain("profile list");
         expect(rootHelp.stdout).toContain("profile set-description");
+        expect(rootHelp.stdout).toContain("profile remove");
         const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
         expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
         expect(profileTestHelp.stderr).toBe("");
@@ -1485,6 +1509,12 @@ describe("packed artifact contract", () => {
         expect(profileDescriptionHelp.stdout).toContain("Usage: miftah profile set-description");
         expect(profileDescriptionHelp.stdout).toContain("--description <text>");
         expect(profileDescriptionHelp.stdout).toContain("--clear-description");
+        const profileRemovalHelp = runInstalledBinary(binary, ["profile", "remove", "--help"], cliContractDirectory);
+        expect(profileRemovalHelp.status, profileRemovalHelp.stderr || profileRemovalHelp.stdout).toBe(0);
+        expect(profileRemovalHelp.stderr).toBe("");
+        expect(profileRemovalHelp.stdout).toContain("Usage: miftah profile remove");
+        expect(profileRemovalHelp.stdout).toContain("--profile <name>");
+        expect(profileRemovalHelp.stdout).toContain("--replacement-profile <name>");
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],

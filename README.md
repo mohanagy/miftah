@@ -516,6 +516,22 @@ Use exactly one of `--description` or `--clear-description`. Miftah changes only
 
 In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Edit a non-secret account label**. In catalog mode, select the configuration again after a successful write before making another Console change.
 
+### Remove an account later
+
+When an account should no longer be part of this Miftah configuration, remove it through the same guarded lifecycle instead of hand-editing JSON:
+
+```bash
+miftah profile remove --config ~/.config/miftah/gsc.json --profile google-personal --replacement-profile google-work
+```
+
+The selected profile must already exist and at least one other profile must remain. `--replacement-profile` is required whenever the removed account is the durable default or is named by a routing rule, routing-plugin binding, or configured profile lock. Miftah moves only those durable configuration references to the chosen existing account, validates the complete candidate, keeps a recovery backup, and finalizes the configured fail-closed audit record.
+
+It changes Miftah configuration only: it does not resolve or delete an underlying secret, read or delete a provider token cache, or change an active MCP client session. Restart or reconnect the client after a successful removal.
+
+Miftah refuses to remove a profile with a configured native OAuth binding. There is intentionally no hand-edit workaround: removing the configuration binding and OS-vault credential needs one atomic lifecycle, which this generic account-removal flow does not yet own.
+
+In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Remove an account safely**. Select the account, a replacement, and the explicit confirmation. In catalog mode, select the configuration again after the write before making another Console change.
+
 ## Everyday commands
 
 These are shell commands. Profile switching and identity tools such as `miftah_use_profile` are MCP management tools used from the connected client.
@@ -527,6 +543,7 @@ These are shell commands. Profile switching and identity tools such as `miftah_u
 | Start one profile and verify initialization | `miftah test-profile --config service.json --profile work` |
 | Review configured account profiles without starting an upstream | `miftah profile list --config service.json` |
 | Set or clear a non-secret account label | `miftah profile set-description --config service.json --profile personal --description "Personal account"` |
+| Remove one account with explicit durable-reference replacement | `miftah profile remove --config service.json --profile personal --replacement-profile work` |
 | Run the reviewed safe check for one provider-backed account | `miftah profile test --config service.json --profile work` |
 | Discover one profile's upstream tools | `miftah list-tools --config service.json --profile work` |
 | Read redacted audit events | `miftah logs --config service.json` |
