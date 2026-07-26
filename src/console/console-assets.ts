@@ -165,6 +165,14 @@ const page = `<!doctype html>
         </section>
         <p class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Restart Claude Desktop or open a new client connection before expecting the new default or connection to be active.</p>
 
+        <section class="work-section" aria-labelledby="profile-inventory-title">
+          <div class="section-heading">
+            <div><p class="step">Configured accounts</p><h2 id="profile-inventory-title">Know which accounts are available</h2></div>
+            <p>These are profile names and non-secret labels only. Miftah does not read credentials, headers, launch arguments, token caches, or OAuth vault data to build this list.</p>
+          </div>
+          <div id="profile-inventory-list" class="profile-inventory-list"></div>
+        </section>
+
         <section id="default-profile-editor" class="work-section" hidden aria-labelledby="default-profile-title">
           <div class="section-heading">
             <div><p class="step">Account selection</p><h2 id="default-profile-title">Choose the default account</h2></div>
@@ -391,6 +399,10 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .provider-authentication .section-heading { margin-bottom: 0; }
 .profile-readiness { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
 .profile-readiness .input-row { max-width: 42rem; }
+.profile-inventory-list { display: grid; gap: .65rem; }
+.profile-inventory-item { display: grid; gap: .2rem; padding: .8rem 1rem; border: 1px solid var(--line); background: var(--panel); }
+.profile-inventory-item p { margin: 0; color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
+.profile-inventory-item strong { overflow-wrap: anywhere; }
 .connection { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; border: 1px solid var(--line); background: var(--panel); }
 .connection p { margin: .25rem 0 0; overflow-wrap: anywhere; font: .77rem/1.5 ui-monospace, monospace; }
 .connection-actions { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
@@ -788,6 +800,46 @@ const script = `(() => {
     if (result) result.textContent = "";
   }
 
+  function renderProfileInventory(value, defaultProfile) {
+    const list = byId("profile-inventory-list");
+    if (!list) return;
+    list.replaceChildren();
+    const profiles = Array.isArray(value) ? value.map(record) : [];
+    if (profiles.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "No configured accounts are available.";
+      list.append(empty);
+      return;
+    }
+    profiles.forEach((profile) => {
+      const name = typeof profile.name === "string" ? profile.name : "Unnamed profile";
+      const item = document.createElement("article");
+      item.className = "profile-inventory-item";
+      const title = document.createElement("strong");
+      title.textContent = name + (name === defaultProfile ? " · durable default" : "");
+      item.append(title);
+      if (typeof profile.description === "string" && profile.description) {
+        const description = document.createElement("p");
+        description.textContent = profile.description;
+        item.append(description);
+      }
+      const tags = Array.isArray(profile.tags) ? profile.tags.filter((tag) => typeof tag === "string") : [];
+      const policy = typeof profile.policy === "string" ? profile.policy : "";
+      const upstreams = Array.isArray(profile.upstreams) ? profile.upstreams.filter((upstream) => typeof upstream === "string") : [];
+      const details = [
+        tags.length > 0 ? "tags: " + tags.join(", ") : "",
+        policy ? "policy: " + policy : "",
+        upstreams.length > 0 ? "overrides: " + upstreams.join(", ") : ""
+      ].filter(Boolean);
+      if (details.length > 0) {
+        const detail = document.createElement("p");
+        detail.textContent = details.join(" · ");
+        item.append(detail);
+      }
+      list.append(item);
+    });
+  }
+
   function profileReadinessMessage(value) {
     const report = record(value);
     const profile = typeof report.profile === "string" ? report.profile : "selected profile";
@@ -962,8 +1014,10 @@ const script = `(() => {
     if (configName) configName.textContent = String(metadata.name || "—");
     if (configVersion) configVersion.textContent = "Config v" + String(metadata.version || "—");
     if (defaultProfile) defaultProfile.textContent = configuredDefaultProfile || "—";
-    const profiles = Array.isArray(metadata.profiles) ? metadata.profiles.map((item) => String(record(item).name || "")).filter(Boolean) : [];
+    const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
+    const profiles = profileMetadata.map((item) => String(item.name || "")).filter(Boolean);
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
+    renderProfileInventory(profileMetadata, configuredDefaultProfile);
     renderDefaultProfileEditor(profiles, configuredDefaultProfile);
     setOptions(byId("native-oauth-account-upstream"), upstreams);
     setOptions(byId("connection-profile"), profiles);

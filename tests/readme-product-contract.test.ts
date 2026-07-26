@@ -114,6 +114,10 @@ describe("product README", () => {
     expect(readme).toContain("### Retest a reviewed provider account");
     expect(readme).toContain("miftah profile test --config ~/.config/miftah/gsc.json --profile google-personal");
     expect(readme).toContain("It does not run an arbitrary tool or expose provider output.");
+    expect(readme).toContain("### Review configured accounts");
+    expect(readme).toContain("miftah profile list --config ~/.config/miftah/gsc.json");
+    expect(readme).toContain("It never resolves a secret reference, reads a credential file, header, OAuth vault entry, or provider token cache, and it never starts an upstream.");
+    expect(readme).toContain("Configured accounts");
     expect(readme).toContain("### Change the durable default later");
     expect(readme).toContain("miftah profile set-default --config ~/.config/miftah/gsc.json --profile google-personal");
     expect(readme).toContain("does not switch an already-running MCP client");

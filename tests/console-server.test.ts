@@ -762,6 +762,8 @@ describe("local Console control server", () => {
       expect(html).toContain('id="default-profile-selection"');
       expect(html).toContain('id="set-default-profile"');
       expect(html).toContain("Choose which account new MCP sessions start with");
+      expect(html).toContain('id="profile-inventory-list"');
+      expect(html).toContain("Configured accounts");
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
@@ -870,6 +872,7 @@ describe("local Console control server", () => {
         readinessRequestsAfterUnselection: 0
       });
       expect(javascript).toContain("Running the reviewed safe check");
+      expect(javascript).toContain("renderProfileInventory");
       expect(javascript).toContain("profile.value = defaultProfile");
       expect(javascript).toContain('body: { profile: profile.value, upstream: upstream.value }');
       expect(javascript).toContain("provider-adapter");
