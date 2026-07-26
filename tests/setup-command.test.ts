@@ -10,6 +10,7 @@ vi.mock("../src/setup/profile-readiness.js", () => ({
 }));
 
 import { CliUsageError, parseCli, renderCommandHelp } from "../src/cli/parse.js";
+import { ClientEntryImportSetupError } from "../src/cli/setup-client-entry-import.js";
 import { runSetupCommand } from "../src/cli/setup.js";
 import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
@@ -78,6 +79,14 @@ afterEach(async () => {
 });
 
 describe("setup command", () => {
+  it("identifies client-entry import setup errors without losing the usage-error contract", () => {
+    const error = new ClientEntryImportSetupError("safe import failure", "invalid");
+
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.name).toBe("ClientEntryImportSetupError");
+    expect(error.importReason).toBe("invalid");
+  });
+
   it("makes the guided setup flow a first-class command", () => {
     expect(parseCli(["setup"])).toEqual({ kind: "run", command: "setup", options: {} });
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");

@@ -30,6 +30,7 @@ type ClientEntryImportSetupOptions = InitCommandOptions & Pick<CliOptions, "impo
 export class ClientEntryImportSetupError extends CliUsageError {
   constructor(message: string, readonly importReason?: ClientEntryImportErrorReason) {
     super(message);
+    this.name = "ClientEntryImportSetupError";
   }
 }
 

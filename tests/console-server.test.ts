@@ -284,7 +284,7 @@ function triggerClientEntryManualRecoveryAction(
   id: string,
   source: string
 ): { readonly selected: readonly string[]; readonly documentCleared: boolean } {
-  const start = javascript.indexOf("function bindClientEntryManualRecoveryAction(id, source)");
+  const start = javascript.indexOf("function bindClientEntryManualRecoveryAction");
   const end = javascript.indexOf("\n\n  async function refresh", start);
   if (start < 0 || end < 0) throw new Error("Expected the client-entry manual recovery action binder.");
 
@@ -313,7 +313,6 @@ function triggerClientEntryManualRecoveryAction(
     {
       byId(candidate: string): unknown {
         if (candidate === id) return button;
-        if (candidate === "client-entry-onboarding-form") return form;
         return undefined;
       },
       HTMLButtonElement: FakeButton,
@@ -323,9 +322,9 @@ function triggerClientEntryManualRecoveryAction(
         selected.push(value);
       }
     }
-  ) as (targetId: string, targetSource: string) => void;
+  ) as (targetId: string, targetSource: string, form: unknown) => void;
 
-  bindClientEntryManualRecoveryAction(id, source);
+  bindClientEntryManualRecoveryAction(id, source, form);
   button.listeners.get("click")?.();
   return { selected, documentCleared: documentInput.value === "" };
 }
@@ -987,8 +986,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain("local-stdio");
       expect(javascript).toContain("acceptLocalCommand");
       expect(javascript).toContain("/api/v1/onboarding/client-entry");
-      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-local", "local")');
-      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote")');
+      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-local", "local", clientEntryOnboardingForm)');
+      expect(javascript).toContain('bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote", clientEntryOnboardingForm)');
       expect(triggerClientEntryManualRecoveryAction(javascript, "client-entry-manual-local", "local")).toEqual({
         selected: ["local"],
         documentCleared: true

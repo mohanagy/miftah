@@ -1183,13 +1183,12 @@ const script = `(() => {
     }
   }
 
-  function bindClientEntryManualRecoveryAction(id, source) {
+  function bindClientEntryManualRecoveryAction(id, source, clientEntryOnboardingForm) {
     const action = byId(id);
     if (!(action instanceof HTMLButtonElement)) return;
     action.addEventListener("click", () => {
-      const form = byId("client-entry-onboarding-form");
-      const documentInput = form instanceof HTMLFormElement
-        ? form.querySelector("textarea[name='document']")
+      const documentInput = clientEntryOnboardingForm instanceof HTMLFormElement
+        ? clientEntryOnboardingForm.querySelector("textarea[name='document']")
         : undefined;
       if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
       selectSetupSource(source);
@@ -1416,8 +1415,8 @@ const script = `(() => {
   }
 
   const clientEntryOnboardingForm = byId("client-entry-onboarding-form");
-  bindClientEntryManualRecoveryAction("client-entry-manual-local", "local");
-  bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote");
+  bindClientEntryManualRecoveryAction("client-entry-manual-local", "local", clientEntryOnboardingForm);
+  bindClientEntryManualRecoveryAction("client-entry-manual-remote", "remote", clientEntryOnboardingForm);
   if (clientEntryOnboardingForm instanceof HTMLFormElement) {
     clientEntryOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
