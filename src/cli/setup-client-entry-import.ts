@@ -103,6 +103,29 @@ export async function runClientEntryImportSetup(
   if (options.importFile === undefined || options.importEntry === undefined) {
     usageError("Client-entry import requires both '--import-file <file>' and '--import-entry <name>'.");
   }
+  let document: string;
+  try {
+    document = await readClientEntryImportFile(options.importFile);
+  } catch (error) {
+    if (error instanceof ClientEntryImportError) usageError(error.message);
+    throw error;
+  }
+  return runClientEntryImportSetupFromDocument(options, context, document);
+}
+
+/**
+ * Publishes from a document already read through the bounded verified source
+ * reader. Guided import uses this to keep its displayed entry list and its
+ * selected entry bound to the same source snapshot.
+ */
+export async function runClientEntryImportSetupFromDocument(
+  options: ClientEntryImportSetupOptions,
+  context: InitCommandContext,
+  document: string
+): Promise<InitCommandResult> {
+  if (options.importFile === undefined || options.importEntry === undefined) {
+    usageError("Client-entry import requires both '--import-file <file>' and '--import-entry <name>'.");
+  }
   rejectPresetOptions(options);
   if (options.client !== undefined && !isClientSelection(options.client)) {
     usageError(`Unsupported client '${options.client}'.`);
@@ -112,7 +135,6 @@ export async function runClientEntryImportSetup(
   const output = resolveOutputPath(options.output ?? `${name}.miftah.json`, context.cwd);
   let config: InitCommandResult["config"];
   try {
-    const document = await readClientEntryImportFile(options.importFile);
     config = createImportedClientConfiguration({
       configurationName: name,
       document,

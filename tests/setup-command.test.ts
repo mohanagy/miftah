@@ -417,6 +417,7 @@ describe("setup command", () => {
       }
     });
 
+    await answer(streams, "Start from (new, import) [new]", "new");
     await answer(streams, "Name [miftah-wrapper]", "guided");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
     await answer(
@@ -517,6 +518,273 @@ describe("setup command", () => {
       profiles: { default: { policy: "readonly" } }
     });
     expect(await readFile(source, "utf8")).toBe(document);
+  });
+
+  it("guides a user through selecting one existing client entry without rendering source credentials", async () => {
+    const source = resolve(outputRoot, "claude-desktop.json");
+    const output = resolve(outputRoot, "analytics.json");
+    const entry = importableClientEntry();
+    const secret = "client-source-secret-must-not-be-rendered";
+    const document = JSON.stringify({
+      mcpServers: {
+        analytics: entry,
+        private: {
+          command: entry.command,
+          args: entry.args,
+          env: { PRIVATE_TOKEN: secret }
+        }
+      }
+    });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, document, { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await answer(streams, "MCP entry to import (number or exact name)", "1");
+    await answer(streams, "Configuration name [miftah-import]", "analytics");
+    await answer(streams, "Output location [analytics.miftah.json]", "analytics.json");
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "analytics",
+      upstream: { transport: "stdio", command: entry.command, args: entry.args },
+      profiles: { default: { policy: "readonly" } }
+    });
+    expect(await readFile(source, "utf8")).toBe(document);
+    expect(streams.transcript.contents).toContain("Available MCP entries (names only):");
+    expect(streams.transcript.contents).toContain("1. analytics");
+    expect(streams.transcript.contents).toContain("2. private");
+    expect(streams.transcript.contents).not.toContain(secret);
+  });
+
+  it("honors an exact numeric client entry name before interpreting a list position", async () => {
+    const source = resolve(outputRoot, "numeric-entry.json");
+    const output = resolve(outputRoot, "numeric-entry.miftah.json");
+    const namedTwoUrl = "https://mcp.example.test/named-two";
+    const secondEntryUrl = "https://mcp.example.test/second-entry";
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, JSON.stringify({
+      mcpServers: {
+        "2": { type: "http", url: namedTwoUrl },
+        analytics: { type: "http", url: secondEntryUrl }
+      }
+    }), { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await answer(streams, "MCP entry to import (number or exact name)", "2");
+    await answer(streams, "Configuration name [miftah-import]", "numeric-entry");
+    await answer(streams, "Output location [numeric-entry.miftah.json]", "numeric-entry.miftah.json");
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      upstream: { transport: "streamable-http", url: namedTwoUrl }
+    });
+  });
+
+  it("imports the inspected client file snapshot when its source path changes before entry confirmation", async () => {
+    const source = resolve(outputRoot, "changing-client.json");
+    const output = resolve(outputRoot, "snapshot.miftah.json");
+    const inspectedUrl = "https://mcp.example.test/inspected";
+    const changedUrl = "https://mcp.example.test/changed";
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, JSON.stringify({
+      mcpServers: { analytics: { type: "http", url: inspectedUrl } }
+    }), { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await streams.transcript.waitFor("MCP entry to import (number or exact name)");
+    await writeFile(source, JSON.stringify({
+      mcpServers: { analytics: { type: "http", url: changedUrl } }
+    }), { mode: 0o600 });
+    await answer(streams, "MCP entry to import (number or exact name)", "analytics");
+    await answer(streams, "Configuration name [miftah-import]", "snapshot");
+    await answer(streams, "Output location [snapshot.miftah.json]", "snapshot.miftah.json");
+    await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      upstream: { transport: "streamable-http", url: inspectedUrl }
+    });
+  });
+
+  it("rejects an unlisted guided client-entry selection before any configuration write", async () => {
+    const source = resolve(outputRoot, "selection-client.json");
+    const original = JSON.stringify({ mcpServers: { analytics: importableClientEntry() } });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, original, { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    await answer(streams, "MCP entry to import (number or exact name)", "missing");
+
+    await expect(command).rejects.toThrow("Choose one listed MCP entry by number or exact name.");
+    streams.input.end();
+    expect(await readFile(source, "utf8")).toBe(original);
+  });
+
+  it("cancels guided client-entry import on EOF or SIGINT before selecting or writing a configuration", async () => {
+    const source = resolve(outputRoot, "cancelled-client.json");
+    const original = JSON.stringify({ mcpServers: { analytics: importableClientEntry() } });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, original, { mode: 0o600 });
+
+    for (const cancel of [
+      (streams: ReturnType<typeof createStreams>) => streams.input.end(),
+      (streams: ReturnType<typeof createStreams>) => streams.input.write("\u0003")
+    ]) {
+      const streams = createStreams();
+      const command = runSetupCommand({}, {
+        input: streams.input,
+        output: streams.output,
+        cwd: outputRoot,
+        launcher: {
+          command: process.execPath,
+          args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+        }
+      });
+
+      await answer(streams, "Start from (new, import) [new]", "import");
+      await streams.transcript.waitFor("Client configuration file (absolute path)");
+      cancel(streams);
+
+      await expect(command).rejects.toThrow("Guided client-entry import was cancelled.");
+      streams.input.end();
+      expect(await readFile(source, "utf8")).toBe(original);
+    }
+  });
+
+  it("reports guided client-entry cancellation safely between prompts", async () => {
+    const source = resolve(outputRoot, "cancel-between-prompts.json");
+    const original = JSON.stringify({ mcpServers: { analytics: importableClientEntry() } });
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(source, original, { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Client configuration file (absolute path)", source);
+    streams.input.end();
+
+    await expect(command).rejects.toThrow("Guided client-entry import was cancelled.");
+    expect(await readFile(source, "utf8")).toBe(original);
+    await expect(readFile(resolve(outputRoot, "miftah-import.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("cancels the initial guided setup choice on EOF or SIGINT before any configuration write", async () => {
+    for (const cancel of [
+      (streams: ReturnType<typeof createStreams>) => streams.input.end(),
+      (streams: ReturnType<typeof createStreams>) => streams.input.write("\u0003")
+    ]) {
+      const streams = createStreams();
+      const command = runSetupCommand({}, {
+        input: streams.input,
+        output: streams.output,
+        cwd: outputRoot,
+        launcher: {
+          command: process.execPath,
+          args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+        }
+      });
+
+      await streams.transcript.waitFor("Start from (new, import) [new]");
+      cancel(streams);
+
+      await expect(command).rejects.toThrow("Guided setup was cancelled.");
+      streams.input.end();
+      await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("rejects an unsupported guided setup starting point before any configuration write", async () => {
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, "Start from (new, import) [new]", "unsupported");
+    await expect(command).rejects.toThrow("Choose 'new' to configure an MCP or 'import' to select an existing client entry.");
+    streams.input.end();
+    await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves the established setup wizard entry point when --verify is explicit", async () => {
+    const streams = createStreams();
+    const command = runSetupCommand({ verify: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await streams.transcript.waitFor("Name [miftah-wrapper]");
+    expect(streams.transcript.contents).not.toContain("Start from (new, import)");
+    streams.input.end();
+    await expect(command).rejects.toThrow("Interactive init was cancelled");
   });
 
   it("imports one explicitly selected remote HTTPS entry without OAuth discovery or an upstream call", async () => {
@@ -1131,6 +1399,7 @@ describe("setup command", () => {
       }
     });
 
+    await answer(streams, "Start from (new, import) [new]", "new");
     await answer(streams, "Name [miftah-wrapper]", "gsc");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");

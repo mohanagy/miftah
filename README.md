@@ -63,7 +63,7 @@ Shell examples below use POSIX syntax, including `~`, `$HOME`, and `\` line cont
 miftah setup
 ```
 
-This starts by asking what you have: enter `remote` for a remote HTTPS endpoint, `local` for a reviewed executable and argument array, or a connector name such as `google-search-console`. It then collects the safe metadata that path needs, an output location, and an optional client JSON snippet. It never asks for a token, password, or browser cookie. For a remote OAuth server, run `miftah setup --native-oauth`: it asks for the exact HTTPS endpoint and account name, then discovers whether Miftah can safely own the OAuth flow. The plain `remote` path does not discover OAuth or call the upstream, so use `--native-oauth` when the server advertises standards-based OAuth. For `local`, it collects one literal argument at a time, shows a no-secret review summary, and requires an explicit acknowledgement. Miftah does not run the local executable during setup. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
+On a bare interactive `miftah setup`, first choose `new` or `import` at `Start from (new, import) [new]`. Choose `new` and this starts by asking what you have: enter `remote` for a remote HTTPS endpoint, `local` for a reviewed executable and argument array, or a connector name such as `google-search-console`. It then collects the safe metadata that path needs and an output location, and can print an optional client JSON snippet for manual review. Choose `import` when you already have one MCP entry in a client JSON file: Miftah asks for that explicit absolute file, lists only entry names, and asks you to select one. It never prints the source entry's command, arguments, headers, environment values, or credentials, and it does not scan or modify the source client file. It never asks for a token, password, or browser cookie. For a remote OAuth server, run `miftah setup --native-oauth`: it asks for the exact HTTPS endpoint and account name, then discovers whether Miftah can safely own the OAuth flow. The plain `remote` path does not discover OAuth or call the upstream, so use `--native-oauth` when the server advertises standards-based OAuth. For `local`, it collects one literal argument at a time, shows a no-secret review summary, and requires an explicit acknowledgement. Miftah does not run the local executable during setup. Miftah validates the complete configuration before it writes an owner-restricted file, never overwrites an existing one, and never edits a Claude, Cursor, VS Code, or other MCP client file. Recognized adapters can then offer one explicit, provider-declared read-only readiness check; Miftah never guesses a tool or auto-approves a policy prompt. Use `miftah init` when you want the same catalog in a scripted command.
 
 ## First setup: GitHub with Claude Desktop
 
@@ -221,7 +221,15 @@ For one reviewed local executable, use `local-stdio` for arguments and a working
 
 ## Reuse one existing MCP client entry
 
-If you already have a local or remote Claude Desktop, Claude Code, Cursor, or VS Code MCP entry, `miftah setup` can create a safe first Miftah configuration from one entry you explicitly choose. It does not scan or modify the source client file.
+If you already have a local or remote Claude Desktop, Claude Code, Cursor, or VS Code MCP entry, start with:
+
+```bash
+miftah setup
+```
+
+At `Start from (new, import) [new]`, choose `import`. Give the exact absolute client configuration file, then choose one listed entry by number or exact name. This is the simplest first-use path: Miftah lists only entry names and never prints the source entry's command, arguments, headers, environment values, or credentials. It does not scan or modify the source client file.
+
+For scripts or a repeatable handoff, use the explicit equivalent:
 
 ```bash
 miftah setup posthog-work \
