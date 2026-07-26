@@ -46,6 +46,25 @@ describe("product README", () => {
     expect(readme).toContain("Provider-specific or local STDIO OAuth remains owned by that upstream");
   });
 
+  it("puts the trust and team-sharing boundaries in one first-use location", () => {
+    expect(readme).toContain("## What Miftah controls—and what it does not");
+    expect(readme).toContain("Credential readiness");
+    expect(readme).toContain("Verified account identity");
+    expect(readme).toContain("Native remote OAuth");
+    expect(readme).toContain("Provider-owned OAuth");
+    expect(readme).toContain("Tool policy and approvals");
+    expect(readme).toContain("Redacted local audit");
+    expect(readme).toContain("### Share a configuration safely");
+    expect(readme).toContain("Miftah configuration is not a token bundle");
+    expect(readme).toContain("OAuth vault credentials");
+    expect(readme).toContain("provider token-cache directories");
+  });
+
+  it("records the discoverability boundary as a user-visible change", () => {
+    expect(changelog).toContain("[#202](https://github.com/mohanagy/miftah/issues/202)");
+    expect(changelog).toContain("one-connector multi-profile model");
+  });
+
   it("keeps a practical Claude Desktop path and routes detailed material to the docs", () => {
     expect(readme).toContain("miftah init github --preset github");
     expect(readme).toContain("[Claude Desktop setup](docs/claude-desktop.md)");

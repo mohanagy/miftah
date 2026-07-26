@@ -14,6 +14,7 @@ import {
 import {
   CLIENT_NAMES,
   ClientSnippetError,
+  formatClientSnippetHandoff,
   renderClaudeCodePermissionGuidance,
   renderClientSnippets
 } from "./client-snippets.js";
@@ -188,7 +189,7 @@ function writeClientHandoff(
       launcher: context.launcher
     });
     for (const snippet of snippets) {
-      context.output.write(`${snippet.target.label} (${snippet.client}):\n${snippet.json}\n`);
+      context.output.write(formatClientSnippetHandoff(snippet));
     }
     if (selection !== "claude-code" && selection !== "all") return;
     const guidance: ClaudeCodePermissionGuidance = renderClaudeCodePermissionGuidance(name, {

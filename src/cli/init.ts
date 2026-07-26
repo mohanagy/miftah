@@ -18,6 +18,7 @@ import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js"
 import {
   CLIENT_NAMES,
   ClientSnippetError,
+  formatClientSnippetHandoff,
   renderClaudeCodePermissionGuidance,
   renderClientSnippets
 } from "./client-snippets.js";
@@ -549,7 +550,7 @@ function writeSnippets(
   claudeCodePermissionGuidance: ClaudeCodePermissionGuidance | undefined
 ): void {
   for (const snippet of snippets) {
-    output.write(`${snippet.target.label} (${snippet.client}):\n${snippet.json}\n`);
+    output.write(formatClientSnippetHandoff(snippet));
   }
   if (claudeCodePermissionGuidance === undefined) return;
   if (claudeCodePermissionGuidance.kind === "manual") {
