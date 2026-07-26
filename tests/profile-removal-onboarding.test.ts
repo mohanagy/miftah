@@ -161,6 +161,50 @@ describe("durable profile removal onboarding", () => {
     expect(oauthBoundProfile).toEqual(original);
   });
 
+  it("applies an unreferenced removal and records the successful audit lifecycle", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-profile-removal-success-"));
+    const configPath = join(directory, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: {
+        work: { env: { API_KEY: "${WORK_API_KEY}" } },
+        personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const audit = {
+      ensureWritable: vi.fn().mockResolvedValue(undefined),
+      intent: vi.fn().mockResolvedValue(undefined),
+      record: vi.fn().mockResolvedValue(undefined)
+    };
+
+    try {
+      const report = await runProfileRemoval({ configPath, profile: "personal" }, { audit });
+
+      expect(report).toEqual({
+        changed: true,
+        profile: "personal",
+        actions: ["Removed profile 'personal'."],
+        write: true,
+        backupPath: expect.any(String)
+      });
+      expect(audit.ensureWritable).toHaveBeenCalledTimes(1);
+      expect(audit.intent).toHaveBeenCalledWith({ profile: "personal" });
+      expect(audit.record).toHaveBeenCalledWith({ profile: "personal", status: "success" });
+      const written = JSON.parse(await readFile(configPath, "utf8"));
+      expect(written).toMatchObject({
+        defaultProfile: "work",
+        profiles: { work: { env: { API_KEY: "${WORK_API_KEY}" } } }
+      });
+      expect(written.profiles).not.toHaveProperty("personal");
+      expect(JSON.stringify(report)).not.toContain("PERSONAL_API_KEY");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("restores the exact original configuration when final required audit recording fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-profile-removal-audit-recovery-"));
     const configPath = join(directory, "analytics.json");
