@@ -145,6 +145,9 @@ describe("product README", () => {
 
   it("documents the explicit no-secret local and remote client-entry import paths", () => {
     expect(readme).toContain("## Reuse one existing MCP client entry");
+    expect(readme).toContain("Start from (new, import) [new]");
+    expect(readme).toContain("lists only entry names");
+    expect(readme).toContain("never prints the source entry's command, arguments, headers, environment values, or credentials");
     expect(readme).toContain("--import-file");
     expect(readme).toContain("--import-entry");
     expect(readme).toContain("does not scan or modify the source client file");

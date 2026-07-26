@@ -1,13 +1,21 @@
 import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { runProfileReadiness, type ProfileReadinessReport } from "../setup/profile-readiness.js";
+import {
+  ClientEntryImportError,
+  inspectClientConfiguration
+} from "../setup/client-entry-import.js";
+import { readClientEntryImportFile } from "../setup/client-entry-import-file.js";
 import { loadConfig } from "../config/load-config.js";
 import { getProviderAdapterForAccountProvisioning } from "../config/provider-adapters.js";
 import { MiftahError } from "../utils/errors.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
 import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
-import { runClientEntryImportSetup } from "./setup-client-entry-import.js";
+import {
+  runClientEntryImportSetup,
+  runClientEntryImportSetupFromDocument
+} from "./setup-client-entry-import.js";
 import { runNativeOAuthSetup } from "./setup-native-oauth.js";
 import { runProviderAccountSetup } from "./setup-provider-account.js";
 import { runEnvironmentProfileSetup } from "./setup-environment-profile.js";
@@ -27,6 +35,12 @@ export interface SetupCommandResult {
 
 type ReadinessDecision = "verify" | "skip" | "cancelled";
 type AccountAdditionKind = "provider" | "environment";
+type GuidedSetupStartingPoint = "new" | "import";
+
+interface InteractivePromptSession {
+  prompt(label: string, defaultValue?: string): Promise<string | undefined>;
+  close(): void;
+}
 
 function flagName(option: string): string {
   return option.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -34,6 +48,128 @@ function flagName(option: string): string {
 
 function isTty(context: InitCommandContext): boolean {
   return context.input.isTTY === true && context.output.isTTY === true;
+}
+
+function createInteractivePromptSession(
+  context: InitCommandContext,
+  cancellationMessage: string
+): InteractivePromptSession {
+  const line = createInterface({ input: context.input, output: context.output, terminal: true });
+  const cancelled = Symbol("cancelled");
+  let resolveCancellation: (value: typeof cancelled) => void = () => undefined;
+  const cancellation = new Promise<typeof cancelled>((resolve) => {
+    resolveCancellation = resolve;
+  });
+  const cancel = () => resolveCancellation(cancelled);
+  line.once("close", cancel);
+  line.once("SIGINT", cancel);
+
+  return {
+    async prompt(label: string, defaultValue?: string): Promise<string | undefined> {
+      const suffix = defaultValue === undefined ? ": " : ` [${defaultValue}]: `;
+      const answer = await Promise.race([line.question(`${label}${suffix}`), cancellation]);
+      if (answer === cancelled) throw new CliUsageError(cancellationMessage);
+      const value = answer.trim();
+      return value === "" ? defaultValue : value;
+    },
+    close(): void {
+      line.removeListener("close", cancel);
+      line.removeListener("SIGINT", cancel);
+      line.close();
+    }
+  };
+}
+
+function hasExplicitNewConfigurationInput(options: SetupCommandOptions): boolean {
+  return [
+    options.name,
+    options.preset,
+    options.output,
+    options.client,
+    options.credentialEnv,
+    options.npmPackage,
+    options.dockerImage,
+    options.url,
+    options.headerName,
+    options.headerPrefix,
+    options.oauthClientSecretsFile,
+    options.localCommand,
+    options.args,
+    options.cwd,
+    options.acceptLocalCommand,
+    options.googleSearchConsoleProfiles,
+    options.defaultProfile,
+    options.verify
+  ].some((value) => value !== undefined);
+}
+
+async function chooseGuidedSetupStartingPoint(context: InitCommandContext): Promise<GuidedSetupStartingPoint> {
+  const prompts = createInteractivePromptSession(context, "Guided setup was cancelled.");
+  try {
+    const answer = (await prompts.prompt("Start from (new, import)", "new"))?.toLowerCase();
+    if (answer === "new" || answer === "n") return "new";
+    if (answer === "import" || answer === "i") return "import";
+    throw new CliUsageError("Choose 'new' to configure an MCP or 'import' to select an existing client entry.");
+  } finally {
+    prompts.close();
+  }
+}
+
+function selectedGuidedClientEntry(answer: string | undefined, entries: readonly string[]): string {
+  if (answer === undefined || answer.length === 0) {
+    throw new CliUsageError("Choose one listed MCP entry by number or exact name.");
+  }
+  if (entries.includes(answer)) return answer;
+  if (/^[1-9][0-9]*$/u.test(answer)) {
+    const index = Number(answer) - 1;
+    if (index >= 0 && index < entries.length) return entries[index]!;
+  }
+  throw new CliUsageError("Choose one listed MCP entry by number or exact name.");
+}
+
+/**
+ * Keeps a selected existing client entry outcome-first without granting it any
+ * authority: source bytes stay private, only safe entry names are rendered,
+ * and the existing shared importer performs the sole conversion and write.
+ */
+async function runGuidedClientEntryImport(context: InitCommandContext): Promise<void> {
+  const prompts = createInteractivePromptSession(context, "Guided client-entry import was cancelled.");
+  try {
+    const importFile = await prompts.prompt("Client configuration file (absolute path)");
+    if (importFile === undefined) throw new CliUsageError("Choose an absolute client configuration file before importing.");
+
+    let document: string;
+    let entries: readonly string[];
+    try {
+      document = await readClientEntryImportFile(importFile);
+      entries = inspectClientConfiguration(document).entries;
+    } catch (error) {
+      if (error instanceof ClientEntryImportError) throw new CliUsageError(error.message);
+      throw error;
+    }
+    context.output.write(`Available MCP entries (names only):\n${entries.map((entry, index) => `${index + 1}. ${entry}\n`).join("")}`);
+    const importEntry = selectedGuidedClientEntry(
+      await prompts.prompt("MCP entry to import (number or exact name)"),
+      entries
+    );
+    const name = await prompts.prompt("Configuration name", "miftah-import");
+    if (name === undefined) throw new CliUsageError("Choose a configuration name before importing.");
+    const output = await prompts.prompt("Output location", `${name}.miftah.json`);
+    if (output === undefined) throw new CliUsageError("Choose an output location before importing.");
+    const client = await prompts.prompt(
+      "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
+    );
+
+    await runClientEntryImportSetupFromDocument({
+      name,
+      output,
+      ...(client === undefined ? {} : { client }),
+      importFile,
+      importEntry
+    }, context, document);
+  } finally {
+    prompts.close();
+  }
 }
 
 async function accountAdditionKind(options: SetupCommandOptions, context: InitCommandContext): Promise<AccountAdditionKind> {
@@ -164,6 +300,13 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     // Imported client entries are intentionally untrusted/manual. They do not
     // inherit a reviewed provider adapter and are never launched during import.
     return { verification: "not-applicable", exitCode: 0, reports: [] };
+  }
+  if (isTty(context) && !hasExplicitNewConfigurationInput(options)) {
+    const startingPoint = await chooseGuidedSetupStartingPoint(context);
+    if (startingPoint === "import") {
+      await runGuidedClientEntryImport(context);
+      return { verification: "not-applicable", exitCode: 0, reports: [] };
+    }
   }
   const created = await runInitCommand({ ...options, interactive: true }, context);
   if (
