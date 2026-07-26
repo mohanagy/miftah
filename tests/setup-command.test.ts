@@ -404,6 +404,47 @@ describe("setup command", () => {
     }
   });
 
+  it("starts browser sign-in setup from bare guided setup without requiring an OAuth flag", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "guided-browser-sign-in.json");
+    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch: upstream.fetch
+    });
+
+    try {
+      await answer(streams, "Start from (new, remote sign-in, import) [new]", "remote-sign-in");
+      await answer(streams, "Configuration name [miftah-remote]", "posthog-work");
+      await answer(streams, "Account profile name [default]", "production");
+      await answer(streams, "Account profile description (optional)", "Production analytics");
+      await answer(streams, "Remote MCP HTTPS URL", upstream.streamableHttpUrl);
+      await answer(streams, "Output location [posthog-work.miftah.json]", "guided-browser-sign-in.json");
+      await answer(streams, "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)", "");
+
+      await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      streams.input.end();
+
+      const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+      expect(config).toMatchObject({
+        name: "posthog-work",
+        defaultProfile: "production",
+        profiles: { production: { description: "Production analytics" } }
+      });
+      expect(streams.transcript.contents).toContain("Start from (new, remote sign-in, import) [new]");
+      expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
+      expect(streams.transcript.contents).not.toContain("--native-oauth");
+    } finally {
+      await upstream.close();
+    }
+  });
+
   it("creates a validated owner-only configuration through the guided setup flow", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "guided.json");
@@ -417,7 +458,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "new");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "new");
     await answer(streams, "Name [miftah-wrapper]", "guided");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
     await answer(
@@ -548,7 +589,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "1");
     await answer(streams, "Configuration name [miftah-import]", "analytics");
@@ -593,7 +634,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "2");
     await answer(streams, "Configuration name [miftah-import]", "numeric-entry");
@@ -627,7 +668,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await streams.transcript.waitFor("MCP entry to import (number or exact name)");
     await writeFile(source, JSON.stringify({
@@ -661,7 +702,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "missing");
 
@@ -691,7 +732,7 @@ describe("setup command", () => {
         }
       });
 
-      await answer(streams, "Start from (new, import) [new]", "import");
+      await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
       await streams.transcript.waitFor("Client configuration file (absolute path)");
       cancel(streams);
 
@@ -717,7 +758,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "import");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     streams.input.end();
 
@@ -742,7 +783,7 @@ describe("setup command", () => {
         }
       });
 
-      await streams.transcript.waitFor("Start from (new, import) [new]");
+      await streams.transcript.waitFor("Start from (new, remote sign-in, import) [new]");
       cancel(streams);
 
       await expect(command).rejects.toThrow("Guided setup was cancelled.");
@@ -763,8 +804,10 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "unsupported");
-    await expect(command).rejects.toThrow("Choose 'new' to configure an MCP or 'import' to select an existing client entry.");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "unsupported");
+    await expect(command).rejects.toThrow(
+      "Choose 'new' to configure an MCP, 'remote-sign-in' when the MCP signs you in in a browser, or 'import' to select an existing client entry."
+    );
     streams.input.end();
     await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -782,7 +825,7 @@ describe("setup command", () => {
     });
 
     await streams.transcript.waitFor("Name [miftah-wrapper]");
-    expect(streams.transcript.contents).not.toContain("Start from (new, import)");
+    expect(streams.transcript.contents).not.toContain("Start from (new, remote sign-in, import)");
     streams.input.end();
     await expect(command).rejects.toThrow("Interactive init was cancelled");
   });
@@ -1399,7 +1442,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, import) [new]", "new");
+    await answer(streams, "Start from (new, remote sign-in, import) [new]", "new");
     await answer(streams, "Name [miftah-wrapper]", "gsc");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");
