@@ -13,6 +13,7 @@ import {
 import {
   CLIENT_NAMES,
   ClientSnippetError,
+  formatClientSnippetHandoff,
   renderClaudeCodePermissionGuidance,
   renderClientSnippets,
   type ClientSelection
@@ -84,7 +85,7 @@ function writeClientHandoff(options: ClientEntryImportSetupOptions, result: Init
       launcher: context.launcher
     });
     for (const snippet of snippets) {
-      context.output.write(`${snippet.target.label} (${snippet.client}):\n${snippet.json}\n`);
+      context.output.write(formatClientSnippetHandoff(snippet));
     }
     if (options.client === "claude-code" || options.client === "all") {
       const guidance = renderClaudeCodePermissionGuidance(result.config.name, {

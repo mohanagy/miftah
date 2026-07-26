@@ -36,6 +36,43 @@ Do not create one client entry for every account. Add one Miftah connector per s
 
 Miftah wraps an existing upstream MCP server. It does not replace it. The upstream still owns its provider tools and provider behavior. Miftah adds the local profile, credential, routing, policy, approval, lifecycle, redaction, and audit boundaries around it.
 
+## What Miftah controls—and what it does not
+
+Miftah is deliberately explicit about the local boundary it owns. A successful setup, OAuth login, or profile label is not more proof than it actually is.
+
+| Boundary | What Miftah does | What it does not prove or own |
+| --- | --- | --- |
+| Credential readiness | Resolves configured secret references for the requested profile and reports redacted readiness diagnostics. | A resolvable reference alone does not prove provider token validity, granted scopes, or account access. |
+| Verified account identity | Can run an optional, configured bounded identity probe with `miftah_verify_identity`. | A profile name, successful OAuth flow, or valid credential is not proof of the intended provider account unless that probe is configured and succeeds. |
+| Native remote OAuth | For one supported HTTPS Streamable HTTP endpoint, Miftah can discover standards-based OAuth, open consent, refresh its own OS-vault credential, reauthorize, and disconnect its local binding. | It does not support every remote MCP or promise provider-side token revocation. |
+| Provider-owned OAuth | Keeps the chosen profile, policy, and local boundaries separate while passing only configured references to the upstream. | The provider owns its login, token cache, refresh, expiry, reauthentication, and revocation. Miftah never scrapes that cache. |
+| Tool policy and approvals | Classifies operations as read, write, or destructive and can allow, deny, or require confirmation. | A local policy cannot reduce the permissions already granted by a provider token. |
+| Redacted local audit | Records redacted local lifecycle and operation metadata; optional hash chaining provides local tamper evidence. | It is not a remotely anchored immutable audit trail or a replacement for compliance retention. |
+| Client handoff and profiles | One generated Miftah client entry serves every named profile in that configuration. | Miftah does not edit client settings or silently switch an already-running client session. |
+
+### Share a configuration safely
+
+Miftah configuration is not a token bundle. You may version a reviewed template only when it contains no plaintext secret. This fragment is safe to review because it contains a variable reference, not a token value:
+
+```json
+{
+  "profiles": {
+    "production": {
+      "env": {
+        "SERVICE_TOKEN": "${SERVICE_PRODUCTION_TOKEN}"
+      },
+      "policy": "readonly"
+    }
+  }
+}
+```
+
+| Safe to share after review | Keep local and never commit or copy as team configuration |
+| --- | --- |
+| Non-secret profile names and labels, policies, routing rules, reviewed upstream metadata, and secret **references** such as `${SERVICE_PRODUCTION_TOKEN}`. | Raw secret values and dotenv files; keychain or 1Password items; OAuth vault credentials; OAuth client-secret files; provider token-cache directories such as `GSC_CONFIG_DIR`; active-profile state; audit journals; and generated client JSON with machine-local paths. |
+
+Each user or deployment supplies its own secret values and local provider state, then runs `miftah validate` and `miftah doctor` before reconnecting the MCP client.
+
 ## Choose your setup path
 
 Start with the row that describes how your upstream MCP authenticates.

@@ -4,6 +4,7 @@ import {
   ClientSnippetError,
   renderClaudeCodePermissionGuidance,
   renderClientSnippet,
+  formatClientSnippetHandoff,
   renderClientSnippets
 } from "../src/cli/client-snippets.js";
 
@@ -30,6 +31,24 @@ describe("client snippets", () => {
         }
       }
     });
+  });
+
+  it("explains that one generated client entry serves every named profile without carrying credentials", () => {
+    const snippet = renderClientSnippet("claude-desktop", posixInput);
+
+    expect(snippet.guidance).toBe(
+      "One Miftah connector serves every named profile in this configuration. Merge this one entry, then select accounts through Miftah instead of adding duplicate client entries. The generated JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account."
+    );
+  });
+
+  it("uses the same one-connector guidance in every CLI client handoff", () => {
+    const snippet = renderClientSnippet("claude-desktop", posixInput);
+
+    expect(formatClientSnippetHandoff(snippet)).toBe(
+      "Claude Desktop settings config (claude-desktop):\n" +
+      "One Miftah connector serves every named profile in this configuration. Merge this one entry, then select accounts through Miftah instead of adding duplicate client entries. The generated JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account.\n" +
+      `${snippet.json}\n`
+    );
   });
 
   it("renders the official Claude Code project .mcp.json configuration", () => {

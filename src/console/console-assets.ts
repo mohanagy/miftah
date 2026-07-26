@@ -65,6 +65,7 @@ const page = `<!doctype html>
             <p>Passwords, browser cookies, and arbitrary third-party token caches are never accepted or scraped.</p>
           </article>
         </div>
+        <p class="restart-note"><strong>Trust boundary:</strong> Profiles and a generated client entry describe local configuration; they do not prove a credential works or belongs to the intended account. A reviewed safe check may establish readiness only where declared, and a configured identity probe is separate. Miftah policy and redacted audit protect the wrapper, not provider-side token scopes or retention.</p>
       </section>
 
       <section id="configuration-catalog-view" class="work-section" hidden aria-labelledby="configuration-catalog-title">
@@ -352,7 +353,7 @@ const page = `<!doctype html>
           <div>
             <p class="step">Client handoff</p>
             <h2 id="client-title">Review and copy configuration</h2>
-            <p>Miftah does not edit Claude, Cursor, or VS Code settings. Copy the generated JSON and merge it yourself.</p>
+            <p>One generated entry serves every named account profile in this configuration. The JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account. Miftah does not edit Claude, Cursor, or VS Code settings. Copy the generated JSON and merge it yourself.</p>
             <div class="input-row">
               <label class="grow">MCP client
                 <select id="client-select">

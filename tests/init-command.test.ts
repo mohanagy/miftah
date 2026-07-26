@@ -170,6 +170,9 @@ describe("init command", () => {
     expect(JSON.parse(await readFile(output, "utf8"))).toMatchObject({ name: "client" });
     expect(streams.transcript.contents).toContain(`Created ${output}\n`);
     expect(streams.transcript.contents).toContain("Cursor .cursor/mcp.json (cursor):");
+    expect(streams.transcript.contents).toContain(
+      "One Miftah connector serves every named profile in this configuration. Merge this one entry, then select accounts through Miftah instead of adding duplicate client entries. The generated JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account."
+    );
     expect(streams.transcript.contents).toContain(JSON.stringify(process.execPath));
     expect(streams.transcript.contents).toContain(JSON.stringify(output));
     const json = streams.transcript.contents.slice(streams.transcript.contents.indexOf("{"));

@@ -897,6 +897,12 @@ describe("local Console control server", () => {
       expect(html).toContain("Provider adapter");
       expect(html).toContain("Upstream-owned auth");
       expect(html).toContain("Unsupported state");
+      expect(html).toContain("Trust boundary:");
+      expect(html).toContain("A reviewed safe check may establish readiness only where declared");
+      expect(html).toContain("a configured identity probe is separate");
+      expect(html).toContain("not provider-side token scopes or retention");
+      expect(html).toContain("One generated entry serves every named account profile in this configuration.");
+      expect(html).toContain("A generated entry does not prove that a credential works or belongs to the intended account.");
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="setup-source-choice"');
       expect(html).toContain('type="radio" name="setup-source"');

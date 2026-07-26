@@ -22,6 +22,8 @@ export interface ClientSnippet {
   target: {
     label: string;
   };
+  /** Non-secret handoff guidance that accompanies, but is not part of, the client JSON. */
+  guidance: string;
   json: string;
 }
 
@@ -58,6 +60,8 @@ const targetLabels: Record<ClientName, string> = {
 
 const claudeCodePermissionTarget = { label: "Claude Code settings permissions" };
 const literalClaudeCodeServerName = /^[A-Za-z0-9-]+$/u;
+const clientProfileGuidance =
+  "One Miftah connector serves every named profile in this configuration. Merge this one entry, then select accounts through Miftah instead of adding duplicate client entries. The generated JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account.";
 
 /** Throws one stable input error for invalid client-snippet configuration. */
 function inputError(message: string): never {
@@ -145,8 +149,14 @@ export function renderClientSnippet(client: ClientName, input: ClientSnippetInpu
   return {
     client,
     target: { label: targetLabels[client] },
+    guidance: clientProfileGuidance,
     json: JSON.stringify(renderConfiguration(client, input), undefined, 2)
   };
+}
+
+/** Formats non-secret client handoff copy consistently across every CLI setup path. */
+export function formatClientSnippetHandoff(snippet: ClientSnippet): string {
+  return `${snippet.target.label} (${snippet.client}):\n${snippet.guidance}\n${snippet.json}\n`;
 }
 
 export function renderClientSnippets(selection: ClientSelection, input: ClientSnippetInput): ClientSnippet[] {

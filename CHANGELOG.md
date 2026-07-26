@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- [#202](https://github.com/mohanagy/miftah/issues/202) Made the shipped trust controls and one-connector multi-profile model discoverable at first use: the README now distinguishes credential readiness, verified identity, native and provider-owned OAuth, local policy, and audit boundaries; it gives a no-token team-sharing pattern; CLI client handoffs and the local Console now state that one generated client entry serves every named profile and contains no credential values.
 - [#200](https://github.com/mohanagy/miftah/issues/200) Reworked the README into a task-oriented first-use guide with complete Claude Desktop setup, authentication-path selection, generic MCP onboarding, profile-management tools, native versus upstream-owned OAuth, dashboard lifecycle, everyday diagnostics/audit commands, and focused security-control guidance; corrected stale configuration-version guidance to identify v3 as current while preserving an explicit v1/v2 removal window.
 
 ### Fixed
