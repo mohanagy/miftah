@@ -34,6 +34,7 @@ export class ClientEntryImportSetupError extends CliUsageError {
   }
 }
 
+/** Converts an importer refusal into the typed CLI contract for direct and guided setup. */
 function usageError(message: string, importReason?: ClientEntryImportErrorReason): never {
   throw new ClientEntryImportSetupError(message, importReason);
 }

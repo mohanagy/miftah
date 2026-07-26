@@ -1183,6 +1183,7 @@ const script = `(() => {
     }
   }
 
+  /** Clears untrusted import text before routing only to an existing manual transport form. */
   function bindClientEntryManualRecoveryAction(id, source, clientEntryOnboardingForm) {
     const action = byId(id);
     if (!(action instanceof HTMLButtonElement)) return;
