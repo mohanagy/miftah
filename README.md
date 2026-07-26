@@ -528,9 +528,11 @@ Rename a profile without hand-editing every configuration reference:
 miftah profile rename --config ~/.config/miftah/gsc.json --profile google-personal --new-profile google-studio
 ```
 
-The selected profile must already exist and the new name must be distinct and safe. Miftah atomically renames the profile and every configuration-owned reference to it: the durable default, routing rules, routing-plugin bindings, and a configured profile lock. It validates the complete candidate, keeps a recovery backup, and finalizes the configured fail-closed audit lifecycle.
+The selected profile must already exist and the new name must be distinct and safe. Miftah atomically renames the profile and every configuration-owned reference to it: the durable default, routing rules, routing-plugin bindings, configured profile lock, and any native OAuth connection binding. It validates the complete candidate, keeps a recovery backup, and finalizes the configured fail-closed audit lifecycle.
 
-It does not read, move, copy, or delete credentials, provider token caches, profile state, identity records, or OS-vault data, and it does not change an active MCP client session. Miftah refuses to rename a profile with a native OAuth binding because moving its OS-vault credential requires one future atomic lifecycle rather than a configuration-only rename.
+For a native OAuth connection, Miftah moves the credential only between its two exact OS-vault keys and migrates its non-secret connection metadata in the same recoverable local transaction. It never exposes the credential or copies it to configuration, logs, provider caches, profile state, or identity records. Existing MCP clients keep their current session; restart the client to use the new profile name.
+
+If a local interruption leaves that native OAuth rename unfinished, retry the same rename from the CLI or Console surface that started it. Miftah completes the recovery journal only after its required audit finalization succeeds, then asks you to reload the configuration. Do not edit the configuration, vault, metadata, or provider cache to recover it.
 
 In the browser, run `miftah dashboard --config ~/.config/miftah/gsc.json` and choose **Rename an account profile**. In catalog mode, select the configuration again after the write before making another Console change.
 

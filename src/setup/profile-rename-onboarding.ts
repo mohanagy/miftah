@@ -12,6 +12,16 @@ import { planConfigMigration } from "../config/migrate-config.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
+import {
+  createOAuthProfileRenameBindingPairs,
+  canonicalOAuthProfileRenameConfigPath,
+  createPlatformOAuthProfileRenameDependencies,
+  hasOAuthProfileRenameJournal,
+  recoverOAuthProfileRename,
+  runOAuthProfileRenameTransaction,
+  type OAuthProfileRenameDependencies
+} from "../oauth/profile-rename-transaction.js";
+import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 
 export interface ProfileRenameRequest {
@@ -43,6 +53,8 @@ export interface ProfileRenameAuditSink {
   intent(event: { readonly profile: string; readonly newProfile: string }): Promise<void>;
   /** Records only a completed durable profile rename. */
   record(event: { readonly profile: string; readonly newProfile: string; readonly status: "success" }): Promise<void>;
+  /** Records completion after an interrupted OAuth transaction is recovered. */
+  recordRecovered?(event: { readonly profile: string; readonly newProfile: string; readonly status: "success" }): Promise<void>;
 }
 
 export interface ProfileRenameDependencies {
@@ -50,6 +62,10 @@ export interface ProfileRenameDependencies {
   readonly trustedSource?: ConfigMigrationSource;
   /** Console callers provide their own redacted local lifecycle journal. */
   readonly audit?: ProfileRenameAuditSink;
+  /** Testable boundary for the native OAuth vault and metadata transaction. */
+  readonly oauth?: OAuthProfileRenameDependencies;
+  /** Shared operation redactor for native-vault parsing and lifecycle diagnostics. */
+  readonly redactor?: SecretRedactor;
 }
 
 function sourceInput(source: ConfigMigrationSource): unknown {
@@ -92,17 +108,6 @@ function profileAlreadyExists(): never {
   );
 }
 
-function nativeOAuthBoundProfile(): never {
-  throw new MiftahError(
-    "PROFILE_RENAME_OAUTH_CONNECTION",
-    "PROFILE_RENAME_OAUTH_CONNECTION: Miftah refuses to rename a profile with a configured native OAuth binding because its OS-vault credential is bound to the current profile name"
-  );
-}
-
-function hasNativeOAuthBinding(config: MiftahConfig, profile: string): boolean {
-  return config.version === "3" && Object.values(config.oauth?.connections ?? {}).some((connection) => connection.profile === profile);
-}
-
 function renameDurableReferences(config: MiftahConfig, profile: string, newProfile: string): void {
   if (config.defaultProfile === profile) config.defaultProfile = newProfile;
   for (const rule of config.routing?.rules ?? []) {
@@ -115,12 +120,17 @@ function renameDurableReferences(config: MiftahConfig, profile: string, newProfi
       if (target === profile) plugin.bindings[binding] = newProfile;
     }
   }
+  if (config.version === "3") {
+    for (const connection of Object.values(config.oauth?.connections ?? {})) {
+      if (connection.profile === profile) connection.profile = newProfile;
+    }
+  }
 }
 
 /**
  * Creates a non-secret plan to rename a profile and every configuration-owned
- * profile reference. Native OAuth-bound profiles are refused because their
- * credential-vault key is intentionally bound to the current profile name.
+ * profile reference. It only changes declarative configuration; the runtime
+ * transaction migrates any matching native OAuth vault and metadata binding.
  */
 export function planProfileRename(input: unknown, options: ProfileRenameRequest): ProfileRenamePlan {
   assertProfileRenameInput(options);
@@ -129,8 +139,6 @@ export function planProfileRename(input: unknown, options: ProfileRenameRequest)
   const profile = config.profiles[options.profile];
   if (profile === undefined) profileNotFound();
   if (Object.hasOwn(config.profiles, options.newProfile)) profileAlreadyExists();
-  if (hasNativeOAuthBinding(config, options.profile)) nativeOAuthBoundProfile();
-
   delete config.profiles[options.profile];
   config.profiles[options.newProfile] = profile;
   renameDurableReferences(config, options.profile, options.newProfile);
@@ -167,6 +175,15 @@ class ConfiguredProfileRenameAuditSink implements ProfileRenameAuditSink {
   record(event: { readonly profile: string; readonly newProfile: string; readonly status: "success" }): Promise<void> {
     return this.trail.writeRequiredLifecycle({
       operation: "config/profile-rename",
+      name: event.newProfile,
+      profile: event.profile,
+      status: event.status
+    });
+  }
+
+  recordRecovered(event: { readonly profile: string; readonly newProfile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "config/profile-rename-recovered",
       name: event.newProfile,
       profile: event.profile,
       status: event.status
@@ -232,21 +249,68 @@ function auditFailureWithUnconfirmedRecovery(backupPath: string): MiftahError {
 }
 
 /**
- * Performs one fail-closed guarded profile rename. It modifies only the
- * selected configuration file and its configuration-owned references; no
- * provider cache, OS-vault credential, identity record, profile state, or
- * active client session is read, moved, copied, deleted, or otherwise changed.
+ * Performs one fail-closed guarded profile rename. A native OAuth binding is
+ * migrated through its own recoverable vault-plus-metadata transaction. Provider
+ * caches, persistent profile state, identity evidence, and active clients stay opaque.
  */
 export async function runProfileRename(
   options: ProfileRenameRequest,
   dependencies: ProfileRenameDependencies = {}
 ): Promise<ProfileRenameReport> {
-  const configPath = resolvePath(options.configPath);
+  const configPath = await canonicalOAuthProfileRenameConfigPath(resolvePath(options.configPath));
   const source = dependencies.trustedSource ?? await readConfigMigrationSource(configPath);
+  const sourceConfig = planConfigMigration(sourceInput(source)).config as MiftahConfig;
+  const audit = dependencies.audit ?? configuredAuditSink(sourceConfig, configPath);
+  const redactor = dependencies.redactor ?? new SecretRedactor();
+  let oauth = dependencies.oauth;
+  if (await hasOAuthProfileRenameJournal(configPath)) {
+    oauth ??= await createPlatformOAuthProfileRenameDependencies(redactor);
+    const recoverAudit = audit?.recordRecovered === undefined
+      ? undefined
+      : async (event: { readonly profile: string; readonly newProfile: string }) => {
+          await audit.recordRecovered?.({ ...event, status: "success" });
+        };
+    const recovered = await recoverOAuthProfileRename(configPath, oauth, {
+      ...(recoverAudit === undefined
+        ? {}
+        : {
+            finalizeAudit: recoverAudit
+          })
+    });
+    if (recovered) {
+      throw new MiftahError(
+        "PROFILE_SELECTION_STALE",
+        "PROFILE_SELECTION_STALE: OAuth profile-rename recovery completed; reload configuration before retrying"
+      );
+    }
+  }
   const plan = planProfileRename(sourceInput(source), { ...options, configPath });
-  const audit = dependencies.audit ?? configuredAuditSink(plan.config, configPath);
+  const oauthBindings = createOAuthProfileRenameBindingPairs(
+    configPath,
+    sourceConfig,
+    plan.config,
+    plan.profile,
+    plan.newProfile
+  );
   await audit?.ensureWritable();
   await audit?.intent({ profile: plan.profile, newProfile: plan.newProfile });
+  if (oauthBindings.length > 0) {
+    oauth ??= await createPlatformOAuthProfileRenameDependencies(redactor);
+    const transaction = await runOAuthProfileRenameTransaction({
+      configPath,
+      source,
+      candidate: plan.config,
+      bindings: oauthBindings,
+      ...(audit === undefined
+        ? {}
+        : {
+            recordAudit: async () => {
+              await audit.record({ profile: plan.profile, newProfile: plan.newProfile, status: "success" });
+            }
+          })
+    }, oauth);
+    return publicReport(plan, transaction.backupPath);
+  }
   const backupPath = await applyConfigReplacement(configPath, source, plan.config);
   try {
     await audit?.record({ profile: plan.profile, newProfile: plan.newProfile, status: "success" });

@@ -2,6 +2,7 @@ import {
   createOAuthConnectionBinding,
   parseOAuthConnectionRef,
   sameOAuthConnectionBinding,
+  sameOAuthConnectionBindingExceptProfile,
   type OAuthConnectionBinding,
   type OAuthConnectionRef,
   type OAuthCredentialState,
@@ -291,6 +292,98 @@ export class OAuthConnectionRegistry {
 
   async get(connectionRef: OAuthConnectionRef | string, expected: OAuthConnectionBinding): Promise<OAuthConnectionRecord> {
     return this.serialized(async () => this.requireExact(await this.records(), connectionRef, expected));
+  }
+
+  /** Returns an exact non-secret metadata snapshot when it exists, without creating a record. */
+  async snapshot(expected: OAuthConnectionBinding): Promise<OAuthConnectionRecord | undefined> {
+    return this.serialized(async () => {
+      const record = (await this.records()).find((candidate) => candidate.binding.connectionRef === expected.connectionRef);
+      if (record === undefined) return undefined;
+      if (!sameOAuthConnectionBinding(record.binding, expected)) mismatchedConnection();
+      return record;
+    });
+  }
+
+  /**
+   * Rebinds one persisted metadata record after its vault key has been moved. The caller must
+   * hold both lifecycle binding locks; this registry lock then makes the metadata write atomic.
+   */
+  async migrateProfileBinding(
+    from: OAuthConnectionBinding,
+    to: OAuthConnectionBinding
+  ): Promise<OAuthConnectionRecord | undefined> {
+    if (!sameOAuthConnectionBindingExceptProfile(from, to)) invalidConnection();
+    return this.serialized(async () => {
+      const records = await this.records();
+      const existing = records.find((record) => record.binding.connectionRef === from.connectionRef);
+      if (existing === undefined) return undefined;
+      if (sameOAuthConnectionBinding(existing.binding, to)) return existing;
+      if (!sameOAuthConnectionBinding(existing.binding, from)) mismatchedConnection();
+      if (
+        records.some(
+          (record) =>
+            record.binding.connectionRef !== from.connectionRef &&
+            record.binding.configIdentity === to.configIdentity &&
+            record.binding.profile === to.profile &&
+            record.binding.upstream === to.upstream
+        )
+      ) {
+        invalidConnection();
+      }
+      const updated: OAuthConnectionRecord = Object.freeze({
+        binding: to,
+        credentialState: existing.credentialState,
+        identityState: existing.identityState,
+        ...(existing.expiresAt === undefined ? {} : { expiresAt: existing.expiresAt }),
+        updatedAt: this.timestamp()
+      });
+      await this.persist(records.map((record) => (record.binding.connectionRef === from.connectionRef ? updated : record)));
+      return updated;
+    });
+  }
+
+  /**
+   * Restores the exact pre-rename non-secret record, or removes a record that did not exist
+   * before the interrupted rename. The caller must hold both lifecycle binding locks.
+   */
+  async restoreProfileBinding(
+    from: OAuthConnectionBinding,
+    to: OAuthConnectionBinding,
+    original: OAuthConnectionRecord | undefined
+  ): Promise<void> {
+    if (!sameOAuthConnectionBindingExceptProfile(from, to)) invalidConnection();
+    if (original !== undefined && !sameOAuthConnectionBinding(normalizeRecord(original).binding, from)) invalidConnection();
+    return this.serialized(async () => {
+      const records = await this.records();
+      const existing = records.find((record) => record.binding.connectionRef === from.connectionRef);
+      if (original === undefined) {
+        if (existing === undefined) return;
+        if (!sameOAuthConnectionBinding(existing.binding, to)) mismatchedConnection();
+        await this.persist(records.filter((record) => record.binding.connectionRef !== from.connectionRef));
+        return;
+      }
+
+      const restored = normalizeRecord(original);
+      if (
+        records.some(
+          (record) =>
+            record.binding.connectionRef !== from.connectionRef &&
+            record.binding.configIdentity === from.configIdentity &&
+            record.binding.profile === from.profile &&
+            record.binding.upstream === from.upstream
+        )
+      ) {
+        invalidConnection();
+      }
+      if (existing === undefined) {
+        await this.persist([...records, restored]);
+        return;
+      }
+      if (!sameOAuthConnectionBinding(existing.binding, to) && !sameOAuthConnectionBinding(existing.binding, from)) {
+        mismatchedConnection();
+      }
+      await this.persist(records.map((record) => (record.binding.connectionRef === from.connectionRef ? restored : record)));
+    });
   }
 
   async setCredentialState(

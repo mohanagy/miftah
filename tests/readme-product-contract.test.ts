@@ -147,7 +147,11 @@ describe("product README", () => {
     expect(readme).toContain("### Rename an account later");
     expect(readme).toContain("miftah profile rename --config ~/.config/miftah/gsc.json --profile google-personal --new-profile google-studio");
     expect(readme).toContain("Rename an account profile");
-    expect(readme).toContain("Miftah refuses to rename a profile with a native OAuth binding");
+    expect(readme).toContain("moves the credential only between its two exact OS-vault keys");
+    expect(cliDocs).toContain(
+      "If a local interruption leaves the transaction unfinished, retry the same rename from the CLI; Miftah completes recovery only after required audit finalization, otherwise returns `OAUTH_PROFILE_RENAME_RECOVERY_REQUIRED` (exit 1). Do not hand-edit the configuration, vault, metadata, or provider cache."
+    );
+    expect(readme).toContain("Do not edit the configuration, vault, metadata, or provider cache to recover it.");
     expect(readme).toContain("### Remove an account later");
     expect(readme).toContain("miftah profile remove --config ~/.config/miftah/gsc.json --profile google-personal --replacement-profile google-work");
     expect(readme).toContain("does not resolve or delete an underlying secret");
@@ -168,7 +172,7 @@ describe("product README", () => {
     expect(readme).not.toContain("oauthconn:<uuid>");
     expect(readme).toContain("uses `~/.config/miftah/miftah.json` by default");
     expect(cliDocs).toContain("miftah profile rename --config <file> --profile <name> --new-profile <name>");
-    expect(cliDocs).toContain("PROFILE_RENAME_OAUTH_CONNECTION");
+    expect(cliDocs).toContain("moves the credential only between exact OS-vault keys");
   });
 
   it("documents the explicit no-secret local and remote client-entry import paths", () => {

@@ -17,6 +17,7 @@ import {
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
+import { createMemoryProfileRenameOAuthDependencies } from "./helpers/profile-rename-oauth-dependencies.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const temporaryDirectories: string[] = [];
@@ -2916,7 +2917,7 @@ describe("local Console control server", () => {
     }
   });
 
-  it("returns a safe explicit refusal when a requested rename has a configured native OAuth binding", async () => {
+  it("renames a configured native OAuth binding through the same strict Console request", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-profile-rename-oauth-"));
     temporaryDirectories.push(directory);
     const configPath = join(directory, "analytics.json");
@@ -2939,8 +2940,11 @@ describe("local Console control server", () => {
         }
       }
     }, null, 2)}\n`, { mode: 0o600 });
-    const original = await readFile(configPath, "utf8");
-    const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
+    const oauth = createMemoryProfileRenameOAuthDependencies();
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      application: new ConsoleApplicationService(configPath, { oauthProfileRename: oauth.dependencies })
+    });
 
     try {
       const session = await bootstrapSession(server);
@@ -2954,14 +2958,66 @@ describe("local Console control server", () => {
         },
         body: JSON.stringify({ profile: "work", newProfile: "studio" })
       });
-      expect(response.status).toBe(422);
-      expect(await response.json()).toEqual({
-        error: {
-          code: "profile_rename_oauth_connection",
-          message: "This account has a native OAuth binding. Miftah refuses to split the rename from OS-vault credential migration."
+      const responseBody = await response.json();
+      expect(response.status, JSON.stringify(responseBody)).toBe(200);
+      expect(responseBody).toEqual({
+        data: {
+          changed: true,
+          write: true,
+          profile: "work",
+          newProfile: "studio",
+          actions: ["Renamed profile 'work' to 'studio'."]
         }
       });
-      expect(await readFile(configPath, "utf8")).toBe(original);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        defaultProfile: "studio",
+        profiles: { studio: {}, personal: {} },
+        oauth: {
+          connections: {
+            "oauthconn:11111111-1111-4111-8111-111111111111": { profile: "studio" }
+          }
+        }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires configuration reload after a completed native OAuth rename recovery", async () => {
+    const configPath = await writeConfig();
+    const application = {
+      async renameProfile() {
+        throw new MiftahError(
+          "PROFILE_SELECTION_STALE",
+          "PROFILE_SELECTION_STALE: OAuth profile-rename recovery completed; reload configuration before retrying"
+        );
+      }
+    } as unknown as ConsoleControlApplication;
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      application
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const response = await fetch(new URL("/api/v1/profiles/rename", server.url), {
+        method: "POST",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ profile: "work", newProfile: "studio" })
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "profile_selection_stale",
+          message: "The configuration changed during recovery; reload it before retrying."
+        }
+      });
     } finally {
       await server.close();
     }
