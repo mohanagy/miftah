@@ -1,19 +1,27 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OAuthAuthorizationHandoff } from "../src/oauth/remote-oauth-client-provider.js";
-import type { OAuthConnectionMetadataStore } from "../src/oauth/connection-registry.js";
+import { OAuthConnectionRegistry, type OAuthConnectionMetadataStore } from "../src/oauth/connection-registry.js";
 import {
   connectionCredentialKey,
   createOAuthConfigIdentity,
-  createOAuthConnectionBinding
+  createOAuthConnectionBinding,
+  parseOAuthConnectionRef
 } from "../src/oauth/connection-types.js";
+import {
+  canonicalOAuthProfileRenameConfigPath,
+  FileOAuthProfileRenameJournalStore,
+  oauthProfileRenameJournalPath,
+  type OAuthProfileRenameJournal
+} from "../src/oauth/profile-rename-transaction.js";
 import type { OAuthCredential, OAuthCredentialStore } from "../src/oauth/secure-credential-store.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
-import { createRuntime } from "../src/runtime/create-runtime.js";
+import { createRuntime, createRuntimeFromLoadedConfig } from "../src/runtime/create-runtime.js";
 import {
   startOAuthCompatibilityProbe,
   type OAuthCompatibilityProbe
@@ -71,6 +79,10 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
   }
 
   async close(): Promise<void> {}
+}
+
+function bytesHash(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 describe("remote OAuth runtime wiring", () => {
@@ -135,6 +147,101 @@ describe("remote OAuth runtime wiring", () => {
     expect(upstream.authenticatedMcpRequests()).toBeGreaterThanOrEqual(2);
     }
   );
+
+  it("finishes an interrupted native OAuth profile rename before refusing to use a stale loaded configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-runtime-profile-rename-recovery-"));
+    directories.push(directory);
+    const actualDirectory = join(directory, "actual");
+    const aliasDirectory = join(directory, "alias");
+    await mkdir(actualDirectory);
+    await symlink(actualDirectory, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    const configPath = join(aliasDirectory, "miftah.json");
+    const connectionRef = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
+    const sourceConfig = {
+      version: "3" as const,
+      name: "oauth-runtime-profile-rename",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http" as const, url: "https://mcp.example.test/mcp" },
+      profiles: { work: {} },
+      oauth: {
+        connections: {
+          [connectionRef]: {
+            profile: "work",
+            upstream: "default",
+            resource: "https://mcp.example.test/mcp",
+            issuer: "https://mcp.example.test",
+            clientRegistration: "dynamic",
+            scopes: ["mcp:tools"]
+          }
+        }
+      }
+    };
+    const targetConfig = {
+      ...sourceConfig,
+      defaultProfile: "studio",
+      profiles: { studio: {} },
+      oauth: {
+        connections: {
+          [connectionRef]: { ...sourceConfig.oauth.connections[connectionRef], profile: "studio" }
+        }
+      }
+    };
+    const sourceBytes = Buffer.from(`${JSON.stringify(sourceConfig, null, 2)}\n`);
+    const targetBytes = Buffer.from(`${JSON.stringify(targetConfig, null, 2)}\n`);
+    await writeFile(configPath, targetBytes, { mode: 0o600 });
+
+    const canonicalConfigPath = await canonicalOAuthProfileRenameConfigPath(configPath);
+    const configIdentity = createOAuthConfigIdentity(canonicalConfigPath);
+    const from = createOAuthConnectionBinding({
+      configIdentity,
+      connectionRef: parseOAuthConnectionRef(connectionRef),
+      profile: "work",
+      upstream: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://mcp.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["mcp:tools"]
+    });
+    const to = createOAuthConnectionBinding({ ...from, profile: "studio", resource: from.canonicalResource });
+    const metadataStore = new MemoryMetadataStore();
+    const credentialStore = new MemoryCredentialStore();
+    const registry = new OAuthConnectionRegistry(metadataStore, () => "2030-01-02T03:04:05.000Z");
+    await credentialStore.save(from, { accessToken: "fixture-runtime-recovery-token" });
+    await credentialStore.save(to, { accessToken: "fixture-runtime-recovery-token" });
+    await registry.create(from);
+    const sourceBackupPath = join(dirname(canonicalConfigPath), ".miftah.json.miftah-oauth-profile-rename-source-runtime-recovery");
+    await writeFile(sourceBackupPath, sourceBytes, { mode: 0o600 });
+    const journal: OAuthProfileRenameJournal = {
+      version: 1,
+      configIdentity,
+      sourceHash: bytesHash(sourceBytes),
+      targetHash: bytesHash(targetBytes),
+      auditRequired: false,
+      sourceBackupPath,
+      bindings: [{ from, to, originalCredentialPresent: true, originalMetadata: await registry.snapshot(from) }]
+    };
+    await new FileOAuthProfileRenameJournalStore().create(canonicalConfigPath, journal);
+
+    await expect(createRuntime(configPath, undefined, {
+      oauth: { metadataStore, credentialStore }
+    })).rejects.toMatchObject({ code: "PROFILE_SELECTION_STALE" });
+    await expect(credentialStore.load(from)).resolves.toBeUndefined();
+    await expect(credentialStore.load(to)).resolves.toEqual({ accessToken: "fixture-runtime-recovery-token" });
+    await expect(registry.snapshot(to)).resolves.toMatchObject({ binding: to });
+    await expect(readFile(oauthProfileRenameJournalPath(configPath), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(sourceBackupPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const resumed = await createRuntimeFromLoadedConfig(configPath, targetConfig, undefined, {
+      oauth: { metadataStore, credentialStore }
+    });
+    try {
+      const oauth = resumed.oauth;
+      expect(oauth).toBeDefined();
+      await expect(oauth?.status("studio", "default")).resolves.toMatchObject({ credentialState: "disconnected" });
+    } finally {
+      await resumed.manager.close();
+    }
+  });
 
   it("refreshes and reconnects after process restart without another browser authorization", async () => {
     const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });

@@ -45,6 +45,17 @@ describe("OAuth secure credential store", () => {
     await expect(createPlatformOAuthCredentialStore()).resolves.toBeInstanceOf(PlatformOAuthCredentialStore);
   });
 
+  it("treats the native keyring null missing-item sentinel as an absent credential", async () => {
+    const adapter = {
+      getPassword: async () => null,
+      setPassword: async () => undefined,
+      deletePassword: async () => undefined
+    } as unknown as OAuthKeyringAdapter;
+    const store = new PlatformOAuthCredentialStore(adapter, new SecretRedactor());
+
+    await expect(store.load(binding())).resolves.toBeUndefined();
+  });
+
   it("stores tokens only under an opaque exact-binding key and registers them for redaction", async () => {
     const adapter = new MemoryKeyringAdapter();
     const redactor = new SecretRedactor();

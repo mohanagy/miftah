@@ -1,4 +1,9 @@
-import { connectionCredentialKey, type OAuthConnectionBinding, type OAuthIdentityState } from "./connection-types.js";
+import {
+  connectionCredentialKey,
+  connectionProfileTargetKey,
+  type OAuthConnectionBinding,
+  type OAuthIdentityState
+} from "./connection-types.js";
 import type {
   OAuthConnectionLifecycleAuditEvent,
   OAuthConnectionLifecycleAuditSink
@@ -14,7 +19,47 @@ const maximumRefreshTimeoutMs = 120_000;
 const maximumRefreshSkewMs = 300_000;
 // A holder can legitimately execute the longest permitted refresh before committing its vault and
 // metadata transaction. This is a lock bound, not a retry-based correctness mechanism.
-const connectionTransactionLockWaitMilliseconds = maximumRefreshTimeoutMs + 5_000;
+export const oauthConnectionTransactionLockWaitMilliseconds = maximumRefreshTimeoutMs + 5_000;
+
+/**
+ * Coordinates exact OAuth binding keys and their unique config/profile/upstream targets in
+ * deterministic order. Every lifecycle mutation uses this same scope, so a cross-binding
+ * migration cannot race a refresh, connect, disconnect, status, identity update, or a competing
+ * connection registration from another Miftah process.
+ */
+export function oauthConnectionLifecycleLockKeys(bindings: readonly OAuthConnectionBinding[]): readonly string[] {
+  return [...new Set(bindings.flatMap((binding) => [
+    connectionCredentialKey(binding),
+    connectionProfileTargetKey(binding)
+  ]))].sort((left, right) => left.localeCompare(right, "en", { sensitivity: "variant" }));
+}
+
+export async function withOAuthConnectionBindingLocks<Value>(
+  bindings: readonly OAuthConnectionBinding[],
+  operation: () => Promise<Value>
+): Promise<Value> {
+  const keys = oauthConnectionLifecycleLockKeys(bindings);
+  const acquire = async (index: number): Promise<Value> => {
+    if (index >= keys.length) return operation();
+    return withOAuthLocalLock(
+      "connection-lifecycle",
+      keys[index]!,
+      oauthConnectionTransactionLockWaitMilliseconds,
+      () => acquire(index + 1)
+    );
+  };
+  try {
+    return await acquire(0);
+  } catch (error) {
+    if (error instanceof OAuthLocalLockUnavailableError) {
+      throw new MiftahError(
+        "OAUTH_CONNECTION_STORE_UNAVAILABLE",
+        "OAUTH_CONNECTION_STORE_UNAVAILABLE: OAuth connection lifecycle coordination is unavailable"
+      );
+    }
+    throw error;
+  }
+}
 
 /**
  * The future authorization engine supplies this port after it has obtained a refresh-capable
@@ -106,11 +151,13 @@ export class OAuthConnectionLifecycle {
   }
 
   async register(binding: OAuthConnectionBinding): Promise<OAuthConnectionRecord> {
-    return this.mutateBinding(binding, async () => {
-      const record = await this.options.registry.create(binding);
-      this.recordAudit("register", binding, record, "success");
-      return record;
-    });
+    return this.withBindingLock(binding, () =>
+      this.mutateBinding(binding, async () => {
+        const record = await this.options.registry.create(binding);
+        this.recordAudit("register", binding, record, "success");
+        return record;
+      })
+    );
   }
 
   async connect(binding: OAuthConnectionBinding, credential: OAuthCredential): Promise<OAuthConnectionRecord> {
@@ -208,30 +255,34 @@ export class OAuthConnectionLifecycle {
   }
 
   async status(binding: OAuthConnectionBinding): Promise<OAuthConnectionRecord> {
-    return this.mutateBinding(binding, async () => {
-      const record = await this.options.registry.get(binding.connectionRef, binding);
-      if (isTerminalCredentialState(record.credentialState) || record.expiresAt === undefined) return record;
-      const expiresAt = Date.parse(record.expiresAt);
-      if (!Number.isFinite(expiresAt)) invalidLifecycle();
-      const state = this.deriveExpiryState(expiresAt, this.currentTime());
-      if (state === record.credentialState) return record;
-      const updated = await this.options.registry.setCredentialState(
-        binding.connectionRef,
-        binding,
-        state,
-        record.expiresAt
-      );
-      this.recordAudit("status", binding, updated, "success");
-      return updated;
-    });
+    return this.withBindingLock(binding, () =>
+      this.mutateBinding(binding, async () => {
+        const record = await this.options.registry.get(binding.connectionRef, binding);
+        if (isTerminalCredentialState(record.credentialState) || record.expiresAt === undefined) return record;
+        const expiresAt = Date.parse(record.expiresAt);
+        if (!Number.isFinite(expiresAt)) invalidLifecycle();
+        const state = this.deriveExpiryState(expiresAt, this.currentTime());
+        if (state === record.credentialState) return record;
+        const updated = await this.options.registry.setCredentialState(
+          binding.connectionRef,
+          binding,
+          state,
+          record.expiresAt
+        );
+        this.recordAudit("status", binding, updated, "success");
+        return updated;
+      })
+    );
   }
 
   async setIdentityState(binding: OAuthConnectionBinding, state: OAuthIdentityState): Promise<OAuthConnectionRecord> {
-    return this.mutateBinding(binding, async () => {
-      const record = await this.options.registry.setIdentityState(binding.connectionRef, binding, state);
-      this.recordAudit("identity", binding, record, "success");
-      return record;
-    });
+    return this.withBindingLock(binding, () =>
+      this.mutateBinding(binding, async () => {
+        const record = await this.options.registry.setIdentityState(binding.connectionRef, binding, state);
+        this.recordAudit("identity", binding, record, "success");
+        return record;
+      })
+    );
   }
 
   private needsRefresh(credential: OAuthCredential): boolean {
@@ -520,22 +571,7 @@ export class OAuthConnectionLifecycle {
   }
 
   private async withBindingLock<Value>(binding: OAuthConnectionBinding, operation: () => Promise<Value>): Promise<Value> {
-    try {
-      return await withOAuthLocalLock(
-        "connection-lifecycle",
-        connectionCredentialKey(binding),
-        connectionTransactionLockWaitMilliseconds,
-        operation
-      );
-    } catch (error) {
-      if (error instanceof OAuthLocalLockUnavailableError) {
-        throw new MiftahError(
-          "OAUTH_CONNECTION_STORE_UNAVAILABLE",
-          "OAUTH_CONNECTION_STORE_UNAVAILABLE: OAuth connection lifecycle coordination is unavailable"
-        );
-      }
-      throw error;
-    }
+    return withOAuthConnectionBindingLocks([binding], operation);
   }
 
   private currentGeneration(binding: OAuthConnectionBinding): number {

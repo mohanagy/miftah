@@ -4,7 +4,8 @@ import {
   createOAuthConfigIdentity,
   createOAuthConnectionBinding,
   parseOAuthConnectionRef,
-  sameOAuthConnectionBinding
+  sameOAuthConnectionBinding,
+  sameOAuthConnectionBindingExceptProfile
 } from "../src/oauth/connection-types.js";
 
 const ref = "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5";
@@ -31,6 +32,14 @@ describe("OAuth connection binding", () => {
     expect(reordered.scopes).toEqual(["mcp:tools", "openid"]);
     expect(connectionCredentialKey(reordered)).toBe(connectionCredentialKey(original));
     expect(sameOAuthConnectionBinding(reordered, original)).toBe(true);
+  });
+
+  it("recognizes the exact profile-only binding migration shape", () => {
+    const original = binding();
+
+    expect(sameOAuthConnectionBindingExceptProfile(original, binding({ profile: "personal" }))).toBe(true);
+    expect(sameOAuthConnectionBindingExceptProfile(original, binding({ upstream: "billing" }))).toBe(false);
+    expect(sameOAuthConnectionBindingExceptProfile(original, binding({ connectionRef: "oauthconn:1d915a13-f8a5-45e0-8343-1e82e0939129" }))).toBe(false);
   });
 
   it.each([

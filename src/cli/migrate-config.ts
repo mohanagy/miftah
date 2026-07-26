@@ -226,7 +226,7 @@ async function writeSyncedExclusive(
 }
 
 /** Creates one synced owner-only configuration file without replacing any existing path. */
-export async function writeNewConfigFile(path: string, content: string): Promise<void> {
+export async function writeNewConfigFile(path: string, content: string | Uint8Array): Promise<void> {
   await writeSyncedExclusive(path, content, 0o600, async (targetPath) => {
     if (!(await secureWindowsConfigFile(targetPath))) {
       throw migrationWriteError("could not apply and verify a private Windows security descriptor");

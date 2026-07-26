@@ -419,6 +419,20 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       "This account has a native OAuth binding. Miftah refuses to split the rename from OS-vault credential migration."
     );
   }
+  if (error.code === "PROFILE_SELECTION_STALE") {
+    return new ConsoleHttpError(
+      409,
+      "profile_selection_stale",
+      "The configuration changed during recovery; reload it before retrying."
+    );
+  }
+  if (error.code === "OAUTH_PROFILE_RENAME_RECOVERY_REQUIRED") {
+    return new ConsoleHttpError(
+      409,
+      "oauth_profile_rename_recovery_required",
+      "Miftah must complete a prior local OAuth profile-rename recovery before retrying."
+    );
+  }
   if (
     error.code.startsWith("CONFIG_") ||
     error.code.startsWith("OAUTH_CONNECTION_") ||

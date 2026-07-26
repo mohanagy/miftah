@@ -81,6 +81,7 @@ import {
   type ProfileRenameAuditSink,
   type ProfileRenameReport
 } from "../setup/profile-rename-onboarding.js";
+import type { OAuthProfileRenameDependencies } from "../oauth/profile-rename-transaction.js";
 import {
   createWindowsPrivateDirectory,
   verifyWindowsConfigPathSecurity
@@ -322,7 +323,7 @@ export interface ConsoleControlApplication {
   ): Promise<ConsoleProfileDescriptionChangeReport>;
   /** Available when an initialized configuration has more than one removable profile. */
   removeProfile?(request: ConsoleProfileRemovalRequest): Promise<ConsoleProfileRemovalReport>;
-  /** Available when an initialized configuration has a non-OAuth-bound profile to rename. */
+  /** Available when an initialized configuration has an existing profile to rename. */
   renameProfile?(request: ConsoleProfileRenameRequest): Promise<ConsoleProfileRenameReport>;
   onboardNativeOAuth(request: ConsoleNativeOAuthOnboardingRequest): Promise<ConsoleConnectionAddReport>;
   clientSnippets(selection: ClientSelection): Promise<readonly ClientSnippet[]>;
@@ -353,6 +354,8 @@ export interface ConsoleApplicationDependencies {
   readonly launcher?: ClientLauncher;
   /** Internal test/runtime seam; endpoint-first discovery is guarded and never persists credentials. */
   readonly nativeOAuthFetch?: FetchLike;
+  /** Internal test/runtime seam; production defaults to the exact OS vault and local OAuth metadata store. */
+  readonly oauthProfileRename?: OAuthProfileRenameDependencies;
   /** A selected dashboard entry that was read through the catalog's verified file handle. */
   readonly trustedConfiguration?: ConsoleTrustedConfiguration;
 }
@@ -623,6 +626,15 @@ class ConsoleProfileRenameAuditSink implements ProfileRenameAuditSink {
       status: event.status
     });
   }
+
+  recordRecovered(event: { readonly profile: string; readonly newProfile: string; readonly status: "success" }): Promise<void> {
+    return this.trail.writeRequiredLifecycle({
+      operation: "console/profile-rename-recovered",
+      name: event.newProfile,
+      profile: event.profile,
+      status: event.status
+    });
+  }
 }
 
 /** Shared, in-process Console application layer. It never invokes the Miftah CLI. */
@@ -634,6 +646,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly generateConnectionRef: () => string;
   private readonly launcher: ClientLauncher | undefined;
   private readonly nativeOAuthFetch: FetchLike | undefined;
+  private readonly oauthProfileRename: OAuthProfileRenameDependencies | undefined;
   private readonly trustedConfiguration: ConsoleTrustedConfiguration | undefined;
 
   constructor(
@@ -650,6 +663,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     this.generateConnectionRef = dependencies.generateConnectionRef ?? randomUUID;
     this.launcher = dependencies.launcher;
     this.nativeOAuthFetch = dependencies.nativeOAuthFetch;
+    this.oauthProfileRename = dependencies.oauthProfileRename;
   }
 
   async health(): Promise<ConsoleHealth> {
@@ -1101,7 +1115,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       newProfile: request.newProfile
     }, {
       trustedSource: source,
-      audit: new ConsoleProfileRenameAuditSink(this.audit)
+      audit: new ConsoleProfileRenameAuditSink(this.audit),
+      ...(this.oauthProfileRename === undefined ? {} : { oauth: this.oauthProfileRename })
     });
     return {
       changed: result.changed,

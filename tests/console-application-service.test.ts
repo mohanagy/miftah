@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import {
+  canonicalOAuthProfileRenameConfigPath,
+} from "../src/oauth/profile-rename-transaction.js";
+import {
+  createOAuthConfigIdentity,
+  createOAuthConnectionBinding,
+  parseOAuthConnectionRef
+} from "../src/oauth/connection-types.js";
+import {
   discoverConsoleConfigCatalog,
   trustedConfigurationFor
 } from "../src/console/console-config-catalog.js";
@@ -12,6 +20,7 @@ import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.j
 import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
+import { createMemoryProfileRenameOAuthDependencies } from "./helpers/profile-rename-oauth-dependencies.js";
 import {
   startOAuthCompatibilityProbe,
   type OAuthCompatibilityProbe
@@ -922,6 +931,65 @@ describe("Console application service", () => {
       status: "success"
     }));
     expect(JSON.stringify(audit)).not.toContain("WORK_API_KEY");
+  });
+
+  it("renames a native OAuth profile through the Console application service", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-native-oauth-profile-rename-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "analytics.json");
+    await writeFile(configPath, `${JSON.stringify({
+      version: "3",
+      name: "analytics",
+      defaultProfile: "work",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.com/mcp" },
+      profiles: { work: {}, personal: {} },
+      oauth: {
+        connections: {
+          "oauthconn:11111111-1111-4111-8111-111111111111": {
+            profile: "work",
+            upstream: "default",
+            resource: "https://mcp.example.com/mcp",
+            issuer: "https://auth.example.com",
+            clientRegistration: "dynamic",
+            scopes: ["openid"]
+          }
+        }
+      }
+    }, null, 2)}\n`, { mode: 0o600 });
+    const oauth = createMemoryProfileRenameOAuthDependencies();
+    const canonicalConfigPath = await canonicalOAuthProfileRenameConfigPath(configPath);
+    const from = createOAuthConnectionBinding({
+      configIdentity: createOAuthConfigIdentity(canonicalConfigPath),
+      connectionRef: parseOAuthConnectionRef("oauthconn:11111111-1111-4111-8111-111111111111"),
+      profile: "work",
+      upstream: "default",
+      resource: "https://mcp.example.com/mcp",
+      issuer: "https://auth.example.com",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    });
+    await oauth.credentials.save(from, { accessToken: "fixture-console-profile-rename-token" });
+    await oauth.registry.create(from);
+    const service = new ConsoleApplicationService(configPath, { oauthProfileRename: oauth.dependencies });
+
+    await expect(service.renameProfile({ profile: "work", newProfile: "studio" })).resolves.toMatchObject({
+      changed: true,
+      profile: "work",
+      newProfile: "studio"
+    });
+    const to = createOAuthConnectionBinding({
+      configIdentity: from.configIdentity,
+      connectionRef: from.connectionRef,
+      profile: "studio",
+      upstream: from.upstream,
+      resource: from.canonicalResource,
+      issuer: from.issuer,
+      clientRegistration: from.clientRegistration,
+      scopes: from.scopes
+    });
+    await expect(oauth.credentials.load(from)).resolves.toBeUndefined();
+    await expect(oauth.credentials.load(to)).resolves.toEqual({ accessToken: "fixture-console-profile-rename-token" });
+    await expect(oauth.registry.snapshot(to)).resolves.toMatchObject({ binding: to });
   });
 
   it("returns allowlisted metadata and audit-records each exact OAuth lifecycle mutation", async () => {

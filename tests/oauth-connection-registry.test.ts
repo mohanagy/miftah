@@ -92,6 +92,21 @@ describe("OAuth connection registry", () => {
     });
   });
 
+  it("fails closed rather than restoring a renamed record into a newly claimed profile/upstream target", async () => {
+    const store = new MemoryMetadataStore();
+    const registry = new OAuthConnectionRegistry(store);
+    const from = binding();
+    const to = binding({ profile: "studio" });
+    const original = await registry.create(from);
+    await registry.migrateProfileBinding(from, to);
+    const competing = binding({ connectionRef: "oauthconn:1d915a13-f8a5-45e0-8343-1e82e0939129" });
+    await registry.create(competing);
+
+    await expect(registry.restoreProfileBinding(from, to, original)).rejects.toMatchObject({ code: "OAUTH_CONNECTION_INVALID" });
+    expect(store.records.map((record) => record.binding)).toEqual(expect.arrayContaining([to, competing]));
+    expect(store.records.filter((record) => record.binding.profile === "work" && record.binding.upstream === "analytics")).toHaveLength(1);
+  });
+
   it("persists only safe metadata in a restrictive local registry file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-registry-"));
     directories.push(directory);

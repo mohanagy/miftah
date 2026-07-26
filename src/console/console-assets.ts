@@ -233,14 +233,14 @@ const page = `<!doctype html>
         <section id="profile-rename-editor" class="work-section" hidden aria-labelledby="profile-rename-title">
           <div class="section-heading">
             <div><p class="step">Account lifecycle</p><h2 id="profile-rename-title">Rename an account profile</h2></div>
-            <p>Renaming updates this configuration's durable default, routing, plugin, and lock references. It never moves credentials, provider token caches, profile state, identity records, or OS-vault data.</p>
+            <p>Renaming updates this configuration's durable default, routing, plugin, and lock references. For native OAuth, it also moves the exact bound OS-vault credential and non-secret connection metadata through one recoverable local transaction. Provider caches, profile state, identity records, and active sessions stay untouched.</p>
           </div>
           <div class="input-row">
             <label class="grow">Account to rename<select id="profile-rename-selection" required></select></label>
             <label class="grow">New account profile<input id="profile-rename-input" maxlength="256" autocomplete="off" placeholder="production"></label>
             <button id="rename-profile" type="button">Rename account</button>
           </div>
-          <p class="field-note">Profiles with native OAuth bindings stay protected: Miftah will not split a configuration rename from OS-vault credential migration until it can do both atomically.</p>
+          <p class="field-note">Native OAuth renames keep the new configuration, vault key, and non-secret connection metadata together. Existing MCP clients keep their current session; restart the client before using the new profile name.</p>
           <p id="profile-rename-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 

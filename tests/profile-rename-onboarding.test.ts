@@ -71,7 +71,7 @@ describe("durable profile rename onboarding", () => {
     expect(input).toEqual(original);
   });
 
-  it("refuses an OAuth-bound profile instead of touching a vault-bound credential", () => {
+  it("plans a renamed native OAuth binding without reading or writing its vault credential", () => {
     const input = {
       version: "3",
       name: "remote-analytics",
@@ -93,11 +93,16 @@ describe("durable profile rename onboarding", () => {
     };
     const original = structuredClone(input);
 
-    expect(() => planProfileRename(input, {
+    const plan = planProfileRename(input, {
       configPath: "/tmp/miftah-profile-rename/remote-analytics.json",
       profile: "work",
       newProfile: "studio"
-    })).toThrowError(expect.objectContaining({ code: "PROFILE_RENAME_OAUTH_CONNECTION" }));
+    });
+
+    const connections = plan.config.version === "3" ? plan.config.oauth?.connections : undefined;
+    expect(connections?.["oauthconn:11111111-1111-4111-8111-111111111111"]?.profile).toBe("studio");
+    expect(plan.config.profiles).toHaveProperty("studio");
+    expect(plan.config.profiles).not.toHaveProperty("work");
     expect(input).toEqual(original);
   });
 

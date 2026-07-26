@@ -159,8 +159,12 @@ export class PlatformOAuthCredentialStore implements OAuthCredentialStore {
 
   async load(binding: OAuthConnectionBinding): Promise<OAuthCredential | undefined> {
     const bindingKey = connectionCredentialKey(binding);
-    const serialized = await this.vault(() => this.keyring.getPassword(keyringService, bindingKey));
-    if (serialized === undefined) return undefined;
+    // @napi-rs/keyring may return null for a missing native vault item at runtime,
+    // despite its TypeScript declaration advertising undefined. Treat both native
+    // no-value sentinels as an absent credential before parsing an envelope.
+    const serialized = await this.vault<unknown>(() => this.keyring.getPassword(keyringService, bindingKey));
+    if (serialized === undefined || serialized === null) return undefined;
+    if (typeof serialized !== "string") invalidCredential();
     const envelope = parseEnvelope(serialized, this.redactor);
     if (envelope.bindingKey !== bindingKey) invalidCredential();
     return {
