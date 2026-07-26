@@ -35,7 +35,7 @@ export interface SetupCommandResult {
 
 type ReadinessDecision = "verify" | "skip" | "cancelled";
 type AccountAdditionKind = "provider" | "environment";
-type GuidedSetupStartingPoint = "new" | "remote-sign-in" | "import";
+type GuidedSetupStartingPoint = "connector" | "remote" | "local" | "remote-sign-in" | "import";
 
 interface InteractivePromptSession {
   prompt(label: string, defaultValue?: string): Promise<string | undefined>;
@@ -106,14 +106,30 @@ function hasExplicitNewConfigurationInput(options: SetupCommandOptions): boolean
 async function chooseGuidedSetupStartingPoint(context: InitCommandContext): Promise<GuidedSetupStartingPoint> {
   const prompts = createInteractivePromptSession(context, "Guided setup was cancelled.");
   try {
-    const answer = (await prompts.prompt("Start from (new, remote sign-in, import)", "new"))?.toLowerCase();
-    if (answer === "new" || answer === "n") return "new";
-    if (answer === "remote-sign-in" || answer === "remote sign-in" || answer === "sign-in" || answer === "browser") {
+    const answer = (await prompts.prompt(
+      "What do you already have? (connector, remote HTTPS, local executable, browser sign-in, import)",
+      "connector"
+    ))?.toLowerCase();
+    if (answer === "connector" || answer === "new" || answer === "n" || answer === "preset" || answer === "package") {
+      return "connector";
+    }
+    if (answer === "remote" || answer === "remote-https" || answer === "remote https" || answer === "https" || answer === "url") {
+      return "remote";
+    }
+    if (answer === "local" || answer === "executable" || answer === "command") return "local";
+    if (
+      answer === "browser-sign-in" ||
+      answer === "browser sign-in" ||
+      answer === "remote-sign-in" ||
+      answer === "remote sign-in" ||
+      answer === "sign-in" ||
+      answer === "browser"
+    ) {
       return "remote-sign-in";
     }
     if (answer === "import" || answer === "i") return "import";
     throw new CliUsageError(
-      "Choose 'new' to configure an MCP, 'remote-sign-in' when the MCP signs you in in a browser, or 'import' to select an existing client entry."
+      "Choose 'connector' for a known connector or pinned package, 'remote' for a generic HTTPS MCP endpoint, 'local' for an executable plus arguments, 'browser-sign-in' when the MCP opens a browser, or 'import' for an existing client entry."
     );
   } finally {
     prompts.close();
@@ -306,6 +322,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     // inherit a reviewed provider adapter and are never launched during import.
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
+  let guidedPreset: "streamable-http" | "local-stdio" | undefined;
   if (isTty(context) && !hasExplicitNewConfigurationInput(options)) {
     const startingPoint = await chooseGuidedSetupStartingPoint(context);
     if (startingPoint === "import") {
@@ -318,15 +335,22 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       });
       return { verification: "not-applicable", exitCode: 0, reports: [] };
     }
+    if (startingPoint === "remote" || startingPoint === "local") {
+      guidedPreset = startingPoint === "remote" ? "streamable-http" : "local-stdio";
+    }
   }
-  const created = await runInitCommand({ ...options, interactive: true }, context);
+  const created = await runInitCommand({
+    ...options,
+    interactive: true,
+    ...(guidedPreset === undefined ? {} : { preset: guidedPreset })
+  }, context);
   if (
     created.config.version === "3" &&
     created.config.upstream?.transport === "streamable-http" &&
     created.config.oauth === undefined
   ) {
     context.output.write(
-      "Remote endpoint setup did not discover OAuth or call the upstream. If this server uses standards-based OAuth, use 'miftah setup --native-oauth'.\n"
+      "Generic remote setup did not discover authentication or call the endpoint. If this MCP needs browser sign-in, start 'miftah setup' again and choose 'browser-sign-in'.\n"
     );
   }
   if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {

@@ -19,6 +19,7 @@ import { environmentProfileConfig } from "./helpers/environment-profile-config.j
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
+const guidedSourcePrompt = "What do you already have? (connector, remote HTTPS, local executable, browser sign-in, import) [connector]";
 
 function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
   return process.platform === "win32"
@@ -420,7 +421,7 @@ describe("setup command", () => {
     });
 
     try {
-      await answer(streams, "Start from (new, remote sign-in, import) [new]", "remote-sign-in");
+      await answer(streams, guidedSourcePrompt, "remote-sign-in");
       await answer(streams, "Configuration name [miftah-remote]", "posthog-work");
       await answer(streams, "Account profile name [default]", "production");
       await answer(streams, "Account profile description (optional)", "Production analytics");
@@ -450,7 +451,7 @@ describe("setup command", () => {
           scopes: ["mcp:tools"]
         }
       ]);
-      expect(streams.transcript.contents).toContain("Start from (new, remote sign-in, import) [new]");
+      expect(streams.transcript.contents).toContain(guidedSourcePrompt);
       expect(streams.transcript.contents).toContain("OAuth discovery completed for https://mcp.example.test/mcp.");
       expect(streams.transcript.contents).not.toContain("--native-oauth");
       expect(upstream.registrationRequests()).toEqual([]);
@@ -459,6 +460,40 @@ describe("setup command", () => {
     } finally {
       await upstream.close();
     }
+  });
+
+  it("accepts a bare remote endpoint choice instead of requiring a technical preset name", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "remote-tools.json");
+    const nativeOAuthFetch = vi.fn();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      nativeOAuthFetch
+    });
+
+    await answer(streams, guidedSourcePrompt, "remote");
+    await answer(streams, "Name [miftah-wrapper]", "remote-tools");
+    await answer(streams, "Streamable HTTPS URL", "https://mcp.example.test/mcp");
+    await answer(streams, "Credential environment variable name (optional)", "");
+    await answer(streams, "Output location [remote-tools.miftah.json]", "remote-tools.json");
+    await answer(streams, "Client", "");
+    await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      name: "remote-tools",
+      upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" },
+      profiles: { default: {} }
+    });
+    expect(nativeOAuthFetch).not.toHaveBeenCalled();
+    expect(streams.transcript.contents).toContain("Generic remote setup did not discover authentication or call the endpoint.");
+    expect(streams.transcript.contents).not.toContain("--native-oauth");
   });
 
   it("creates a validated owner-only configuration through the guided setup flow", async () => {
@@ -474,7 +509,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "new");
+    await answer(streams, guidedSourcePrompt, "new");
     await answer(streams, "Name [miftah-wrapper]", "guided");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
     await answer(
@@ -605,7 +640,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+    await answer(streams, guidedSourcePrompt, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "1");
     await answer(streams, "Configuration name [miftah-import]", "analytics");
@@ -650,7 +685,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+    await answer(streams, guidedSourcePrompt, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "2");
     await answer(streams, "Configuration name [miftah-import]", "numeric-entry");
@@ -684,7 +719,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+    await answer(streams, guidedSourcePrompt, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await streams.transcript.waitFor("MCP entry to import (number or exact name)");
     await writeFile(source, JSON.stringify({
@@ -718,7 +753,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+    await answer(streams, guidedSourcePrompt, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "missing");
 
@@ -748,7 +783,7 @@ describe("setup command", () => {
         }
       });
 
-      await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+      await answer(streams, guidedSourcePrompt, "import");
       await streams.transcript.waitFor("Client configuration file (absolute path)");
       cancel(streams);
 
@@ -774,7 +809,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "import");
+    await answer(streams, guidedSourcePrompt, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     streams.input.end();
 
@@ -799,7 +834,7 @@ describe("setup command", () => {
         }
       });
 
-      await streams.transcript.waitFor("Start from (new, remote sign-in, import) [new]");
+      await streams.transcript.waitFor(guidedSourcePrompt);
       cancel(streams);
 
       await expect(command).rejects.toThrow("Guided setup was cancelled.");
@@ -820,9 +855,9 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "unsupported");
+    await answer(streams, guidedSourcePrompt, "unsupported");
     await expect(command).rejects.toThrow(
-      "Choose 'new' to configure an MCP, 'remote-sign-in' when the MCP signs you in in a browser, or 'import' to select an existing client entry."
+      "Choose 'connector' for a known connector or pinned package, 'remote' for a generic HTTPS MCP endpoint, 'local' for an executable plus arguments, 'browser-sign-in' when the MCP opens a browser, or 'import' for an existing client entry."
     );
     streams.input.end();
     await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -841,7 +876,7 @@ describe("setup command", () => {
     });
 
     await streams.transcript.waitFor("Name [miftah-wrapper]");
-    expect(streams.transcript.contents).not.toContain("Start from (new, remote sign-in, import)");
+    expect(streams.transcript.contents).not.toContain("What do you already have?");
     streams.input.end();
     await expect(command).rejects.toThrow("Interactive init was cancelled");
   });
@@ -929,7 +964,7 @@ describe("setup command", () => {
     expect(config).not.toHaveProperty("oauth");
     expect(nativeOAuthFetch).not.toHaveBeenCalled();
     expect(streams.transcript.contents).toContain("Created");
-    expect(streams.transcript.contents).toContain("Remote endpoint setup did not discover OAuth or call the upstream.");
+    expect(streams.transcript.contents).toContain("Generic remote setup did not discover authentication or call the endpoint.");
     expect(streams.transcript.contents).not.toContain("OAuth discovery completed");
     expect(streams.transcript.contents).not.toContain("fixture-access-token");
   });
@@ -1458,7 +1493,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, "Start from (new, remote sign-in, import) [new]", "new");
+    await answer(streams, guidedSourcePrompt, "new");
     await answer(streams, "Name [miftah-wrapper]", "gsc");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");

@@ -87,6 +87,17 @@ const page = `<!doctype html>
           <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
+          <fieldset id="setup-source-choice" class="wide setup-source-choice">
+            <legend>What do you already have?</legend>
+            <p class="field-note">Choose a starting point first. Nothing is saved, launched, discovered, or sent to an MCP until you review and submit the matching setup form.</p>
+            <div class="setup-source-grid">
+              <button type="button" data-setup-source="connector" aria-pressed="true">Known connector or pinned package</button>
+              <button type="button" data-setup-source="remote" aria-pressed="false">Remote HTTPS endpoint</button>
+              <button type="button" data-setup-source="local" aria-pressed="false">Local executable</button>
+              <button type="button" data-setup-source="browser-sign-in" aria-pressed="false">Remote MCP with browser sign-in</button>
+              <button type="button" data-setup-source="import" aria-pressed="false">Existing client entry</button>
+            </div>
+          </fieldset>
           <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
           <label>Known connector
             <select name="preset" id="preset-selection">
@@ -396,6 +407,11 @@ p { color: var(--muted); line-height: 1.6; }
 .form-grid.compact { margin-top: 1.2rem; }
 .wide { grid-column: 1 / -1; }
 fieldset { min-inline-size: 0; margin: 0; }
+.setup-source-choice { padding: 1rem; border: 1px solid var(--line); background: var(--ground); }
+.setup-source-choice legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
+.setup-source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; margin-top: 1rem; }
+.setup-source-grid button { min-height: 3.3rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); text-align: left; }
+.setup-source-grid button[aria-pressed="true"] { color: #19150d; background: var(--key); border-color: var(--key); }
 .gsc-accounts { border: 1px solid var(--line); padding: 1rem; }
 .gsc-accounts legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
 .gsc-account-list { display: grid; gap: 1rem; margin: 1rem 0; }
@@ -1063,6 +1079,57 @@ const script = `(() => {
     if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
   }
 
+  function updateSetupSourceChoice(source) {
+    const choice = byId("setup-source-choice");
+    if (!(choice instanceof HTMLElement)) return;
+    choice.querySelectorAll("button[data-setup-source]").forEach((button) => {
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.setAttribute("aria-pressed", String(button.dataset.setupSource === source));
+    });
+  }
+
+  function selectSetupSource(source) {
+    updateSetupSourceChoice(source);
+    if (source === "browser-sign-in") {
+      if (onboardingView instanceof HTMLElement) onboardingView.scrollIntoView({ block: "start" });
+      const name = onboardingForm instanceof HTMLFormElement
+        ? onboardingForm.querySelector("input[name='name']")
+        : undefined;
+      if (name instanceof HTMLInputElement) name.focus();
+      message("Enter the remote MCP details below. Miftah checks supported browser sign-in before it writes a configuration.");
+      return;
+    }
+    if (source === "import") {
+      if (clientEntryOnboardingView instanceof HTMLElement) clientEntryOnboardingView.scrollIntoView({ block: "start" });
+      const name = clientEntryOnboardingForm instanceof HTMLFormElement
+        ? clientEntryOnboardingForm.querySelector("input[name='name']")
+        : undefined;
+      if (name instanceof HTMLInputElement) name.focus();
+      message("Paste one selected client entry below. Miftah never scans or changes client settings.");
+      return;
+    }
+    const form = byId("preset-onboarding-form");
+    const selection = byId("preset-selection");
+    if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement)) return;
+    const preset = source === "remote" ? "streamable-http" : source === "local" ? "local-stdio" : "generic";
+    selection.value = preset;
+    updatePresetFields();
+    form.scrollIntoView({ block: "start" });
+    const target = source === "remote"
+      ? form.querySelector("input[name='url']")
+      : source === "local"
+        ? form.querySelector("input[name='localCommand']")
+        : selection;
+    if (target instanceof HTMLElement) target.focus();
+    if (source === "remote") {
+      message("Enter the generic HTTPS endpoint below. Miftah does not discover authentication or call it during this setup.");
+    } else if (source === "local") {
+      message("Enter the exact executable and arguments below. Miftah saves a no-shell argument array and will not run it during setup.");
+    } else {
+      message("Choose a known connector or pinned package below.");
+    }
+  }
+
   async function refresh() {
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
@@ -1201,13 +1268,18 @@ const script = `(() => {
 
   const nativeOAuthSetupLink = byId("native-oauth-setup-link");
   if (nativeOAuthSetupLink instanceof HTMLButtonElement) {
-    nativeOAuthSetupLink.addEventListener("click", () => {
-      if (onboardingView instanceof HTMLElement) onboardingView.scrollIntoView({ block: "start" });
-      const name = onboardingForm instanceof HTMLFormElement
-        ? onboardingForm.querySelector("input[name='name']")
-        : undefined;
-      if (name instanceof HTMLInputElement) name.focus();
-      message("Enter the remote MCP details below. Miftah checks supported browser sign-in before it writes a configuration.");
+    nativeOAuthSetupLink.addEventListener("click", () => selectSetupSource("browser-sign-in"));
+  }
+
+  const setupSourceChoice = byId("setup-source-choice");
+  if (setupSourceChoice instanceof HTMLElement) {
+    setupSourceChoice.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest("button[data-setup-source]") : null;
+      if (!(button instanceof HTMLButtonElement)) return;
+      const source = button.dataset.setupSource;
+      if (source === "connector" || source === "remote" || source === "local" || source === "browser-sign-in" || source === "import") {
+        selectSetupSource(source);
+      }
     });
   }
 
