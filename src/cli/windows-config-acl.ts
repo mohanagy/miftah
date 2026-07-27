@@ -64,7 +64,7 @@ export async function copyWindowsConfigSecurityDescriptors(
   return runWindowsAclRequest({ operation: "copy-file-security-batch", source, targets });
 }
 
-/** Creates a current-user-only directory with its DACL applied at creation time. */
+/** Creates and verifies a current-user-only directory with its DACL applied at creation time. */
 export async function createWindowsPrivateDirectory(directory: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "create-private-directory", directory });
 }
@@ -364,6 +364,7 @@ try {
     $actual = $directory.GetAccessControl()
     if (-not $actual.AreAccessRulesProtected) { exit 1 }
     if ($actual.GetSecurityDescriptorSddlForm($directorySections) -ne $expected) { exit 1 }
+    if (-not (Test-MiftahPrivatePath $directory 'directory')) { exit 1 }
     exit 0
   }
 

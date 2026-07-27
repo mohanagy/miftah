@@ -121,6 +121,21 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("Test-MiftahPrivatePath $path 'file'");
   });
 
+  it("creates and verifies a current-user-only private directory before returning", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateMigrationDirectory("C:\\config\\.miftah-private")).resolves.toBe(true);
+
+    const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("create-private-directory");
+    expect(command).toContain("Test-MiftahPrivatePath $directory 'directory'");
+  });
+
   it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();

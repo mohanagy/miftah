@@ -232,7 +232,15 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
     if (await privateDirectoryMetadata(directory) !== undefined) return;
     // Exclusive creation may lose a race to another Miftah process. Validate the
     // resulting path rather than treating that safe race as a storage failure.
-    await createWindowsPrivateDirectory(directory);
+    const created = await createWindowsPrivateDirectory(directory);
+    if (created) {
+      // The trusted creator verified the directory's owner, DACL, and reparse
+      // state. Retain the Node metadata check without launching it again.
+      if (await privateDirectoryMetadata(directory, false) === undefined) setupDraftUnavailable();
+      return;
+    }
+    // A failed exclusive create may be a safe race with another Miftah process.
+    // Re-establish the full boundary before accepting that directory.
     if (await privateDirectoryMetadata(directory) === undefined) setupDraftUnavailable();
   } catch (error) {
     if (error instanceof MiftahError) throw error;
@@ -240,8 +248,8 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
   }
 }
 
-async function verifyPrivateFile(path: string): Promise<void> {
-  if (await privateFileMetadata(path) === undefined) setupDraftUnavailable();
+async function verifyPrivateFile(path: string, verifyWindowsAcl: boolean = true): Promise<void> {
+  if (await privateFileMetadata(path, verifyWindowsAcl) === undefined) setupDraftUnavailable();
 }
 
 function sameFileIdentity(left: Pick<BigIntStats, "dev" | "ino">, right: Pick<BigIntStats, "dev" | "ino">): boolean {
@@ -422,9 +430,11 @@ export class FileSetupDraftStore implements SetupDraftStore {
       await handle.close();
       handle = undefined;
       await setRestrictiveMode(temporaryPath, 0o600);
-      await verifyPrivateFile(temporaryPath);
+      // secureWindowsConfigFile verifies the temporary file's owner, DACL, and
+      // reparse state. A same-directory rename preserves that verified object.
+      await verifyPrivateFile(temporaryPath, process.platform !== "win32");
       await rename(temporaryPath, this.path);
-      await verifyPrivateFile(this.path);
+      await verifyPrivateFile(this.path, process.platform !== "win32");
     } catch (error) {
       try {
         await handle?.close();
