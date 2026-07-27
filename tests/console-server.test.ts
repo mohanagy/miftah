@@ -241,14 +241,21 @@ async function reviewThenCreatePresetForm(
   reviewOptions: {
     readonly changeDuringPreview?: boolean;
     readonly doubleCreate?: boolean;
+    readonly editDuringCreate?: boolean;
+    readonly failFirstCreate?: boolean;
+    readonly profileCountMismatch?: boolean;
     readonly reReviewDuringCreate?: boolean;
+    readonly unsafeReview?: boolean;
   } = {}
 ): Promise<{
   readonly requests: readonly { readonly path: string; readonly body?: string }[];
   readonly reviewVisibleAfterSubmit: boolean;
   readonly createEnabledAfterSubmit: boolean;
   readonly createEnabledAfterChange: boolean;
+  readonly createEnabledAfterFailure?: boolean;
+  readonly reviewEditDisabledDuringCreate?: boolean;
   readonly reviewText: readonly string[];
+  readonly statusText?: string;
 }> {
   type Listener = (event?: { readonly preventDefault: () => void }) => void | Promise<void>;
   class FakeElement {
@@ -289,6 +296,10 @@ async function reviewThenCreatePresetForm(
     };
 
     reset(): void {}
+
+    querySelector(): undefined {
+      return undefined;
+    }
   }
   class FakeSelect extends FakeElement {
     constructor(public value: string) {
@@ -309,6 +320,7 @@ async function reviewThenCreatePresetForm(
   const reviewSummary = new FakeElement();
   const reviewDetails = new FakeElement();
   const create = new FakeButton();
+  const edit = new FakeButton();
   const status = new FakeElement();
   const requests: Array<{ readonly path: string; readonly body?: string }> = [];
   type FakeResponse = {
@@ -318,11 +330,11 @@ async function reviewThenCreatePresetForm(
   };
   const previewData: Record<string, unknown> = {
     configuration: {
-      sensitiveValues: "omitted",
+      sensitiveValues: reviewOptions.unsafeReview === true ? "included" : "omitted",
       publication: "new-file-only",
       name: "analytics",
       defaultProfile: "default",
-      profileCount: 1,
+      profileCount: reviewOptions.profileCountMismatch === true ? 3 : 1,
       profiles: ["default"],
       upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
     }
@@ -334,6 +346,7 @@ async function reviewThenCreatePresetForm(
   });
   let resolveDelayedPreview: ((value: FakeResponse) => void) | undefined;
   const resolveDelayedCreates: Array<(value: FakeResponse) => void> = [];
+  let firstCreateFailed = false;
   runInNewContext(javascript, {
     document: {
       getElementById(id: string): unknown {
@@ -344,6 +357,7 @@ async function reviewThenCreatePresetForm(
         if (id === "preset-review-summary") return reviewSummary;
         if (id === "preset-review-details") return reviewDetails;
         if (id === "preset-create-reviewed") return create;
+        if (id === "preset-review-edit") return edit;
         return undefined;
       },
       createElement: () => new FakeElement(),
@@ -369,9 +383,13 @@ async function reviewThenCreatePresetForm(
       }
       if (
         requestPath === "/api/v1/onboarding/preset"
-        && (reviewOptions.doubleCreate === true || reviewOptions.reReviewDuringCreate === true)
+        && (reviewOptions.doubleCreate === true || reviewOptions.editDuringCreate === true || reviewOptions.reReviewDuringCreate === true)
       ) {
         return await new Promise<FakeResponse>((resolve) => { resolveDelayedCreates.push(resolve); });
+      }
+      if (requestPath === "/api/v1/onboarding/preset" && reviewOptions.failFirstCreate === true && !firstCreateFailed) {
+        firstCreateFailed = true;
+        throw new Error("Configuration already exists.");
       }
       return requestPath === "/api/v1/onboarding/preset/preview"
         ? response(previewData)
@@ -411,8 +429,37 @@ async function reviewThenCreatePresetForm(
   const createEnabledAfterSubmit = create.disabled === false;
   const reviewText = [reviewSummary.textContent, ...reviewDetails.children.map((item) => item.textContent)];
 
-  if (reviewOptions.doubleCreate === true || reviewOptions.reReviewDuringCreate === true) {
+  if (reviewOptions.unsafeReview === true || reviewOptions.profileCountMismatch === true) {
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      reviewText,
+      statusText: status.textContent
+    };
+  }
+
+  if (reviewOptions.failFirstCreate === true) {
+    await create.click();
+    const createEnabledAfterFailure = create.disabled === false;
+    await create.click();
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      createEnabledAfterFailure,
+      reviewText
+    };
+  }
+
+  if (reviewOptions.doubleCreate === true || reviewOptions.editDuringCreate === true || reviewOptions.reReviewDuringCreate === true) {
     const firstCreate = create.click();
+    const reviewEditDisabledDuringCreate = edit.disabled;
+    if (reviewOptions.editDuringCreate === true) {
+      await edit.click();
+    }
     if (reviewOptions.reReviewDuringCreate === true) {
       await submit({ preventDefault: () => undefined });
     }
@@ -425,6 +472,7 @@ async function reviewThenCreatePresetForm(
       reviewVisibleAfterSubmit,
       createEnabledAfterSubmit,
       createEnabledAfterChange: create.disabled === false,
+      reviewEditDisabledDuringCreate,
       reviewText
     };
   }
@@ -1316,6 +1364,22 @@ describe("local Console control server", () => {
       expect(duplicateCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
       const reReviewedCreate = await reviewThenCreatePresetForm(javascript, { reReviewDuringCreate: true });
       expect(reReviewedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      expect(reReviewedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset/preview")).toHaveLength(1);
+      const editDuringCreate = await reviewThenCreatePresetForm(javascript, { editDuringCreate: true });
+      expect(editDuringCreate.reviewEditDisabledDuringCreate).toBe(true);
+      expect(editDuringCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      const failedThenRetriedCreate = await reviewThenCreatePresetForm(javascript, { failFirstCreate: true });
+      expect(failedThenRetriedCreate.createEnabledAfterFailure).toBe(true);
+      expect(failedThenRetriedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(2);
+      const unsafeReview = await reviewThenCreatePresetForm(javascript, { unsafeReview: true });
+      expect(unsafeReview).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(unsafeReview.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const inconsistentProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountMismatch: true });
+      expect(inconsistentProfileCount.reviewText[0]).toContain("with 1 account profile(s)");
       await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
         request: {
           name: "gsc",

@@ -1189,6 +1189,11 @@ const script = `(() => {
     if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
   }
 
+  function setPresetReviewActionsDisabled(disabled) {
+    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = disabled;
+    if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = disabled;
+  }
+
   function clearPresetReview() {
     presetReviewGeneration += 1;
     pendingPresetRequest = undefined;
@@ -1196,6 +1201,7 @@ const script = `(() => {
     if (presetReviewSummary instanceof HTMLElement) presetReviewSummary.textContent = "";
     if (presetReviewDetails instanceof HTMLElement) presetReviewDetails.replaceChildren();
     if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = true;
+    if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = presetCreateInFlight;
   }
 
   function renderPresetReview(value) {
@@ -1208,7 +1214,7 @@ const script = `(() => {
       ? configuration.profiles.filter((profile) => typeof profile === "string")
       : [];
     const upstreams = Array.isArray(configuration.upstreams) ? configuration.upstreams.map(record) : [];
-    const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : profiles.length;
+    const profileCount = profiles.length;
     const name = typeof configuration.name === "string" ? configuration.name : "this configuration";
     const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "not set";
     if (presetReviewSummary instanceof HTMLElement) {
@@ -1235,7 +1241,7 @@ const script = `(() => {
       });
     }
     if (presetReviewView instanceof HTMLElement) presetReviewView.hidden = false;
-    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = presetCreateInFlight;
+    setPresetReviewActionsDisabled(presetCreateInFlight);
   }
 
   function presetOnboardingRequest(form) {
@@ -1520,6 +1526,10 @@ const script = `(() => {
     presetOnboardingForm.addEventListener("change", clearPresetReview);
     presetOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (presetCreateInFlight) {
+        message("Wait for the reviewed configuration to finish creating.");
+        return;
+      }
       clearPresetReview();
       const reviewGeneration = presetReviewGeneration;
       message("Validating the setup for review…");
@@ -1546,7 +1556,7 @@ const script = `(() => {
       if (presetCreateInFlight || presetCreateReviewed.disabled) return;
       message("Creating the reviewed Miftah configuration…");
       presetCreateInFlight = true;
-      presetCreateReviewed.disabled = true;
+      setPresetReviewActionsDisabled(true);
       try {
         const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
         setupCompletion = record(result.completion);
@@ -1560,7 +1570,7 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally {
         presetCreateInFlight = false;
-        if (pendingPresetRequest !== undefined) presetCreateReviewed.disabled = false;
+        if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
       }
     });
   }
