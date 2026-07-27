@@ -202,7 +202,21 @@ async function submitPresetFormWithStaleValue(
         status: 200,
         json: async () => requestPath === "/api/v1/config"
           ? { data: { initialized: false } }
-          : { data: {} }
+          : requestPath === "/api/v1/onboarding/preset/preview"
+            ? {
+                data: {
+                  configuration: {
+                    sensitiveValues: "omitted",
+                    publication: "new-file-only",
+                    name: "analytics",
+                    defaultProfile: "default",
+                    profileCount: 1,
+                    profiles: ["default"],
+                    upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
+                  }
+                }
+              }
+            : { data: {} }
       };
     }
   });
@@ -217,9 +231,278 @@ async function submitPresetFormWithStaleValue(
   if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
   await submit({ preventDefault: () => undefined });
 
-  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset");
+  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset/preview");
   if (request?.body === undefined) throw new Error("Expected a preset onboarding request.");
   return JSON.parse(request.body) as Record<string, unknown>;
+}
+
+async function reviewThenCreatePresetForm(
+  javascript: string,
+  reviewOptions: {
+    readonly changeDuringPreview?: boolean;
+    readonly doubleCreate?: boolean;
+    readonly editDuringCreate?: boolean;
+    readonly failFirstCreate?: boolean;
+    readonly profileCountMismatch?: boolean;
+    readonly profileCountValue?: unknown;
+    readonly omitProfileCount?: boolean;
+    readonly reReviewDuringCreate?: boolean;
+    readonly unsafeReview?: boolean;
+  } = {}
+): Promise<{
+  readonly requests: readonly { readonly path: string; readonly body?: string }[];
+  readonly reviewVisibleAfterSubmit: boolean;
+  readonly createEnabledAfterSubmit: boolean;
+  readonly createEnabledAfterChange: boolean;
+  readonly createEnabledAfterFailure?: boolean;
+  readonly reviewEditDisabledDuringCreate?: boolean;
+  readonly reviewText: readonly string[];
+  readonly statusText?: string;
+}> {
+  type Listener = (event?: { readonly preventDefault: () => void }) => void | Promise<void>;
+  class FakeElement {
+    readonly listeners = new Map<string, Listener>();
+    readonly children: FakeElement[] = [];
+    hidden = false;
+    textContent = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    append(...children: FakeElement[]): void {
+      this.children.push(...children);
+    }
+
+    replaceChildren(...children: FakeElement[]): void {
+      this.children.splice(0, this.children.length, ...children);
+    }
+
+    querySelectorAll(): readonly unknown[] {
+      return [];
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+
+    async click(): Promise<void> {
+      if (this.disabled) return;
+      await this.listeners.get("click")?.();
+    }
+  }
+  class FakeForm extends FakeElement {
+    readonly values: Record<string, string> = {
+      name: "analytics",
+      preset: "generic",
+      credentialEnv: "ANALYTICS_TOKEN"
+    };
+
+    reset(): void {}
+
+    querySelector(): undefined {
+      return undefined;
+    }
+  }
+  class FakeSelect extends FakeElement {
+    constructor(public value: string) {
+      super();
+    }
+  }
+  class FakeFormData {
+    constructor(private readonly form: FakeForm) {}
+
+    get(name: string): string | null {
+      return this.form.values[name] ?? null;
+    }
+  }
+
+  const form = new FakeForm();
+  const selection = new FakeSelect("generic");
+  const reviewView = new FakeElement();
+  const reviewSummary = new FakeElement();
+  const reviewDetails = new FakeElement();
+  const create = new FakeButton();
+  const edit = new FakeButton();
+  const status = new FakeElement();
+  const requests: Array<{ readonly path: string; readonly body?: string }> = [];
+  type FakeResponse = {
+    readonly ok: true;
+    readonly status: 200;
+    readonly json: () => Promise<{ readonly data: Record<string, unknown> }>;
+  };
+  const hasProfileCountValue = Object.prototype.hasOwnProperty.call(reviewOptions, "profileCountValue");
+  const previewConfiguration: Record<string, unknown> = {
+    sensitiveValues: reviewOptions.unsafeReview === true ? "included" : "omitted",
+    publication: "new-file-only",
+    name: "analytics",
+    defaultProfile: "default",
+    profiles: ["default"],
+    upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
+  };
+  if (!reviewOptions.omitProfileCount) {
+    previewConfiguration.profileCount = hasProfileCountValue
+      ? reviewOptions.profileCountValue
+      : reviewOptions.profileCountMismatch === true ? 3 : 1;
+  }
+  const previewData: Record<string, unknown> = { configuration: previewConfiguration };
+  const response = (data: Record<string, unknown>): FakeResponse => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ data })
+  });
+  let resolveDelayedPreview: ((value: FakeResponse) => void) | undefined;
+  const resolveDelayedCreates: Array<(value: FakeResponse) => void> = [];
+  let firstCreateFailed = false;
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "preset-onboarding-form") return form;
+        if (id === "preset-selection") return selection;
+        if (id === "preset-review-view") return reviewView;
+        if (id === "preset-review-summary") return reviewSummary;
+        if (id === "preset-review-details") return reviewDetails;
+        if (id === "preset-create-reviewed") return create;
+        if (id === "preset-review-edit") return edit;
+        return undefined;
+      },
+      createElement: () => new FakeElement(),
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: class {},
+    Element: class {},
+    FormData: FakeFormData,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown, requestOptions?: { readonly body?: unknown }) => {
+      const requestPath = String(path);
+      requests.push({
+        path: requestPath,
+        ...(typeof requestOptions?.body === "string" ? { body: requestOptions.body } : {})
+      });
+      if (requestPath === "/api/v1/onboarding/preset/preview" && reviewOptions.changeDuringPreview === true) {
+        return await new Promise<FakeResponse>((resolve) => { resolveDelayedPreview = resolve; });
+      }
+      if (
+        requestPath === "/api/v1/onboarding/preset"
+        && (reviewOptions.doubleCreate === true || reviewOptions.editDuringCreate === true || reviewOptions.reReviewDuringCreate === true)
+      ) {
+        return await new Promise<FakeResponse>((resolve) => { resolveDelayedCreates.push(resolve); });
+      }
+      if (requestPath === "/api/v1/onboarding/preset" && reviewOptions.failFirstCreate === true && !firstCreateFailed) {
+        firstCreateFailed = true;
+        throw new Error("Configuration already exists.");
+      }
+      return requestPath === "/api/v1/onboarding/preset/preview"
+        ? response(previewData)
+        : requestPath === "/api/v1/config"
+          ? response({ initialized: false })
+          : response({ completion: {} });
+    }
+  });
+
+  const submit = form.listeners.get("submit");
+  if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
+  const changed = form.listeners.get("input");
+  if (changed === undefined) throw new Error("Expected review invalidation when setup details change.");
+  if (reviewOptions.changeDuringPreview === true) {
+    const submitted = submit({ preventDefault: () => undefined });
+    if (resolveDelayedPreview === undefined) throw new Error("Expected a pending preset preview request.");
+    await changed();
+    const createEnabledAfterChange = create.disabled === false;
+    resolveDelayedPreview(response(previewData));
+    await submitted;
+    const reviewVisibleAfterSubmit = reviewView.hidden === false;
+    const createEnabledAfterSubmit = create.disabled === false;
+    const reviewText = [reviewSummary.textContent, ...reviewDetails.children.map((item) => item.textContent)];
+    const createReviewed = create.listeners.get("click");
+    if (createReviewed === undefined) throw new Error("Expected the reviewed-create handler.");
+    await createReviewed();
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange,
+      reviewText
+    };
+  }
+  await submit({ preventDefault: () => undefined });
+  const reviewVisibleAfterSubmit = reviewView.hidden === false;
+  const createEnabledAfterSubmit = create.disabled === false;
+  const reviewText = [reviewSummary.textContent, ...reviewDetails.children.map((item) => item.textContent)];
+
+  if (
+    reviewOptions.unsafeReview === true
+    || reviewOptions.profileCountMismatch === true
+    || (hasProfileCountValue && reviewOptions.profileCountValue !== 1)
+  ) {
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      reviewText,
+      statusText: status.textContent
+    };
+  }
+
+  if (reviewOptions.failFirstCreate === true) {
+    await create.click();
+    const createEnabledAfterFailure = create.disabled === false;
+    await create.click();
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      createEnabledAfterFailure,
+      reviewText
+    };
+  }
+
+  if (reviewOptions.doubleCreate === true || reviewOptions.editDuringCreate === true || reviewOptions.reReviewDuringCreate === true) {
+    const firstCreate = create.click();
+    const reviewEditDisabledDuringCreate = edit.disabled;
+    if (reviewOptions.editDuringCreate === true) {
+      await edit.click();
+    }
+    if (reviewOptions.reReviewDuringCreate === true) {
+      await submit({ preventDefault: () => undefined });
+    }
+    const secondCreate = create.click();
+    if (resolveDelayedCreates.length === 0) throw new Error("Expected a pending reviewed-create request.");
+    resolveDelayedCreates.splice(0).forEach((resolve) => resolve(response({ completion: {} })));
+    await Promise.all([firstCreate, secondCreate]);
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      reviewEditDisabledDuringCreate,
+      reviewText
+    };
+  }
+
+  await changed();
+  const createEnabledAfterChange = create.disabled === false;
+
+  const createReviewed = create.listeners.get("click");
+  if (createReviewed === undefined) throw new Error("Expected the reviewed-create handler.");
+  await createReviewed();
+  await submit({ preventDefault: () => undefined });
+  await createReviewed();
+
+  return {
+    requests,
+    reviewVisibleAfterSubmit,
+    createEnabledAfterSubmit,
+    createEnabledAfterChange,
+    reviewText
+  };
 }
 
 function selectConsoleRemoteSetupSource(javascript: string): {
@@ -722,7 +1005,21 @@ async function submitMultiAccountGscPresetForm(
         status: 200,
         json: async () => requestPath === "/api/v1/config"
           ? { data: { initialized: false } }
-          : { data: {} }
+          : requestPath === "/api/v1/onboarding/preset/preview"
+            ? {
+                data: {
+                  configuration: {
+                    sensitiveValues: "omitted",
+                    publication: "new-file-only",
+                    name: "gsc",
+                    defaultProfile: "google-craftmyletter",
+                    profileCount: 2,
+                    profiles: ["google-craftmyletter", "google-govalidate"],
+                    upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
+                  }
+                }
+              }
+            : { data: {} }
       };
     }
   });
@@ -731,7 +1028,7 @@ async function submitMultiAccountGscPresetForm(
   if (submit === undefined) throw new Error("Expected the preset setup submit handler.");
   await submit({ preventDefault: () => undefined });
 
-  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset");
+  const request = requests.find((entry) => entry.path === "/api/v1/onboarding/preset/preview");
   return {
     ...(request?.body === undefined ? {} : { request: JSON.parse(request.body) as Record<string, unknown> }),
     status: status.textContent
@@ -928,6 +1225,10 @@ describe("local Console control server", () => {
       expect(html).toContain("Advanced manual OAuth registration");
       expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
+      expect(html).toContain('id="preset-review-view"');
+      expect(html).toContain('id="preset-create-reviewed"');
+      expect(html).toContain("Review configuration");
+      expect(html).toContain("Create reviewed configuration");
       expect(html).toContain('id="client-entry-onboarding-view"');
       expect(html).toContain('id="client-entry-onboarding-form"');
       expect(html).toContain("Import one MCP client entry");
@@ -978,6 +1279,12 @@ describe("local Console control server", () => {
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 
+      const reviewStylesheet = await fetch(new URL("/app.css", server.url));
+      expect(reviewStylesheet.status).toBe(200);
+      const css = await reviewStylesheet.text();
+      expect(css).toContain(".setup-review { padding: 1rem; border: 1px solid var(--key); background: rgb(38 32 20 / 48%); }");
+      expect(css).not.toContain("var(--amber)");
+
       const script = await fetch(new URL("/app.js", server.url));
       expect(script.status).toBe(200);
       expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
@@ -989,6 +1296,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/profiles/provider-account");
       expect(javascript).toContain("/api/v1/profiles/environment-account");
+      expect(javascript).toContain("/api/v1/onboarding/preset/preview");
       expect(javascript).toContain("/api/v1/onboarding/preset");
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("function selectSetupSource(source)");
@@ -1035,6 +1343,81 @@ describe("local Console control server", () => {
         cwd: "/Users/example/local-tools",
         credentialEnv: "LOCAL_MCP_TOKEN",
         acceptLocalCommand: true
+      });
+      const reviewedPreset = await reviewThenCreatePresetForm(javascript);
+      expect(reviewedPreset).toMatchObject({
+        reviewVisibleAfterSubmit: true,
+        createEnabledAfterSubmit: true,
+        createEnabledAfterChange: false
+      });
+      expect(reviewedPreset.reviewText.join(" ")).toContain("Miftah will create 'analytics' with 1 account profile(s).");
+      expect(reviewedPreset.reviewText.join(" ")).toContain("Publication: a new configuration file only");
+      expect(reviewedPreset.reviewText.join(" ")).not.toContain("ANALYTICS_TOKEN");
+      expect(reviewedPreset.requests.map((request) => request.path)).toEqual([
+        "/api/v1/onboarding/preset/preview",
+        "/api/v1/onboarding/preset/preview",
+        "/api/v1/onboarding/preset",
+        "/api/v1/config"
+      ]);
+      expect(reviewedPreset.requests[0]?.body).toBe(reviewedPreset.requests[2]?.body);
+      const stalePreview = await reviewThenCreatePresetForm(javascript, { changeDuringPreview: true });
+      expect(stalePreview).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        createEnabledAfterChange: false,
+        reviewText: [""]
+      });
+      expect(stalePreview.requests.map((request) => request.path)).toEqual([
+        "/api/v1/onboarding/preset/preview"
+      ]);
+      const duplicateCreate = await reviewThenCreatePresetForm(javascript, { doubleCreate: true });
+      expect(duplicateCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      const reReviewedCreate = await reviewThenCreatePresetForm(javascript, { reReviewDuringCreate: true });
+      expect(reReviewedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      expect(reReviewedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset/preview")).toHaveLength(1);
+      const editDuringCreate = await reviewThenCreatePresetForm(javascript, { editDuringCreate: true });
+      expect(editDuringCreate.reviewEditDisabledDuringCreate).toBe(true);
+      expect(editDuringCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      const failedThenRetriedCreate = await reviewThenCreatePresetForm(javascript, { failFirstCreate: true });
+      expect(failedThenRetriedCreate.createEnabledAfterFailure).toBe(true);
+      expect(failedThenRetriedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(2);
+      const unsafeReview = await reviewThenCreatePresetForm(javascript, { unsafeReview: true });
+      expect(unsafeReview).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(unsafeReview.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const inconsistentProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountMismatch: true });
+      expect(inconsistentProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(inconsistentProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const malformedProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: "1" });
+      expect(malformedProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(malformedProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const nullProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: null });
+      expect(nullProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(nullProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const matchingProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: 1 });
+      expect(matchingProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: true,
+        createEnabledAfterSubmit: true
+      });
+      const omittedProfileCount = await reviewThenCreatePresetForm(javascript, { omitProfileCount: true });
+      expect(omittedProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: true,
+        createEnabledAfterSubmit: true
       });
       await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
         request: {
@@ -1376,6 +1759,34 @@ describe("local Console control server", () => {
           body: JSON.stringify({ ...request, accessToken: "must-not-be-accepted" })
         });
         expect(secretBearing.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+        const preview = await fetch(new URL("/api/v1/onboarding/preset/preview", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(preview.status).toBe(200);
+        const previewBody = await preview.json();
+        expect(previewBody).toMatchObject({
+          data: {
+            changed: false,
+            write: false,
+            name: "support-tools",
+            defaultProfile: "default",
+            configuration: {
+              sensitiveValues: "omitted",
+              publication: "new-file-only"
+            }
+          }
+        });
+        expect(JSON.stringify(previewBody)).not.toContain("SUPPORT_TOKEN");
+        expect(JSON.stringify(previewBody)).not.toContain(configPath);
         await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
         const created = await fetch(endpoint, {

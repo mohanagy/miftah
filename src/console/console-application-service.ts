@@ -34,8 +34,10 @@ import { parseOAuthConnectionRef } from "../oauth/connection-types.js";
 import { discoverNativeOAuthConnection } from "../oauth/remote-oauth-discovery.js";
 import {
   createSetupConfigurationPlan,
+  describeSetupConfiguration,
   publishSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
+import type { SetupConfigurationPreview } from "../setup/setup-configuration.js";
 import { createSetupCompletion, type SetupCompletion } from "../setup/setup-completion.js";
 import {
   planNativeOAuthFirstRunConfiguration,
@@ -247,6 +249,18 @@ export interface ConsolePresetOnboardingReport {
   readonly completion?: SetupCompletion;
 }
 
+/** A validated first-run configuration summary that has not written local state. */
+export interface ConsolePresetOnboardingPreview {
+  readonly changed: false;
+  readonly write: false;
+  readonly name: string;
+  readonly defaultProfile: string;
+  readonly profileCount: number;
+  readonly actions: readonly string[];
+  /** Structural summary only; it omits paths, endpoints, launch arguments, and credential references. */
+  readonly configuration: SetupConfigurationPreview;
+}
+
 /** Non-secret, explicitly selected local stdio or canonical HTTPS MCP entry pasted into first-run Console setup. */
 export interface ConsoleClientEntryOnboardingRequest {
   readonly name: string;
@@ -289,6 +303,8 @@ export interface ConsoleControlApplication {
   configMetadata(): Promise<ConsoleConfigMetadata>;
   /** Available only for a dashboard started without an explicit --config path. */
   selectConfiguration?(configurationId: string): Promise<ConsoleConfigMetadata>;
+  /** Available only when the embedding supports first-run known-connector setup. */
+  previewPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview>;
   /** Available only when the embedding supports first-run known-connector setup. */
   onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   /** Available only when the embedding supports first-run selected local stdio entry import. */
@@ -387,7 +403,7 @@ function selectedNativeOAuthUpstream(
   return selectedExistingUpstream(config, upstream);
 }
 
-function consoleAuditPath(configPath: string): string {
+export function consoleAuditPath(configPath: string): string {
   return join(dirname(resolvePath(configPath)), ".miftah", "audit", "console.jsonl");
 }
 
@@ -434,6 +450,40 @@ function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
     clientHandoff: "available"
   });
+}
+
+/** Builds the exact validated first-run preset configuration for review or publication. */
+function buildConsolePresetConfiguration(request: ConsolePresetOnboardingRequest, configPath: string): MiftahConfig {
+  try {
+    const config = buildPresetConfig(request.name, request.preset, {
+      credentialEnv: request.credentialEnv,
+      npmPackage: request.npmPackage,
+      dockerImage: request.dockerImage,
+      url: request.url,
+      headerName: request.headerName,
+      headerPrefix: request.headerPrefix,
+      oauthClientSecretsFile: request.oauthClientSecretsFile,
+      localCommand: request.localCommand,
+      args: request.args,
+      cwd: request.cwd,
+      acceptLocalCommand: request.acceptLocalCommand,
+      googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
+      defaultProfile: request.defaultProfile
+    }, {
+      configurationPath: resolvePath(configPath)
+    });
+    return validateConfig(config);
+  } catch (error) {
+    if (error instanceof PresetCatalogError) {
+      throw new MiftahError(
+        "CONFIG_SCHEMA_INVALID",
+        isWindowsNpxPresetUnavailable(request.preset)
+          ? "CONFIG_SCHEMA_INVALID: the selected npm package-runner connector is unavailable on Windows; choose a direct .exe or .com executable, a direct-executable preset, or a remote MCP."
+          : "CONFIG_SCHEMA_INVALID: the requested setup connector is not valid"
+      );
+    }
+    throw error;
+  }
 }
 
 class ConsoleConnectionAuditSink implements ConnectionApplicationAuditSink {
@@ -781,38 +831,21 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     };
   }
 
+  async previewPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview> {
+    const config = buildConsolePresetConfiguration(request, this.configPath);
+    return {
+      changed: false,
+      write: false,
+      name: config.name,
+      defaultProfile: config.defaultProfile,
+      profileCount: Object.keys(config.profiles).length,
+      actions: [`Review Miftah configuration '${config.name}' from preset '${request.preset}' before creating it.`],
+      configuration: describeSetupConfiguration(config)
+    };
+  }
+
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
-    let config: MiftahConfig;
-    try {
-      config = buildPresetConfig(request.name, request.preset, {
-        credentialEnv: request.credentialEnv,
-        npmPackage: request.npmPackage,
-        dockerImage: request.dockerImage,
-        url: request.url,
-        headerName: request.headerName,
-        headerPrefix: request.headerPrefix,
-        oauthClientSecretsFile: request.oauthClientSecretsFile,
-        localCommand: request.localCommand,
-        args: request.args,
-        cwd: request.cwd,
-        acceptLocalCommand: request.acceptLocalCommand,
-        googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
-        defaultProfile: request.defaultProfile
-      }, {
-        configurationPath: resolvePath(this.configPath)
-      });
-      validateConfig(config);
-    } catch (error) {
-      if (error instanceof PresetCatalogError) {
-        throw new MiftahError(
-          "CONFIG_SCHEMA_INVALID",
-          isWindowsNpxPresetUnavailable(request.preset)
-            ? "CONFIG_SCHEMA_INVALID: the selected npm package-runner connector is unavailable on Windows; choose a direct .exe or .com executable, a direct-executable preset, or a remote MCP."
-            : "CONFIG_SCHEMA_INVALID: the requested setup connector is not valid"
-        );
-      }
-      throw error;
-    }
+    const config = buildConsolePresetConfiguration(request, this.configPath);
     await this.publishFirstRunConfiguration(config, {
       operation: "console/onboard-preset",
       name: "configuration",

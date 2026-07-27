@@ -189,6 +189,29 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--verify"]);
   });
 
+  it("offers a non-writing setup plan only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--plan",
+      "--name", "posthog-work",
+      "--preset", "streamable-http",
+      "--url", "https://mcp.example.test/mcp",
+      "--output", "posthog-work.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        plan: true,
+        name: "posthog-work",
+        preset: "streamable-http",
+        url: "https://mcp.example.test/mcp",
+        output: "posthog-work.json"
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--plan");
+    expectUsageError(["init", "--plan"]);
+  });
+
   it("offers endpoint-first native OAuth only from guided setup", () => {
     expect(parseCli([
       "setup",

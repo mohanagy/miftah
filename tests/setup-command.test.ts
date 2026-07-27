@@ -92,6 +92,165 @@ describe("setup command", () => {
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
   });
 
+  it("prints a validated non-secret setup plan without writing or contacting a remote MCP", async () => {
+    const outputPath = resolve(outputRoot, "remote-tools.json");
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    let transcript = "";
+    output.on("data", (chunk: Buffer) => { transcript += chunk.toString(); });
+    input.end();
+
+    await expect(runSetupCommand({
+      plan: true,
+      name: "remote-tools",
+      preset: "streamable-http",
+      url: "https://mcp.example.test/mcp",
+      credentialEnv: "MCP_TOKEN",
+      headerName: "Authorization",
+      headerPrefix: "Bearer ",
+      output: "remote-tools.json"
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+      nativeOAuthFetch: vi.fn()
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    expect(JSON.parse(transcript)).toEqual({
+      schemaVersion: 1,
+      kind: "setup-plan",
+      output: outputPath,
+      configuration: {
+        schemaVersion: 1,
+        name: "remote-tools",
+        version: "3",
+        defaultProfile: "default",
+        profiles: ["default"],
+        profileCount: 1,
+        upstreams: [{ name: "default", transport: "streamable-http", kind: "remote-mcp" }],
+        sensitiveValues: "omitted",
+        publication: "new-file-only"
+      },
+      clientHandoff: "not-requested"
+    });
+    expect(transcript).not.toContain("mcp.example.test");
+    expect(transcript).not.toContain("MCP_TOKEN");
+    await expect(readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("redacts Google OAuth client-secrets paths while printing a setup plan", async () => {
+    const outputPath = resolve(outputRoot, "gsc.json");
+    const clientSecretsPath = resolve(outputRoot, "google-client-secrets.json");
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    let transcript = "";
+    output.on("data", (chunk: Buffer) => { transcript += chunk.toString(); });
+    input.end();
+
+    await expect(runSetupCommand({
+      plan: true,
+      name: "gsc",
+      preset: "google-search-console",
+      output: "gsc.json",
+      oauthClientSecretsFile: clientSecretsPath
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    expect(JSON.parse(transcript)).toMatchObject({
+      kind: "setup-plan",
+      output: outputPath,
+      configuration: {
+        name: "gsc",
+        profiles: ["default"],
+        upstreams: [{ name: "default", transport: "stdio", kind: "local-process" }],
+        sensitiveValues: "omitted",
+        publication: "new-file-only"
+      }
+    });
+    expect(transcript).not.toContain(clientSecretsPath);
+    await expect(readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not render client snippets while printing a setup plan", async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    input.end();
+    const launcher = Object.create(null) as { readonly command: string; readonly args: readonly string[] };
+    Object.defineProperties(launcher, {
+      command: {
+        get: (): string => {
+          throw new Error("client snippet rendering must not run for a setup plan");
+        }
+      },
+      args: {
+        get: (): readonly string[] => {
+          throw new Error("client snippet rendering must not run for a setup plan");
+        }
+      }
+    });
+
+    await expect(runSetupCommand({
+      plan: true,
+      name: "remote-tools",
+      preset: "streamable-http",
+      url: "https://mcp.example.test/mcp",
+      client: "claude-desktop"
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    expect(JSON.parse(output.read()?.toString() ?? "{}")).toMatchObject({
+      kind: "setup-plan",
+      clientHandoff: "requested"
+    });
+  });
+
+  it("validates a requested client while printing a setup plan", async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    input.end();
+
+    await expect(runSetupCommand({
+      plan: true,
+      name: "remote-tools",
+      preset: "streamable-http",
+      url: "https://mcp.example.test/mcp",
+      client: "unsupported" as never
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Unsupported client 'unsupported'.");
+
+    await expect(stat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses to combine the noninteractive setup plan with the interactive wizard", async () => {
+    await expect(runSetupCommand({
+      plan: true,
+      interactive: true,
+      name: "remote-tools",
+      preset: "streamable-http",
+      url: "https://mcp.example.test/mcp"
+    }, {
+      input: Object.assign(new PassThrough(), { isTTY: true }),
+      output: Object.assign(new PassThrough(), { isTTY: true }),
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Option '--interactive' is unavailable when printing a setup plan.");
+  });
+
   it("requires a configuration before classifying account-addition flags", async () => {
     await expect(runSetupCommand({
       addProfile: true,

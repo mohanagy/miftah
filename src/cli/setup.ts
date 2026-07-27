@@ -11,7 +11,12 @@ import { getProviderAdapterForAccountProvisioning } from "../config/provider-ada
 import { MiftahError } from "../utils/errors.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
-import { runInitCommand, type InitCommandContext, type InitCommandOptions } from "./init.js";
+import {
+  previewInitCommand,
+  runInitCommand,
+  type InitCommandContext,
+  type InitCommandOptions
+} from "./init.js";
 import {
   ClientEntryImportSetupError,
   runClientEntryImportSetup,
@@ -29,7 +34,7 @@ import {
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
 export type SetupCommandOptions = InitCommandOptions & Pick<
   CliOptions,
-  "config" | "description" | "makeDefault" | "upstream" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "addProfile" | "profile"
+  "config" | "description" | "makeDefault" | "upstream" | "plan" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "addProfile" | "profile"
 >;
 
 export interface SetupCommandResult {
@@ -263,6 +268,27 @@ function writeCliSetupCompletion(
  * validation, config writer, and client-handoff implementation.
  */
 export async function runSetupCommand(options: SetupCommandOptions, context: InitCommandContext): Promise<SetupCommandResult> {
+  if (options.plan === true) {
+    const incompatible = [
+      "interactive",
+      "config",
+      "description",
+      "makeDefault",
+      "upstream",
+      "verify",
+      "importFile",
+      "importEntry",
+      "nativeOAuth",
+      "addProfile",
+      "profile"
+    ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
+    if (incompatible !== undefined) {
+      throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when printing a setup plan.`);
+    }
+    const preview = previewInitCommand(options, context);
+    context.output.write(`${JSON.stringify(preview, null, 2)}\n`);
+    return { verification: "not-applicable", exitCode: 0, reports: [] };
+  }
   if (options.addProfile === true) {
     if (options.nativeOAuth === true) {
       throw new CliUsageError("Choose either '--add-profile' for a reviewed provider adapter or '--native-oauth' for endpoint-first OAuth.");

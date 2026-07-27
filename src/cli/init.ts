@@ -11,8 +11,10 @@ import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
 import {
   createSetupConfigurationPlan,
+  describeSetupConfiguration,
   publishSetupConfigurationPlan,
-  type SetupConfigurationPlan
+  type SetupConfigurationPlan,
+  type SetupConfigurationPreview
 } from "../setup/setup-configuration.js";
 import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
 import {
@@ -83,6 +85,20 @@ export interface InitCommandResult {
   readonly providerAdapter?: ProviderAdapterDefinition;
   /** Whether this invocation displayed copy-only client JSON. */
   readonly clientHandoff?: SetupCompletionClientHandoff;
+}
+
+/**
+ * A side-effect-free CLI review artifact. It deliberately keeps the resolved
+ * output path for the local caller while the nested configuration summary omits
+ * launch arguments, credential references, endpoints, and other sensitive values.
+ */
+export interface InitConfigurationPreview {
+  readonly schemaVersion: 1;
+  readonly kind: "setup-plan";
+  readonly output: string;
+  readonly configuration: SetupConfigurationPreview;
+  /** A requested client is not rendered or verified while a plan is printed. */
+  readonly clientHandoff: "not-requested" | "requested";
 }
 
 interface Cancellation {
@@ -450,6 +466,12 @@ function isClientSelection(value: string): value is ClientSelection {
   return value === "all" || (CLIENT_NAMES as readonly string[]).includes(value);
 }
 
+function validateClientSelection(client: string | undefined): asserts client is ClientSelection | undefined {
+  if (client !== undefined && !isClientSelection(client)) {
+    usageError(`Unsupported client '${client}'.`);
+  }
+}
+
 function resolveOutputPath(output: string, cwd: string): string {
   if (output.includes("\0")) usageError("Output path must not contain a NUL character.");
   return resolve(cwd, output);
@@ -462,9 +484,7 @@ function isExistingOutputError(error: unknown): boolean {
 /** Resolves user input into a validated, side-effect-free plan for `miftah init`. */
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
-  if (values.client !== undefined && !isClientSelection(values.client)) {
-    usageError(`Unsupported client '${values.client}'.`);
-  }
+  validateClientSelection(values.client);
 
   let config: MiftahConfig;
   try {
@@ -519,6 +539,23 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
     snippets,
     claudeCodePermissionGuidance,
     providerAdapter: getProviderAdapterForPreset(values.preset)
+  };
+}
+
+/**
+ * Validates a noninteractive setup request without creating directories, writing
+ * files, launching an upstream, or producing client-setting snippets.
+ */
+export function previewInitCommand(options: InitCommandOptions, context: InitCommandContext): InitConfigurationPreview {
+  const values = nonInteractiveValues(options);
+  validateClientSelection(values.client);
+  const plan = buildInitPlan({ ...values, client: undefined }, context);
+  return {
+    schemaVersion: 1,
+    kind: "setup-plan",
+    output: plan.output,
+    configuration: describeSetupConfiguration(plan.config),
+    clientHandoff: values.client === undefined ? "not-requested" : "requested"
   };
 }
 

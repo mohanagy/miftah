@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ConsoleApplicationService } from "../src/console/console-application-service.js";
+import { ConsoleApplicationService, consoleAuditPath } from "../src/console/console-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import {
   canonicalOAuthProfileRenameConfigPath,
@@ -485,6 +485,50 @@ describe("Console application service", () => {
       preset,
       ...options
     })).rejects.toMatchObject({ code: "CONFIG_ALREADY_EXISTS" });
+  });
+
+  it("previews a first-run connector without writing configuration or audit state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-preset-preview-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const configPath = join(privateParent, "miftah", "miftah.json");
+    const service = new ConsoleApplicationService(configPath);
+    const { preset, ...options } = supportedKnownConnectorOptions();
+
+    await expect(service.previewPreset({
+      name: "support-tools",
+      preset,
+      ...options
+    })).resolves.toEqual({
+      changed: false,
+      write: false,
+      name: "support-tools",
+      defaultProfile: "default",
+      profileCount: 1,
+      actions: [`Review Miftah configuration 'support-tools' from preset '${preset}' before creating it.`],
+      configuration: {
+        schemaVersion: 1,
+        name: "support-tools",
+        version: "3",
+        defaultProfile: "default",
+        profiles: ["default"],
+        profileCount: 1,
+        upstreams: [{ name: "default", transport: "stdio", kind: "local-process" }],
+        sensitiveValues: "omitted",
+        publication: "new-file-only"
+      }
+    });
+
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(consoleAuditPath(configPath), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    const serialized = JSON.stringify(await service.previewPreset({
+      name: "support-tools",
+      preset,
+      ...options
+    }));
+    expect(serialized).not.toContain("SUPPORT_TOKEN");
+    expect(serialized).not.toContain(privateParent);
   });
 
   it("refuses a Windows npx preset before it can create a Console configuration", async () => {

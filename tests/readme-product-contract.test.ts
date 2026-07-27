@@ -85,6 +85,8 @@ describe("product README", () => {
     expect(readme).toContain("The generic `remote` path does not discover authentication or call the endpoint");
     expect(readme).toContain("Choose `browser sign-in` when the remote MCP opens a browser to authenticate you");
     expect(readme).toContain("Keep `miftah setup --native-oauth` for scripted or repeatable setup");
+    expect(readme).toContain("Add `--plan` to a complete noninteractive `miftah setup` command to validate and print its non-secret structure before Miftah writes anything.");
+    expect(readme).toContain("The Console uses the same review-before-write boundary: **Review configuration** validates a candidate without writing it, and **Create reviewed configuration** is the separate explicit write.");
     expect(readme).toContain("Remote MCP with browser sign-in");
     expect(readme).toContain("never asks for a token, password, or browser cookie");
     expect(readme).toContain("## First setup: GitHub with Claude Desktop");
@@ -109,6 +111,7 @@ describe("product README", () => {
     );
     expect(cliDocs).toContain("The completion handoff prints the actual configuration path in any later `miftah profile test` command.");
     expect(cliDocs).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
+    expect(cliDocs).toContain("`miftah setup ... --plan` validates a complete noninteractive first-configuration candidate and prints a structural, non-secret JSON plan without creating a directory, writing a file, or contacting an upstream.");
     expect(cliDocs).not.toContain("it first offers `new` or `import`");
   });
 

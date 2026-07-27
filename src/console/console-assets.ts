@@ -145,7 +145,13 @@ const page = `<!doctype html>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
           <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache. For a local executable, use the environment-variable field for a secret reference; never put a token in an argument.</p>
-          <div class="wide form-action"><button type="submit">Create configuration</button></div>
+          <div class="wide form-action"><button type="submit">Review configuration</button></div>
+          <div id="preset-review-view" class="wide setup-review" hidden aria-live="polite">
+            <p><strong>Review before Miftah writes.</strong> This summary excludes endpoints, paths, launch arguments, credential references, and secret values.</p>
+            <p id="preset-review-summary"></p>
+            <ul id="preset-review-details"></ul>
+            <div class="form-action"><button id="preset-create-reviewed" type="button" disabled>Create reviewed configuration</button><button id="preset-review-edit" type="button" class="secondary">Keep editing</button></div>
+          </div>
           <div class="wide form-action"><button id="native-oauth-setup-link" type="button" class="secondary">Remote MCP with browser sign-in</button></div>
         </form>
       </section>
@@ -468,6 +474,10 @@ button.secondary { color: var(--ink); background: var(--panel-raised); border: 1
 button.danger { color: #ffd7cf; background: transparent; border: 1px solid #70433a; }
 .form-action { display: flex; justify-content: flex-end; }
 .manual-recovery .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
+.setup-review { padding: 1rem; border: 1px solid var(--key); background: rgb(38 32 20 / 48%); }
+.setup-review p { margin: 0 0 .65rem; }
+.setup-review ul { display: grid; gap: .35rem; margin: .8rem 0 1rem; padding-left: 1.25rem; color: var(--muted); }
+.setup-review .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
 .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
@@ -534,6 +544,11 @@ const script = `(() => {
   const environmentProfileCredentialEnv = byId("environment-profile-credential-env");
   const nativeOAuthEditor = byId("native-oauth-editor");
   const nativeOAuthAccountEditor = byId("native-oauth-account-editor");
+  const presetReviewView = byId("preset-review-view");
+  const presetReviewSummary = byId("preset-review-summary");
+  const presetReviewDetails = byId("preset-review-details");
+  const presetCreateReviewed = byId("preset-create-reviewed");
+  const presetReviewEdit = byId("preset-review-edit");
   const presetInputNames = Object.freeze({
     generic: ["credentialEnv"],
     "github": [],
@@ -548,6 +563,9 @@ const script = `(() => {
   let profileReadinessTargets = [];
   let profileReadinessGeneration = 0;
   let setupCompletion = undefined;
+  let pendingPresetRequest = undefined;
+  let presetReviewGeneration = 0;
+  let presetCreateInFlight = false;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -560,6 +578,7 @@ const script = `(() => {
   function restoreUnlock() {
     csrfToken = "";
     setupCompletion = undefined;
+    clearPresetReview();
     if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
     if (onboardingView) onboardingView.hidden = true;
@@ -1170,6 +1189,102 @@ const script = `(() => {
     if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
   }
 
+  function setPresetReviewActionsDisabled(disabled) {
+    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = disabled;
+    if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = disabled;
+  }
+
+  function clearPresetReview() {
+    presetReviewGeneration += 1;
+    pendingPresetRequest = undefined;
+    if (presetReviewView instanceof HTMLElement) presetReviewView.hidden = true;
+    if (presetReviewSummary instanceof HTMLElement) presetReviewSummary.textContent = "";
+    if (presetReviewDetails instanceof HTMLElement) presetReviewDetails.replaceChildren();
+    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = true;
+    if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = presetCreateInFlight;
+  }
+
+  function renderPresetReview(value) {
+    const review = record(value);
+    const configuration = record(review.configuration);
+    if (configuration.sensitiveValues !== "omitted" || configuration.publication !== "new-file-only") {
+      throw new Error("Miftah did not return a safe configuration review.");
+    }
+    const profiles = Array.isArray(configuration.profiles)
+      ? configuration.profiles.filter((profile) => typeof profile === "string")
+      : [];
+    const upstreams = Array.isArray(configuration.upstreams) ? configuration.upstreams.map(record) : [];
+    const profileCount = profiles.length;
+    if (Object.prototype.hasOwnProperty.call(configuration, "profileCount") && configuration.profileCount !== profileCount) {
+      throw new Error("Miftah did not return a safe configuration review.");
+    }
+    const name = typeof configuration.name === "string" ? configuration.name : "this configuration";
+    const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "not set";
+    if (presetReviewSummary instanceof HTMLElement) {
+      presetReviewSummary.textContent = "Miftah will create '" + name + "' with " + profileCount + " account profile(s).";
+    }
+    if (presetReviewDetails instanceof HTMLElement) {
+      presetReviewDetails.replaceChildren();
+      [
+        "Durable default profile: " + defaultProfile,
+        "Profiles: " + (profiles.length > 0 ? profiles.join(", ") : "none"),
+        "Upstreams: " + (upstreams.length > 0
+          ? upstreams.map((upstream) => {
+              const upstreamName = typeof upstream.name === "string" ? upstream.name : "default";
+              const kind = typeof upstream.kind === "string" ? upstream.kind : "configured upstream";
+              const transport = typeof upstream.transport === "string" ? upstream.transport : "unknown transport";
+              return upstreamName + " — " + kind + " (" + transport + ")";
+            }).join("; ")
+          : "none"),
+        "Publication: a new configuration file only; existing files are never replaced."
+      ].forEach((text) => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        presetReviewDetails.append(item);
+      });
+    }
+    if (presetReviewView instanceof HTMLElement) presetReviewView.hidden = false;
+    setPresetReviewActionsDisabled(presetCreateInFlight);
+  }
+
+  function presetOnboardingRequest(form) {
+    const data = new FormData(form);
+    const request = {
+      name: String(data.get("name") || "").trim(),
+      preset: String(data.get("preset") || "")
+    };
+    const preset = request.preset;
+    const allowedNames = presetInputNames[preset] || [];
+    if (preset === "google-search-console") {
+      const googleSearchConsoleProfiles = collectGoogleSearchConsoleProfiles();
+      const defaultProfile = String(data.get("defaultProfile") || "").trim();
+      if (!googleSearchConsoleProfiles.some((profile) => profile.name === defaultProfile)) {
+        throw new Error("Choose one of the configured Google Search Console accounts as the default.");
+      }
+      request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
+      request.defaultProfile = defaultProfile;
+    } else if (preset === "local-stdio") {
+      const localCommand = String(data.get("localCommand") || "").trim();
+      const argumentText = String(data.get("args") || "");
+      const cwd = String(data.get("cwd") || "").trim();
+      const credentialEnv = String(data.get("credentialEnv") || "").trim();
+      request.localCommand = localCommand;
+      request.args = argumentText === "" ? [] : argumentText.split(/\\r?\\n/u);
+      request.acceptLocalCommand = data.get("acceptLocalCommand") === "true";
+      if (cwd) request.cwd = cwd;
+      if (credentialEnv) request.credentialEnv = credentialEnv;
+    } else {
+      ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
+        if (!allowedNames.includes(name)) return;
+        const value = String(data.get(name) || "").trim();
+        if (value) request[name] = value;
+      });
+      const headerPrefix = String(data.get("headerPrefix") || "");
+      if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
+    }
+    return request;
+  }
+
   function updateSetupSourceChoice(source) {
     const choice = byId("setup-source-choice");
     if (!(choice instanceof HTMLElement)) return;
@@ -1394,63 +1509,83 @@ const script = `(() => {
   if (presetOnboardingForm instanceof HTMLFormElement) {
     const presetSelection = byId("preset-selection");
     if (presetSelection instanceof HTMLSelectElement) {
-      presetSelection.addEventListener("change", updatePresetFields);
+      presetSelection.addEventListener("change", () => {
+        updatePresetFields();
+        clearPresetReview();
+      });
     }
     const addGoogleSearchConsoleAccount = byId("add-gsc-account");
     if (addGoogleSearchConsoleAccount instanceof HTMLButtonElement) {
       addGoogleSearchConsoleAccount.addEventListener("click", () => {
         const list = byId("gsc-account-list");
         if (!(list instanceof HTMLElement)) return;
+        clearPresetReview();
         list.append(createGoogleSearchConsoleAccountRow(googleSearchConsoleAccountRows().length));
         syncGoogleSearchConsoleDefaultProfile();
       });
     }
     updatePresetFields();
+    presetOnboardingForm.addEventListener("input", clearPresetReview);
+    presetOnboardingForm.addEventListener("change", clearPresetReview);
     presetOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      message("Creating the validated Miftah configuration…");
+      if (presetCreateInFlight) {
+        message("Wait for the reviewed configuration to finish creating.");
+        return;
+      }
+      clearPresetReview();
+      const reviewGeneration = presetReviewGeneration;
+      message("Validating the setup for review…");
       try {
-        const data = new FormData(presetOnboardingForm);
-        const request = {
-          name: String(data.get("name") || "").trim(),
-          preset: String(data.get("preset") || "")
-        };
-        const preset = request.preset;
-        const allowedNames = presetInputNames[preset] || [];
-        if (preset === "google-search-console") {
-          const googleSearchConsoleProfiles = collectGoogleSearchConsoleProfiles();
-          const defaultProfile = String(data.get("defaultProfile") || "").trim();
-          if (!googleSearchConsoleProfiles.some((profile) => profile.name === defaultProfile)) {
-            throw new Error("Choose one of the configured Google Search Console accounts as the default.");
-          }
-          request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
-          request.defaultProfile = defaultProfile;
-        } else if (preset === "local-stdio") {
-          const localCommand = String(data.get("localCommand") || "").trim();
-          const argumentText = String(data.get("args") || "");
-          const cwd = String(data.get("cwd") || "").trim();
-          const credentialEnv = String(data.get("credentialEnv") || "").trim();
-          request.localCommand = localCommand;
-          request.args = argumentText === "" ? [] : argumentText.split(/\\r?\\n/u);
-          request.acceptLocalCommand = data.get("acceptLocalCommand") === "true";
-          if (cwd) request.cwd = cwd;
-          if (credentialEnv) request.credentialEnv = credentialEnv;
-        } else {
-          ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
-            if (!allowedNames.includes(name)) return;
-            const value = String(data.get(name) || "").trim();
-            if (value) request[name] = value;
-          });
-          const headerPrefix = String(data.get("headerPrefix") || "");
-          if (allowedNames.includes("headerPrefix") && headerPrefix.trim()) request.headerPrefix = headerPrefix.trimStart();
-        }
+        const request = presetOnboardingRequest(presetOnboardingForm);
+        const review = record(await api("/api/v1/onboarding/preset/preview", { method: "POST", body: request }));
+        if (reviewGeneration !== presetReviewGeneration) return;
+        renderPresetReview(review);
+        pendingPresetRequest = request;
+        message("Review the structural summary, then create the configuration when it matches your intent.");
+      } catch (error) {
+        if (reviewGeneration === presetReviewGeneration) message(errorMessage(error));
+      }
+    });
+  }
+
+  if (presetCreateReviewed instanceof HTMLButtonElement) {
+    presetCreateReviewed.addEventListener("click", async () => {
+      const request = pendingPresetRequest;
+      if (request === undefined) {
+        message("Review a configuration before creating it.");
+        return;
+      }
+      if (presetCreateInFlight || presetCreateReviewed.disabled) return;
+      message("Creating the reviewed Miftah configuration…");
+      presetCreateInFlight = true;
+      setPresetReviewActionsDisabled(true);
+      try {
         const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
         setupCompletion = record(result.completion);
         renderSetupCompletion(setupCompletion);
-        presetOnboardingForm.reset();
-        updatePresetFields();
+        clearPresetReview();
+        if (presetOnboardingForm instanceof HTMLFormElement) {
+          presetOnboardingForm.reset();
+          updatePresetFields();
+        }
         await refresh();
       } catch (error) { message(errorMessage(error)); }
+      finally {
+        presetCreateInFlight = false;
+        if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
+      }
+    });
+  }
+
+  if (presetReviewEdit instanceof HTMLButtonElement) {
+    presetReviewEdit.addEventListener("click", () => {
+      clearPresetReview();
+      const name = presetOnboardingForm instanceof HTMLFormElement
+        ? presetOnboardingForm.querySelector("input[name='name']")
+        : undefined;
+      if (name instanceof HTMLInputElement) name.focus();
+      message("Update the setup details, then review the configuration again.");
     });
   }
 
