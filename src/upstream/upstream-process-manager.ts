@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -18,9 +18,14 @@ import { UpstreamSession } from "./upstream-session.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { mergeHeaders } from "./headers.js";
 import { resolveWindowsStdioCommand } from "./windows-stdio-command.js";
+import {
+  ContainedStdioClientTransport,
+  createContainedStdioClientTransport
+} from "./contained-stdio-transport.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
+const forcedGracefulCloseTimeoutMs = 100;
 const defaultMaxRestarts = 3;
 const initialRestartDelayMs = 100;
 const maximumRestartDelayMs = 5_000;
@@ -438,7 +443,7 @@ export class UpstreamProcessManager {
     const token = ++this.nextToken;
     let transport: Transport | undefined;
     let streamableTransport: StreamableHTTPClientTransport | undefined;
-    let stdioTransport: StdioClientTransport | undefined;
+    let stdioTransport: ContainedStdioClientTransport | undefined;
     let oauthProvider: ManagedOAuthClientProvider | undefined;
     let startingAttempt: StartingAttempt | undefined;
     let transportClosed = createCloseSignal();
@@ -483,13 +488,14 @@ export class UpstreamProcessManager {
         if (stdioCommand === undefined) {
           throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: stdio upstream requires a direct executable");
         }
-        stdioTransport = new StdioClientTransport({
+        stdioTransport = await createContainedStdioClientTransport({
           command: stdioCommand.command,
           args: [...stdioCommand.args],
           env: environment,
           ...(profileConfig.cwd ?? this.upstream.cwd ? { cwd: profileConfig.cwd ?? this.upstream.cwd } : {}),
           stderr: "pipe"
         });
+        this.assertCurrentStartup(profile, generation);
         transport = stdioTransport;
         this.attachStderr(profile, stdioTransport.stderr, suppressStderr);
       } else {
@@ -528,7 +534,7 @@ export class UpstreamProcessManager {
       startingAttempt.pid = stdioTransport?.pid ?? null;
       void connection.catch(() => undefined);
       try {
-        await this.awaitConnection(connection);
+        await this.awaitConnection(connection, transportClosed);
       } catch (error) {
         if (!(error instanceof UnauthorizedError) || oauthProvider === undefined || streamableTransport === undefined) {
           throw oauthProvider === undefined ? error : this.oauthAuthorizationFailure(error);
@@ -559,7 +565,7 @@ export class UpstreamProcessManager {
         connection = client.connect(transport);
         void connection.catch(() => undefined);
         try {
-          await this.awaitConnection(connection);
+          await this.awaitConnection(connection, transportClosed);
         } catch (connectionError) {
           throw this.oauthAuthorizationFailure(connectionError);
         }
@@ -660,9 +666,25 @@ export class UpstreamProcessManager {
     }
   }
 
-  private awaitConnection(connection: Promise<void>): Promise<void> {
+  private awaitConnection(connection: Promise<void>, transportClosed: TransportCloseSignal): Promise<void> {
+    const closedDuringStartup = transportClosed.promise.then(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          // A server can send an initialization error and immediately close.
+          // Let the protocol dispatch that response before classifying a pure
+          // transport close as a cancelled startup.
+          setImmediate(() => {
+            reject(
+              new MiftahError(
+                "UPSTREAM_START_FAILED",
+                "UPSTREAM_START_FAILED: upstream transport closed during initialization"
+              )
+            );
+          });
+        })
+    );
     return withTimeout(
-      connection,
+      Promise.race([connection, closedDuringStartup]),
       this.options.startupTimeoutMs,
       "UPSTREAM_START_FAILED",
       `UPSTREAM_START_FAILED: startup timed out after ${this.options.startupTimeoutMs}ms`
@@ -1151,6 +1173,31 @@ export class UpstreamProcessManager {
 
   /** Forcibly closes a transport without exceeding the configured shutdown bound. */
   private async forceCloseTransport(transport: Transport, pid: number | null): Promise<void> {
+    const underlying = unwrapProgressPreservingTransport(transport);
+    if (underlying instanceof ContainedStdioClientTransport) {
+      let closedGracefully = false;
+      const gracefulTimeoutMs = Math.min(this.options.shutdownTimeoutMs, forcedGracefulCloseTimeoutMs);
+      await withTimeout(
+        Promise.resolve().then(() => transport.close()),
+        gracefulTimeoutMs,
+        "UPSTREAM_SHUTDOWN_TIMEOUT",
+        `UPSTREAM_SHUTDOWN_TIMEOUT: forced transport close timed out after ${gracefulTimeoutMs}ms`
+      ).then(
+        () => {
+          closedGracefully = true;
+        },
+        () => undefined
+      );
+      if (!closedGracefully) {
+        await withTimeout(
+          underlying.forceTerminate(),
+          this.options.shutdownTimeoutMs,
+          "UPSTREAM_SHUTDOWN_TIMEOUT",
+          `UPSTREAM_SHUTDOWN_TIMEOUT: process-tree cleanup timed out after ${this.options.shutdownTimeoutMs}ms`
+        ).catch(() => undefined);
+      }
+      return;
+    }
     if (pid !== null) {
       try {
         process.kill(pid, "SIGKILL");

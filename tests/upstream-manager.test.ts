@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { describe, expect, it, vi } from "vitest";
+import { ContainedStdioClientTransport } from "../src/upstream/contained-stdio-transport.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
@@ -54,8 +54,18 @@ function terminateFixtureProcess(pid: number): void {
   }
 }
 
-/** Observes the SDK's public close callback without coupling the test to its private child handle. */
-function observeTransportClose(transport: StdioClientTransport, onClose: () => void): void {
+function fixtureProcessIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+/** Observes the public close callback without coupling the test to its private child handle. */
+function observeTransportClose(transport: ContainedStdioClientTransport, onClose: () => void): void {
   const wrap = (callback: (() => void) | undefined): (() => void) | undefined =>
     callback === undefined
       ? undefined
@@ -595,6 +605,62 @@ describe("upstream process manager", () => {
     }
   });
 
+  it("reaps a retained stdio descendant before recovering from an unexpected parent exit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-crashed-stdio-descendant-"));
+    const crashPath = join(directory, "crash");
+    const descendantPidPath = join(directory, "descendant-pid");
+    const restartGatePath = join(directory, "restart-gate");
+    const restartReadyPath = join(directory, "restart-ready");
+    const startCountPath = join(directory, "starts");
+    let descendantPid: number | undefined;
+    await writeFile(startCountPath, "");
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [retainedStdioDescendantFixture],
+        env: {
+          TEST_CRASH_ON_CALL_TOOL_PATH: crashPath,
+          TEST_RETAINED_STDIO_DESCENDANT_PID_PATH: descendantPidPath,
+          TEST_HANG_ON_START_PATH: restartGatePath,
+          TEST_HANG_ON_START_READY_PATH: restartReadyPath,
+          TEST_START_COUNT_PATH: startCountPath
+        }
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000, restartOnCrash: true, maxRestarts: 1 }
+    );
+
+    try {
+      const session = await manager.get("work");
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      const crashedDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(crashedDescendantPid)).toBe(true);
+
+      await Promise.all([writeFile(crashPath, "crash"), writeFile(restartGatePath, "restart")]);
+      await expect(session.callTool({ name: "whoami", arguments: {} })).rejects.toThrow();
+
+      await waitFor(
+        () => fixtureProcessIsAlive(crashedDescendantPid),
+        (alive) => alive === false,
+        1_000
+      );
+      await waitFor(() => countStarts(startCountPath), (starts) => starts === 2);
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      await waitFor(() => existsSync(restartReadyPath), Boolean);
+      await Promise.all([unlink(crashPath), unlink(restartGatePath)]);
+      await expect((await manager.get("work")).callTool({ name: "whoami", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: "unknown" }]
+      });
+    } finally {
+      if (descendantPid !== undefined && fixtureProcessIsAlive(descendantPid)) {
+        terminateFixtureProcess(descendantPid);
+      }
+      await manager.close().catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("stops automatic recovery when the configured restart budget is exhausted", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-restart-limit-"));
     const crashPath = join(directory, "crash");
@@ -735,6 +801,10 @@ describe("upstream process manager", () => {
     );
 
     const startup = manager.get("work");
+    // Shutdown can now contain the child before this test reaches its final
+    // assertion; observe the rejection immediately to avoid a test-runner
+    // unhandled-rejection race while still asserting the original promise.
+    void startup.catch(() => undefined);
     await delay(50);
     const startedAt = Date.now();
     await manager.close();
@@ -823,12 +893,12 @@ describe("upstream process manager", () => {
       { work: {} },
       { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25 }
     );
-    const originalStart = StdioClientTransport.prototype.start;
+    const originalStart = ContainedStdioClientTransport.prototype.start;
     let firstTransportStarted = false;
     let firstChildClosed = false;
     let replacementStartedBeforeFirstChildClosed = false;
-    const start = vi.spyOn(StdioClientTransport.prototype, "start").mockImplementation(async function (
-      this: StdioClientTransport
+    const start = vi.spyOn(ContainedStdioClientTransport.prototype, "start").mockImplementation(async function (
+      this: ContainedStdioClientTransport
     ) {
       if (firstTransportStarted) {
         replacementStartedBeforeFirstChildClosed ||= !firstChildClosed;
@@ -854,7 +924,7 @@ describe("upstream process manager", () => {
     }
   });
 
-  it("blocks a replacement while forced stdio cleanup remains pending", async () => {
+  it("reaps forced stdio descendants before starting a replacement", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-retained-stdio-descendant-"));
     const descendantPidPath = join(directory, "descendant-pid");
     const startCountPath = join(directory, "starts");
@@ -877,20 +947,19 @@ describe("upstream process manager", () => {
     try {
       await manager.get("work");
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      const firstDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(firstDescendantPid)).toBe(true);
 
-      await expect(manager.restart("work")).rejects.toMatchObject({ code: "UPSTREAM_SHUTDOWN_TIMEOUT" });
-      expect(await countStarts(startCountPath)).toBe(1);
-
-      terminateFixtureProcess(descendantPid);
-      descendantPid = undefined;
+      await expect(manager.restart("work")).resolves.toBeDefined();
       await waitFor(
-        () => manager.listHealth().find((health) => health.profile === "work")?.processState,
-        (state) => state === "stopped"
+        () => fixtureProcessIsAlive(firstDescendantPid),
+        (alive) => alive === false
+      );
+      await waitFor(
+        () => countStarts(startCountPath),
+        (starts) => starts === 2
       );
 
-      await expect(manager.get("work")).resolves.toBeDefined();
-      expect(await countStarts(startCountPath)).toBe(2);
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
       expect(Number.isSafeInteger(descendantPid)).toBe(true);
     } finally {
@@ -902,7 +971,88 @@ describe("upstream process manager", () => {
     }
   });
 
-  it("retains profile capacity when a second close observes pending stdio cleanup", async () => {
+  it("reaps retained stdio descendants before manager shutdown resolves", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-close-stdio-descendant-"));
+    const descendantPidPath = join(directory, "descendant-pid");
+    let descendantPid: number | undefined;
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [retainedStdioDescendantFixture],
+        env: {
+          TEST_RETAINED_STDIO_DESCENDANT_PID_PATH: descendantPidPath,
+          TEST_SHUTDOWN_DELAY_MS: "10000"
+        }
+      },
+      { work: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 }
+    );
+
+    try {
+      await manager.get("work");
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      const recordedDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(recordedDescendantPid)).toBe(true);
+
+      await manager.close();
+
+      await waitFor(
+        () => fixtureProcessIsAlive(recordedDescendantPid),
+        (alive) => alive === false,
+        1_000
+      );
+    } finally {
+      if (descendantPid !== undefined && fixtureProcessIsAlive(descendantPid)) {
+        terminateFixtureProcess(descendantPid);
+      }
+      await manager.close().catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a profile teardown gate until delayed contained cleanup confirms close", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-delayed-contained-cleanup-"));
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const originalClose = ContainedStdioClientTransport.prototype.close;
+    const close = vi.spyOn(ContainedStdioClientTransport.prototype, "close").mockImplementation(function (
+      this: ContainedStdioClientTransport
+    ) {
+      return closeGate.then(() => originalClose.call(this));
+    });
+    const forceTerminate = vi.spyOn(ContainedStdioClientTransport.prototype, "forceTerminate").mockResolvedValue();
+    const manager = new UpstreamProcessManager(
+      { transport: "stdio", command: process.execPath, args: [fixture] },
+      { work: {}, personal: {} },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25, maxConcurrentProfiles: 1 }
+    );
+
+    try {
+      await manager.get("work");
+
+      await expect(manager.restart("work")).rejects.toMatchObject({ code: "UPSTREAM_SHUTDOWN_TIMEOUT" });
+      await expect(manager.get("work")).rejects.toMatchObject({ code: "UPSTREAM_SHUTDOWN_TIMEOUT" });
+      await expect(manager.get("personal")).rejects.toMatchObject({ code: "UPSTREAM_CONCURRENCY_LIMIT" });
+
+      releaseClose();
+      await waitFor(
+        () => manager.listHealth().find((health) => health.profile === "work")?.processState,
+        (state) => state === "stopped"
+      );
+      await expect(manager.get("personal")).resolves.toBeDefined();
+    } finally {
+      releaseClose();
+      await manager.close().catch(() => undefined);
+      forceTerminate.mockRestore();
+      close.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("releases profile capacity when a second close follows contained stdio cleanup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-pending-stdio-capacity-"));
     const descendantPidPath = join(directory, "descendant-pid");
     const workStartCountPath = join(directory, "work-starts");
@@ -933,19 +1083,25 @@ describe("upstream process manager", () => {
     try {
       await manager.get("work");
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      const firstDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(firstDescendantPid)).toBe(true);
 
-      await expect(manager.restart("work")).rejects.toMatchObject({ code: "UPSTREAM_SHUTDOWN_TIMEOUT" });
-      await manager.closeProfile("work");
-      expect(await countStarts(workStartCountPath)).toBe(1);
-      await expect(manager.get("personal")).rejects.toMatchObject({ code: "UPSTREAM_CONCURRENCY_LIMIT" });
-
-      terminateFixtureProcess(descendantPid);
-      descendantPid = undefined;
+      await expect(manager.restart("work")).resolves.toBeDefined();
       await waitFor(
-        () => manager.listHealth().find((health) => health.profile === "work")?.processState,
-        (state) => state === "stopped"
+        () => fixtureProcessIsAlive(firstDescendantPid),
+        (alive) => alive === false
       );
+      expect(await countStarts(workStartCountPath)).toBe(2);
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      const replacementDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(replacementDescendantPid)).toBe(true);
+
+      await manager.closeProfile("work");
+      await waitFor(
+        () => fixtureProcessIsAlive(replacementDescendantPid),
+        (alive) => alive === false
+      );
+      descendantPid = undefined;
 
       await expect(manager.get("personal")).resolves.toBeDefined();
       expect(await countStarts(personalStartCountPath)).toBe(1);
@@ -958,16 +1114,16 @@ describe("upstream process manager", () => {
     }
   });
 
-  it("retains profile capacity while a concurrent close races timed-out stdio cleanup", async () => {
+  it("keeps profile capacity and containment during a concurrent stdio close and restart", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-racing-stdio-capacity-"));
     const descendantPidPath = join(directory, "descendant-pid");
     const workStartCountPath = join(directory, "work-starts");
     const personalStartCountPath = join(directory, "personal-starts");
     let descendantPid: number | undefined;
     let closeStarted = false;
-    const originalClose = StdioClientTransport.prototype.close;
-    const close = vi.spyOn(StdioClientTransport.prototype, "close").mockImplementation(async function (
-      this: StdioClientTransport
+    const originalClose = ContainedStdioClientTransport.prototype.close;
+    const close = vi.spyOn(ContainedStdioClientTransport.prototype, "close").mockImplementation(async function (
+      this: ContainedStdioClientTransport
     ) {
       closeStarted = true;
       await originalClose.call(this);
@@ -997,22 +1153,29 @@ describe("upstream process manager", () => {
     try {
       await manager.get("work");
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      const firstDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(firstDescendantPid)).toBe(true);
 
       const restarting = manager.restart("work");
-      void restarting.catch(() => undefined);
       await waitFor(() => closeStarted, Boolean);
       await manager.closeProfile("work");
-      await expect(restarting).rejects.toMatchObject({ code: "UPSTREAM_SHUTDOWN_TIMEOUT" });
-      expect(await countStarts(workStartCountPath)).toBe(1);
+      await expect(restarting).resolves.toBeDefined();
+      await waitFor(
+        () => fixtureProcessIsAlive(firstDescendantPid),
+        (alive) => alive === false
+      );
+      expect(await countStarts(workStartCountPath)).toBe(2);
       await expect(manager.get("personal")).rejects.toMatchObject({ code: "UPSTREAM_CONCURRENCY_LIMIT" });
 
-      terminateFixtureProcess(descendantPid);
-      descendantPid = undefined;
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      const replacementDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(replacementDescendantPid)).toBe(true);
+      await manager.closeProfile("work");
       await waitFor(
-        () => manager.listHealth().find((health) => health.profile === "work")?.processState,
-        (state) => state === "stopped"
+        () => fixtureProcessIsAlive(replacementDescendantPid),
+        (alive) => alive === false
       );
+      descendantPid = undefined;
 
       await expect(manager.get("personal")).resolves.toBeDefined();
       expect(await countStarts(personalStartCountPath)).toBe(1);
@@ -1026,7 +1189,7 @@ describe("upstream process manager", () => {
     }
   });
 
-  it("retains profile capacity when automatic recovery exhausts with pending stdio cleanup", async () => {
+  it("reaps descendants before releasing capacity when automatic recovery is exhausted", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-auto-pending-stdio-capacity-"));
     const crashPath = join(directory, "crash");
     const failOnRestartPath = join(directory, "fail-on-restart");
@@ -1072,16 +1235,14 @@ describe("upstream process manager", () => {
         (health) => health?.restartLimitReached === true
       );
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      const retainedDescendantPid = descendantPid;
+      expect(Number.isSafeInteger(retainedDescendantPid)).toBe(true);
       expect(await countStarts(workStartCountPath)).toBe(2);
-      await expect(manager.get("personal")).rejects.toMatchObject({ code: "UPSTREAM_CONCURRENCY_LIMIT" });
-
-      terminateFixtureProcess(descendantPid);
-      descendantPid = undefined;
       await waitFor(
-        () => manager.listHealth().find((health) => health.profile === "work")?.processState,
-        (state) => state === "stopped"
+        () => fixtureProcessIsAlive(retainedDescendantPid),
+        (alive) => alive === false
       );
+      descendantPid = undefined;
 
       await expect(manager.get("personal")).resolves.toBeDefined();
       expect(await countStarts(personalStartCountPath)).toBe(1);
