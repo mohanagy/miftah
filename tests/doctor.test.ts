@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -61,6 +62,10 @@ function baseConfig(upstream: Record<string, unknown>, profiles: Record<string, 
   };
 }
 
+function fixtureLifecycleDiagnostic(startedPath: string, initializedPath: string): string {
+  return `Fixture lifecycle markers: source-loaded=${existsSync(startedPath)}, initialized=${existsSync(initializedPath)}`;
+}
+
 function check(report: Awaited<ReturnType<typeof runDoctor>>, code: DoctorCode): DoctorCheck {
   const found = report.checks.find((item) => item.code === code);
   if (!found) throw new Error(`Expected ${code} check.`);
@@ -94,6 +99,8 @@ afterEach(async () => {
 
 describe("doctor readiness runner", () => {
   it("reports a healthy real stdio runtime and closes its child process", async () => {
+    const startedPath = join(fixtureDirectory, "healthy", "upstream-started");
+    const initializedPath = join(fixtureDirectory, "healthy", "upstream-initialized");
     const shutdownPath = join(fixtureDirectory, "healthy", "upstream-ended");
     const auditPath = join(fixtureDirectory, "healthy", "audit", "events.jsonl");
     const { configPath } = await writeConfig(
@@ -102,6 +109,8 @@ describe("doctor readiness runner", () => {
         ...baseConfig(
           stdioUpstream({
             TEST_ACCOUNT_NAME: "secretref:dotenv://MIFTAH_DOCTOR_ACCOUNT",
+            TEST_START_COUNT_PATH: startedPath,
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_SHUTDOWN_END_PATH: shutdownPath
           })
         ),
@@ -113,7 +122,10 @@ describe("doctor readiness runner", () => {
 
     const report = await runDoctor(configPath);
 
-    expect(report).toMatchObject({ overallStatus: "healthy", ok: true });
+    expect(report.overallStatus, fixtureLifecycleDiagnostic(startedPath, initializedPath)).toBe("healthy");
+    expect(report.ok).toBe(true);
+    expect(existsSync(startedPath), fixtureLifecycleDiagnostic(startedPath, initializedPath)).toBe(true);
+    expect(existsSync(initializedPath), fixtureLifecycleDiagnostic(startedPath, initializedPath)).toBe(true);
     for (const code of [
       DOCTOR_CODES.CONFIGURATION,
       DOCTOR_CODES.SECRET_REFERENCES,
