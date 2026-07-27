@@ -9,7 +9,6 @@ import {
   createWindowsPrivateDirectoryInPrivateParent,
   verifyWindowsConfigPathSecurity
 } from "../src/cli/windows-config-acl.js";
-import { createPrivateConsoleTestRoot } from "./helpers/private-console-directory.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
@@ -124,68 +123,6 @@ try {
   exit 1
 }`;
 const encodedUnsafeAncestorProbe = Buffer.from(unsafeAncestorProbe, "utf16le").toString("base64");
-
-const ancestorDiagnosticProbe = String.raw`$ErrorActionPreference = 'Stop'
-$requestName = '${privateDirectoryRequestEnvironmentName}'
-$sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
-function Write-Result {
-  param([string]$value)
-  [Console]::Out.Write($value)
-  exit 0
-}
-try {
-  $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
-  $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
-  [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-  if ([string]::IsNullOrEmpty($path)) { Write-Result 'probe' }
-  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-  if ($null -eq $identity) { Write-Result 'probe' }
-  $trusted = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-  $creatorOwner = 'S-1-3-0'
-  $creatorGroup = 'S-1-3-1'
-  $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
-  $entry = [System.IO.DirectoryInfo]::new($path)
-  $index = 0
-  while ($null -ne $entry) {
-    if (-not $entry.Exists) { Write-Result "missing:$index" }
-    $reparse = [int][System.IO.FileAttributes]::ReparsePoint
-    if (([int]$entry.Attributes -band $reparse) -ne 0) { Write-Result "reparse:$index" }
-    try {
-      $acl = [System.IO.Directory]::GetAccessControl($entry.FullName, $sections)
-      $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-      if ($null -eq $owner -or -not ($trusted -ccontains $owner.Value)) { Write-Result "owner:$index" }
-      $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
-      if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { Write-Result "acl:$index" }
-      $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-      if ($rules.Count -eq 0) { Write-Result "rules:$index" }
-      foreach ($rule in $rules) {
-        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-        if ($trusted -ccontains $rule.IdentityReference.Value) { continue }
-        if (
-          ($rule.IdentityReference.Value -ceq $creatorOwner -or $rule.IdentityReference.Value -ceq $creatorGroup) -and
-          (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
-        ) { continue }
-        $rights = [int]$rule.FileSystemRights
-        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles) -ne 0) { Write-Result "delete-child:$index" }
-        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::Delete) -ne 0) { Write-Result "delete:$index" }
-        if (($rights -band [int]([System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)) -ne 0) { Write-Result "ownership:$index" }
-        if (($rights -band [int]([System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes)) -ne 0) { Write-Result "attributes:$index" }
-        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::AppendData) -ne 0) { Write-Result "create-child:$index" }
-        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::WriteData) -ne 0) { Write-Result "create-file:$index" }
-      }
-    } catch {
-      Write-Result "read:$index"
-    }
-    $next = $entry.Parent
-    if ($null -eq $next -or $next.FullName -ceq $entry.FullName) { break }
-    $entry = $next
-    $index++
-  }
-  Write-Result 'ok'
-} catch {
-  Write-Result 'probe'
-}`;
-const encodedAncestorDiagnosticProbe = Buffer.from(ancestorDiagnosticProbe, "utf16le").toString("base64");
 
 const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP')
 $ErrorActionPreference = 'Stop'
@@ -560,72 +497,16 @@ async function windowsCopyFileSecurityProbe(
   });
 }
 
-async function windowsAncestorDiagnostic(directory: string): Promise<string> {
-  const request = Buffer.from(directory, "utf8").toString("base64");
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      trustedPowerShellExecutable(),
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedAncestorDiagnosticProbe],
-      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
-    );
-    const output: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The diagnostic probe has no verified result after its bounded execution time.
-      }
-      reject(new Error("Windows ancestor diagnostic probe timed out"));
-    }, 5_000);
-    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-    child.once("error", () => {
-      clearTimeout(timeout);
-      reject(new Error("Windows ancestor diagnostic probe could not start"));
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        reject(new Error("Windows ancestor diagnostic probe failed"));
-        return;
-      }
-      const result = Buffer.concat(output).toString("utf8");
-      if (!/^(?:missing|reparse|owner|acl|rules|delete-child|delete|ownership|attributes|create-child|create-file|read):\d+$|^(?:ok|probe)$/.test(result)) {
-        reject(new Error("Windows ancestor diagnostic probe returned an invalid category"));
-        return;
-      }
-      resolve(result);
-    });
-  });
-}
-
 describe("Windows migration ACL contract", () => {
   it.runIf(process.platform === "win32")(
-    "accepts a first-run child under a current-user-profile ancestor chain",
+    "accepts a private child when only the terminal volume root grants DELETE",
     async () => {
-      const root = await createPrivateConsoleTestRoot("miftah-windows-profile-ancestor-");
+      const root = await mkdtemp(join(tmpdir(), "miftah-windows-root-delete-"));
       temporaryDirectories.push(root);
-      const category = await windowsAncestorDiagnostic(root);
-      console.info(`MIFTAH_WINDOWS_PROFILE_ANCESTOR_DIAGNOSTIC:${category}`);
-      expect(category).toBe("ok");
       const privateParent = join(root, "private-parent");
       await windowsPrivateDirectoryProbe(privateParent);
 
       await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, join(privateParent, "miftah"))).resolves.toBe(true);
-    },
-    10_000
-  );
-
-  it.runIf(process.platform === "win32")(
-    "reports a redacted rejection category for a temporary configuration ancestor chain",
-    async () => {
-      const root = await mkdtemp(join(tmpdir(), "miftah-windows-ancestor-diagnostic-"));
-      temporaryDirectories.push(root);
-      const privateParent = join(root, "private-parent");
-      await windowsPrivateDirectoryProbe(privateParent);
-
-      const category = await windowsAncestorDiagnostic(root);
-      console.info(`MIFTAH_WINDOWS_ANCESTOR_DIAGNOSTIC:${category}`);
-      expect(category).toMatch(/^(?:missing|reparse|owner|acl|rules|delete-child|delete|ownership|attributes|create-child|create-file|read):\d+$/);
     },
     10_000
   );

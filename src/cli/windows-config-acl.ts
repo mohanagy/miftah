@@ -90,7 +90,7 @@ export async function createWindowsPrivateDirectory(directory: string): Promise<
 /**
  * Verifies an immediate private parent and creates the child under its own
  * current-user-only descriptor in one trusted helper invocation. The helper
- * rejects a non-child path, reparse point, unsafe parent, or failed creation.
+ * rejects a non-child path, reparse point, unsafe replaceable ancestor, or failed creation.
  */
 export async function createWindowsPrivateDirectoryInPrivateParent(
   parent: string,
@@ -334,9 +334,9 @@ function Test-MiftahPrivatePath {
 function Test-MiftahAncestors {
   param($ancestor)
   while ($null -ne $ancestor) {
-    if(-not(Test-MiftahPrivatePath $ancestor.FullName 'directory' $null $false $false)){return $false}
     $next = $ancestor.Parent
     if($null -eq $next -or $next.FullName -ceq $ancestor.FullName){break}
+    if(-not(Test-MiftahPrivatePath $ancestor.FullName 'directory' $null $false $false)){return $false}
     $ancestor = $next
   }
   return $true

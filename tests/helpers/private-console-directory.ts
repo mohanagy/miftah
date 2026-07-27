@@ -1,5 +1,4 @@
-import { chmod, mkdir, mkdtemp, open, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { chmod, mkdir, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   createWindowsPrivateDirectory,
@@ -27,15 +26,6 @@ export async function createPrivateConsoleDirectory(parent: string, name = "conf
     throw new Error("Windows Console test directory did not pass production ACL verification.");
   }
   return directory;
-}
-
-/**
- * Creates a disposable root for tests that exercise Windows first-run creation.
- * The system temporary hierarchy is mutable by untrusted principals on hosted
- * Windows runners, so it cannot model a protected configuration ancestor chain.
- */
-export async function createPrivateConsoleTestRoot(prefix: string): Promise<string> {
-  return mkdtemp(join(process.platform === "win32" ? homedir() : tmpdir(), prefix));
 }
 
 /** Writes a fresh fixture file only after its Windows ACL is private and verified. */
