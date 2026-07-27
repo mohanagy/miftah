@@ -4,7 +4,7 @@ import type { ListenOptions, Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
-const macOSFallbackCandidateCount = 7;
+export const macOSFallbackCandidateCount = 7;
 // macOS retains one canonical candidate to preserve coordination with older Miftah versions, then
 // uses a bounded deterministic fallback set only when that candidate is proven unrelated.
 // Windows and Linux recognize an exact holder on that legacy candidate and hold a best-effort
@@ -169,14 +169,17 @@ async function tryAcquireMacOSFallback(
   endpoints: readonly OAuthLocalLockProbeEndpoint[],
   key: string
 ): Promise<LocalLock | undefined> {
+  // Every endpoint must be inspected before choosing a fallback because a later matching or
+  // incomplete probe overrides an earlier available one. Run that complete inspection together
+  // so the bounded fallback scan takes one probe round trip rather than one per endpoint.
+  const states = await Promise.all(endpoints.map((endpoint) => inspectLocalLockEndpoint(endpoint, key)));
   let candidate: OAuthLocalLockProbeEndpoint | undefined;
-  for (const endpoint of endpoints) {
-    const state = await inspectLocalLockEndpoint(endpoint, key);
+  for (const [index, state] of states.entries()) {
     // A matching holder or incomplete probe may be a same-key process acquiring a fallback. Do not
     // choose another endpoint until that state has resolved, or one key could split across locks.
     if (state === "held" || state === "unknown") return undefined;
     if (state === "occupied") continue;
-    candidate ??= endpoint;
+    candidate ??= endpoints[index];
   }
   if (candidate === undefined) return undefined;
   // All contenders choose the first available endpoint. If it is won concurrently, retry from the

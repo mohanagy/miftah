@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
-import type { Server } from "node:net";
+import type { Server, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
   createOAuthLocalLockListenOptions,
   createOAuthLocalLockStrategy,
+  macOSFallbackCandidateCount,
   OAuthLocalLockUnavailableError,
   withOAuthLocalLock
 } from "../src/oauth/local-lock.js";
@@ -39,7 +40,7 @@ function fallbackCandidatePorts(scope: string, value: string): readonly number[]
   const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
   const ports = new Set<number>([firstCandidatePort(scope, value)]);
   const candidates: number[] = [];
-  for (let index = 1; index <= 7; index += 1) {
+  for (let index = 1; index <= macOSFallbackCandidateCount; index += 1) {
     const port = portStart + (Number.parseInt(key.slice(index * 8, (index + 1) * 8), 16) % portCount);
     if (ports.has(port)) continue;
     ports.add(port);
@@ -87,6 +88,42 @@ async function tryHoldAmbiguousListener(port: number): Promise<Server | undefine
       resolve(server);
     });
   });
+}
+
+async function tryHoldFallbackProbeBarriers(ports: readonly number[]): Promise<readonly Server[] | undefined> {
+  const sockets = new Set<Socket>();
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    for (const socket of sockets) socket.end("unrelated-listener\n");
+  };
+  const servers: Server[] = [];
+  for (const port of ports) {
+    const server = createServer((socket) => {
+      if (released) {
+        socket.end("unrelated-listener\n");
+        return;
+      }
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      if (sockets.size === ports.length) release();
+    });
+    const listening = await new Promise<boolean>((resolve) => {
+      const onError = (): void => resolve(false);
+      server.once("error", onError);
+      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+        server.off("error", onError);
+        resolve(true);
+      });
+    });
+    if (!listening) {
+      await Promise.all(servers.map((existing) => close(existing)));
+      return undefined;
+    }
+    servers.push(server);
+  }
+  return servers;
 }
 
 async function close(server: Server): Promise<void> {
@@ -288,6 +325,38 @@ describe("OAuth local lock", () => {
       expect(operation).toHaveBeenCalledOnce();
     } finally {
       await close(blocker);
+    }
+  });
+
+  it("probes macOS fallback candidates concurrently before selecting the first available endpoint", async () => {
+    const scope = "macos-fallback-concurrent-probe-regression";
+    let value = "";
+    let legacyBlocker: Server | undefined;
+    let fallbackBlockers: readonly Server[] = [];
+    for (let index = 0; index < 256 && legacyBlocker === undefined; index += 1) {
+      const candidateValue = `connection-${index}`;
+      const fallbackPorts = fallbackCandidatePorts(scope, candidateValue);
+      if (fallbackPorts.length < 2) continue;
+      const candidateFallbackBlockers = await tryHoldFallbackProbeBarriers(fallbackPorts.slice(0, -1));
+      if (candidateFallbackBlockers === undefined) continue;
+      const candidateLegacyBlocker = await tryOccupy(firstCandidatePort(scope, candidateValue));
+      if (candidateLegacyBlocker === undefined) {
+        await Promise.all(candidateFallbackBlockers.map((server) => close(server)));
+        continue;
+      }
+      value = candidateValue;
+      fallbackBlockers = candidateFallbackBlockers;
+      legacyBlocker = candidateLegacyBlocker;
+    }
+    if (legacyBlocker === undefined) throw new Error("Could not reserve deterministic macOS fallback probe barriers");
+
+    const operation = vi.fn(async () => undefined);
+    try {
+      await withOAuthLocalLock(scope, value, 400, operation, "darwin");
+      expect(operation).toHaveBeenCalledOnce();
+    } finally {
+      await close(legacyBlocker);
+      await Promise.all(fallbackBlockers.map((server) => close(server)));
     }
   });
 
