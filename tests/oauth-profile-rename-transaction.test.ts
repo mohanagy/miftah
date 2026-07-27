@@ -25,11 +25,115 @@ import {
   MemoryProfileRenameMetadataStore as MemoryMetadataStore
 } from "./helpers/profile-rename-oauth-dependencies.js";
 
+type ProfileRenameTimeoutDiagnosticPhase =
+  | "test-setup"
+  | "transaction-forward"
+  | "audit-finalization"
+  | "config-restore"
+  | "vault-rollback"
+  | "metadata-rollback"
+  | "journal-cleanup"
+  | "assertions"
+  | "test-cleanup";
+
+const profileRenameTimeoutDiagnostic = vi.hoisted(() => ({
+  active: false,
+  auditFinalizationFailed: false,
+  phase: "test-setup" as ProfileRenameTimeoutDiagnosticPhase
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>): Promise<void> => {
+      const [path] = args;
+      if (
+        profileRenameTimeoutDiagnostic.active &&
+        typeof path === "string" &&
+        (path.endsWith(".miftah-oauth-profile-rename-journal") || path.includes(".miftah-oauth-profile-rename-source-"))
+      ) {
+        profileRenameTimeoutDiagnostic.phase = "journal-cleanup";
+      }
+      await actual.rm(...args);
+    }
+  };
+});
+
+vi.mock("../src/cli/migrate-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/cli/migrate-config.js")>();
+  return {
+    ...actual,
+    applyConfigReplacement: async (...args: Parameters<typeof actual.applyConfigReplacement>): Promise<string> => {
+      if (profileRenameTimeoutDiagnostic.active) profileRenameTimeoutDiagnostic.phase = "transaction-forward";
+      return actual.applyConfigReplacement(...args);
+    },
+    restoreConfigReplacementWithoutPublishingBackup: async (
+      ...args: Parameters<typeof actual.restoreConfigReplacementWithoutPublishingBackup>
+    ): Promise<void> => {
+      if (profileRenameTimeoutDiagnostic.active && profileRenameTimeoutDiagnostic.auditFinalizationFailed) {
+        profileRenameTimeoutDiagnostic.phase = "config-restore";
+      }
+      await actual.restoreConfigReplacementWithoutPublishingBackup(...args);
+    }
+  };
+});
+
 const directories: string[] = [];
 const connectionRef = "oauthconn:11111111-1111-4111-8111-111111111111";
+let profileRenameTimeoutDiagnosticStop: (() => void) | undefined;
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  const stopTimeoutDiagnostic = profileRenameTimeoutDiagnosticStop;
+  if (stopTimeoutDiagnostic !== undefined) profileRenameTimeoutDiagnostic.phase = "test-cleanup";
+  try {
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  } finally {
+    stopTimeoutDiagnostic?.();
+    profileRenameTimeoutDiagnosticStop = undefined;
+    profileRenameTimeoutDiagnostic.active = false;
+    profileRenameTimeoutDiagnostic.auditFinalizationFailed = false;
+    profileRenameTimeoutDiagnostic.phase = "test-setup";
+  }
+});
+
+function startProfileRenameTimeoutDiagnostic({
+  test,
+  phase,
+  delayMs = 4_500
+}: {
+  readonly test: "audit-finalization-rollback";
+  readonly phase: () => ProfileRenameTimeoutDiagnosticPhase;
+  readonly delayMs?: number;
+}): () => void {
+  const timeout = setTimeout(() => {
+    process.stderr.write(
+      `MIFTAH_OAUTH_PROFILE_RENAME_TIMEOUT_DIAGNOSTIC: test=${test}; phase=${phase()}\n`
+    );
+  }, delayMs);
+  timeout.unref();
+  return () => clearTimeout(timeout);
+}
+
+describe("OAuth profile-rename timeout diagnostic", () => {
+  it("emits only a fixed rollback phase label before the test deadline", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const stop = startProfileRenameTimeoutDiagnostic({
+        test: "audit-finalization-rollback",
+        phase: () => "config-restore",
+        delayMs: 0
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      stop();
+
+      expect(write).toHaveBeenCalledWith(
+        "MIFTAH_OAUTH_PROFILE_RENAME_TIMEOUT_DIAGNOSTIC: test=audit-finalization-rollback; phase=config-restore\n"
+      );
+    } finally {
+      write.mockRestore();
+    }
+  });
 });
 
 function binding(configPath: string, profile: string, reference = connectionRef) {
@@ -352,6 +456,14 @@ describe("native OAuth profile rename transaction", () => {
   });
 
   it("restores config, vault, and metadata when required audit finalization fails", async () => {
+    if (process.platform === "win32") {
+      profileRenameTimeoutDiagnostic.active = true;
+      profileRenameTimeoutDiagnostic.phase = "test-setup";
+      profileRenameTimeoutDiagnosticStop = startProfileRenameTimeoutDiagnostic({
+        test: "audit-finalization-rollback",
+        phase: () => profileRenameTimeoutDiagnostic.phase
+      });
+    }
     const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-profile-rename-audit-rollback-"));
     directories.push(directory);
     const configPath = join(directory, "remote-analytics.json");
@@ -360,6 +472,29 @@ describe("native OAuth profile rename transaction", () => {
     const credentials = new MemoryCredentialStore();
     const metadata = new MemoryMetadataStore();
     const registry = new OAuthConnectionRegistry(metadata, () => "2030-01-02T03:04:05.000Z");
+    if (process.platform === "win32") {
+      const saveCredential = credentials.save.bind(credentials);
+      vi.spyOn(credentials, "save").mockImplementation(async (...args) => {
+        if (profileRenameTimeoutDiagnostic.auditFinalizationFailed) {
+          profileRenameTimeoutDiagnostic.phase = "vault-rollback";
+        }
+        await saveCredential(...args);
+      });
+      const deleteCredential = credentials.delete.bind(credentials);
+      vi.spyOn(credentials, "delete").mockImplementation(async (...args) => {
+        if (profileRenameTimeoutDiagnostic.auditFinalizationFailed) {
+          profileRenameTimeoutDiagnostic.phase = "vault-rollback";
+        }
+        await deleteCredential(...args);
+      });
+      const restoreBinding = registry.restoreProfileBinding.bind(registry);
+      vi.spyOn(registry, "restoreProfileBinding").mockImplementation(async (...args) => {
+        if (profileRenameTimeoutDiagnostic.auditFinalizationFailed) {
+          profileRenameTimeoutDiagnostic.phase = "metadata-rollback";
+        }
+        await restoreBinding(...args);
+      });
+    }
     const oldBinding = binding(canonicalConfigPath, "work");
     const newBinding = binding(canonicalConfigPath, "studio");
     await credentials.save(oldBinding, { accessToken: "fixture-access-token", refreshToken: "fixture-refresh-token" });
@@ -369,9 +504,16 @@ describe("native OAuth profile rename transaction", () => {
     const audit = {
       ensureWritable: vi.fn().mockResolvedValue(undefined),
       intent: vi.fn().mockResolvedValue(undefined),
-      record: vi.fn().mockRejectedValue(new MiftahError("AUDIT_WRITE_FAILED", "fixture audit finalization failure"))
+      record: vi.fn(async () => {
+        if (profileRenameTimeoutDiagnostic.active) {
+          profileRenameTimeoutDiagnostic.auditFinalizationFailed = true;
+          profileRenameTimeoutDiagnostic.phase = "audit-finalization";
+        }
+        throw new MiftahError("AUDIT_WRITE_FAILED", "fixture audit finalization failure");
+      })
     };
 
+    profileRenameTimeoutDiagnostic.phase = "transaction-forward";
     await expect(runProfileRename(
       { configPath, profile: "work", newProfile: "studio" },
       { audit, oauth: { credentialStore: credentials, registry } }
@@ -380,6 +522,7 @@ describe("native OAuth profile rename transaction", () => {
       message: expect.stringContaining("configuration and OAuth connection state were restored")
     });
 
+    profileRenameTimeoutDiagnostic.phase = "assertions";
     await expect(credentials.load(oldBinding)).resolves.toEqual({
       accessToken: "fixture-access-token",
       refreshToken: "fixture-refresh-token"
