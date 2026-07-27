@@ -26,7 +26,12 @@ jobs:
           persist-credentials: false
       - name: Compile checked helper
         shell: powershell
-        run: ./scripts/export-windows-secret-job-assembly.ps1 -OutputPath assets/windows-secret-job.exe
+        run: |
+          $compiler = Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe'
+          & $compiler /nologo /target:exe /main:MiftahSecretJob /platform:anycpu /optimize+ '/out:assets/windows-secret-job.exe' src/secrets/windows-secret-job.cs
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the Windows helper.' }
+          $artifact = [IO.File]::ReadAllBytes('assets/windows-secret-job.exe')
+          Write-Output "MIFTAH_WINDOWS_HELPER_SIZE=$($artifact.Length)"
       - name: Upload checked helper
         uses: actions/upload-artifact@v4
         with:
