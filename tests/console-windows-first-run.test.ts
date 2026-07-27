@@ -144,6 +144,46 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reverify a known draft during first-run cleanup", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-draft-lifecycle-"));
+    temporaryDirectories.push(parent);
+    const configDirectory = join(parent, "miftah");
+    const configPath = join(configDirectory, "miftah.json");
+    const draftStore = new FileSetupDraftStore({ directory: join(parent, "setup-draft") });
+    const service = new ConsoleDashboardApplicationService({
+      configDirectory,
+      defaultConfigPath: configPath,
+      setupDraftStore: draftStore
+    });
+    const saveSetupDraft = service.saveSetupDraft;
+    const loadSetupDraft = service.loadSetupDraft;
+    if (saveSetupDraft === undefined || loadSetupDraft === undefined) {
+      throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
+    }
+
+    const draft = await saveSetupDraft({
+      source: "connector",
+      name: "support-tools",
+      preset: "generic",
+      stage: "connection"
+    });
+    await expect(loadSetupDraft()).resolves.toEqual(draft);
+    await expect(service.onboardNativeOAuth({
+      name: "first-run",
+      profile: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    })).resolves.toMatchObject({ changed: true, write: true });
+    await expect(draftStore.load()).resolves.toBeUndefined();
+    await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+
+    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(2);
+    expect(aclMocks.secureFile).toHaveBeenCalledTimes(2);
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(12);
+  });
+
   it("checks each stable setup-draft path ACL once before retaining its opened identity", async () => {
     const parent = await mkdtemp(join(tmpdir(), "miftah-setup-draft-windows-read-"));
     temporaryDirectories.push(parent);

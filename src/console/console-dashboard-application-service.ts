@@ -93,6 +93,10 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   readonly saveSetupDraft: ((input: SetupDraftInput, expectedRevision?: number) => Promise<SetupDraft>) | undefined;
   readonly discardSetupDraft: ((expectedRevision: number) => Promise<void>) | undefined;
   private active: ActiveConsoleConfiguration | undefined;
+  // Only a revision returned by this dashboard instance is retained. The
+  // store still revalidates it under its lock before deletion, preserving a
+  // concurrent writer's conflict rather than deleting a newer draft.
+  private knownSetupDraftRevision: number | undefined;
   private discoveryInFlight: Promise<ConsoleConfigCatalogDiscovery> | undefined;
 
   constructor(private readonly options: ConsoleDashboardApplicationServiceOptions) {
@@ -102,15 +106,20 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     if (store !== undefined) {
       this.loadSetupDraft = async () => {
         await this.assertFirstRunAvailable();
-        return store.load();
+        const draft = await store.load();
+        this.knownSetupDraftRevision = draft?.revision;
+        return draft;
       };
       this.saveSetupDraft = async (input, expectedRevision) => {
         await this.assertFirstRunAvailable();
-        return store.save(input, expectedRevision);
+        const draft = await store.save(input, expectedRevision);
+        this.knownSetupDraftRevision = draft.revision;
+        return draft;
       };
       this.discardSetupDraft = async (expectedRevision) => {
         await this.assertFirstRunAvailable();
         await store.discard(expectedRevision);
+        if (this.knownSetupDraftRevision === expectedRevision) this.knownSetupDraftRevision = undefined;
       };
     }
   }
@@ -386,8 +395,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     const store = this.setupDraftStore;
     if (store === undefined) return;
     try {
+      const knownRevision = this.knownSetupDraftRevision;
+      if (knownRevision !== undefined) {
+        await store.discard(knownRevision);
+        this.knownSetupDraftRevision = undefined;
+        return;
+      }
       const draft = await store.load();
-      if (draft !== undefined) await store.discard(draft.revision);
+      if (draft !== undefined) {
+        await store.discard(draft.revision);
+        this.knownSetupDraftRevision = undefined;
+      }
     } catch (error) {
       const code = error instanceof MiftahError ? error.code : "SETUP_DRAFT_UNAVAILABLE";
       process.emitWarning(

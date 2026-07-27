@@ -440,7 +440,7 @@ describe("Console dashboard application service", () => {
     await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
-  it("keeps a published first-run configuration when private draft cleanup conflicts", async () => {
+  it("keeps a published first-run configuration when cached draft cleanup conflicts", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-cleanup-"));
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
@@ -473,14 +473,25 @@ describe("Console dashboard application service", () => {
       setupDraftStore: draftStore
     });
     const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+    const saveSetupDraft = service.saveSetupDraft;
+    if (saveSetupDraft === undefined) {
+      throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
+    }
 
     try {
+      await expect(saveSetupDraft({
+        source: "connector",
+        name: "support-tools",
+        preset: "generic",
+        stage: "connection"
+      })).resolves.toEqual(draft);
       await expect(service.onboardPreset({
         name: "support-tools",
         preset,
         ...presetOptions
       })).resolves.toMatchObject({ name: "support-tools" });
       await expect(readFile(configPath, "utf8")).resolves.toContain('"name": "support-tools"');
+      expect(draftStore.load).not.toHaveBeenCalled();
       expect(draftStore.discard).toHaveBeenCalledWith(1);
       expect(warning).toHaveBeenCalledWith(
         "Configuration was created, but Miftah could not clear the saved connector choice (SETUP_DRAFT_CONFLICT). Run 'miftah setup --discard-draft' to remove it later.",
