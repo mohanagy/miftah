@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [development, main]
   push:
@@ -14,6 +15,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  export-windows-helper-artifact:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: Export Windows helper artifact
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Compile checked helper
+        shell: powershell
+        run: ./scripts/export-windows-secret-job-assembly.ps1 -OutputPath assets/windows-secret-job.exe
+      - name: Upload checked helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-secret-job-exe
+          path: assets/windows-secret-job.exe
+          if-no-files-found: error
+          retention-days: 1
+
   linux-quality:
     name: Linux quality
     runs-on: ubuntu-latest
