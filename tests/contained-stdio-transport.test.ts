@@ -345,6 +345,69 @@ describe("contained stdio transport", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "fails closed when a POSIX process-group probe cannot be verified",
+    async () => {
+      const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
+      const internal = transport as unknown as {
+        containedPid: number | undefined;
+        verifyContainment(): Promise<void>;
+      };
+      const pid = 41_045;
+      const errors: Error[] = [];
+      const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (target === -pid && signal === 0) {
+          throw Object.assign(new Error("unexpected probe failure"), { code: "EIO" });
+        }
+        return true;
+      });
+      internal.containedPid = pid;
+      transport.onerror = (error) => errors.push(error);
+
+      try {
+        await expect(internal.verifyContainment()).rejects.toThrow("POSIX process-tree state could not be verified");
+
+        expect(internal.containedPid).toBe(pid);
+        expect(errors).toEqual([expect.objectContaining({ message: "POSIX process-tree state could not be verified" })]);
+      } finally {
+        kill.mockRestore();
+      }
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when a POSIX process group outlives its bounded termination check",
+    async () => {
+      vi.useFakeTimers();
+      const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
+      const internal = transport as unknown as {
+        containedPid: number | undefined;
+        verifyContainment(): Promise<void>;
+      };
+      const pid = 41_046;
+      const errors: Error[] = [];
+      const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (target === -pid && (signal === 0 || signal === "SIGKILL")) return true;
+        return true;
+      });
+      internal.containedPid = pid;
+      transport.onerror = (error) => errors.push(error);
+
+      try {
+        const containment = internal.verifyContainment();
+        const rejection = expect(containment).rejects.toThrow("POSIX process-tree termination could not be confirmed");
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await rejection;
+        expect(internal.containedPid).toBe(pid);
+        expect(errors).toEqual([expect.objectContaining({ message: "POSIX process-tree termination could not be confirmed" })]);
+      } finally {
+        kill.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
     "keeps polling after SIGKILL until a POSIX process group has exited",
     async () => {
       const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
