@@ -608,6 +608,9 @@ describe("Windows migration ACL contract", () => {
     async () => {
       const root = await createPrivateConsoleTestRoot("miftah-windows-profile-ancestor-");
       temporaryDirectories.push(root);
+      const category = await windowsAncestorDiagnostic(root);
+      console.info(`MIFTAH_WINDOWS_PROFILE_ANCESTOR_DIAGNOSTIC:${category}`);
+      expect(category).toBe("ok");
       const privateParent = join(root, "private-parent");
       await windowsPrivateDirectoryProbe(privateParent);
 
