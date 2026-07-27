@@ -4,9 +4,10 @@ import { chmod, lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
-  createWindowsPrivateDirectory,
+  createWindowsPrivateDirectoryInPrivateParent,
   secureWindowsConfigFile,
-  verifyWindowsConfigPathSecurity
+  verifyWindowsConfigPathSecurity,
+  verifyWindowsConfigPathsSecurity
 } from "../cli/windows-config-acl.js";
 import { PRESET_CATALOG, type PresetCatalogName } from "../config/presets.js";
 import { withOAuthLocalLock } from "../oauth/local-lock.js";
@@ -228,11 +229,10 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
     }
     const parent = dirname(directory);
     await mkdir(parent, { recursive: true, mode: 0o700 });
-    if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) setupDraftUnavailable();
-    if (await privateDirectoryMetadata(directory) !== undefined) return;
+    if (await verifyExistingPrivateDirectory(parent, directory)) return;
     // Exclusive creation may lose a race to another Miftah process. Validate the
     // resulting path rather than treating that safe race as a storage failure.
-    const created = await createWindowsPrivateDirectory(directory);
+    const created = await createWindowsPrivateDirectoryInPrivateParent(parent, directory);
     if (created) {
       // The trusted creator verified the directory's owner, DACL, and reparse
       // state. Retain the Node metadata check without launching it again.
@@ -241,11 +241,26 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
     }
     // A failed exclusive create may be a safe race with another Miftah process.
     // Re-establish the full boundary before accepting that directory.
-    if (await privateDirectoryMetadata(directory) === undefined) setupDraftUnavailable();
+    if (!(await verifyExistingPrivateDirectory(parent, directory))) setupDraftUnavailable();
   } catch (error) {
     if (error instanceof MiftahError) throw error;
     setupDraftUnavailable(error);
   }
+}
+
+/** Validates a stable child directory and the parent that protects it from replacement. */
+async function verifyExistingPrivateDirectory(parent: string, directory: string): Promise<boolean> {
+  const before = await privateDirectoryMetadata(directory, false);
+  if (before === undefined) return false;
+  if (!(await verifyWindowsConfigPathsSecurity([
+    { path: parent, kind: "directory" },
+    { path: directory, kind: "directory" }
+  ]))) {
+    setupDraftUnavailable();
+  }
+  const after = await privateDirectoryMetadata(directory, false);
+  if (after === undefined || !sameFileIdentity(before, after)) setupDraftUnavailable();
+  return true;
 }
 
 async function verifyPrivateFile(path: string, verifyWindowsAcl: boolean = true): Promise<void> {
@@ -357,8 +372,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
   }
 
   private async loadUnchecked(directoryAlreadyVerified: boolean = false): Promise<SetupDraft | undefined> {
-    if (await privateDirectoryMetadata(this.directory, !directoryAlreadyVerified) === undefined) return undefined;
-    const observed = await privateFileMetadata(this.path);
+    const observed = await this.observedDraftFileForRead(directoryAlreadyVerified);
     if (observed === undefined) return undefined;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let content: string | undefined;
@@ -415,6 +429,42 @@ export class FileSetupDraftStore implements SetupDraftStore {
       setupDraftInvalid();
     }
     return normalizeStoredDraft(value);
+  }
+
+  private async observedDraftFileForRead(directoryAlreadyVerified: boolean): Promise<BigIntStats | undefined> {
+    if (process.platform !== "win32" || directoryAlreadyVerified) {
+      if (await privateDirectoryMetadata(this.directory, !directoryAlreadyVerified) === undefined) return undefined;
+      return privateFileMetadata(this.path);
+    }
+    const directory = await privateDirectoryMetadata(this.directory, false);
+    if (directory === undefined) return undefined;
+    const observed = await privateFileMetadata(this.path, false);
+    if (observed === undefined) {
+      // Returning an absent draft still influences which setup path the caller
+      // may take. Keep the directory's original fail-closed verification even
+      // though there is no file to include in a batch yet.
+      if (!(await verifyWindowsConfigPathSecurity(this.directory, "directory"))) setupDraftUnavailable();
+      const verifiedDirectory = await privateDirectoryMetadata(this.directory, false);
+      if (verifiedDirectory === undefined || !sameFileIdentity(directory, verifiedDirectory)) setupDraftUnavailable();
+      return undefined;
+    }
+    if (!(await verifyWindowsConfigPathsSecurity([
+      { path: this.directory, kind: "directory" },
+      { path: this.path, kind: "file" }
+    ]))) {
+      setupDraftUnavailable();
+    }
+    const verifiedDirectory = await privateDirectoryMetadata(this.directory, false);
+    const verifiedFile = await privateFileMetadata(this.path, false);
+    if (
+      verifiedDirectory === undefined ||
+      verifiedFile === undefined ||
+      !sameFileIdentity(directory, verifiedDirectory) ||
+      !sameFileIdentity(observed, verifiedFile)
+    ) {
+      setupDraftUnavailable();
+    }
+    return verifiedFile;
   }
 
   private async persist(draft: SetupDraft): Promise<void> {

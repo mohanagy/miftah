@@ -86,8 +86,8 @@ import {
 } from "../setup/profile-rename-onboarding.js";
 import type { OAuthProfileRenameDependencies } from "../oauth/profile-rename-transaction.js";
 import {
-  createWindowsPrivateDirectory,
-  verifyWindowsConfigPathSecurity
+  createWindowsPrivateDirectoryInPrivateParent,
+  verifyWindowsConfigPathsSecurity
 } from "../cli/windows-config-acl.js";
 import {
   renderClientSnippets,
@@ -423,16 +423,16 @@ async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> 
     }
     const parent = dirname(directory);
     await mkdir(parent, { recursive: true, mode: 0o700 });
-    if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) {
-      throw new Error("unsafe configuration parent directory");
-    }
-    const created = await createWindowsPrivateDirectory(directory);
+    const created = await createWindowsPrivateDirectoryInPrivateParent(parent, directory);
     // The trusted creator applies and verifies the private owner/DACL/reparse
-    // boundary before it reports success. A failed exclusive create may be a
-    // safe concurrent Miftah creation, so only that path needs an independent
-    // verifier before it can be accepted.
-    if (!created && !(await verifyWindowsConfigPathSecurity(directory, "directory"))) {
-      throw new Error("unsafe configuration directory");
+    // boundary, including its parent, before it reports success. A failed
+    // exclusive create may be a safe concurrent Miftah creation, so both path
+    // components need an independent verifier before that race is accepted.
+    if (!created && !(await verifyWindowsConfigPathsSecurity([
+      { path: parent, kind: "directory" },
+      { path: directory, kind: "directory" }
+    ]))) {
+      throw new Error("unsafe configuration directory or parent");
     }
   } catch (error) {
     if (error instanceof MiftahError) throw error;

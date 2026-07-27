@@ -19,9 +19,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 import {
   copyWindowsConfigSecurityDescriptor,
   copyWindowsConfigSecurityDescriptors,
+  createWindowsPrivateDirectoryInPrivateParent,
   createWindowsPrivateMigrationDirectory,
   secureWindowsConfigFile,
-  verifyWindowsConfigPathSecurity
+  verifyWindowsConfigPathSecurity,
+  verifyWindowsConfigPathsSecurity
 } from "../src/cli/windows-config-acl.js";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -87,6 +89,39 @@ describe("Windows migration ACL boundary", () => {
     await expect(verifyWindowsConfigPathSecurity("C:\\Users\\miftah\\.config\\miftah\\gsc.json", "file")).resolves.toBe(false);
   });
 
+  it("verifies multiple stable private paths in one trusted helper without relaxing either check", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(verifyWindowsConfigPathsSecurity([
+      { path: "C:\\Users\\miftah\\.config\\miftah", kind: "directory" },
+      { path: "C:\\Users\\miftah\\.config\\miftah\\gsc.json", kind: "file" }
+    ])).resolves.toBe(true);
+
+    expect(windowsAclMocks.spawn).toHaveBeenCalledOnce();
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "verify-private-paths\u0000directory\u0000C:\\Users\\miftah\\.config\\miftah\u0000file\u0000C:\\Users\\miftah\\.config\\miftah\\gsc.json"
+    );
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("verify-private-paths");
+    expect(command).toContain("for ($index = 1; $index -lt $fields.Count; $index += 2)");
+    expect(command).toContain("Test-MiftahPrivatePath $path $kind");
+  });
+
+  it("fails closed before launch for an empty or NUL-containing batch verification request", async () => {
+    await expect(verifyWindowsConfigPathsSecurity([])).resolves.toBe(false);
+    await expect(verifyWindowsConfigPathsSecurity([
+      { path: "C:\\Users\\miftah\\.config\\miftah\u0000unexpected", kind: "directory" }
+    ])).resolves.toBe(false);
+
+    expect(windowsAclMocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("fails closed when source descriptor verification fails", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();
@@ -139,6 +174,40 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("[string]$expectedSddl = $null");
     expect(command).toContain("[bool]$requireProtected = $false");
     expect(command).toContain("$expectedSddl.Length -gt 0");
+  });
+
+  it("checks an immediate private parent in the same trusted helper before creating its child directory", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateDirectoryInPrivateParent(
+      "C:\\Users\\miftah\\.config",
+      "C:\\Users\\miftah\\.config\\miftah"
+    )).resolves.toBe(true);
+
+    expect(windowsAclMocks.spawn).toHaveBeenCalledOnce();
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({ shell: false, windowsHide: true, stdio: "ignore" });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "create-private-directory-in-private-parent\u0000C:\\Users\\miftah\\.config\u0000C:\\Users\\miftah\\.config\\miftah"
+    );
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("create-private-directory-in-private-parent");
+    expect(command).toContain("GetDirectoryName($directoryPath)");
+    expect(command).toContain("Test-MiftahPrivatePath $parent 'directory'");
+    expect(command).toContain("Test-MiftahPrivatePath $directory 'directory' $expected $true");
+  });
+
+  it("fails closed before launch when the parent-checked directory request contains a NUL byte", async () => {
+    await expect(createWindowsPrivateDirectoryInPrivateParent(
+      "C:\\Users\\miftah\\.config\u0000unexpected",
+      "C:\\Users\\miftah\\.config\\miftah"
+    )).resolves.toBe(false);
+
+    expect(windowsAclMocks.spawn).not.toHaveBeenCalled();
   });
 
   it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {

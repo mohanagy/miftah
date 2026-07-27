@@ -27,6 +27,12 @@ interface CreatePrivateDirectoryRequest {
   readonly directory: string;
 }
 
+interface CreatePrivateDirectoryInPrivateParentRequest {
+  readonly operation: "create-private-directory-in-private-parent";
+  readonly parent: string;
+  readonly directory: string;
+}
+
 interface SecurePrivateFileRequest {
   readonly operation: "secure-private-file";
   readonly path: string;
@@ -38,12 +44,24 @@ interface VerifyPrivatePathRequest {
   readonly path: string;
 }
 
+export interface WindowsPrivatePath {
+  readonly kind: "file" | "directory";
+  readonly path: string;
+}
+
+interface VerifyPrivatePathsRequest {
+  readonly operation: "verify-private-paths";
+  readonly paths: readonly WindowsPrivatePath[];
+}
+
 type WindowsConfigAclRequest =
   | CopyFileSecurityRequest
   | CopyFileSecurityBatchRequest
   | CreatePrivateDirectoryRequest
+  | CreatePrivateDirectoryInPrivateParentRequest
   | SecurePrivateFileRequest
-  | VerifyPrivatePathRequest;
+  | VerifyPrivatePathRequest
+  | VerifyPrivatePathsRequest;
 
 /**
  * Copies the source file's non-null owner, group, and DACL, then verifies its
@@ -69,6 +87,18 @@ export async function createWindowsPrivateDirectory(directory: string): Promise<
   return runWindowsAclRequest({ operation: "create-private-directory", directory });
 }
 
+/**
+ * Verifies an immediate private parent and creates the child under its own
+ * current-user-only descriptor in one trusted helper invocation. The helper
+ * rejects a non-child path, reparse point, unsafe parent, or failed creation.
+ */
+export async function createWindowsPrivateDirectoryInPrivateParent(
+  parent: string,
+  directory: string
+): Promise<boolean> {
+  return runWindowsAclRequest({ operation: "create-private-directory-in-private-parent", parent, directory });
+}
+
 /** Applies and verifies a current-user-only DACL to an already exclusively created file. */
 export async function secureWindowsConfigFile(path: string): Promise<boolean> {
   return runWindowsAclRequest({ operation: "secure-private-file", path });
@@ -91,6 +121,27 @@ export async function verifyWindowsConfigPathSecurity(
   return runWindowsAclRequest({ operation: "verify-private-path", path, kind });
 }
 
+/**
+ * Verifies a bounded set of already-stable private paths in one trusted helper
+ * process. Each path receives the same owner, DACL, and reparse-point checks
+ * as verifyWindowsConfigPathSecurity; callers retain their own identity checks.
+ */
+export async function verifyWindowsConfigPathsSecurity(paths: readonly WindowsPrivatePath[]): Promise<boolean> {
+  if (
+    paths.length === 0 ||
+    paths.length > 8 ||
+    paths.some((candidate) => (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      (candidate.kind !== "file" && candidate.kind !== "directory") ||
+      typeof candidate.path !== "string"
+    ))
+  ) {
+    return false;
+  }
+  return runWindowsAclRequest({ operation: "verify-private-paths", paths });
+}
+
 async function runWindowsAclRequest(request: WindowsConfigAclRequest): Promise<boolean> {
   if (process.platform !== "win32") return true;
   const launcher = trustedPowerShellExecutable();
@@ -107,6 +158,10 @@ function requestHasNul(request: WindowsConfigAclRequest): boolean {
   if (request.operation === "copy-file-security-batch") {
     return request.source.includes("\u0000") || request.targets.some((target) => target.includes("\u0000"));
   }
+  if (request.operation === "create-private-directory-in-private-parent") {
+    return request.parent.includes("\u0000") || request.directory.includes("\u0000");
+  }
+  if (request.operation === "verify-private-paths") return request.paths.some((path) => path.path.includes("\u0000"));
   if (request.operation === "create-private-directory") return request.directory.includes("\u0000");
   return request.path.includes("\u0000");
 }
@@ -116,11 +171,15 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
     ? [request.operation, request.source, request.target]
     : request.operation === "copy-file-security-batch"
       ? [request.operation, request.source, ...request.targets]
-    : request.operation === "create-private-directory"
-      ? [request.operation, request.directory]
-      : request.operation === "secure-private-file"
-        ? [request.operation, request.path]
-        : [request.operation, request.kind, request.path];
+      : request.operation === "create-private-directory"
+        ? [request.operation, request.directory]
+        : request.operation === "create-private-directory-in-private-parent"
+          ? [request.operation, request.parent, request.directory]
+          : request.operation === "secure-private-file"
+            ? [request.operation, request.path]
+            : request.operation === "verify-private-paths"
+              ? [request.operation, ...request.paths.flatMap((path) => [path.kind, path.path])]
+              : [request.operation, request.kind, request.path];
   const payload = fields.join("\u0000");
   const bytes = Buffer.from(payload, "utf8");
   return bytes.byteLength <= maximumRequestBytes && bytes.toString("utf8") === payload
@@ -319,6 +378,20 @@ try {
     exit 0
   }
 
+  if (
+    $fields.Count -ge 3 -and
+    $fields.Count -le 17 -and
+    $fields[0] -eq 'verify-private-paths' -and
+    (($fields.Count - 1) % 2 -eq 0)
+  ) {
+    for ($index = 1; $index -lt $fields.Count; $index += 2) {
+      $kind = $fields[$index]
+      $path = $fields[$index + 1]
+      if (-not (Test-MiftahPrivatePath $path $kind)) { exit 1 }
+    }
+    exit 0
+  }
+
   if ($fields.Count -eq 2 -and $fields[0] -eq 'secure-private-file') {
     $path = $fields[1]
     $entry = [System.IO.FileInfo]::new($path)
@@ -343,6 +416,38 @@ try {
 
   if ($fields.Count -eq 2 -and $fields[0] -eq 'create-private-directory') {
     $directory = [System.IO.DirectoryInfo]::new($fields[1])
+    if ($directory.Exists) { exit 1 }
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    if ($null -eq $identity) { exit 1 }
+    $security = [System.Security.AccessControl.DirectorySecurity]::new()
+    $security.SetAccessRuleProtection($true, $false)
+    $security.SetOwner($identity)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+      $identity,
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.InheritanceFlags]$inheritance,
+      [System.Security.AccessControl.PropagationFlags]::None,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $security.SetAccessRule($rule)
+    $expected = $security.GetSecurityDescriptorSddlForm($directorySections)
+    $directory.Create($security)
+    if (-not (Test-MiftahPrivatePath $directory 'directory' $expected $true)) { exit 1 }
+    exit 0
+  }
+
+  if ($fields.Count -eq 3 -and $fields[0] -eq 'create-private-directory-in-private-parent') {
+    $parent = [System.IO.DirectoryInfo]::new($fields[1])
+    $directory = [System.IO.DirectoryInfo]::new($fields[2])
+    $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $parentPath = [System.IO.Path]::GetFullPath($parent.FullName).TrimEnd($trimCharacters)
+    $directoryPath = [System.IO.Path]::GetFullPath($directory.FullName)
+    $directoryParent = [System.IO.Path]::GetDirectoryName($directoryPath)
+    if ([string]::IsNullOrEmpty($directoryParent)) { exit 1 }
+    $directoryParent = $directoryParent.TrimEnd($trimCharacters)
+    if (-not [string]::Equals($parentPath, $directoryParent, [System.StringComparison]::OrdinalIgnoreCase)) { exit 1 }
+    if (-not (Test-MiftahPrivatePath $parent 'directory')) { exit 1 }
     if ($directory.Exists) { exit 1 }
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     if ($null -eq $identity) { exit 1 }

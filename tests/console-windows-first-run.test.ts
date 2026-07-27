@@ -5,14 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const aclMocks = vi.hoisted(() => ({
   createPrivateDirectory: vi.fn<(directory: string) => Promise<boolean>>(),
+  createPrivateDirectoryInParent: vi.fn<(parent: string, directory: string) => Promise<boolean>>(),
   secureFile: vi.fn<(path: string) => Promise<boolean>>(),
-  verifyPath: vi.fn<(path: string, kind: "file" | "directory") => Promise<boolean>>()
+  verifyPath: vi.fn<(path: string, kind: "file" | "directory") => Promise<boolean>>(),
+  verifyPaths: vi.fn<(paths: readonly { readonly path: string; readonly kind: "file" | "directory" }[]) => Promise<boolean>>()
 }));
 
 vi.mock("../src/cli/windows-config-acl.js", () => ({
   createWindowsPrivateDirectory: aclMocks.createPrivateDirectory,
+  createWindowsPrivateDirectoryInPrivateParent: aclMocks.createPrivateDirectoryInParent,
   secureWindowsConfigFile: aclMocks.secureFile,
-  verifyWindowsConfigPathSecurity: aclMocks.verifyPath
+  verifyWindowsConfigPathSecurity: aclMocks.verifyPath,
+  verifyWindowsConfigPathsSecurity: aclMocks.verifyPaths
 }));
 
 vi.mock("../src/oauth/local-lock.js", () => ({
@@ -34,8 +38,17 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 beforeEach(() => {
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   aclMocks.verifyPath.mockResolvedValue(true);
+  aclMocks.verifyPaths.mockResolvedValue(true);
   aclMocks.secureFile.mockResolvedValue(true);
   aclMocks.createPrivateDirectory.mockImplementation(async (directory) => {
+    try {
+      await mkdir(directory);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  aclMocks.createPrivateDirectoryInParent.mockImplementation(async (_parent, directory) => {
     try {
       await mkdir(directory);
       return true;
@@ -48,8 +61,10 @@ beforeEach(() => {
 afterEach(async () => {
   if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   aclMocks.createPrivateDirectory.mockReset();
+  aclMocks.createPrivateDirectoryInParent.mockReset();
   aclMocks.secureFile.mockReset();
   aclMocks.verifyPath.mockReset();
+  aclMocks.verifyPaths.mockReset();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -70,13 +85,13 @@ describe("Console Windows first-run boundary", () => {
       scopes: ["openid"]
     })).resolves.toMatchObject({ changed: true, write: true });
 
-    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledWith(configDirectory);
+    expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledWith(parent, configDirectory);
     // Catalog discovery independently verifies the created configuration after
     // publication. The creator must not add a second directory probe before it.
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(3);
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, parent, "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah$/u), "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(3, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, expect.stringMatching(/[/\\]miftah$/u), "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
+    expect(aclMocks.verifyPaths).not.toHaveBeenCalled();
     expect(aclMocks.secureFile).toHaveBeenCalledWith(configPath);
   });
 
@@ -85,7 +100,7 @@ describe("Console Windows first-run boundary", () => {
     temporaryDirectories.push(parent);
     const configDirectory = join(parent, "miftah");
     const configPath = join(configDirectory, "miftah.json");
-    aclMocks.createPrivateDirectory.mockImplementationOnce(async (directory) => {
+    aclMocks.createPrivateDirectoryInParent.mockImplementationOnce(async (_parent, directory) => {
       await mkdir(directory);
       return false;
     });
@@ -100,11 +115,13 @@ describe("Console Windows first-run boundary", () => {
       scopes: ["openid"]
     })).resolves.toMatchObject({ changed: true, write: true });
 
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(4);
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, parent, "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, configDirectory, "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(3, expect.stringMatching(/[/\\]miftah$/u), "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(4, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
+    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+      { path: parent, kind: "directory" },
+      { path: configDirectory, kind: "directory" }
+    ]);
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, expect.stringMatching(/[/\\]miftah$/u), "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
   });
 
   it("fails closed before audit or config creation when the standard directory cannot be verified", async () => {
@@ -112,8 +129,8 @@ describe("Console Windows first-run boundary", () => {
     temporaryDirectories.push(parent);
     const configDirectory = join(parent, "miftah");
     const configPath = join(configDirectory, "miftah.json");
-    aclMocks.createPrivateDirectory.mockResolvedValue(false);
-    aclMocks.verifyPath.mockResolvedValue(false);
+    aclMocks.createPrivateDirectoryInParent.mockResolvedValue(false);
+    aclMocks.verifyPaths.mockResolvedValue(false);
     const service = new ConsoleDashboardApplicationService({ configDirectory, defaultConfigPath: configPath });
 
     await expect(service.onboardNativeOAuth({
@@ -141,7 +158,11 @@ describe("Console Windows first-run boundary", () => {
     });
 
     await expect(store.discard(draft.revision)).resolves.toBeUndefined();
-    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(1);
+    expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledWith(parent, join(parent, "setup-draft"));
+    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+      { path: parent, kind: "directory" },
+      { path: join(parent, "setup-draft"), kind: "directory" }
+    ]);
   });
 
   it("does not reverify a known draft during first-run cleanup", async () => {
@@ -179,9 +200,68 @@ describe("Console Windows first-run boundary", () => {
     await expect(draftStore.load()).resolves.toBeUndefined();
     await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
 
-    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(2);
+    expect(aclMocks.createPrivateDirectory).not.toHaveBeenCalled();
+    expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledTimes(2);
     expect(aclMocks.secureFile).toHaveBeenCalledTimes(2);
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(12);
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(6);
+    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(2);
+  });
+
+  it("attributes Windows ACL helper launches across the complete first-run draft lifecycle", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-draft-boundaries-"));
+    temporaryDirectories.push(parent);
+    const configDirectory = join(parent, "miftah");
+    const configPath = join(configDirectory, "miftah.json");
+    const draftStore = new FileSetupDraftStore({ directory: join(parent, "setup-draft") });
+    const service = new ConsoleDashboardApplicationService({
+      configDirectory,
+      defaultConfigPath: configPath,
+      setupDraftStore: draftStore
+    });
+    const saveSetupDraft = service.saveSetupDraft;
+    const loadSetupDraft = service.loadSetupDraft;
+    if (saveSetupDraft === undefined || loadSetupDraft === undefined) {
+      throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
+    }
+
+    const snapshot = (): Readonly<Record<"create" | "createInParent" | "secure" | "verify" | "verifyBatch", number>> => ({
+      create: aclMocks.createPrivateDirectory.mock.calls.length,
+      createInParent: aclMocks.createPrivateDirectoryInParent.mock.calls.length,
+      secure: aclMocks.secureFile.mock.calls.length,
+      verify: aclMocks.verifyPath.mock.calls.length,
+      verifyBatch: aclMocks.verifyPaths.mock.calls.length
+    });
+
+    const draft = await saveSetupDraft({
+      source: "connector",
+      name: "support-tools",
+      preset: "generic",
+      stage: "connection"
+    });
+    const afterSave = snapshot();
+    await expect(loadSetupDraft()).resolves.toEqual(draft);
+    const afterLoad = snapshot();
+    await expect(service.onboardNativeOAuth({
+      name: "first-run",
+      profile: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    })).resolves.toMatchObject({ changed: true, write: true });
+    const afterPublication = snapshot();
+    await expect(draftStore.load()).resolves.toBeUndefined();
+    const afterDraftRead = snapshot();
+    await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+    const afterConfiguredRead = snapshot();
+
+    expect({ afterSave, afterLoad, afterPublication, afterDraftRead, afterConfiguredRead }).toEqual({
+      afterSave: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 0 },
+      afterLoad: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 1 },
+      afterPublication: { create: 0, createInParent: 2, secure: 2, verify: 3, verifyBatch: 2 },
+      afterDraftRead: { create: 0, createInParent: 2, secure: 2, verify: 4, verifyBatch: 2 },
+      afterConfiguredRead: { create: 0, createInParent: 2, secure: 2, verify: 6, verifyBatch: 2 }
+    });
   });
 
   it("checks each stable setup-draft path ACL once before retaining its opened identity", async () => {
@@ -196,12 +276,15 @@ describe("Console Windows first-run boundary", () => {
       stage: "connection"
     });
     aclMocks.verifyPath.mockClear();
+    aclMocks.verifyPaths.mockClear();
 
     await expect(store.load()).resolves.toEqual(draft);
 
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, directory, "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/setup-draft-v1\.json$/u), "file");
+    expect(aclMocks.verifyPath).not.toHaveBeenCalled();
+    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+      { path: directory, kind: "directory" },
+      { path: expect.stringMatching(/setup-draft-v1\.json$/u), kind: "file" }
+    ]);
   });
 
   it("relies on completed Windows ACL helper verification when publishing a new draft", async () => {
@@ -217,9 +300,9 @@ describe("Console Windows first-run boundary", () => {
       stage: "connection"
     })).resolves.toMatchObject({ revision: 1 });
 
-    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledWith(directory);
+    expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledWith(parent, directory);
     expect(aclMocks.secureFile).toHaveBeenCalledOnce();
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(1);
-    expect(aclMocks.verifyPath).toHaveBeenCalledWith(parent, "directory");
+    expect(aclMocks.verifyPath).not.toHaveBeenCalled();
+    expect(aclMocks.verifyPaths).not.toHaveBeenCalled();
   });
 });
