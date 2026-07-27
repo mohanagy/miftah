@@ -141,16 +141,6 @@ try {
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if ($null -eq $identity) { Write-Result 'probe' }
   $trusted = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-  $restricted = [int](
-    [System.Security.AccessControl.FileSystemRights]::WriteData -bor
-    [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-    [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-    [System.Security.AccessControl.FileSystemRights]::Delete -bor
-    [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-    [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-    [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-    [System.Security.AccessControl.FileSystemRights]::TakeOwnership
-  )
   $creatorOwner = 'S-1-3-0'
   $creatorGroup = 'S-1-3-1'
   $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
@@ -175,7 +165,13 @@ try {
           ($rule.IdentityReference.Value -ceq $creatorOwner -or $rule.IdentityReference.Value -ceq $creatorGroup) -and
           (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
         ) { continue }
-        if (([int]$rule.FileSystemRights -band $restricted) -ne 0) { Write-Result "mutation:$index" }
+        $rights = [int]$rule.FileSystemRights
+        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles) -ne 0) { Write-Result "delete-child:$index" }
+        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::Delete) -ne 0) { Write-Result "delete:$index" }
+        if (($rights -band [int]([System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)) -ne 0) { Write-Result "ownership:$index" }
+        if (($rights -band [int]([System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes)) -ne 0) { Write-Result "attributes:$index" }
+        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::AppendData) -ne 0) { Write-Result "create-child:$index" }
+        if (($rights -band [int][System.Security.AccessControl.FileSystemRights]::WriteData) -ne 0) { Write-Result "create-file:$index" }
       }
     } catch {
       Write-Result "read:$index"
@@ -593,7 +589,7 @@ async function windowsAncestorDiagnostic(directory: string): Promise<string> {
         return;
       }
       const result = Buffer.concat(output).toString("utf8");
-      if (!/^(?:missing|reparse|owner|acl|rules|mutation|read):\d+$|^(?:ok|probe)$/.test(result)) {
+      if (!/^(?:missing|reparse|owner|acl|rules|delete-child|delete|ownership|attributes|create-child|create-file|read):\d+$|^(?:ok|probe)$/.test(result)) {
         reject(new Error("Windows ancestor diagnostic probe returned an invalid category"));
         return;
       }
@@ -629,7 +625,7 @@ describe("Windows migration ACL contract", () => {
 
       const category = await windowsAncestorDiagnostic(root);
       console.info(`MIFTAH_WINDOWS_ANCESTOR_DIAGNOSTIC:${category}`);
-      expect(category).toMatch(/^(?:missing|reparse|owner|acl|rules|mutation|read):\d+$/);
+      expect(category).toMatch(/^(?:missing|reparse|owner|acl|rules|delete-child|delete|ownership|attributes|create-child|create-file|read):\d+$/);
     },
     10_000
   );
