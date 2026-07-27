@@ -4,7 +4,6 @@ import type { ListenOptions, Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
-const macOSFallbackCandidateCount = 7;
 // macOS retains one canonical candidate to preserve coordination with older Miftah versions.
 // Windows and Linux recognize an exact holder on that legacy candidate and hold a best-effort
 // companion listener for rolling upgrades, but acquire collision-free kernel endpoints. Windows
@@ -43,21 +42,6 @@ export interface OAuthLocalLockStrategy {
   readonly key: string;
   readonly probeEndpoints: readonly [OAuthLocalLockProbeEndpoint];
   readonly acquisitionEndpoint: OAuthLocalLockEndpoint;
-  /** Deterministic new-version candidates used only after a verified unrelated macOS TCP collision. */
-  readonly fallbackEndpoints?: readonly OAuthLocalLockProbeEndpoint[];
-}
-
-function macOSFallbackEndpoints(key: string, legacyEndpoint: OAuthLocalLockProbeEndpoint): readonly OAuthLocalLockProbeEndpoint[] {
-  const ports = new Set<number>([legacyEndpoint.port]);
-  const endpoints: OAuthLocalLockProbeEndpoint[] = [];
-  for (let index = 1; index <= macOSFallbackCandidateCount; index += 1) {
-    const chunk = key.slice(index * 8, (index + 1) * 8);
-    const port = localLockPortStart + (Number.parseInt(chunk, 16) % localLockPortCount);
-    if (ports.has(port)) continue;
-    ports.add(port);
-    endpoints.push({ kind: "tcp", port });
-  }
-  return endpoints;
 }
 
 export function createOAuthLocalLockStrategy(
@@ -80,14 +64,6 @@ export function createOAuthLocalLockStrategy(
       path: `\\\\.\\pipe\\${localLockProtocol}-${key}`
     };
     return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint };
-  }
-  if (platform === "darwin") {
-    return {
-      key,
-      probeEndpoints: [legacyEndpoint],
-      acquisitionEndpoint: legacyEndpoint,
-      fallbackEndpoints: macOSFallbackEndpoints(key, legacyEndpoint)
-    };
   }
   return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint: legacyEndpoint };
 }
@@ -174,27 +150,6 @@ async function tryAcquireLocalLock(endpoint: OAuthLocalLockEndpoint, key: string
   });
 }
 
-async function tryAcquireMacOSFallback(
-  endpoints: readonly OAuthLocalLockProbeEndpoint[],
-  key: string
-): Promise<LocalLock | undefined> {
-  let candidate: OAuthLocalLockProbeEndpoint | undefined;
-  for (const endpoint of endpoints) {
-    const state = await inspectLocalLockEndpoint(endpoint, key);
-    // A matching holder or an incomplete probe might be a concurrently acquiring holder for this
-    // exact key. Do not select another endpoint until that state is resolved.
-    if (state === "held" || state === "unknown") return undefined;
-    if (state === "occupied") continue;
-    candidate ??= endpoint;
-  }
-  if (candidate === undefined) return undefined;
-  const lock = await tryAcquireLocalLock(candidate, key);
-  if (lock !== undefined) return lock;
-  // Another contender may have just acquired this candidate. Re-probe the whole stable set so we
-  // observe its greeting rather than acquiring a second endpoint for the same key.
-  return undefined;
-}
-
 async function releaseLocalLock(lock: LocalLock): Promise<void> {
   for (const client of lock.clients) client.destroy();
   await new Promise<void>((resolve) => {
@@ -219,10 +174,7 @@ async function acquireLocalLock(
   while (true) {
     if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
     const legacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
-    const canUseMacOSFallback = legacyState === "occupied" && strategy.fallbackEndpoints !== undefined;
-    const mustWait = acquiresLegacyEndpoint
-      ? legacyState !== "available" && !canUseMacOSFallback
-      : legacyState === "held";
+    const mustWait = acquiresLegacyEndpoint ? legacyState !== "available" : legacyState === "held";
     if (!mustWait) {
       let primaryLock: LocalLock | undefined;
       try {
@@ -259,10 +211,6 @@ async function acquireLocalLock(
           }
         };
       }
-    }
-    if (canUseMacOSFallback) {
-      const fallbackLock = await tryAcquireMacOSFallback(strategy.fallbackEndpoints!, strategy.key);
-      if (fallbackLock !== undefined) return async () => releaseLocalLock(fallbackLock);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

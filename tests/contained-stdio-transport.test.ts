@@ -344,7 +344,84 @@ describe("contained stdio transport", () => {
     }
   );
 
-  it("rejects a second start rather than spawning a second contained child", async () => {
+  it.runIf(process.platform !== "win32")(
+    "keeps polling after SIGKILL until a POSIX process group has exited",
+    async () => {
+      const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
+      const internal = transport as unknown as {
+        containedPid: number | undefined;
+        verifyContainment(): Promise<void>;
+      };
+      const pid = 41_045;
+      let probes = 0;
+      const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (target === -pid && signal === 0) {
+          probes += 1;
+          if (probes < 4) return true;
+          throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+        }
+        if (target === -pid && signal === "SIGKILL") return true;
+        return true;
+      });
+      internal.containedPid = pid;
+
+      await internal.verifyContainment();
+
+      expect(probes).toBe(4);
+      expect(internal.containedPid).toBeUndefined();
+      kill.mockRestore();
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not wait indefinitely for a missing child close event once POSIX containment is verified",
+    async () => {
+      vi.useFakeTimers();
+      const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
+      const internal = transport as unknown as {
+        child: ChildProcess | undefined;
+        containedPid: number | undefined;
+        childClose: Promise<void> | undefined;
+      };
+      const pid = 41_046;
+      const child = createFakeChild(pid);
+      const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (target === -pid && signal === "SIGKILL") return true;
+        if (target === -pid && signal === 0) {
+          throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+        }
+        return true;
+      });
+      internal.child = child as unknown as ChildProcess;
+      internal.containedPid = pid;
+      internal.childClose = new Promise<void>(() => undefined);
+      let result: "closed" | "failed" | undefined;
+      transport.onclose = () => undefined;
+
+      try {
+        void transport.close().then(
+          () => {
+            result = "closed";
+          },
+          () => {
+            result = "failed";
+          }
+        );
+        // Two seconds cover graceful shutdown; the final second is the bounded
+        // post-kill close confirmation window.
+        await vi.advanceTimersByTimeAsync(3_000);
+        await Promise.resolve();
+
+        expect(result).toBe("closed");
+        expect(transport.pid).toBeNull();
+      } finally {
+        kill.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.runIf(process.platform !== "win32")("rejects a second start rather than spawning a second contained child", async () => {
     const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
     try {
       await transport.start();

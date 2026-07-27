@@ -13,6 +13,7 @@ import {
 
 const gracefulShutdownDelayMs = 2_000;
 const containmentVerificationDelayMs = 25;
+const containmentVerificationTimeoutMs = 1_000;
 
 /** Resolves the Windows helper before Client.connect can race its child startup. */
 export async function createContainedStdioClientTransport(
@@ -186,8 +187,17 @@ export class ContainedStdioClientTransport implements Transport {
 
       if (childClose !== undefined) {
         const closedGracefully = await settlesWithin(childClose, gracefulShutdownDelayMs);
-        if (!closedGracefully) await this.forceTerminate();
-        await childClose;
+        if (!closedGracefully) {
+          await this.forceTerminate();
+          const closedAfterForce = await settlesWithin(childClose, containmentVerificationTimeoutMs);
+          // A Windows Job Object closes only when its checked helper exits. Do
+          // not release the manager's teardown gate merely because a kill was
+          // requested; the helper-close event is the Windows containment proof.
+          if (!closedAfterForce && process.platform === "win32") {
+            this.recordContainmentFailure("Windows process-tree termination could not be confirmed");
+            throw this.containmentFailure!;
+          }
+        }
       }
       await this.verifyContainment();
       this.emitClose();
@@ -248,34 +258,40 @@ export class ContainedStdioClientTransport implements Transport {
     if (process.platform === "win32") {
       // The helper's close is the Job Object close boundary. Its provider and
       // descendants cannot outlive the helper without an explicit breakaway.
-      this.containedPid = undefined;
+      if (this.child !== undefined && !hasExited(this.child)) {
+        this.recordContainmentFailure("Windows process-tree termination could not be confirmed");
+        throw this.containmentFailure!;
+      }
+      this.clearContainedProcess();
       return;
     }
 
-    let groupRunning: boolean;
     try {
-      groupRunning = isPosixProcessGroupRunning(pid);
+      if (!isPosixProcessGroupRunning(pid)) {
+        this.clearContainedProcess();
+        return;
+      }
     } catch {
       this.recordContainmentFailure("POSIX process-tree state could not be verified");
       throw this.containmentFailure!;
-    }
-    if (!groupRunning) {
-      this.containedPid = undefined;
-      return;
     }
     await this.forceTerminate();
     if (this.containmentFailure !== undefined) throw this.containmentFailure;
-    await delayUnref(containmentVerificationDelayMs);
     try {
-      groupRunning = isPosixProcessGroupRunning(pid);
+      if (await waitForPosixProcessGroupExit(pid)) {
+        this.clearContainedProcess();
+        return;
+      }
     } catch {
       this.recordContainmentFailure("POSIX process-tree state could not be verified");
       throw this.containmentFailure!;
     }
-    if (groupRunning) {
-      this.recordContainmentFailure("POSIX process-tree termination could not be confirmed");
-      throw this.containmentFailure!;
-    }
+    this.recordContainmentFailure("POSIX process-tree termination could not be confirmed");
+    throw this.containmentFailure!;
+  }
+
+  private clearContainedProcess(): void {
+    this.child = undefined;
     this.containedPid = undefined;
   }
 
@@ -318,6 +334,16 @@ function isPosixProcessGroupRunning(pid: number): boolean {
     if (errorCode(error) === "EPERM") return true;
     throw error;
   }
+}
+
+async function waitForPosixProcessGroupExit(pid: number): Promise<boolean> {
+  const deadline = Date.now() + containmentVerificationTimeoutMs;
+  while (isPosixProcessGroupRunning(pid)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await delayUnref(Math.min(containmentVerificationDelayMs, remaining));
+  }
+  return true;
 }
 
 function settlesWithin(pending: Promise<void>, timeoutMs: number): Promise<boolean> {
