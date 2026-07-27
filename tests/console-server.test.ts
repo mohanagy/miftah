@@ -15,6 +15,7 @@ import { MiftahError } from "../src/utils/errors.js";
 import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
 import {
   createPrivateConsoleDirectory,
+  createPrivateConsoleTestRoot,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
@@ -1783,7 +1784,7 @@ describe("local Console control server", () => {
   });
 
   it("serves a CSRF-protected first-run connector draft without accepting connection data", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-draft-http-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-draft-http-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -1898,7 +1899,7 @@ describe("local Console control server", () => {
     let configPath: string;
 
     beforeEach(async () => {
-      const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-"));
+      const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-");
       temporaryDirectories.push(root);
       const privateParent = await createPrivateConsoleDirectory(root);
       // The endpoint must create this directory itself: the Windows helper

@@ -9,6 +9,7 @@ import {
   createWindowsPrivateDirectoryInPrivateParent,
   verifyWindowsConfigPathSecurity
 } from "../src/cli/windows-config-acl.js";
+import { createPrivateConsoleTestRoot } from "./helpers/private-console-directory.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
@@ -602,6 +603,19 @@ async function windowsAncestorDiagnostic(directory: string): Promise<string> {
 }
 
 describe("Windows migration ACL contract", () => {
+  it.runIf(process.platform === "win32")(
+    "accepts a first-run child under a current-user-profile ancestor chain",
+    async () => {
+      const root = await createPrivateConsoleTestRoot("miftah-windows-profile-ancestor-");
+      temporaryDirectories.push(root);
+      const privateParent = join(root, "private-parent");
+      await windowsPrivateDirectoryProbe(privateParent);
+
+      await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, join(privateParent, "miftah"))).resolves.toBe(true);
+    },
+    10_000
+  );
+
   it.runIf(process.platform === "win32")(
     "reports a redacted rejection category for a temporary configuration ancestor chain",
     async () => {

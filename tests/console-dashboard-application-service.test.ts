@@ -15,6 +15,7 @@ import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
 import { MiftahError } from "../src/utils/errors.js";
 import {
   createPrivateConsoleDirectory,
+  createPrivateConsoleTestRoot,
   writePrivateConsoleFile
 } from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
@@ -380,7 +381,7 @@ describe("Console dashboard application service", () => {
   });
 
   it("creates a first known connector through the same dashboard setup boundary", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-preset-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-preset-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -404,7 +405,7 @@ describe("Console dashboard application service", () => {
   });
 
   it("shares only a safe connector draft during first run and clears it after configuration publication", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-draft-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -441,7 +442,7 @@ describe("Console dashboard application service", () => {
   });
 
   it("keeps a published first-run configuration when cached draft cleanup conflicts", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-cleanup-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-draft-cleanup-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -515,7 +516,7 @@ describe("Console dashboard application service", () => {
   });
 
   it("previews a first known connector without selecting or creating a configuration", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-preset-preview-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-preset-preview-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -543,7 +544,7 @@ describe("Console dashboard application service", () => {
   });
 
   it("creates one selected local stdio entry only through the first-run dashboard boundary", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-client-entry-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-dashboard-client-entry-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");

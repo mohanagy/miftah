@@ -18,7 +18,10 @@ import {
 } from "../src/console/console-config-catalog.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { MiftahError } from "../src/utils/errors.js";
-import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
+import {
+  createPrivateConsoleDirectory,
+  createPrivateConsoleTestRoot
+} from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { createMemoryProfileRenameOAuthDependencies } from "./helpers/profile-rename-oauth-dependencies.js";
 import {
@@ -178,7 +181,7 @@ describe("Console application service", () => {
   });
 
   it("creates a validated first-run native OAuth profile and connection without accepting secret material", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-first-run-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-first-run-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -260,7 +263,7 @@ describe("Console application service", () => {
   });
 
   it("discovers a first-run native OAuth binding from the endpoint before writing the configuration", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-discovered-native-oauth-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-discovered-native-oauth-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -455,7 +458,7 @@ describe("Console application service", () => {
   });
 
   it("creates a first-run known connector through the shared preset setup path", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-preset-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-preset-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -488,7 +491,7 @@ describe("Console application service", () => {
   });
 
   it("previews a first-run connector without writing configuration or audit state", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-preset-preview-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-preset-preview-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -550,7 +553,7 @@ describe("Console application service", () => {
   });
 
   it("creates an explicitly acknowledged local stdio configuration through the same preset path", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-local-stdio-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-local-stdio-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -583,7 +586,7 @@ describe("Console application service", () => {
   });
 
   it("creates a first-run configuration from one explicitly selected local stdio client entry without accepting credentials", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-client-entry-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -617,7 +620,7 @@ describe("Console application service", () => {
   });
 
   it("creates a first-run configuration from one explicitly selected HTTPS remote client entry without OAuth discovery", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-remote-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-client-entry-remote-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -652,7 +655,7 @@ describe("Console application service", () => {
   });
 
   it("gives a bounded advanced-manual recovery code for an entry outside the static launch grammar", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-client-entry-static-launch-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-client-entry-static-launch-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
@@ -677,7 +680,7 @@ describe("Console application service", () => {
   });
 
   it("creates the same multi-account GSC configuration as the guided CLI path", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-gsc-preset-"));
+    const root = await createPrivateConsoleTestRoot("miftah-console-gsc-preset-");
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "gsc.json");
