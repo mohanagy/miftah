@@ -781,16 +781,29 @@ async function acquireJournalLock(location: AuditJournalLocation): Promise<() =>
       if (Date.now() - startedAt >= lockWaitMilliseconds) {
         throw new Error("Audit journal lock could not be acquired.");
       }
+      // Binding is the atomic availability check. Avoid probing a free local
+      // port first: on Windows, an otherwise-free loopback probe can be
+      // delayed long enough to consume the lock deadline. A probe is needed
+      // only after a bind collision, to distinguish a Miftah holder from an
+      // unrelated listener without ever treating an ambiguous collision as
+      // available.
+      const attempt = await tryAcquireLocalLock(port, key);
+      if (attempt.status === "acquired") return async () => releaseLocalLock(attempt.lock);
+      if (attempt.status === "unavailable") continue;
+
       const state = await inspectLocalLockPort(port, key);
-      if (state === "held" || state === "unknown") {
-        break;
-      }
+      if (state === "occupied") continue;
       if (state === "available") {
-        const attempt = await tryAcquireLocalLock(port, key);
-        if (attempt.status === "acquired") return async () => releaseLocalLock(attempt.lock);
-        if (attempt.status === "unavailable") continue;
-        break;
+        // The listener released the port between the bind collision and its
+        // probe. Retry the atomic bind immediately rather than allowing a
+        // completed delayed refusal to consume the lock deadline.
+        const retry = await tryAcquireLocalLock(port, key);
+        if (retry.status === "acquired") return async () => releaseLocalLock(retry.lock);
+        if (retry.status === "unavailable") continue;
       }
+      // `held` and `unknown` remain ambiguous and therefore retry only after
+      // the bounded backoff; neither state is treated as available.
+      break;
     }
     await wait(lockRetryMilliseconds);
   }

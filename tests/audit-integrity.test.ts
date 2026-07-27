@@ -303,6 +303,11 @@ describe("audit journal integrity", () => {
     class ProbeServer extends EventEmitter {
       listen(_options: { host: string; port: number; exclusive: boolean }, callback?: () => void): this {
         queueMicrotask(() => {
+          if (listenerStartCount === 1) {
+            bindOutcome = "error:EADDRINUSE";
+            this.emit("error", Object.assign(new Error("lock port already in use"), { code: "EADDRINUSE" }));
+            return;
+          }
           bindOutcome = "listening";
           this.emit("listening");
           callback?.();
@@ -383,13 +388,76 @@ describe("audit journal integrity", () => {
       expect(probeTimedOut).toBe(true);
       expect(refusalDelivered).toBe(true);
       expect(bindOutcome).toBe("listening");
-      expect(listenerStartCount).toBe(1);
+      expect(listenerStartCount).toBe(2);
       expect(listenerCloseCount).toBe(1);
     } finally {
       setTimeoutSpy.mockRestore();
       nowSpy.mockRestore();
       vi.doUnmock("node:net");
       vi.resetModules();
+    }
+  });
+
+  it("acquires an available local lock without waiting for an unresponsive probe", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-audit-integrity-unresponsive-lock-probe-"));
+    const path = join(directory, "audit.jsonl");
+    class ProbeSocket extends EventEmitter {
+      setEncoding(): this {
+        return this;
+      }
+
+      destroy(): this {
+        return this;
+      }
+    }
+
+    const originalSetTimeout = global.setTimeout;
+    let probeRequested = false;
+    let probeTimedOut = false;
+    vi.resetModules();
+    vi.doMock("node:net", async () => {
+      const actual = await vi.importActual<typeof import("node:net")>("node:net");
+      return {
+        ...actual,
+        connect: () => {
+          probeRequested = true;
+          return new ProbeSocket() as unknown as Socket;
+        }
+      };
+    });
+    const { AuditLogger: IsolatedAuditLogger } = await import("../src/audit/audit-logger.js");
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (probeTimedOut ? 5_000 : 0));
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(
+      ((callback: (...args: never[]) => void, delay?: number, ...args: never[]) => {
+        if (delay === 100) {
+          const timer = originalSetTimeout(() => undefined, 1_000);
+          queueMicrotask(() => {
+            probeTimedOut = true;
+            callback(...args);
+          });
+          return timer;
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      }) as unknown as typeof setTimeout
+    );
+    try {
+      const logger = new IsolatedAuditLogger(path, { integrity: { algorithm: "sha256-chain" } });
+      await expect(logger.log({
+        wrapper: "github",
+        profile: "work",
+        operation: "tools/call",
+        name: "writes-before-an-unresponsive-local-lock-probe",
+        status: "success",
+        durationMs: 1
+      })).resolves.toBeUndefined();
+      expect(probeRequested).toBe(false);
+      expect(probeTimedOut).toBe(false);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      nowSpy.mockRestore();
+      vi.doUnmock("node:net");
+      vi.resetModules();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
