@@ -119,6 +119,7 @@ describe("product README", () => {
     expect(cliDocs).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
     expect(cliDocs).toContain("`miftah setup ... --plan` validates a complete noninteractive first-configuration candidate and prints a structural, non-secret JSON plan without creating a directory, writing a file, or contacting an upstream.");
     expect(cliDocs).toContain("`miftah setup --resume` requires a TTY and cannot be combined with any setup-input option.");
+    expect(cliDocs).toContain("It restores the connector source, configuration name, catalog preset, and setup stage, then asks again for every URL, executable, argument, path, environment reference, credential-file choice, client selection, and OAuth/browser detail.");
     expect(cliDocs).toContain("`miftah setup --discard-draft` deletes that checkpoint without creating a configuration and does not require a TTY.");
     expect(consoleDocs).toContain("`GET /api/v1/setup-draft` returns the current safe draft or `null`.");
     expect(consoleDocs).toContain("`PUT /api/v1/setup-draft` accepts only the safe connector intent");
