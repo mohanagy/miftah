@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/validate-config.js";
 import { runInitCommand } from "../src/cli/init.js";
 import { CliUsageError } from "../src/cli/parse.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const outputRoot = resolve(process.cwd(), ".init-command-test-output");
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -337,6 +338,26 @@ describe("init command", () => {
 
     await expectNoPath(resolve(outputRoot, "eof"));
     await expectNoPath(resolve(outputRoot, "cancel"));
+  });
+
+  it("preserves a setup-draft failure instead of presenting it as interactive cancellation", async () => {
+    const streams = createStreams();
+    const failure = new MiftahError(
+      "SETUP_DRAFT_CONFLICT",
+      "SETUP_DRAFT_CONFLICT: setup draft changed in another CLI or Console session"
+    );
+
+    await expect(runInitCommand({
+      interactive: true,
+      name: "draft-conflict",
+      preset: "generic-docker",
+      output: "draft-conflict.json",
+      client: ""
+    }, {
+      ...commandContext(streams),
+      onSetupDraftIntent: async () => { throw failure; }
+    })).rejects.toBe(failure);
+    streams.input.end();
   });
 
   it("does not emit an unhandled rejection when fully supplied wizard input closes", async () => {

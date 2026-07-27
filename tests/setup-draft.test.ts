@@ -78,6 +78,27 @@ describe("setup drafts", () => {
     await expect(first.load()).resolves.toEqual(saved);
   });
 
+  it("replaces a saved connector intent when no expected revision is supplied", async () => {
+    const directory = await createRoot();
+    const store = new FileSetupDraftStore({ directory });
+    await store.save({
+      source: "connector",
+      name: "support-tools",
+      preset: "generic",
+      stage: "connection"
+    });
+
+    const replacement = await store.save({
+      source: "connector",
+      name: "support-tools",
+      preset: "sentry",
+      stage: "connection"
+    });
+
+    expect(replacement).toMatchObject({ revision: 2, preset: "sentry" });
+    await expect(store.load()).resolves.toEqual(replacement);
+  });
+
   it("fails closed when a draft contains an excluded connection or credential field", async () => {
     const directory = await createRoot();
     await writeFile(resolveSetupDraftPath(directory), JSON.stringify({
@@ -157,5 +178,28 @@ describe("setup drafts", () => {
       stage: "connection"
     })).rejects.toMatchObject({ code: "SETUP_DRAFT_INPUT_INVALID" });
     await expect(store.load()).resolves.toBeUndefined();
+  });
+
+  it("retains the underlying storage cause in unavailable-draft diagnostics", async () => {
+    const root = await createRoot();
+    const fileParent = join(root, "not-a-directory");
+    await writeFile(fileParent, "not a directory", { mode: 0o600 });
+    const store = new FileSetupDraftStore({ directory: join(fileParent, "setup") });
+    let failure: unknown;
+
+    try {
+      await store.save({
+        source: "connector",
+        name: "support-tools",
+        preset: "generic",
+        stage: "connection"
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MiftahError);
+    expect(failure).toMatchObject({ code: "SETUP_DRAFT_UNAVAILABLE" });
+    expect((failure as MiftahError).details?.cause).toMatchObject({ code: expect.any(String) });
   });
 });

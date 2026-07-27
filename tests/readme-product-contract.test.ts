@@ -91,7 +91,7 @@ describe("product README", () => {
     expect(readme).toContain("If a bare connector setup is interrupted, continue it with:");
     expect(readme).toContain("miftah setup --resume");
     expect(readme).toContain("miftah setup --discard-draft");
-    expect(readme).toContain("Miftah saves only the configuration name and connector preset");
+    expect(readme).toContain("Miftah saves only the connector source, configuration name, catalog preset, and setup stage");
     expect(readme).toContain("You re-enter every URL, executable, argument, path, environment reference, client entry, and browser or OAuth detail.");
     expect(readme).toContain("Remote MCP with browser sign-in");
     expect(readme).toContain("never asks for a token, password, or browser cookie");
@@ -118,10 +118,12 @@ describe("product README", () => {
     expect(cliDocs).toContain("The completion handoff prints the actual configuration path in any later `miftah profile test` command.");
     expect(cliDocs).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
     expect(cliDocs).toContain("`miftah setup ... --plan` validates a complete noninteractive first-configuration candidate and prints a structural, non-secret JSON plan without creating a directory, writing a file, or contacting an upstream.");
-    expect(cliDocs).toContain("`miftah setup --resume` requires a TTY and can be combined with no setup-input option.");
+    expect(cliDocs).toContain("`miftah setup --resume` requires a TTY and cannot be combined with any setup-input option.");
     expect(cliDocs).toContain("`miftah setup --discard-draft` deletes that checkpoint without creating a configuration and does not require a TTY.");
-    expect(consoleDocs).toContain("`GET`, `PUT`, and `DELETE /api/v1/setup-draft`");
-    expect(consoleDocs).toContain('The request and response contain only `source: "connector"`, a bounded configuration name, a catalog preset, stage, revision, and timestamp.');
+    expect(consoleDocs).toContain("`GET /api/v1/setup-draft` returns the current safe draft or `null`.");
+    expect(consoleDocs).toContain("`PUT /api/v1/setup-draft` accepts only the safe connector intent");
+    expect(consoleDocs).toContain("optional `expectedRevision` compare-and-swap value");
+    expect(consoleDocs).toContain("`DELETE /api/v1/setup-draft` requires `{ revision: number }` and returns `204 No Content`.");
     expect(cliDocs).not.toContain("it first offers `new` or `import`");
   });
 

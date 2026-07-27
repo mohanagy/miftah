@@ -384,6 +384,21 @@ function setupDraftStore(context: InitCommandContext): SetupDraftStore {
   return context.setupDraftStore;
 }
 
+async function discardPublishedSetupDraft(
+  store: SetupDraftStore,
+  revision: number,
+  context: InitCommandContext
+): Promise<void> {
+  try {
+    await store.discard(revision);
+  } catch (error) {
+    const code = error instanceof MiftahError ? error.code : "SETUP_DRAFT_UNAVAILABLE";
+    context.output.write(
+      `Configuration was created, but Miftah could not clear the saved connector choice (${code}). Run 'miftah setup --discard-draft' to remove it later.\n`
+    );
+  }
+}
+
 /**
  * Starts the human-first setup journey while retaining `init` for scripts and
  * existing automation. Both entry points deliberately use the same planner,
@@ -422,7 +437,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       name: draft.name,
       preset: draft.preset
     }, context);
-    await store.discard(draft.revision);
+    await discardPublishedSetupDraft(store, draft.revision, context);
     return finishCreatedSetup(options, context, created);
   }
   if (options.plan === true) {
@@ -626,12 +641,13 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     }
     checkpointConnectorIntent = startingPoint === "connector";
   }
-  const initContext = checkpointConnectorIntent && context.setupDraftStore !== undefined
+  const checkpointStore = context.setupDraftStore;
+  const initContext = checkpointConnectorIntent && checkpointStore !== undefined
     ? {
         ...context,
         onSetupDraftIntent: async (intent: Parameters<NonNullable<InitCommandContext["onSetupDraftIntent"]>>[0]) => {
           try {
-            checkpointedDraft = await context.setupDraftStore!.save(intent);
+            checkpointedDraft = await checkpointStore.save(intent);
           } catch (error) {
             if (error instanceof MiftahError && error.code === "SETUP_DRAFT_INPUT_INVALID") {
               context.output.write(
@@ -649,8 +665,8 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     interactive: true,
     ...(guidedPreset === undefined ? {} : { preset: guidedPreset })
   }, initContext);
-  if (checkpointedDraft !== undefined) {
-    await context.setupDraftStore!.discard(checkpointedDraft.revision);
+  if (checkpointedDraft !== undefined && checkpointStore !== undefined) {
+    await discardPublishedSetupDraft(checkpointStore, checkpointedDraft.revision, context);
   }
   return finishCreatedSetup(options, context, created);
 }

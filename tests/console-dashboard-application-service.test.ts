@@ -12,6 +12,7 @@ import { ConsoleDashboardApplicationService } from "../src/console/console-dashb
 import { buildPresetConfig } from "../src/config/presets.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
 import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
+import { MiftahError } from "../src/utils/errors.js";
 import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
@@ -437,6 +438,57 @@ describe("Console dashboard application service", () => {
     })).resolves.toMatchObject({ name: "support-tools" });
     await expect(draftStore.load()).resolves.toBeUndefined();
     await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
+  it("keeps a published first-run configuration when private draft cleanup conflicts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-cleanup-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const draft = {
+      schemaVersion: 1 as const,
+      revision: 1,
+      source: "connector" as const,
+      name: "support-tools",
+      preset: "generic",
+      stage: "connection" as const,
+      savedAt: "2026-07-25T12:00:00.000Z"
+    };
+    const draftStore = {
+      load: vi.fn(async () => draft),
+      save: vi.fn(async () => draft),
+      discard: vi.fn(async () => {
+        throw new MiftahError(
+          "SETUP_DRAFT_CONFLICT",
+          "SETUP_DRAFT_CONFLICT: setup draft changed in another CLI or Console session"
+        );
+      })
+    };
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] },
+      setupDraftStore: draftStore
+    });
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+
+    try {
+      await expect(service.onboardPreset({
+        name: "support-tools",
+        preset,
+        ...presetOptions
+      })).resolves.toMatchObject({ name: "support-tools" });
+      await expect(readFile(configPath, "utf8")).resolves.toContain('"name": "support-tools"');
+      expect(draftStore.discard).toHaveBeenCalledWith(1);
+      expect(warning).toHaveBeenCalledWith(
+        "Configuration was created, but Miftah could not clear the saved connector choice (SETUP_DRAFT_CONFLICT). Run 'miftah setup --discard-draft' to remove it later.",
+        { code: "MIFTAH_SETUP_DRAFT_CLEANUP_FAILED" }
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("does not expose connector-draft operations when its embedding has no draft store", () => {

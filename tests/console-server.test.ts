@@ -659,6 +659,55 @@ async function resumeMissingSetupDraft(javascript: string): Promise<{
   return { restored, controlsUpdated, message: status };
 }
 
+async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
+  readonly requests: number;
+  readonly disabledWhilePending: boolean;
+  readonly enabledAfterCompletion: boolean;
+}> {
+  const start = javascript.indexOf("if (saveSetupDraft instanceof HTMLButtonElement)");
+  const end = javascript.indexOf("\n\n  if (resumeSetupDraft instanceof HTMLButtonElement)", start);
+  if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft save action.");
+
+  type Listener = () => void | Promise<void>;
+  class FakeButton {
+    disabled = false;
+    readonly listeners = new Map<string, Listener>();
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+  }
+
+  const button = new FakeButton();
+  let requests = 0;
+  let releaseRequest: () => void = () => undefined;
+  const request = new Promise<void>((resolve) => { releaseRequest = resolve; });
+  runInNewContext(javascript.slice(start, end), {
+    saveSetupDraft: button,
+    HTMLButtonElement: FakeButton,
+    message(): void {},
+    setupDraftIntent(): Record<string, unknown> {
+      return { source: "connector", name: "saved-connector", preset: "generic", stage: "connection" };
+    },
+    api: async () => {
+      requests += 1;
+      await request;
+      return { revision: 1 };
+    },
+    restoreSetupDraft(): void {},
+    errorMessage(): string { return "request failed"; }
+  });
+  const listener = button.listeners.get("click");
+  if (listener === undefined) throw new Error("Expected the saved setup-draft save listener.");
+  const first = listener();
+  const second = listener();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const disabledWhilePending = button.disabled;
+  releaseRequest();
+  await Promise.all([first, second]);
+  return { requests, disabledWhilePending, enabledAfterCompletion: button.disabled === false };
+}
+
 async function resumeSetupDraftWithoutConnectionValues(javascript: string): Promise<{
   readonly name: string;
   readonly preset: string;
@@ -1480,6 +1529,17 @@ describe("local Console control server", () => {
         discardVisible: true,
         discardEnabled: true
       });
+      await expect(saveSetupDraftOnlyOnce(javascript)).resolves.toEqual({
+        requests: 1,
+        disabledWhilePending: true,
+        enabledAfterCompletion: true
+      });
+      expect(javascript).toContain("if (resumeSetupDraft.disabled) return;");
+      expect(javascript).toContain("resumeSetupDraft.disabled = true;");
+      expect(javascript).toContain("finally { resumeSetupDraft.disabled = false; }");
+      expect(javascript).toContain("if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;");
+      expect(javascript).toContain("discardSetupDraft.disabled = true;");
+      expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");

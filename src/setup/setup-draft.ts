@@ -9,7 +9,7 @@ import {
   verifyWindowsConfigPathSecurity
 } from "../cli/windows-config-acl.js";
 import { PRESET_CATALOG, type PresetCatalogName } from "../config/presets.js";
-import { OAuthLocalLockUnavailableError, withOAuthLocalLock } from "../oauth/local-lock.js";
+import { withOAuthLocalLock } from "../oauth/local-lock.js";
 import { MiftahError } from "../utils/errors.js";
 
 const maximumDraftBytes = 4 * 1024;
@@ -82,10 +82,11 @@ function setupDraftConflict(): never {
   );
 }
 
-function setupDraftUnavailable(): never {
+function setupDraftUnavailable(cause?: unknown): never {
   throw new MiftahError(
     "SETUP_DRAFT_UNAVAILABLE",
-    "SETUP_DRAFT_UNAVAILABLE: private setup draft storage is unavailable"
+    "SETUP_DRAFT_UNAVAILABLE: private setup draft storage is unavailable",
+    cause === undefined ? undefined : { cause }
   );
 }
 
@@ -228,11 +229,14 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
     const parent = dirname(directory);
     await mkdir(parent, { recursive: true, mode: 0o700 });
     if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) setupDraftUnavailable();
-    if (!(await createWindowsPrivateDirectory(directory))) setupDraftUnavailable();
-    if (!(await verifyWindowsConfigPathSecurity(directory, "directory"))) setupDraftUnavailable();
+    if (await privateDirectoryMetadata(directory) !== undefined) return;
+    // Exclusive creation may lose a race to another Miftah process. Validate the
+    // resulting path rather than treating that safe race as a storage failure.
+    await createWindowsPrivateDirectory(directory);
+    if (await privateDirectoryMetadata(directory) === undefined) setupDraftUnavailable();
   } catch (error) {
     if (error instanceof MiftahError) throw error;
-    setupDraftUnavailable();
+    setupDraftUnavailable(error);
   }
 }
 
@@ -301,9 +305,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
     if (expectedRevision !== undefined && !validExpectedRevision(expectedRevision)) setupDraftInputInvalid();
     return this.withLock(async () => {
       const existing = await this.loadUnchecked();
-      if (existing === undefined) {
-        if (expectedRevision !== undefined && expectedRevision !== 0) setupDraftConflict();
-      } else if (expectedRevision !== existing.revision) {
+      if (expectedRevision !== undefined && expectedRevision !== (existing?.revision ?? 0)) {
         setupDraftConflict();
       }
       const revision = existing === undefined ? 1 : existing.revision + 1;
@@ -339,8 +341,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
       return await withOAuthLocalLock("setup-draft", this.path, draftLockWaitMilliseconds, operation);
     } catch (error) {
       if (error instanceof MiftahError) throw error;
-      if (error instanceof OAuthLocalLockUnavailableError) setupDraftUnavailable();
-      setupDraftUnavailable();
+      setupDraftUnavailable(error);
     }
   }
 

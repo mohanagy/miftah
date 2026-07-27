@@ -15,7 +15,18 @@ vi.mock("../src/cli/windows-config-acl.js", () => ({
   verifyWindowsConfigPathSecurity: aclMocks.verifyPath
 }));
 
+vi.mock("../src/oauth/local-lock.js", () => ({
+  OAuthLocalLockUnavailableError: class OAuthLocalLockUnavailableError extends Error {},
+  withOAuthLocalLock: async (
+    _scope: string,
+    _value: string,
+    _waitMilliseconds: number,
+    operation: () => Promise<unknown>
+  ) => operation()
+}));
+
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
 
 const temporaryDirectories: string[] = [];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -25,8 +36,12 @@ beforeEach(() => {
   aclMocks.verifyPath.mockResolvedValue(true);
   aclMocks.secureFile.mockResolvedValue(true);
   aclMocks.createPrivateDirectory.mockImplementation(async (directory) => {
-    await mkdir(directory, { recursive: true });
-    return true;
+    try {
+      await mkdir(directory);
+      return true;
+    } catch {
+      return false;
+    }
   });
 });
 
@@ -80,5 +95,21 @@ describe("Console Windows first-run boundary", () => {
     })).rejects.toMatchObject({ code: "CONFIG_CREATE_FAILED" });
 
     await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reuses an existing verified setup-draft directory for a later mutation", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-setup-draft-windows-"));
+    temporaryDirectories.push(parent);
+    const store = new FileSetupDraftStore({ directory: join(parent, "setup-draft") });
+
+    const draft = await store.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic",
+      stage: "connection"
+    });
+
+    await expect(store.discard(draft.revision)).resolves.toBeUndefined();
+    expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(1);
   });
 });

@@ -385,8 +385,16 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   private async clearSetupDraftAfterFirstRunPublication(): Promise<void> {
     const store = this.setupDraftStore;
     if (store === undefined) return;
-    const draft = await store.load();
-    if (draft !== undefined) await store.discard(draft.revision);
+    try {
+      const draft = await store.load();
+      if (draft !== undefined) await store.discard(draft.revision);
+    } catch (error) {
+      const code = error instanceof MiftahError ? error.code : "SETUP_DRAFT_UNAVAILABLE";
+      process.emitWarning(
+        `Configuration was created, but Miftah could not clear the saved connector choice (${code}). Run 'miftah setup --discard-draft' to remove it later.`,
+        { code: "MIFTAH_SETUP_DRAFT_CLEANUP_FAILED" }
+      );
+    }
   }
 
   private async confirmCreatedFirstRunConfiguration(): Promise<void> {

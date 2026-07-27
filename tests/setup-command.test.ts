@@ -17,6 +17,7 @@ import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
 import { FileSetupDraftStore, resolveSetupDraftPath } from "../src/setup/setup-draft.js";
+import { MiftahError } from "../src/utils/errors.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
@@ -178,6 +179,56 @@ describe("setup command", () => {
     }
   });
 
+  it("finishes a published resumed setup when its private draft cleanup conflicts", async () => {
+    const persistedStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    const draft = await persistedStore.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic-docker",
+      stage: "connection"
+    });
+    const draftStore = {
+      load: persistedStore.load.bind(persistedStore),
+      save: persistedStore.save.bind(persistedStore),
+      discard: async () => {
+        throw new MiftahError(
+          "SETUP_DRAFT_CONFLICT",
+          "SETUP_DRAFT_CONFLICT: setup draft changed in another CLI or Console session"
+        );
+      }
+    };
+    const streams = createStreams();
+    const command = runSetupCommand({ resume: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    });
+
+    try {
+      await answer(
+        streams,
+        "Docker image (digest-pinned)",
+        "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      );
+      await answer(streams, "Output location [posthog-work.miftah.json]", "resumed-cleanup-conflict.json");
+      await answer(streams, "Client", "");
+
+      await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      expect(streams.transcript.contents).toContain(
+        "Configuration was created, but Miftah could not clear the saved connector choice (SETUP_DRAFT_CONFLICT)."
+      );
+      await expect(persistedStore.load()).resolves.toEqual(draft);
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+  });
+
   it("retains a resumed draft when publication fails and permits an explicit discard without a TTY", async () => {
     const draftStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
     const draft = await draftStore.save({
@@ -239,6 +290,30 @@ describe("setup command", () => {
       setupDraftStore: new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") })
     })).rejects.toThrow("cannot be combined with '--output'");
     streams.input.end();
+  });
+
+  it("rejects mutually exclusive and noninteractive resume modes", async () => {
+    const streams = createStreams();
+    const draftStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    await expect(runSetupCommand({ resume: true, discardDraft: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+      setupDraftStore: draftStore
+    })).rejects.toThrow("Choose either '--resume' or '--discard-draft', not both.");
+    streams.input.end();
+
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    await expect(runSetupCommand({ resume: true }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+      setupDraftStore: draftStore
+    })).rejects.toThrow("Option '--resume' requires TTY input and output");
+    input.end();
   });
 
   it("prints a validated non-secret setup plan without writing or contacting a remote MCP", async () => {

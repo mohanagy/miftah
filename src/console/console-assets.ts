@@ -1634,17 +1634,22 @@ const script = `(() => {
 
   if (saveSetupDraft instanceof HTMLButtonElement) {
     saveSetupDraft.addEventListener("click", async () => {
+      if (saveSetupDraft.disabled) return;
+      saveSetupDraft.disabled = true;
       message("Saving only the connector choice…");
       try {
         const draft = await api("/api/v1/setup-draft", { method: "PUT", body: setupDraftIntent() });
         restoreSetupDraft(draft);
         message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
       } catch (error) { message(errorMessage(error)); }
+      finally { saveSetupDraft.disabled = false; }
     });
   }
 
   if (resumeSetupDraft instanceof HTMLButtonElement) {
     resumeSetupDraft.addEventListener("click", async () => {
+      if (resumeSetupDraft.disabled) return;
+      resumeSetupDraft.disabled = true;
       message("Loading the saved connector choice…");
       try {
         const draft = await api("/api/v1/setup-draft");
@@ -1657,12 +1662,14 @@ const script = `(() => {
         restoreSetupDraft(draft);
         message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
       } catch (error) { message(errorMessage(error)); }
+      finally { resumeSetupDraft.disabled = false; }
     });
   }
 
   if (discardSetupDraft instanceof HTMLButtonElement) {
     discardSetupDraft.addEventListener("click", async () => {
-      if (activeSetupDraft === undefined) return;
+      if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;
+      discardSetupDraft.disabled = true;
       message("Discarding the saved connector choice…");
       try {
         await api("/api/v1/setup-draft", { method: "DELETE", body: { revision: activeSetupDraft.revision } });
@@ -1670,6 +1677,7 @@ const script = `(() => {
         renderSetupDraftControls();
         message("Discarded the saved connector choice. The current form stays open and is not saved.");
       } catch (error) { message(errorMessage(error)); }
+      finally { discardSetupDraft.disabled = false; }
     });
   }
 

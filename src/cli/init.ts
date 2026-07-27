@@ -33,6 +33,7 @@ import type {
 } from "./client-snippets.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
+import { MiftahError } from "../utils/errors.js";
 
 export type InitCommandOptions = Pick<
   CliOptions,
@@ -441,7 +442,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
     }
     return { name, preset, output, client, ...presetOptions };
   } catch (error) {
-    if (error instanceof CliUsageError) throw error;
+    if (error instanceof CliUsageError || error instanceof MiftahError) throw error;
     throw new CliUsageError("Interactive init was cancelled.");
   } finally {
     cancellation.dispose();
