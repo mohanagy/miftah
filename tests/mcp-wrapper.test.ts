@@ -2100,7 +2100,6 @@ describe("Miftah MCP wrapper", () => {
 
   it("propagates cancellation through management tool discovery", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-management-discovery-"));
-    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -2112,8 +2111,8 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
-            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_START_DELAY_MS: "1100",
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
           }
@@ -2125,24 +2124,34 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "management-discovery-cancellation-test-client", version: "1.0.0" });
     const controller = new AbortController();
+    let toolListStarted: PathArrivalWatch | undefined;
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
+      toolListStarted = watchForPathArrival(startedPath);
       const pending = client.callTool(
         { name: "miftah_list_upstream_tools", arguments: {} },
         undefined,
         { signal: controller.signal }
       );
-      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
-        initialized: true,
-        toolListStarted: true
-      });
+      await Promise.race([
+        toolListStarted.wait,
+        pending.then(
+          () => {
+            throw new Error("Tool discovery completed before its started marker");
+          },
+          (error) => {
+            throw error;
+          }
+        )
+      ]);
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
       await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
     } finally {
+      toolListStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });

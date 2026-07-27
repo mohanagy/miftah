@@ -21,6 +21,7 @@ const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const responseText =
   process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const listToolsStartDelayMs = Number(process.env.TEST_LIST_TOOLS_START_DELAY_MS ?? "0");
 const listToolsDelayAfterNotificationMs = Number(process.env.TEST_LIST_TOOLS_DELAY_AFTER_NOTIFICATION_MS ?? "0");
 const listResourcesDelayMs = Number(process.env.TEST_LIST_RESOURCES_DELAY_MS ?? "0");
 const listPromptsDelayMs = Number(process.env.TEST_LIST_PROMPTS_DELAY_MS ?? "0");
@@ -267,6 +268,9 @@ if (failInitialize || clientInfoPath) {
 server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   toolListRequests += 1;
   const changedToolList = changeToolListAfterFirstRequest && toolListRequests > 1;
+  if (listToolsStartDelayMs > 0) {
+    await delay(listToolsStartDelayMs);
+  }
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
   }
