@@ -11,6 +11,7 @@ import {
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
+import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
 import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
@@ -399,6 +400,55 @@ describe("Console dashboard application service", () => {
       buildPresetConfig("support-tools", preset, presetOptions)
     );
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
+  it("shares only a safe connector draft during first run and clears it after configuration publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const draftStore = new FileSetupDraftStore({ directory: join(root, "setup-draft") });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] },
+      setupDraftStore: draftStore
+    });
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+    const saveSetupDraft = service.saveSetupDraft;
+    const loadSetupDraft = service.loadSetupDraft;
+    if (saveSetupDraft === undefined || loadSetupDraft === undefined) {
+      throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
+    }
+
+    const draft = await saveSetupDraft({
+      source: "connector",
+      name: "support-tools",
+      preset,
+      stage: "connection"
+    });
+    await expect(loadSetupDraft()).resolves.toEqual(draft);
+
+    await expect(service.onboardPreset({
+      name: "support-tools",
+      preset,
+      ...presetOptions
+    })).resolves.toMatchObject({ name: "support-tools" });
+    await expect(draftStore.load()).resolves.toBeUndefined();
+    await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
+  });
+
+  it("does not expose connector-draft operations when its embedding has no draft store", () => {
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(tmpdir(), "miftah-console-dashboard-no-draft-store.json"),
+      configDirectory: tmpdir(),
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
+
+    expect(service.loadSetupDraft).toBeUndefined();
+    expect(service.saveSetupDraft).toBeUndefined();
+    expect(service.discardSetupDraft).toBeUndefined();
   });
 
   it("previews a first known connector without selecting or creating a configuration", async () => {

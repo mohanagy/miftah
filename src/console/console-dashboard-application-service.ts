@@ -42,6 +42,7 @@ import {
 } from "./console-config-catalog.js";
 import type { ConsoleConfigCatalog, ConsoleConfigMetadata } from "./console-config-metadata.js";
 import type { ConsoleTrustedConfiguration } from "./console-trusted-configuration.js";
+import type { SetupDraft, SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
 
 export interface ConsoleDashboardApplicationServiceOptions {
   /** Destination used only for a genuine first native OAuth configuration. */
@@ -51,6 +52,8 @@ export interface ConsoleDashboardApplicationServiceOptions {
   readonly launcher?: ClientLauncher;
   /** Internal test/runtime seam for guarded endpoint-first OAuth discovery. */
   readonly nativeOAuthFetch?: FetchLike;
+  /** Shared private setup checkpoint store; omitted embeddings expose no draft controls. */
+  readonly setupDraftStore?: SetupDraftStore;
 }
 
 interface ActiveConsoleConfiguration {
@@ -85,11 +88,31 @@ function withCatalog(metadata: ConsoleConfigMetadata, catalog: ConsoleConfigCata
  */
 export class ConsoleDashboardApplicationService implements ConsoleControlApplication {
   private readonly firstRunApplication: ConsoleApplicationService;
+  private readonly setupDraftStore: SetupDraftStore | undefined;
+  readonly loadSetupDraft: (() => Promise<SetupDraft | undefined>) | undefined;
+  readonly saveSetupDraft: ((input: SetupDraftInput, expectedRevision?: number) => Promise<SetupDraft>) | undefined;
+  readonly discardSetupDraft: ((expectedRevision: number) => Promise<void>) | undefined;
   private active: ActiveConsoleConfiguration | undefined;
   private discoveryInFlight: Promise<ConsoleConfigCatalogDiscovery> | undefined;
 
   constructor(private readonly options: ConsoleDashboardApplicationServiceOptions) {
     this.firstRunApplication = this.applicationFor(options.defaultConfigPath);
+    this.setupDraftStore = options.setupDraftStore;
+    const store = this.setupDraftStore;
+    if (store !== undefined) {
+      this.loadSetupDraft = async () => {
+        await this.assertFirstRunAvailable();
+        return store.load();
+      };
+      this.saveSetupDraft = async (input, expectedRevision) => {
+        await this.assertFirstRunAvailable();
+        return store.save(input, expectedRevision);
+      };
+      this.discardSetupDraft = async (expectedRevision) => {
+        await this.assertFirstRunAvailable();
+        await store.discard(expectedRevision);
+      };
+    }
   }
 
   async configMetadata(): Promise<ConsoleConfigMetadata> {
@@ -140,6 +163,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardNativeOAuth(request);
+    await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration();
     return result;
   }
@@ -149,6 +173,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardDiscoveredNativeOAuth(request);
+    await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration();
     return result;
   }
@@ -156,6 +181,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardPreset(request);
+    await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration();
     return result;
   }
@@ -168,6 +194,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     await this.assertFirstRunAvailable();
     const result = await this.firstRunApplication.onboardClientEntry(request);
+    await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration();
     return result;
   }
@@ -353,6 +380,13 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
         "CONSOLE_CONFIGURATION_SELECTION_REQUIRED: select an existing configuration before changing it"
       );
     }
+  }
+
+  private async clearSetupDraftAfterFirstRunPublication(): Promise<void> {
+    const store = this.setupDraftStore;
+    if (store === undefined) return;
+    const draft = await store.load();
+    if (draft !== undefined) await store.discard(draft.revision);
   }
 
   private async confirmCreatedFirstRunConfiguration(): Promise<void> {

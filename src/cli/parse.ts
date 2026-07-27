@@ -41,7 +41,9 @@ type BooleanOptionName =
   | "addProfile"
   | "makeDefault"
   | "clearDescription"
-  | "acceptLocalCommand";
+  | "acceptLocalCommand"
+  | "resume"
+  | "discardDraft";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -101,6 +103,10 @@ export interface CliOptions {
   readonly makeDefault?: true;
   /** Explicitly removes a non-secret profile description. */
   readonly clearDescription?: true;
+  /** Resumes only a private, non-secret connector intent and re-prompts connection details. */
+  readonly resume?: true;
+  /** Deletes the private, non-secret connector setup intent without creating a configuration. */
+  readonly discardDraft?: true;
 }
 
 interface CliCommandMetadata {
@@ -185,7 +191,9 @@ export const CLI_COMMANDS = {
       "addProfile",
       "makeDefault",
       "plan",
-      "verify"
+      "verify",
+      "resume",
+      "discardDraft"
     ]
   },
   "profile set-default": {
@@ -540,6 +548,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--clear-description",
     description: "Explicitly remove the selected profile's non-secret description."
   },
+  resume: {
+    name: "resume",
+    takesValue: false,
+    usage: "--resume",
+    description: "Resume a private connector choice and re-enter all connection details."
+  },
+  discardDraft: {
+    name: "discardDraft",
+    takesValue: false,
+    usage: "--discard-draft",
+    description: "Discard the private connector choice without writing a configuration."
+  },
   acceptLocalCommand: {
     name: "acceptLocalCommand",
     takesValue: false,
@@ -590,6 +610,8 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--add-profile": OPTION_DEFINITIONS.addProfile,
   "--make-default": OPTION_DEFINITIONS.makeDefault,
   "--clear-description": OPTION_DEFINITIONS.clearDescription,
+  "--resume": OPTION_DEFINITIONS.resume,
+  "--discard-draft": OPTION_DEFINITIONS.discardDraft,
   "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",
   "-h": "help",

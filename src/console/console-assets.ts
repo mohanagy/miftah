@@ -127,6 +127,10 @@ const page = `<!doctype html>
               <option value="streamable-http">Remote HTTPS MCP endpoint</option>
             </select>
           </label>
+          <div class="wide setup-draft-actions">
+            <p class="field-note">Save your configuration name and connector choice to continue later. Miftah does not save a URL, executable, arguments, path, client entry, environment variable, secret, OAuth state, or browser sign-in details. You will enter those again when you continue.</p>
+            <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save connector choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved connector choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
+          </div>
           <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
           <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
           <label class="wide" data-preset-field="local-stdio" hidden>Local executable<input name="localCommand" maxlength="4096" placeholder="node (macOS/Linux) or C:/tools/server.exe (Windows)"></label>
@@ -549,6 +553,9 @@ const script = `(() => {
   const presetReviewDetails = byId("preset-review-details");
   const presetCreateReviewed = byId("preset-create-reviewed");
   const presetReviewEdit = byId("preset-review-edit");
+  const saveSetupDraft = byId("save-setup-draft");
+  const resumeSetupDraft = byId("resume-setup-draft");
+  const discardSetupDraft = byId("discard-setup-draft");
   const presetInputNames = Object.freeze({
     generic: ["credentialEnv"],
     "github": [],
@@ -566,6 +573,7 @@ const script = `(() => {
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
+  let activeSetupDraft = undefined;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -578,6 +586,8 @@ const script = `(() => {
   function restoreUnlock() {
     csrfToken = "";
     setupCompletion = undefined;
+    activeSetupDraft = undefined;
+    renderSetupDraftControls();
     clearPresetReview();
     if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
@@ -1189,6 +1199,79 @@ const script = `(() => {
     if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
   }
 
+  function renderSetupDraftControls() {
+    if (discardSetupDraft instanceof HTMLButtonElement) {
+      discardSetupDraft.hidden = activeSetupDraft === undefined;
+      discardSetupDraft.disabled = activeSetupDraft === undefined;
+    }
+  }
+
+  function setupDraftIntent() {
+    const form = byId("preset-onboarding-form");
+    const selection = byId("preset-selection");
+    const name = form instanceof HTMLFormElement ? form.querySelector("input[name='name']") : undefined;
+    if (!(name instanceof HTMLInputElement) || !(selection instanceof HTMLSelectElement)) {
+      throw new Error("The connector setup form is unavailable.");
+    }
+    const configurationName = name.value.trim();
+    const preset = selection.value;
+    if (!/^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u.test(configurationName)) {
+      throw new Error("Use a lowercase configuration name of up to 64 letters, numbers, dots, underscores, or hyphens before saving.");
+    }
+    if (!Object.prototype.hasOwnProperty.call(presetInputNames, preset)) {
+      throw new Error("Choose a supported connector before saving.");
+    }
+    return {
+      source: "connector",
+      name: configurationName,
+      preset,
+      stage: "connection",
+      expectedRevision: activeSetupDraft === undefined ? 0 : activeSetupDraft.revision
+    };
+  }
+
+  function restoreSetupDraft(value) {
+    const draft = record(value);
+    const allowedFields = new Set(["schemaVersion", "revision", "source", "name", "preset", "stage", "savedAt"]);
+    if (
+      Object.keys(draft).length !== allowedFields.size ||
+      Object.keys(draft).some((field) => !allowedFields.has(field)) ||
+      draft.schemaVersion !== 1 ||
+      !Number.isSafeInteger(draft.revision) || draft.revision < 1 ||
+      draft.source !== "connector" ||
+      typeof draft.name !== "string" || !/^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u.test(draft.name) ||
+      typeof draft.preset !== "string" || !Object.prototype.hasOwnProperty.call(presetInputNames, draft.preset) ||
+      draft.stage !== "connection" ||
+      typeof draft.savedAt !== "string"
+    ) {
+      throw new Error("Miftah did not return a safe saved connector choice.");
+    }
+    const form = byId("preset-onboarding-form");
+    const selection = byId("preset-selection");
+    const name = form instanceof HTMLFormElement ? form.querySelector("input[name='name']") : undefined;
+    if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement) || !(name instanceof HTMLInputElement)) {
+      throw new Error("The connector setup form is unavailable.");
+    }
+    form.reset();
+    const accounts = byId("gsc-account-list");
+    if (accounts instanceof HTMLElement) accounts.replaceChildren();
+    activeSetupDraft = {
+      schemaVersion: 1,
+      revision: draft.revision,
+      source: "connector",
+      name: draft.name,
+      preset: draft.preset,
+      stage: "connection",
+      savedAt: draft.savedAt
+    };
+    name.value = activeSetupDraft.name;
+    selection.value = activeSetupDraft.preset;
+    updateSetupSourceChoice("connector");
+    updatePresetFields();
+    clearPresetReview();
+    renderSetupDraftControls();
+  }
+
   function setPresetReviewActionsDisabled(disabled) {
     if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = disabled;
     if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = disabled;
@@ -1549,6 +1632,49 @@ const script = `(() => {
     });
   }
 
+  if (saveSetupDraft instanceof HTMLButtonElement) {
+    saveSetupDraft.addEventListener("click", async () => {
+      message("Saving only the connector choice…");
+      try {
+        const draft = await api("/api/v1/setup-draft", { method: "PUT", body: setupDraftIntent() });
+        restoreSetupDraft(draft);
+        message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  if (resumeSetupDraft instanceof HTMLButtonElement) {
+    resumeSetupDraft.addEventListener("click", async () => {
+      message("Loading the saved connector choice…");
+      try {
+        const draft = await api("/api/v1/setup-draft");
+        if (draft === undefined || draft === null) {
+          activeSetupDraft = undefined;
+          renderSetupDraftControls();
+          message("No saved connector choice exists. Start with a configuration name and connector above.");
+          return;
+        }
+        restoreSetupDraft(draft);
+        message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  if (discardSetupDraft instanceof HTMLButtonElement) {
+    discardSetupDraft.addEventListener("click", async () => {
+      if (activeSetupDraft === undefined) return;
+      message("Discarding the saved connector choice…");
+      try {
+        await api("/api/v1/setup-draft", { method: "DELETE", body: { revision: activeSetupDraft.revision } });
+        activeSetupDraft = undefined;
+        renderSetupDraftControls();
+        message("Discarded the saved connector choice. The current form stays open and is not saved.");
+      } catch (error) { message(errorMessage(error)); }
+    });
+  }
+
+  renderSetupDraftControls();
+
   if (presetCreateReviewed instanceof HTMLButtonElement) {
     presetCreateReviewed.addEventListener("click", async () => {
       const request = pendingPresetRequest;
@@ -1565,6 +1691,8 @@ const script = `(() => {
         setupCompletion = record(result.completion);
         renderSetupCompletion(setupCompletion);
         clearPresetReview();
+        activeSetupDraft = undefined;
+        renderSetupDraftControls();
         if (presetOnboardingForm instanceof HTMLFormElement) {
           presetOnboardingForm.reset();
           updatePresetFields();

@@ -212,6 +212,23 @@ describe("CLI parser", () => {
     expectUsageError(["init", "--plan"]);
   });
 
+  it("offers private connector-draft controls only from guided setup", () => {
+    expect(parseCli(["setup", "--resume"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { resume: true }
+    });
+    expect(parseCli(["setup", "--discard-draft"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { discardDraft: true }
+    });
+    expect(renderCommandHelp("setup")).toContain("--resume");
+    expect(renderCommandHelp("setup")).toContain("--discard-draft");
+    expectUsageError(["init", "--resume"]);
+    expectUsageError(["init", "--discard-draft"]);
+  });
+
   it("offers endpoint-first native OAuth only from guided setup", () => {
     expect(parseCli([
       "setup",

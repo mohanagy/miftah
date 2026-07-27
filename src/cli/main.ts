@@ -32,6 +32,7 @@ import { resolvePath } from "../config/path-resolve.js";
 import { startConsoleServer } from "../console/console-server.js";
 import { openSystemBrowser } from "../console/open-browser.js";
 import { ConsoleDashboardApplicationService } from "../console/console-dashboard-application-service.js";
+import { FileSetupDraftStore } from "../setup/setup-draft.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -133,7 +134,8 @@ async function dashboardServe(
     ? new ConsoleDashboardApplicationService({
         defaultConfigPath: configPath,
         configDirectory: dirname(resolvePath(configPath)),
-        launcher
+        launcher,
+        setupDraftStore: new FileSetupDraftStore()
       })
     : undefined;
   const server = await startConsoleServer(configPath, {
@@ -197,7 +199,8 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       launcher: {
         command: process.execPath,
         args: [fileURLToPath(import.meta.url), "serve"]
-      }
+      },
+      setupDraftStore: new FileSetupDraftStore()
     });
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;

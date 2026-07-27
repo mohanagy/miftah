@@ -53,6 +53,7 @@ import {
   runProfileReadinessFromLoadedConfig,
   type ProfileReadinessReport
 } from "../setup/profile-readiness.js";
+import type { SetupDraft, SetupDraftInput } from "../setup/setup-draft.js";
 import {
   runProviderAccountAddition,
   type ProviderAccountAdditionAuditSink,
@@ -307,6 +308,12 @@ export interface ConsoleControlApplication {
   previewPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview>;
   /** Available only when the embedding supports first-run known-connector setup. */
   onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  loadSetupDraft?(): Promise<SetupDraft | undefined>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  saveSetupDraft?(input: SetupDraftInput, expectedRevision?: number): Promise<SetupDraft>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  discardSetupDraft?(expectedRevision: number): Promise<void>;
   /** Available only when the embedding supports first-run selected local stdio entry import. */
   onboardClientEntry?(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   /** Available only when the embedding supports endpoint-first native OAuth discovery. */

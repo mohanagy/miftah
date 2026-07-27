@@ -8,6 +8,7 @@ import { MANAGEMENT_TOOL_NAMES } from "../src/mcp/server/management-tools.js";
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
 const cliDocs = readFileSync(new URL("../docs/cli.md", import.meta.url), "utf8");
+const consoleDocs = readFileSync(new URL("../docs/console-api.md", import.meta.url), "utf8");
 
 function headingSlugs(markdown: string): Set<string> {
   const slugs = new Set<string>();
@@ -87,6 +88,11 @@ describe("product README", () => {
     expect(readme).toContain("Keep `miftah setup --native-oauth` for scripted or repeatable setup");
     expect(readme).toContain("Add `--plan` to a complete noninteractive `miftah setup` command to validate and print its non-secret structure before Miftah writes anything.");
     expect(readme).toContain("The Console uses the same review-before-write boundary: **Review configuration** validates a candidate without writing it, and **Create reviewed configuration** is the separate explicit write.");
+    expect(readme).toContain("If a bare connector setup is interrupted, continue it with:");
+    expect(readme).toContain("miftah setup --resume");
+    expect(readme).toContain("miftah setup --discard-draft");
+    expect(readme).toContain("Miftah saves only the configuration name and connector preset");
+    expect(readme).toContain("You re-enter every URL, executable, argument, path, environment reference, client entry, and browser or OAuth detail.");
     expect(readme).toContain("Remote MCP with browser sign-in");
     expect(readme).toContain("never asks for a token, password, or browser cookie");
     expect(readme).toContain("## First setup: GitHub with Claude Desktop");
@@ -112,6 +118,10 @@ describe("product README", () => {
     expect(cliDocs).toContain("The completion handoff prints the actual configuration path in any later `miftah profile test` command.");
     expect(cliDocs).toContain("Browser sign-in setup can finish with browser authorization still outstanding.");
     expect(cliDocs).toContain("`miftah setup ... --plan` validates a complete noninteractive first-configuration candidate and prints a structural, non-secret JSON plan without creating a directory, writing a file, or contacting an upstream.");
+    expect(cliDocs).toContain("`miftah setup --resume` requires a TTY and can be combined with no setup-input option.");
+    expect(cliDocs).toContain("`miftah setup --discard-draft` deletes that checkpoint without creating a configuration and does not require a TTY.");
+    expect(consoleDocs).toContain("`GET`, `PUT`, and `DELETE /api/v1/setup-draft`");
+    expect(consoleDocs).toContain('The request and response contain only `source: "connector"`, a bounded configuration name, a catalog preset, stage, revision, and timestamp.');
     expect(cliDocs).not.toContain("it first offers `new` or `import`");
   });
 

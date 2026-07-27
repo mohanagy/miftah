@@ -12,6 +12,7 @@ import { ConsoleDashboardApplicationService } from "../src/console/console-dashb
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { MiftahError } from "../src/utils/errors.js";
+import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
 import {
   createPrivateConsoleDirectory,
   writePrivateConsoleFile
@@ -611,6 +612,166 @@ function triggerClientEntryManualRecoveryAction(
   bindClientEntryManualRecoveryAction(id, source, form);
   button.listeners.get("click")?.();
   return { selected, documentCleared: documentInput.value === "" };
+}
+
+async function resumeMissingSetupDraft(javascript: string): Promise<{
+  readonly restored: boolean;
+  readonly controlsUpdated: number;
+  readonly message: string;
+}> {
+  const start = javascript.indexOf("if (resumeSetupDraft instanceof HTMLButtonElement)");
+  const end = javascript.indexOf("\n\n  if (discardSetupDraft instanceof HTMLButtonElement)", start);
+  if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft resume action.");
+
+  class FakeButton {
+    readonly listeners = new Map<string, () => void | Promise<void>>();
+
+    addEventListener(name: string, listener: () => void | Promise<void>): void {
+      this.listeners.set(name, listener);
+    }
+  }
+
+  const button = new FakeButton();
+  let restored = false;
+  let controlsUpdated = 0;
+  let status = "";
+  runInNewContext(`let activeSetupDraft = { revision: 1 };\n${javascript.slice(start, end)}`, {
+    resumeSetupDraft: button,
+    HTMLButtonElement: FakeButton,
+    api: async () => null,
+    restoreSetupDraft(): void {
+      restored = true;
+      throw new Error("A missing setup draft must not be restored.");
+    },
+    renderSetupDraftControls(): void {
+      controlsUpdated += 1;
+    },
+    message(value: string): void {
+      status = value;
+    },
+    errorMessage(error: unknown): string {
+      return error instanceof Error ? error.message : "unexpected";
+    }
+  });
+  const listener = button.listeners.get("click");
+  if (listener === undefined) throw new Error("Expected the saved setup-draft resume listener.");
+  await listener();
+  return { restored, controlsUpdated, message: status };
+}
+
+async function resumeSetupDraftWithoutConnectionValues(javascript: string): Promise<{
+  readonly name: string;
+  readonly preset: string;
+  readonly credential: string;
+  readonly resetCount: number;
+  readonly accountsCleared: number;
+  readonly discardVisible: boolean;
+  readonly discardEnabled: boolean;
+}> {
+  type Listener = () => void | Promise<void>;
+  class FakeElement {
+    readonly listeners = new Map<string, Listener>();
+    textContent = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    querySelectorAll(): readonly unknown[] {
+      return [];
+    }
+  }
+  class FakeInput extends FakeElement {
+    constructor(public value = "") {
+      super();
+    }
+  }
+  class FakeSelect extends FakeElement {
+    constructor(public value = "generic") {
+      super();
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+    hidden = false;
+  }
+  const name = new FakeInput("unsafe-name");
+  const credential = new FakeInput("UNSAFE_CONNECTION_VALUE");
+  const selection = new FakeSelect("generic");
+  class FakeForm extends FakeElement {
+    resetCount = 0;
+
+    reset(): void {
+      this.resetCount += 1;
+      name.value = "";
+      credential.value = "";
+      selection.value = "generic";
+    }
+
+    querySelector(selector: string): unknown {
+      return selector === "input[name='name']" ? name : undefined;
+    }
+  }
+  class FakeAccountList extends FakeElement {
+    cleared = 0;
+
+    replaceChildren(): void {
+      this.cleared += 1;
+    }
+  }
+
+  const form = new FakeForm();
+  const accounts = new FakeAccountList();
+  const resume = new FakeButton();
+  const discard = new FakeButton();
+  const status = new FakeElement();
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "preset-onboarding-form") return form;
+        if (id === "preset-selection") return selection;
+        if (id === "gsc-account-list") return accounts;
+        if (id === "resume-setup-draft") return resume;
+        if (id === "discard-setup-draft") return discard;
+        return undefined;
+      }
+    },
+    HTMLFormElement: FakeForm,
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: class {},
+    Element: FakeElement,
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          schemaVersion: 1,
+          revision: 2,
+          source: "connector",
+          name: "saved-connector",
+          preset: "generic-npx",
+          stage: "connection",
+          savedAt: "2026-07-25T12:00:00.000Z"
+        }
+      })
+    })
+  });
+  const listener = resume.listeners.get("click");
+  if (listener === undefined) throw new Error("Expected the saved setup-draft resume listener.");
+  await listener();
+  return {
+    name: name.value,
+    preset: selection.value,
+    credential: credential.value,
+    resetCount: form.resetCount,
+    accountsCleared: accounts.cleared,
+    discardVisible: discard.hidden === false,
+    discardEnabled: discard.disabled === false
+  };
 }
 
 function clearProfileReadinessResultOnTargetChange(javascript: string): {
@@ -1225,6 +1386,9 @@ describe("local Console control server", () => {
       expect(html).toContain("Advanced manual OAuth registration");
       expect(html).toContain("acceptLocalCommand");
       expect(html).toContain('id="preset-onboarding-view"');
+      expect(html).toContain('id="save-setup-draft"');
+      expect(html).toContain('id="resume-setup-draft"');
+      expect(html).toContain('id="discard-setup-draft"');
       expect(html).toContain('id="preset-review-view"');
       expect(html).toContain('id="preset-create-reviewed"');
       expect(html).toContain("Review configuration");
@@ -1298,6 +1462,24 @@ describe("local Console control server", () => {
       expect(javascript).toContain("/api/v1/profiles/environment-account");
       expect(javascript).toContain("/api/v1/onboarding/preset/preview");
       expect(javascript).toContain("/api/v1/onboarding/preset");
+      expect(javascript).toContain("/api/v1/setup-draft");
+      expect(javascript).toContain("function restoreSetupDraft");
+      expect(javascript).not.toContain("localStorage");
+      expect(javascript).not.toContain("sessionStorage");
+      await expect(resumeMissingSetupDraft(javascript)).resolves.toEqual({
+        restored: false,
+        controlsUpdated: 1,
+        message: "No saved connector choice exists. Start with a configuration name and connector above."
+      });
+      await expect(resumeSetupDraftWithoutConnectionValues(javascript)).resolves.toEqual({
+        name: "saved-connector",
+        preset: "generic-npx",
+        credential: "",
+        resetCount: 1,
+        accountsCleared: 1,
+        discardVisible: true,
+        discardEnabled: true
+      });
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");
@@ -1535,6 +1717,118 @@ describe("local Console control server", () => {
 
       const mutation = await fetch(server.url, { method: "POST" });
       expect(mutation.status).toBe(405);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves a CSRF-protected first-run connector draft without accepting connection data", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-draft-http-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const draftStore = new FileSetupDraftStore({ directory: join(root, "setup-draft") });
+    const server = await startConsoleServer(configPath, {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      allowMissingConfig: true,
+      deferConfigValidation: true,
+      application: new ConsoleDashboardApplicationService({
+        defaultConfigPath: configPath,
+        configDirectory: directory,
+        launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] },
+        setupDraftStore: draftStore
+      })
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/setup-draft", server.url);
+      const unauthorized = await fetch(endpoint, { headers: { origin: server.url.origin } });
+      expect(unauthorized.status).toBe(401);
+
+      const missingCsrf = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          source: "connector",
+          name: "support-tools",
+          preset: "generic",
+          stage: "connection"
+        })
+      });
+      expect(missingCsrf.status).toBe(403);
+
+      const unsafe = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          source: "connector",
+          name: "support-tools",
+          preset: "generic",
+          stage: "connection",
+          credentialEnv: "SUPPORT_TOKEN"
+        })
+      });
+      expect(unsafe.status).toBe(422);
+
+      const saved = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          source: "connector",
+          name: "support-tools",
+          preset: "generic",
+          stage: "connection",
+          expectedRevision: 0
+        })
+      });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        data: {
+          schemaVersion: 1,
+          revision: 1,
+          source: "connector",
+          name: "support-tools",
+          preset: "generic",
+          stage: "connection"
+        }
+      });
+
+      const loaded = await fetch(endpoint, {
+        headers: { origin: server.url.origin, cookie: session.cookie }
+      });
+      expect(loaded.status).toBe(200);
+      const loadedText = await loaded.text();
+      expect(loadedText).toContain("support-tools");
+      expect(loadedText).not.toContain("SUPPORT_TOKEN");
+
+      const deleted = await fetch(endpoint, {
+        method: "DELETE",
+        headers: {
+          origin: server.url.origin,
+          cookie: session.cookie,
+          "x-miftah-csrf": session.csrfToken,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ revision: 1 })
+      });
+      expect(deleted.status).toBe(204);
+      await expect(draftStore.load()).resolves.toBeUndefined();
     } finally {
       await server.close();
     }
