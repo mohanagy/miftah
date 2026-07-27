@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { copyFile, link, mkdtemp, open, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdtemp, open, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createServer, Socket } from "node:net";
 import type { Server } from "node:net";
@@ -575,19 +575,23 @@ describe("audit journal integrity", () => {
       rotation: { maxBytes: 1, retainFiles: 4 }
     });
 
-    await withWindowsFirstAppendLocalLockPhaseDiagnostic(async (setPhase) => {
-      setPhase("before-first-append");
-      await logger.log({
-        wrapper: "github",
-        profile: "work",
-        operation: "tools/call",
-        name: "first-append-local-lock-diagnostic",
-        status: "success",
-        durationMs: 1
+    try {
+      await withWindowsFirstAppendLocalLockPhaseDiagnostic(async (setPhase) => {
+        setPhase("before-first-append");
+        await logger.log({
+          wrapper: "github",
+          profile: "work",
+          operation: "tools/call",
+          name: "first-append-local-lock-diagnostic",
+          status: "success",
+          durationMs: 1
+        });
+        setPhase("post-first-append");
+        setPhase("complete");
       });
-      setPhase("post-first-append");
-      setPhase("complete");
-    });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("fails safely when a retained archive is replaced by a symlink", async () => {
