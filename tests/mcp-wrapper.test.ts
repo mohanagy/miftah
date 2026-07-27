@@ -2135,7 +2135,17 @@ describe("Miftah MCP wrapper", () => {
         undefined,
         { signal: controller.signal }
       );
-      await toolListStarted.wait;
+      await Promise.race([
+        toolListStarted.wait,
+        pending.then(
+          () => {
+            throw new Error("Tool discovery completed before its started marker");
+          },
+          (error) => {
+            throw error;
+          }
+        )
+      ]);
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
