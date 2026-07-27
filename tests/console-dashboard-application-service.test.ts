@@ -403,8 +403,37 @@ describe("Console dashboard application service", () => {
     await expect(service.health()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
-  it("shares only a safe connector draft during first run and clears it after configuration publication", async () => {
+  it("shares only a safe connector draft during first run", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const directory = join(privateParent, "miftah");
+    const configPath = join(directory, "miftah.json");
+    const draftStore = new FileSetupDraftStore({ directory: join(privateParent, "setup-draft") });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: configPath,
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] },
+      setupDraftStore: draftStore
+    });
+    const { preset } = supportedKnownConnectorOptions();
+    const saveSetupDraft = service.saveSetupDraft;
+    const loadSetupDraft = service.loadSetupDraft;
+    if (saveSetupDraft === undefined || loadSetupDraft === undefined) {
+      throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
+    }
+
+    const draft = await saveSetupDraft({
+      source: "connector",
+      name: "support-tools",
+      preset,
+      stage: "connection"
+    });
+    await expect(loadSetupDraft()).resolves.toEqual(draft);
+  });
+
+  it("clears a real first-run connector draft after configuration publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-publication-"));
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
@@ -423,13 +452,12 @@ describe("Console dashboard application service", () => {
       throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
     }
 
-    const draft = await saveSetupDraft({
+    await saveSetupDraft({
       source: "connector",
       name: "support-tools",
       preset,
       stage: "connection"
     });
-    await expect(loadSetupDraft()).resolves.toEqual(draft);
 
     await expect(service.onboardPreset({
       name: "support-tools",
