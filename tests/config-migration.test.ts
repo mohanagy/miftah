@@ -4,6 +4,20 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type MigrationTimeoutDiagnosticPhase =
+  | "test-setup"
+  | "transaction-create"
+  | "source-snapshot"
+  | "source-hold"
+  | "private-file-preparation"
+  | "security-descriptor"
+  | "backup-publish"
+  | "candidate-publish"
+  | "publication-identity"
+  | "transaction-cleanup"
+  | "assertions"
+  | "test-cleanup";
+
 const migrationRace = vi.hoisted(() => ({
   configPath: undefined as string | undefined,
   concurrentBytes: undefined as Buffer | undefined,
@@ -20,7 +34,9 @@ const migrationRace = vi.hoisted(() => ({
   replacementTargetAfterPublish: undefined as Buffer | undefined,
   replacedPublishedTarget: false,
   maskPublishedCandidateNumberMetadata: false,
-  triggered: false
+  triggered: false,
+  timeoutDiagnosticActive: false,
+  timeoutDiagnosticPhase: "test-setup" as MigrationTimeoutDiagnosticPhase
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -28,8 +44,16 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
-      const stats = await actual.lstat(...args);
       const [path, options] = args;
+      if (migrationRace.timeoutDiagnosticActive && typeof path === "string") {
+        if (path === migrationRace.configPath) {
+          migrationRace.timeoutDiagnosticPhase =
+            migrationRace.holdingPath === undefined ? "source-snapshot" : "publication-identity";
+        }
+        else if (path.endsWith(".miftah-migrate-hold")) migrationRace.timeoutDiagnosticPhase = "source-hold";
+        else if (path.endsWith(".miftah-migrate.tmp")) migrationRace.timeoutDiagnosticPhase = "publication-identity";
+      }
+      const stats = await actual.lstat(...args);
       const usesBigIntIdentity =
         typeof options === "object" && options !== null && "bigint" in options && options.bigint === true;
       const isPublishedCandidateOrTargetWithAliasedNumberMetadata =
@@ -51,6 +75,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
     open: async (...args: Parameters<typeof actual.open>) => {
       const [path, flags] = args;
+      if (migrationRace.timeoutDiagnosticActive && typeof path === "string") {
+        if (path === migrationRace.configPath && flags === "r") migrationRace.timeoutDiagnosticPhase = "source-snapshot";
+        else if (path.endsWith(".miftah-migrate.tmp") && flags === "wx") {
+          migrationRace.timeoutDiagnosticPhase = "private-file-preparation";
+        }
+      }
       if (
         migrationRace.failCandidateOpen &&
         typeof path === "string" &&
@@ -69,6 +99,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         from === migrationRace.configPath &&
         typeof to === "string" &&
         to.endsWith(".miftah-migrate-hold");
+      if (migrationRace.timeoutDiagnosticActive && isSourceMove) {
+        migrationRace.timeoutDiagnosticPhase = "source-hold";
+      }
       if (isSourceMove && migrationRace.sourceBytesBeforeMove !== undefined) {
         await actual.writeFile(from, migrationRace.sourceBytesBeforeMove);
         if (migrationRace.sourceMtimeBeforeMove !== undefined) {
@@ -86,6 +119,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
     link: async (...args: Parameters<typeof actual.link>): Promise<void> => {
       const [existingPath, newPath] = args;
+      if (migrationRace.timeoutDiagnosticActive && typeof existingPath === "string" && typeof newPath === "string") {
+        if (existingPath.endsWith("backup.miftah-migrate.tmp") && newPath === `${migrationRace.configPath}.bak`) {
+          migrationRace.timeoutDiagnosticPhase = "backup-publish";
+        } else if (existingPath.endsWith("candidate.miftah-migrate.tmp") && newPath === migrationRace.configPath) {
+          migrationRace.timeoutDiagnosticPhase = "candidate-publish";
+        }
+      }
       if (
         typeof existingPath === "string" &&
         existingPath.endsWith("backup.miftah-migrate.tmp") &&
@@ -128,6 +168,39 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         await actual.writeFile(newPath, migrationRace.replacementTargetAfterPublish, { flag: "wx" });
         migrationRace.replacedPublishedTarget = true;
       }
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>): Promise<void> => {
+      const [path] = args;
+      if (migrationRace.timeoutDiagnosticActive && typeof path === "string" && path.includes(".miftah-migrate-")) {
+        migrationRace.timeoutDiagnosticPhase = "transaction-cleanup";
+      }
+      await actual.unlink(...args);
+    },
+    rmdir: async (...args: Parameters<typeof actual.rmdir>): Promise<void> => {
+      const [path] = args;
+      if (migrationRace.timeoutDiagnosticActive && typeof path === "string" && path.includes(".miftah-migrate-")) {
+        migrationRace.timeoutDiagnosticPhase = "transaction-cleanup";
+      }
+      await actual.rmdir(...args);
+    }
+  };
+});
+
+vi.mock("../src/cli/windows-config-acl.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/cli/windows-config-acl.js")>();
+  return {
+    ...actual,
+    createWindowsPrivateMigrationDirectory: async (
+      ...args: Parameters<typeof actual.createWindowsPrivateMigrationDirectory>
+    ): Promise<boolean> => {
+      if (migrationRace.timeoutDiagnosticActive) migrationRace.timeoutDiagnosticPhase = "transaction-create";
+      return actual.createWindowsPrivateMigrationDirectory(...args);
+    },
+    copyWindowsConfigSecurityDescriptors: async (
+      ...args: Parameters<typeof actual.copyWindowsConfigSecurityDescriptors>
+    ): Promise<boolean> => {
+      if (migrationRace.timeoutDiagnosticActive) migrationRace.timeoutDiagnosticPhase = "security-descriptor";
+      return actual.copyWindowsConfigSecurityDescriptors(...args);
     }
   };
 });
@@ -302,9 +375,51 @@ describe("config migration planning", () => {
   });
 });
 
+describe("config migration timeout diagnostic", () => {
+  it("emits only a fixed phase label before the test deadline", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const stop = startMigrationTimeoutDiagnostic({
+        test: "exact-backup",
+        phase: () => "candidate-publish",
+        delayMs: 0
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      stop();
+
+      expect(write).toHaveBeenCalledWith(
+        "MIFTAH_CONFIG_MIGRATION_TIMEOUT_DIAGNOSTIC: test=exact-backup; phase=candidate-publish\n"
+      );
+    } finally {
+      write.mockRestore();
+    }
+  });
+});
+
 const temporaryDirectories: string[] = [];
+let migrationTimeoutDiagnosticStop: (() => void) | undefined;
+
+function startMigrationTimeoutDiagnostic({
+  test,
+  phase,
+  delayMs = 4_500
+}: {
+  readonly test: "exact-backup";
+  readonly phase: () => MigrationTimeoutDiagnosticPhase;
+  readonly delayMs?: number;
+}): () => void {
+  const timeout = setTimeout(() => {
+    process.stderr.write(
+      `MIFTAH_CONFIG_MIGRATION_TIMEOUT_DIAGNOSTIC: test=${test}; phase=${phase()}\n`
+    );
+  }, delayMs);
+  timeout.unref();
+  return () => clearTimeout(timeout);
+}
 
 afterEach(async () => {
+  const stopTimeoutDiagnostic = migrationTimeoutDiagnosticStop;
+  if (stopTimeoutDiagnostic !== undefined) migrationRace.timeoutDiagnosticPhase = "test-cleanup";
   migrationRace.configPath = undefined;
   migrationRace.concurrentBytes = undefined;
   migrationRace.sourceBytesBeforeMove = undefined;
@@ -321,7 +436,14 @@ afterEach(async () => {
   migrationRace.replacedPublishedTarget = false;
   migrationRace.maskPublishedCandidateNumberMetadata = false;
   migrationRace.triggered = false;
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  try {
+    await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  } finally {
+    stopTimeoutDiagnostic?.();
+    migrationTimeoutDiagnosticStop = undefined;
+    migrationRace.timeoutDiagnosticActive = false;
+    migrationRace.timeoutDiagnosticPhase = "test-setup";
+  }
 });
 
 function legacyConfig() {
@@ -359,15 +481,25 @@ describe("migrate-config command", () => {
   });
 
   it("creates an exact backup and preserves file mode before non-overwriting publication of a validated migration", async () => {
+    if (process.platform === "win32") {
+      migrationRace.timeoutDiagnosticActive = true;
+      migrationTimeoutDiagnosticStop = startMigrationTimeoutDiagnostic({
+        test: "exact-backup",
+        phase: () => migrationRace.timeoutDiagnosticPhase
+      });
+    }
     const directory = await mkdtemp(join(tmpdir(), "miftah-config-migration-"));
     temporaryDirectories.push(directory);
     const configPath = join(directory, "miftah.json");
+    migrationRace.configPath = configPath;
     const original = `${JSON.stringify(legacyConfig(), null, 2)}\n`;
     await writeFile(configPath, original, "utf8");
     if (process.platform !== "win32") await chmod(configPath, 0o640);
 
+    migrationRace.timeoutDiagnosticPhase = "transaction-create";
     const report = await runMigrateConfigCommand({ configPath, write: true });
 
+    migrationRace.timeoutDiagnosticPhase = "assertions";
     expect(report).toMatchObject({ changed: true, write: true, backupCreated: true });
     expect(await readFile(`${configPath}.bak`, "utf8")).toBe(original);
     const migrated = JSON.parse(await readFile(configPath, "utf8"));
