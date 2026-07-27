@@ -437,6 +437,53 @@ describe("contained stdio transport", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "does not keep a forced POSIX close in its graceful wait after the process group is gone",
+    async () => {
+      vi.useFakeTimers();
+      const transport = new ContainedStdioClientTransport({ command: process.execPath, args: [fixture] });
+      const internal = transport as unknown as {
+        child: ChildProcess | undefined;
+        containedPid: number | undefined;
+        childClose: Promise<void> | undefined;
+      };
+      const pid = 41_047;
+      const child = createFakeChild(pid);
+      let processGroupRunning = true;
+      const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (target === -pid && signal === "SIGKILL") {
+          processGroupRunning = false;
+          return true;
+        }
+        if (target === -pid && signal === 0) {
+          if (processGroupRunning) return true;
+          throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+        }
+        return true;
+      });
+      internal.child = child as unknown as ChildProcess;
+      internal.containedPid = pid;
+      internal.childClose = new Promise<void>(() => undefined);
+      const closed = vi.fn();
+      transport.onclose = closed;
+      const closing = transport.close();
+
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        await transport.forceTerminate();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(closed).toHaveBeenCalledOnce();
+        await expect(closing).resolves.toBeUndefined();
+      } finally {
+        await vi.runAllTimersAsync();
+        await closing.catch(() => undefined);
+        kill.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not wait indefinitely for a missing child close event once POSIX containment is verified",
     async () => {
       vi.useFakeTimers();
