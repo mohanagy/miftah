@@ -118,7 +118,8 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("FileSystemRights]::FullControl");
     expect(command).toContain("File]::SetAccessControl");
     expect(command).toContain("AreAccessRulesProtected");
-    expect(command).toContain("Test-MiftahPrivatePath $path 'file'");
+    expect(command).toContain("Test-MiftahPrivatePath $path 'file' $null $true");
+    expect(command).not.toContain("$actual = [System.IO.File]::GetAccessControl($path, $verifySections)");
   });
 
   it("creates and verifies a current-user-only private directory before returning", async () => {
@@ -133,7 +134,11 @@ describe("Windows migration ACL boundary", () => {
     const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
     const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
     expect(command).toContain("create-private-directory");
-    expect(command).toContain("Test-MiftahPrivatePath $directory 'directory'");
+    expect(command).toContain("Test-MiftahPrivatePath $directory 'directory' $expected $true");
+    expect(command).not.toContain("$actual = $directory.GetAccessControl()");
+    expect(command).toContain("[string]$expectedSddl = $null");
+    expect(command).toContain("[bool]$requireProtected = $false");
+    expect(command).toContain("$expectedSddl.Length -gt 0");
   });
 
   it("copies a non-null binary descriptor and verifies the persisted access rules", async () => {

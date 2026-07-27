@@ -200,7 +200,9 @@ $verifySections = [System.Security.AccessControl.AccessControlSections]::Access 
 function Test-MiftahPrivatePath {
   param(
     [string]$path,
-    [string]$kind
+    [string]$kind,
+    [string]$expectedSddl = $null,
+    [bool]$requireProtected = $false
   )
 
   if ($kind -ne 'file' -and $kind -ne 'directory') { return $false }
@@ -223,6 +225,8 @@ function Test-MiftahPrivatePath {
   if ($null -eq $owner -or $owner.Value -cne $identity.Value) { return $false }
   $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
   if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { return $false }
+  if ($requireProtected -and -not $acl.AreAccessRulesProtected) { return $false }
+  if ($expectedSddl.Length -gt 0 -and $acl.GetSecurityDescriptorSddlForm($directorySections) -ne $expectedSddl) { return $false }
   if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
   # OWNER RIGHTS applies only to the owner. CREATOR OWNER/GROUP are safe only
   # on inherit-only ACEs, where they have no access to this entry itself.
@@ -333,11 +337,7 @@ try {
     )
     $security.SetAccessRule($rule)
     [System.IO.File]::SetAccessControl($path, $security)
-    $entry.Refresh()
-    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { exit 1 }
-    $actual = [System.IO.File]::GetAccessControl($path, $verifySections)
-    if (-not $actual.AreAccessRulesProtected) { exit 1 }
-    if (-not (Test-MiftahPrivatePath $path 'file')) { exit 1 }
+    if (-not (Test-MiftahPrivatePath $path 'file' $null $true)) { exit 1 }
     exit 0
   }
 
@@ -360,11 +360,7 @@ try {
     $security.SetAccessRule($rule)
     $expected = $security.GetSecurityDescriptorSddlForm($directorySections)
     $directory.Create($security)
-    $directory.Refresh()
-    $actual = $directory.GetAccessControl()
-    if (-not $actual.AreAccessRulesProtected) { exit 1 }
-    if ($actual.GetSecurityDescriptorSddlForm($directorySections) -ne $expected) { exit 1 }
-    if (-not (Test-MiftahPrivatePath $directory 'directory')) { exit 1 }
+    if (-not (Test-MiftahPrivatePath $directory 'directory' $expected $true)) { exit 1 }
     exit 0
   }
 
