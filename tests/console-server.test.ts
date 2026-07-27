@@ -238,7 +238,11 @@ async function submitPresetFormWithStaleValue(
 
 async function reviewThenCreatePresetForm(
   javascript: string,
-  reviewOptions: { readonly changeDuringPreview?: boolean } = {}
+  reviewOptions: {
+    readonly changeDuringPreview?: boolean;
+    readonly doubleCreate?: boolean;
+    readonly reReviewDuringCreate?: boolean;
+  } = {}
 ): Promise<{
   readonly requests: readonly { readonly path: string; readonly body?: string }[];
   readonly reviewVisibleAfterSubmit: boolean;
@@ -271,6 +275,11 @@ async function reviewThenCreatePresetForm(
   }
   class FakeButton extends FakeElement {
     disabled = false;
+
+    async click(): Promise<void> {
+      if (this.disabled) return;
+      await this.listeners.get("click")?.();
+    }
   }
   class FakeForm extends FakeElement {
     readonly values: Record<string, string> = {
@@ -324,6 +333,7 @@ async function reviewThenCreatePresetForm(
     json: async () => ({ data })
   });
   let resolveDelayedPreview: ((value: FakeResponse) => void) | undefined;
+  const resolveDelayedCreates: Array<(value: FakeResponse) => void> = [];
   runInNewContext(javascript, {
     document: {
       getElementById(id: string): unknown {
@@ -356,6 +366,12 @@ async function reviewThenCreatePresetForm(
       });
       if (requestPath === "/api/v1/onboarding/preset/preview" && reviewOptions.changeDuringPreview === true) {
         return await new Promise<FakeResponse>((resolve) => { resolveDelayedPreview = resolve; });
+      }
+      if (
+        requestPath === "/api/v1/onboarding/preset"
+        && (reviewOptions.doubleCreate === true || reviewOptions.reReviewDuringCreate === true)
+      ) {
+        return await new Promise<FakeResponse>((resolve) => { resolveDelayedCreates.push(resolve); });
       }
       return requestPath === "/api/v1/onboarding/preset/preview"
         ? response(previewData)
@@ -394,6 +410,24 @@ async function reviewThenCreatePresetForm(
   const reviewVisibleAfterSubmit = reviewView.hidden === false;
   const createEnabledAfterSubmit = create.disabled === false;
   const reviewText = [reviewSummary.textContent, ...reviewDetails.children.map((item) => item.textContent)];
+
+  if (reviewOptions.doubleCreate === true || reviewOptions.reReviewDuringCreate === true) {
+    const firstCreate = create.click();
+    if (reviewOptions.reReviewDuringCreate === true) {
+      await submit({ preventDefault: () => undefined });
+    }
+    const secondCreate = create.click();
+    if (resolveDelayedCreates.length === 0) throw new Error("Expected a pending reviewed-create request.");
+    resolveDelayedCreates.splice(0).forEach((resolve) => resolve(response({ completion: {} })));
+    await Promise.all([firstCreate, secondCreate]);
+    return {
+      requests,
+      reviewVisibleAfterSubmit,
+      createEnabledAfterSubmit,
+      createEnabledAfterChange: create.disabled === false,
+      reviewText
+    };
+  }
 
   await changed();
   const createEnabledAfterChange = create.disabled === false;
@@ -1187,6 +1221,12 @@ describe("local Console control server", () => {
       expect(html).not.toContain("test-only-bootstrap-credential");
       expect(html).not.toContain("localStorage");
 
+      const reviewStylesheet = await fetch(new URL("/app.css", server.url));
+      expect(reviewStylesheet.status).toBe(200);
+      const css = await reviewStylesheet.text();
+      expect(css).toContain(".setup-review { padding: 1rem; border: 1px solid var(--key); background: rgb(38 32 20 / 48%); }");
+      expect(css).not.toContain("var(--amber)");
+
       const script = await fetch(new URL("/app.js", server.url));
       expect(script.status).toBe(200);
       expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
@@ -1272,6 +1312,10 @@ describe("local Console control server", () => {
       expect(stalePreview.requests.map((request) => request.path)).toEqual([
         "/api/v1/onboarding/preset/preview"
       ]);
+      const duplicateCreate = await reviewThenCreatePresetForm(javascript, { doubleCreate: true });
+      expect(duplicateCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
+      const reReviewedCreate = await reviewThenCreatePresetForm(javascript, { reReviewDuringCreate: true });
+      expect(reReviewedCreate.requests.filter((request) => request.path === "/api/v1/onboarding/preset")).toHaveLength(1);
       await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
         request: {
           name: "gsc",

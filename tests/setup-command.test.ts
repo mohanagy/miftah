@@ -140,6 +140,43 @@ describe("setup command", () => {
     await expect(stat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("does not render client snippets while printing a setup plan", async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    input.end();
+    const launcher = Object.create(null) as { readonly command: string; readonly args: readonly string[] };
+    Object.defineProperties(launcher, {
+      command: {
+        get: (): string => {
+          throw new Error("client snippet rendering must not run for a setup plan");
+        }
+      },
+      args: {
+        get: (): readonly string[] => {
+          throw new Error("client snippet rendering must not run for a setup plan");
+        }
+      }
+    });
+
+    await expect(runSetupCommand({
+      plan: true,
+      name: "remote-tools",
+      preset: "streamable-http",
+      url: "https://mcp.example.test/mcp",
+      client: "claude-desktop"
+    }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+
+    expect(JSON.parse(output.read()?.toString() ?? "{}")).toMatchObject({
+      kind: "setup-plan",
+      clientHandoff: "available"
+    });
+  });
+
   it("refuses to combine the noninteractive setup plan with the interactive wizard", async () => {
     await expect(runSetupCommand({
       plan: true,

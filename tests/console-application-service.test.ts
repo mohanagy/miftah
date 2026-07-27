@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService } from "../src/console/console-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
@@ -520,6 +520,8 @@ describe("Console application service", () => {
     });
 
     await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(dirname(configPath), ".miftah", "audit", "console.jsonl"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
     const serialized = JSON.stringify(await service.previewPreset({
       name: "support-tools",
       preset,

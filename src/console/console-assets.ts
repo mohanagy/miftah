@@ -474,7 +474,7 @@ button.secondary { color: var(--ink); background: var(--panel-raised); border: 1
 button.danger { color: #ffd7cf; background: transparent; border: 1px solid #70433a; }
 .form-action { display: flex; justify-content: flex-end; }
 .manual-recovery .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
-.setup-review { padding: 1rem; border: 1px solid var(--amber); background: rgb(38 32 20 / 48%); }
+.setup-review { padding: 1rem; border: 1px solid var(--key); background: rgb(38 32 20 / 48%); }
 .setup-review p { margin: 0 0 .65rem; }
 .setup-review ul { display: grid; gap: .35rem; margin: .8rem 0 1rem; padding-left: 1.25rem; color: var(--muted); }
 .setup-review .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
@@ -565,6 +565,7 @@ const script = `(() => {
   let setupCompletion = undefined;
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
+  let presetCreateInFlight = false;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -1234,7 +1235,7 @@ const script = `(() => {
       });
     }
     if (presetReviewView instanceof HTMLElement) presetReviewView.hidden = false;
-    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = false;
+    if (presetCreateReviewed instanceof HTMLButtonElement) presetCreateReviewed.disabled = presetCreateInFlight;
   }
 
   function presetOnboardingRequest(form) {
@@ -1537,13 +1538,17 @@ const script = `(() => {
 
   if (presetCreateReviewed instanceof HTMLButtonElement) {
     presetCreateReviewed.addEventListener("click", async () => {
-      if (pendingPresetRequest === undefined) {
+      const request = pendingPresetRequest;
+      if (request === undefined) {
         message("Review a configuration before creating it.");
         return;
       }
+      if (presetCreateInFlight || presetCreateReviewed.disabled) return;
       message("Creating the reviewed Miftah configuration…");
+      presetCreateInFlight = true;
+      presetCreateReviewed.disabled = true;
       try {
-        const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: pendingPresetRequest }));
+        const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
         setupCompletion = record(result.completion);
         renderSetupCompletion(setupCompletion);
         clearPresetReview();
@@ -1553,6 +1558,10 @@ const script = `(() => {
         }
         await refresh();
       } catch (error) { message(errorMessage(error)); }
+      finally {
+        presetCreateInFlight = false;
+        if (pendingPresetRequest !== undefined) presetCreateReviewed.disabled = false;
+      }
     });
   }
 

@@ -542,13 +542,13 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
  * files, launching an upstream, or producing client-setting snippets.
  */
 export function previewInitCommand(options: InitCommandOptions, context: InitCommandContext): InitConfigurationPreview {
-  const plan = buildInitPlan(nonInteractiveValues(options), context);
+  const plan = buildInitPlan({ ...nonInteractiveValues(options), client: undefined }, context);
   return {
     schemaVersion: 1,
     kind: "setup-plan",
     output: plan.output,
     configuration: describeSetupConfiguration(plan.config),
-    clientHandoff: plan.snippets.length === 0 ? "not-requested" : "available"
+    clientHandoff: options.client === undefined ? "not-requested" : "available"
   };
 }
 
