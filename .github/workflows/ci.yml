@@ -28,9 +28,11 @@ jobs:
         shell: powershell
         run: |
           $compiler = Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe'
-          & $compiler /nologo /target:exe /main:MiftahSecretJob /platform:anycpu /optimize+ '/out:assets/windows-secret-job.exe' src/secrets/windows-secret-job.cs
+          $sourcePath = Join-Path $PWD 'src\\secrets\\windows-secret-job.cs'
+          $outputPath = Join-Path $PWD 'assets\\windows-secret-job.exe'
+          & $compiler /nologo /target:exe /main:MiftahSecretJob /platform:anycpu /optimize+ "/out:$outputPath" $sourcePath
           if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the Windows helper.' }
-          $artifact = [IO.File]::ReadAllBytes('assets/windows-secret-job.exe')
+          $artifact = [IO.File]::ReadAllBytes($outputPath)
           Write-Output "MIFTAH_WINDOWS_HELPER_SIZE=$($artifact.Length)"
       - name: Upload checked helper
         uses: actions/upload-artifact@v4
