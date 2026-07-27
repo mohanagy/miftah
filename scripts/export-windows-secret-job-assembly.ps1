@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$maximumArtifactBytes = 20 * 1024
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $sourcePath = Join-Path $repositoryRoot 'src/secrets/windows-secret-job.cs'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -23,7 +24,7 @@ if ($LASTEXITCODE -ne 0 -or -not [IO.File]::Exists($OutputPath)) {
 }
 
 $artifact = [IO.File]::ReadAllBytes($OutputPath)
-if ($artifact.Length -eq 0 -or $artifact.Length -gt 16384 -or $artifact[0] -ne 0x4d -or $artifact[1] -ne 0x5a) {
+if ($artifact.Length -eq 0 -or $artifact.Length -gt $maximumArtifactBytes -or $artifact[0] -ne 0x4d -or $artifact[1] -ne 0x5a) {
   throw 'Windows Job Object executable is invalid or exceeds its runtime bound.'
 }
 $normalizedSource = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n").Replace("`r", "`n")

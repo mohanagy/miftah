@@ -104,6 +104,20 @@ On a bare interactive `miftah setup`, Miftah starts with `What do you already ha
 
 Add `--plan` to a complete noninteractive `miftah setup` command to validate and print its non-secret structure before Miftah writes anything. The plan includes the output location you supplied plus configuration, profile, and upstream transport shape; it excludes the endpoint, executable, working directory, arguments, credential references, and secret values. The Console uses the same review-before-write boundary: **Review configuration** validates a candidate without writing it, and **Create reviewed configuration** is the separate explicit write. Changing the form clears the review.
 
+If a bare connector setup is interrupted, continue it with:
+
+```bash
+miftah setup --resume
+```
+
+Or remove that checkpoint without creating a configuration:
+
+```bash
+miftah setup --discard-draft
+```
+
+Miftah saves only the connector source, configuration name, catalog preset, and setup stage in a private local checkpoint. You re-enter every URL, executable, argument, path, environment reference, client entry, and browser or OAuth detail. The checkpoint stays after cancellation or a failed pre-publication write, and is removed only after a configuration is created or you explicitly discard it. This safe resume is intentionally limited to the bare `connector` path; import and browser-sign-in data are never persisted. In the first-run Console, **Save connector choice**, **Continue saved connector choice**, and **Discard saved choice** use that same checkpoint and never use browser storage.
+
 If a selected client entry cannot be safely imported, Miftah writes no configuration from it. Miftah does not retain rejected arguments, headers, environment values, or credentials. The guided CLI keeps the non-secret configuration name and output location, then takes you to manual transport setup: re-enter a reviewed local executable with literal arguments, or a canonical HTTPS endpoint. In the Console, choose **Set up local executable manually** or **Set up remote HTTPS MCP manually**; it clears the pasted client JSON before opening the existing form. Configure authentication separately through the upstream's documented flow and Miftah secret references.
 
 When setup finishes, Miftah tells you whether it ran a reviewed check, skipped one, or had no declared safe check at all. Browser sign-in setup can finish with browser authorization still outstanding. It saves a discovered connection plan, not a credential; use the later connect action to start the provider's browser flow. A completed configuration is not the same as a working client. You still review and merge any client JSON yourself, then restart or reconnect the client.

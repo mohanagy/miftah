@@ -17,6 +17,7 @@ import {
   type SetupConfigurationPreview
 } from "../setup/setup-configuration.js";
 import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
+import type { SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
 import {
   CLIENT_NAMES,
   ClientSnippetError,
@@ -32,6 +33,7 @@ import type {
 } from "./client-snippets.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
+import { MiftahError } from "../utils/errors.js";
 
 export type InitCommandOptions = Pick<
   CliOptions,
@@ -60,6 +62,13 @@ export interface InitCommandContext {
   readonly launcher: ClientLauncher;
   /** Internal test/runtime seam for endpoint-first OAuth metadata discovery. */
   readonly nativeOAuthFetch?: FetchLike;
+  /** Shared private checkpoint store used only by the guided `setup` command. */
+  readonly setupDraftStore?: SetupDraftStore;
+  /**
+   * Internal guided-setup seam invoked after safe name/preset selection and before any
+   * connection, credential, path, client, or OAuth prompt is collected.
+   */
+  readonly onSetupDraftIntent?: (intent: SetupDraftInput) => Promise<void>;
 }
 
 interface InitValues extends PresetBuildOptions {
@@ -410,6 +419,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   const cancellation = createCancellation(line);
   try {
     const name = options.name ?? (await prompt(line, cancellation, "Name", "miftah-wrapper"));
+    if (name === undefined) usageError("Interactive init requires a name, preset, and output location.");
     const preset = requirePresetSelection(resolveGuidedPreset(
       options.preset ?? (await prompt(
         line,
@@ -418,6 +428,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
         defaultPresetForPlatform()
       ))
     ));
+    await context.onSetupDraftIntent?.({ source: "connector", name, preset, stage: "connection" });
     const presetOptions = await collectPresetOptions(line, cancellation, preset, options, context.output);
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
@@ -426,12 +437,12 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
       "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
     ));
 
-    if (name === undefined || output === undefined) {
+    if (output === undefined) {
       usageError("Interactive init requires a name, preset, and output location.");
     }
     return { name, preset, output, client, ...presetOptions };
   } catch (error) {
-    if (error instanceof CliUsageError) throw error;
+    if (error instanceof CliUsageError || error instanceof MiftahError) throw error;
     throw new CliUsageError("Interactive init was cancelled.");
   } finally {
     cancellation.dispose();

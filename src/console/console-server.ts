@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from "node:net";
 import { z } from "zod";
 import { loadConfig } from "../config/load-config.js";
+import { PRESET_CATALOG } from "../config/presets.js";
 import { MiftahError } from "../utils/errors.js";
 import { CLIENT_NAMES, type ClientLauncher, type ClientSelection } from "../cli/client-snippets.js";
 import { consoleAsset, type ConsoleAsset } from "./console-assets.js";
@@ -153,6 +154,16 @@ const presetOnboardingSchema = z.object({
     });
   }
 });
+const setupDraftSchema = z.object({
+  source: z.literal("connector"),
+  name: z.string().regex(/^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u),
+  preset: z.string().max(128).refine((value) => Object.hasOwn(PRESET_CATALOG.presets, value)),
+  stage: z.literal("connection"),
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
+}).strict();
+const setupDraftDiscardSchema = z.object({
+  revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+}).strict();
 const clientEntryOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   entry: z.string().min(1).max(256),
@@ -599,6 +610,60 @@ class LocalConsoleServer implements ConsoleServer {
         throw publicApplicationError(error);
       }
       return;
+    }
+    if (request.url === "/api/v1/setup-draft") {
+      if (request.method === "GET") {
+        if (this.application.loadSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          const draft = await this.application.loadSetupDraft();
+          session.lastUsedAt = this.options.now();
+          writeJson(response, 200, { data: draft ?? null });
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      if (request.method === "PUT") {
+        this.requireCsrf(request, session);
+        const parsed = setupDraftSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+        if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+        if (this.application.saveSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          const draft = await this.application.saveSetupDraft({
+            source: parsed.data.source,
+            name: parsed.data.name,
+            preset: parsed.data.preset,
+            stage: parsed.data.stage
+          }, parsed.data.expectedRevision);
+          session.lastUsedAt = this.options.now();
+          writeJson(response, 200, { data: draft });
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      if (request.method === "DELETE") {
+        this.requireCsrf(request, session);
+        const parsed = setupDraftDiscardSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+        if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+        if (this.application.discardSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          await this.application.discardSetupDraft(parsed.data.revision);
+          session.lastUsedAt = this.options.now();
+          response.writeHead(204, { "cache-control": "no-store" });
+          response.end();
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET, PUT, DELETE" });
     }
     if (request.url === "/api/v1/configurations") {
       if (request.method !== "GET") {

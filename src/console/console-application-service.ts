@@ -35,7 +35,7 @@ import { discoverNativeOAuthConnection } from "../oauth/remote-oauth-discovery.j
 import {
   createSetupConfigurationPlan,
   describeSetupConfiguration,
-  publishSetupConfigurationPlan
+  publishFirstRunSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
 import type { SetupConfigurationPreview } from "../setup/setup-configuration.js";
 import { createSetupCompletion, type SetupCompletion } from "../setup/setup-completion.js";
@@ -53,6 +53,7 @@ import {
   runProfileReadinessFromLoadedConfig,
   type ProfileReadinessReport
 } from "../setup/profile-readiness.js";
+import type { SetupDraft, SetupDraftInput } from "../setup/setup-draft.js";
 import {
   runProviderAccountAddition,
   type ProviderAccountAdditionAuditSink,
@@ -85,8 +86,8 @@ import {
 } from "../setup/profile-rename-onboarding.js";
 import type { OAuthProfileRenameDependencies } from "../oauth/profile-rename-transaction.js";
 import {
-  createWindowsPrivateDirectory,
-  verifyWindowsConfigPathSecurity
+  createWindowsPrivateDirectoryInPrivateParent,
+  verifyWindowsConfigPathsSecurity
 } from "../cli/windows-config-acl.js";
 import {
   renderClientSnippets,
@@ -307,6 +308,12 @@ export interface ConsoleControlApplication {
   previewPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview>;
   /** Available only when the embedding supports first-run known-connector setup. */
   onboardPreset?(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  loadSetupDraft?(): Promise<SetupDraft | undefined>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  saveSetupDraft?(input: SetupDraftInput, expectedRevision?: number): Promise<SetupDraft>;
+  /** Available only when the embedding supports a private, first-run connector setup checkpoint. */
+  discardSetupDraft?(expectedRevision: number): Promise<void>;
   /** Available only when the embedding supports first-run selected local stdio entry import. */
   onboardClientEntry?(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport>;
   /** Available only when the embedding supports endpoint-first native OAuth discovery. */
@@ -416,18 +423,23 @@ async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> 
     }
     const parent = dirname(directory);
     await mkdir(parent, { recursive: true, mode: 0o700 });
-    if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) {
-      throw new Error("unsafe configuration parent directory");
-    }
-    await createWindowsPrivateDirectory(directory);
-    if (!(await verifyWindowsConfigPathSecurity(directory, "directory"))) {
-      throw new Error("unsafe configuration directory");
+    const created = await createWindowsPrivateDirectoryInPrivateParent(parent, directory);
+    // The private writer holds the complete verified directory chain through
+    // the exclusive first-file creation. A failed exclusive create may be a
+    // safe concurrent Miftah creation, so both path components need an
+    // independent verifier before that race is accepted.
+    if (!created && !(await verifyWindowsConfigPathsSecurity([
+      { path: parent, kind: "directory" },
+      { path: directory, kind: "directory" }
+    ]))) {
+      throw new Error("unsafe configuration directory or parent");
     }
   } catch (error) {
     if (error instanceof MiftahError) throw error;
     throw new MiftahError(
       "CONFIG_CREATE_FAILED",
-      "CONFIG_CREATE_FAILED: unable to create a safe first-run configuration directory"
+      "CONFIG_CREATE_FAILED: unable to create a safe first-run configuration directory",
+      { cause: error }
     );
   }
 }
@@ -1217,7 +1229,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     await ensureFirstRunConfigDirectory(setup.path);
     await this.audit.ensureWritable();
     try {
-      await publishSetupConfigurationPlan(setup);
+      await publishFirstRunSetupConfigurationPlan(setup);
     } catch (error) {
       if (fileErrorCode(error) === "EEXIST") {
         throw new MiftahError(

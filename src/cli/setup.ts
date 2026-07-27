@@ -15,6 +15,7 @@ import {
   previewInitCommand,
   runInitCommand,
   type InitCommandContext,
+  type InitCommandResult,
   type InitCommandOptions
 } from "./init.js";
 import {
@@ -30,11 +31,24 @@ import {
   type SetupCompletionClientHandoff,
   type SetupCompletionVerification
 } from "../setup/setup-completion.js";
+import type { SetupDraft, SetupDraftStore } from "../setup/setup-draft.js";
 
 /** `init` remains network-free; only guided `setup --verify` may run the reviewed provider probe. */
 export type SetupCommandOptions = InitCommandOptions & Pick<
   CliOptions,
-  "config" | "description" | "makeDefault" | "upstream" | "plan" | "verify" | "importFile" | "importEntry" | "nativeOAuth" | "addProfile" | "profile"
+  | "config"
+  | "description"
+  | "makeDefault"
+  | "upstream"
+  | "plan"
+  | "verify"
+  | "importFile"
+  | "importEntry"
+  | "nativeOAuth"
+  | "addProfile"
+  | "profile"
+  | "resume"
+  | "discardDraft"
 >;
 
 export interface SetupCommandResult {
@@ -262,12 +276,170 @@ function writeCliSetupCompletion(
   }
 }
 
+async function finishCreatedSetup(
+  options: Pick<SetupCommandOptions, "verify">,
+  context: InitCommandContext,
+  created: InitCommandResult
+): Promise<SetupCommandResult> {
+  if (
+    created.config.version === "3" &&
+    created.config.upstream?.transport === "streamable-http" &&
+    created.config.oauth === undefined
+  ) {
+    context.output.write(
+      "Generic remote setup did not discover authentication or call the endpoint. If this MCP needs browser sign-in, start 'miftah setup' again and choose 'browser-sign-in'.\n"
+    );
+  }
+  if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
+    writeCliSetupCompletion(context, {
+      verification: "not-declared",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      configPath: created.output
+    });
+    return { verification: "not-applicable", exitCode: 0, reports: [] };
+  }
+  const decision = options.verify === true ? "verify" : await confirmReadiness(context, "every account now");
+  if (decision === "skip") {
+    context.output.write("First-success verification was skipped; the configuration was created but has not been tested with the provider.\n");
+    writeCliSetupCompletion(context, {
+      verification: "skipped",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      profile: created.config.defaultProfile,
+      configPath: created.output
+    });
+    return { verification: "skipped", exitCode: 0, reports: [] };
+  }
+  if (decision === "cancelled") {
+    context.output.write("First-success verification was cancelled after configuration creation; the configuration remains available.\n");
+    writeCliSetupCompletion(context, {
+      verification: "incomplete",
+      clientHandoff: created.clientHandoff ?? "not-generated",
+      profile: created.config.defaultProfile,
+      configPath: created.output
+    });
+    return { verification: "incomplete", exitCode: 1, reports: [] };
+  }
+
+  const reports: ProfileReadinessReport[] = [];
+  let incomplete = false;
+  for (const profile of Object.keys(created.config.profiles).sort()) {
+    try {
+      const report = await runProfileReadiness(created.output, { profile });
+      reports.push(report);
+      writeReadinessReport(context, report);
+      if (report.status !== "ready") incomplete = true;
+    } catch (error) {
+      incomplete = true;
+      const code = error instanceof MiftahError ? error.code : "UPSTREAM_CALL_FAILED";
+      context.output.write(`Profile '${profile}': readiness did not complete (${code}).\n`);
+    }
+  }
+  writeCliSetupCompletion(context, {
+    verification: incomplete ? "incomplete" : "complete",
+    clientHandoff: created.clientHandoff ?? "not-generated",
+    ...(incomplete ? { profile: created.config.defaultProfile } : {}),
+    configPath: created.output
+  });
+  return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
+}
+
+function setupDraftIncompatibleOption(options: SetupCommandOptions): string | undefined {
+  return [
+    "interactive",
+    "config",
+    "description",
+    "makeDefault",
+    "upstream",
+    "plan",
+    "verify",
+    "importFile",
+    "importEntry",
+    "nativeOAuth",
+    "addProfile",
+    "profile",
+    "name",
+    "preset",
+    "output",
+    "client",
+    "credentialEnv",
+    "npmPackage",
+    "dockerImage",
+    "url",
+    "headerName",
+    "headerPrefix",
+    "oauthClientSecretsFile",
+    "localCommand",
+    "args",
+    "cwd",
+    "acceptLocalCommand",
+    "googleSearchConsoleProfiles",
+    "defaultProfile"
+  ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
+}
+
+function setupDraftStore(context: InitCommandContext): SetupDraftStore {
+  if (context.setupDraftStore === undefined) {
+    throw new CliUsageError("Resumable setup is unavailable in this embedding.");
+  }
+  return context.setupDraftStore;
+}
+
+async function discardPublishedSetupDraft(
+  store: SetupDraftStore,
+  revision: number,
+  context: InitCommandContext
+): Promise<void> {
+  try {
+    await store.discard(revision);
+  } catch (error) {
+    const code = error instanceof MiftahError ? error.code : "SETUP_DRAFT_UNAVAILABLE";
+    context.output.write(
+      `Configuration was created, but Miftah could not clear the saved connector choice (${code}). Run 'miftah setup --discard-draft' to remove it later.\n`
+    );
+  }
+}
+
 /**
  * Starts the human-first setup journey while retaining `init` for scripts and
  * existing automation. Both entry points deliberately use the same planner,
  * validation, config writer, and client-handoff implementation.
  */
 export async function runSetupCommand(options: SetupCommandOptions, context: InitCommandContext): Promise<SetupCommandResult> {
+  if (options.resume === true && options.discardDraft === true) {
+    throw new CliUsageError("Choose either '--resume' or '--discard-draft', not both.");
+  }
+  if (options.resume === true || options.discardDraft === true) {
+    const incompatible = setupDraftIncompatibleOption(options);
+    const option = options.resume === true ? "resume" : "discard-draft";
+    if (incompatible !== undefined) {
+      throw new CliUsageError(`Option '--${option}' cannot be combined with '--${flagName(incompatible)}'.`);
+    }
+    const store = setupDraftStore(context);
+    const draft = await store.load();
+    if (options.discardDraft === true) {
+      if (draft === undefined) {
+        context.output.write("No saved connector setup is available to discard.\n");
+      } else {
+        await store.discard(draft.revision);
+        context.output.write("Discarded the saved connector setup choice.\n");
+      }
+      return { verification: "not-applicable", exitCode: 0, reports: [] };
+    }
+    if (!isTty(context)) {
+      throw new CliUsageError("Option '--resume' requires TTY input and output so connection details can be re-entered.");
+    }
+    if (draft === undefined) {
+      throw new CliUsageError("No saved connector setup is available to resume. Start 'miftah setup' and choose a connector first.");
+    }
+    context.output.write("Resuming the saved connector choice. Re-enter all connection details before Miftah creates a configuration.\n");
+    const created = await runInitCommand({
+      interactive: true,
+      name: draft.name,
+      preset: draft.preset
+    }, context);
+    await discardPublishedSetupDraft(store, draft.revision, context);
+    return finishCreatedSetup(options, context, created);
+  }
   if (options.plan === true) {
     const incompatible = [
       "interactive",
@@ -436,6 +608,8 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
   }
   let guidedPreset: "streamable-http" | "local-stdio" | undefined;
   let recoveredManualConfiguration: Awaited<ReturnType<typeof runInitCommand>> | undefined;
+  let checkpointedDraft: SetupDraft | undefined;
+  let checkpointConnectorIntent = false;
   if (isTty(context) && !hasExplicitNewConfigurationInput(options)) {
     const startingPoint = await chooseGuidedSetupStartingPoint(context);
     if (startingPoint === "import") {
@@ -465,72 +639,36 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     if (recoveredManualConfiguration === undefined && (startingPoint === "remote" || startingPoint === "local")) {
       guidedPreset = startingPoint === "remote" ? "streamable-http" : "local-stdio";
     }
+    checkpointConnectorIntent = startingPoint === "connector";
   }
+  const checkpointStore = context.setupDraftStore;
+  const initContext = checkpointConnectorIntent && checkpointStore !== undefined
+    ? {
+        ...context,
+        onSetupDraftIntent: async (intent: Parameters<NonNullable<InitCommandContext["onSetupDraftIntent"]>>[0]) => {
+          try {
+            checkpointedDraft = await checkpointStore.save(intent);
+          } catch (error) {
+            if (error instanceof MiftahError && error.code === "SETUP_DRAFT_INPUT_INVALID") {
+              context.output.write(
+                "This connector name or preset cannot be safely saved as a resumable setup choice; continuing without a resume point.\n"
+              );
+              return;
+            }
+            throw error;
+          }
+        }
+      }
+    : context;
   const created = recoveredManualConfiguration ?? await runInitCommand({
     ...options,
     interactive: true,
     ...(guidedPreset === undefined ? {} : { preset: guidedPreset })
-  }, context);
-  if (
-    created.config.version === "3" &&
-    created.config.upstream?.transport === "streamable-http" &&
-    created.config.oauth === undefined
-  ) {
-    context.output.write(
-      "Generic remote setup did not discover authentication or call the endpoint. If this MCP needs browser sign-in, start 'miftah setup' again and choose 'browser-sign-in'.\n"
-    );
+  }, initContext);
+  if (checkpointedDraft !== undefined && checkpointStore !== undefined) {
+    await discardPublishedSetupDraft(checkpointStore, checkpointedDraft.revision, context);
   }
-  if (created.providerAdapter?.diagnostics.safeReadProbe === undefined) {
-    writeCliSetupCompletion(context, {
-      verification: "not-declared",
-      clientHandoff: created.clientHandoff ?? "not-generated",
-      configPath: created.output
-    });
-    return { verification: "not-applicable", exitCode: 0, reports: [] };
-  }
-  const decision = options.verify === true ? "verify" : await confirmReadiness(context, "every account now");
-  if (decision === "skip") {
-    context.output.write("First-success verification was skipped; the configuration was created but has not been tested with the provider.\n");
-    writeCliSetupCompletion(context, {
-      verification: "skipped",
-      clientHandoff: created.clientHandoff ?? "not-generated",
-      profile: created.config.defaultProfile,
-      configPath: created.output
-    });
-    return { verification: "skipped", exitCode: 0, reports: [] };
-  }
-  if (decision === "cancelled") {
-    context.output.write("First-success verification was cancelled after configuration creation; the configuration remains available.\n");
-    writeCliSetupCompletion(context, {
-      verification: "incomplete",
-      clientHandoff: created.clientHandoff ?? "not-generated",
-      profile: created.config.defaultProfile,
-      configPath: created.output
-    });
-    return { verification: "incomplete", exitCode: 1, reports: [] };
-  }
-
-  const reports: ProfileReadinessReport[] = [];
-  let incomplete = false;
-  for (const profile of Object.keys(created.config.profiles).sort()) {
-    try {
-      const report = await runProfileReadiness(created.output, { profile });
-      reports.push(report);
-      writeReadinessReport(context, report);
-      if (report.status !== "ready") incomplete = true;
-    } catch (error) {
-      incomplete = true;
-      const code = error instanceof MiftahError ? error.code : "UPSTREAM_CALL_FAILED";
-      context.output.write(`Profile '${profile}': readiness did not complete (${code}).\n`);
-    }
-  }
-  writeCliSetupCompletion(context, {
-    verification: incomplete ? "incomplete" : "complete",
-    clientHandoff: created.clientHandoff ?? "not-generated",
-    ...(incomplete ? { profile: created.config.defaultProfile } : {}),
-    configPath: created.output
-  });
-  return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
+  return finishCreatedSetup(options, context, created);
 }
 
 async function confirmReadiness(context: InitCommandContext, target: string): Promise<ReadinessDecision> {

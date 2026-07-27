@@ -16,6 +16,8 @@ import { runNativeOAuthSetup } from "../src/cli/setup-native-oauth.js";
 import { runProviderAccountSetup } from "../src/cli/setup-provider-account.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { FileSetupDraftStore, resolveSetupDraftPath } from "../src/setup/setup-draft.js";
+import { MiftahError } from "../src/utils/errors.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
@@ -90,6 +92,228 @@ describe("setup command", () => {
   it("makes the guided setup flow a first-class command", () => {
     expect(parseCli(["setup"])).toEqual({ kind: "run", command: "setup", options: {} });
     expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
+  });
+
+  it("checkpoints only a bare connector intent before asking for connection details", async () => {
+    const draftDirectory = resolve(outputRoot, "setup-draft");
+    const draftStore = new FileSetupDraftStore({
+      directory: draftDirectory,
+      now: () => "2026-07-25T12:00:00.000Z"
+    });
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    });
+
+    try {
+      await answer(streams, guidedSourcePrompt, "connector");
+      await answer(streams, "Name [miftah-wrapper]", "posthog-work");
+      await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
+      await streams.transcript.waitFor("Docker image (digest-pinned)");
+
+      await expect(draftStore.load()).resolves.toEqual({
+        schemaVersion: 1,
+        revision: 1,
+        source: "connector",
+        name: "posthog-work",
+        preset: "generic-docker",
+        stage: "connection",
+        savedAt: "2026-07-25T12:00:00.000Z"
+      });
+      await expect(readFile(resolveSetupDraftPath(draftDirectory), "utf8")).resolves.not.toContain("Docker image");
+      await expect(readFile(resolveSetupDraftPath(draftDirectory), "utf8")).resolves.not.toContain("credentialEnv");
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+  });
+
+  it("resumes a connector choice, re-prompts connection data, and clears the draft only after publication", async () => {
+    const draftStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    const draft = await draftStore.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic-docker",
+      stage: "connection"
+    });
+    const streams = createStreams();
+    const command = runSetupCommand({ resume: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    });
+
+    try {
+      await vi.waitFor(() => expect(streams.transcript.contents).toContain("Docker image (digest-pinned)"));
+      expect(streams.transcript.contents).not.toContain(guidedSourcePrompt);
+      expect(streams.transcript.contents).not.toContain("Name [miftah-wrapper]");
+      expect(streams.transcript.contents).not.toContain("What do you want to set up? (connector name, remote, or local)");
+
+      await answer(
+        streams,
+        "Docker image (digest-pinned)",
+        "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      );
+      await answer(streams, "Output location [posthog-work.miftah.json]", "resumed.json");
+      await answer(streams, "Client", "");
+
+      await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      await expect(draftStore.load()).resolves.toBeUndefined();
+      await expect(readFile(resolve(outputRoot, "resumed.json"), "utf8")).resolves.toContain("ghcr.io/acme/server@sha256");
+      expect(draft.revision).toBe(1);
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+  });
+
+  it("finishes a published resumed setup when its private draft cleanup conflicts", async () => {
+    const persistedStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    const draft = await persistedStore.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic-docker",
+      stage: "connection"
+    });
+    const draftStore = {
+      load: persistedStore.load.bind(persistedStore),
+      save: persistedStore.save.bind(persistedStore),
+      discard: async () => {
+        throw new MiftahError(
+          "SETUP_DRAFT_CONFLICT",
+          "SETUP_DRAFT_CONFLICT: setup draft changed in another CLI or Console session"
+        );
+      }
+    };
+    const streams = createStreams();
+    const command = runSetupCommand({ resume: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    });
+
+    try {
+      await answer(
+        streams,
+        "Docker image (digest-pinned)",
+        "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      );
+      await answer(streams, "Output location [posthog-work.miftah.json]", "resumed-cleanup-conflict.json");
+      await answer(streams, "Client", "");
+
+      await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+      expect(streams.transcript.contents).toContain(
+        "Configuration was created, but Miftah could not clear the saved connector choice (SETUP_DRAFT_CONFLICT)."
+      );
+      await expect(persistedStore.load()).resolves.toEqual(draft);
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+  });
+
+  it("retains a resumed draft when publication fails and permits an explicit discard without a TTY", async () => {
+    const draftStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    const draft = await draftStore.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic",
+      stage: "connection"
+    });
+    const existingOutput = resolve(outputRoot, "existing.json");
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await writeFile(existingOutput, "{}", { mode: 0o600 });
+    const streams = createStreams();
+    const command = runSetupCommand({ resume: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    });
+
+    try {
+      await answer(streams, "Output location [posthog-work.miftah.json]", "existing.json");
+      await answer(streams, "Client", "");
+      await expect(command).rejects.toThrow("Output");
+      await expect(draftStore.load()).resolves.toEqual(draft);
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    await expect(runSetupCommand({ discardDraft: true }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: draftStore
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    await expect(draftStore.load()).resolves.toBeUndefined();
+  });
+
+  it("rejects every setup input when resuming a private connector intent", async () => {
+    const streams = createStreams();
+    await expect(runSetupCommand({ resume: true, output: "unsafe.json" }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      },
+      setupDraftStore: new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") })
+    })).rejects.toThrow("cannot be combined with '--output'");
+    streams.input.end();
+  });
+
+  it("rejects mutually exclusive and noninteractive resume modes", async () => {
+    const streams = createStreams();
+    const draftStore = new FileSetupDraftStore({ directory: resolve(outputRoot, "setup-draft") });
+    await expect(runSetupCommand({ resume: true, discardDraft: true }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+      setupDraftStore: draftStore
+    })).rejects.toThrow("Choose either '--resume' or '--discard-draft', not both.");
+    streams.input.end();
+
+    const input = Object.assign(new PassThrough(), { isTTY: false });
+    const output = Object.assign(new PassThrough(), { isTTY: false });
+    await expect(runSetupCommand({ resume: true }, {
+      input,
+      output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] },
+      setupDraftStore: draftStore
+    })).rejects.toThrow("Option '--resume' requires TTY input and output");
+    input.end();
   });
 
   it("prints a validated non-secret setup plan without writing or contacting a remote MCP", async () => {
