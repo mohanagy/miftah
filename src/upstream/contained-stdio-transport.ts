@@ -53,6 +53,10 @@ export class ContainedStdioClientTransport implements Transport {
   private resolveChildClose: (() => void) | undefined;
   private closePromise: Promise<void> | undefined;
   private forceTermination: Promise<void> | undefined;
+  private resolveForceTerminationRequested: (() => void) | undefined;
+  private readonly forceTerminationRequested = new Promise<void>((resolve) => {
+    this.resolveForceTerminationRequested = resolve;
+  });
   private explicitlyClosing = false;
   private closeEmitted = false;
   private containmentFailure: Error | undefined;
@@ -128,6 +132,11 @@ export class ContainedStdioClientTransport implements Transport {
    */
   forceTerminate(): Promise<void> {
     if (this.forceTermination !== undefined) return this.forceTermination;
+    // A manager may escalate a close while this transport is still waiting for
+    // the child to finish its graceful stdin shutdown. That wait must yield to
+    // the verified containment path rather than delaying the public close
+    // signal after the process group is already gone.
+    this.resolveForceTerminationRequested?.();
     this.forceTermination = this.requestForceTermination();
     return this.forceTermination;
   }
@@ -186,16 +195,22 @@ export class ContainedStdioClientTransport implements Transport {
       }
 
       if (childClose !== undefined) {
-        const closedGracefully = await settlesWithin(childClose, gracefulShutdownDelayMs);
+        const closedGracefully = await settlesWithin(
+          childClose,
+          gracefulShutdownDelayMs,
+          this.forceTerminationRequested
+        );
         if (!closedGracefully) {
           await this.forceTerminate();
-          const closedAfterForce = await settlesWithin(childClose, containmentVerificationTimeoutMs);
           // A Windows Job Object closes only when its checked helper exits. Do
           // not release the manager's teardown gate merely because a kill was
           // requested; the helper-close event is the Windows containment proof.
-          if (!closedAfterForce && process.platform === "win32") {
-            this.recordContainmentFailure("Windows process-tree termination could not be confirmed");
-            throw this.containmentFailure!;
+          if (process.platform === "win32") {
+            const closedAfterForce = await settlesWithin(childClose, containmentVerificationTimeoutMs);
+            if (!closedAfterForce) {
+              this.recordContainmentFailure("Windows process-tree termination could not be confirmed");
+              throw this.containmentFailure!;
+            }
           }
         }
       }
@@ -346,7 +361,7 @@ async function waitForPosixProcessGroupExit(pid: number): Promise<boolean> {
   return true;
 }
 
-function settlesWithin(pending: Promise<void>, timeoutMs: number): Promise<boolean> {
+function settlesWithin(pending: Promise<void>, timeoutMs: number, interrupt?: Promise<void>): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: boolean) => {
@@ -361,6 +376,7 @@ function settlesWithin(pending: Promise<void>, timeoutMs: number): Promise<boole
       () => finish(true),
       () => finish(false)
     );
+    void interrupt?.then(() => finish(false));
   });
 }
 

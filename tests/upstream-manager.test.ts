@@ -929,6 +929,23 @@ describe("upstream process manager", () => {
     const descendantPidPath = join(directory, "descendant-pid");
     const startCountPath = join(directory, "starts");
     let descendantPid: number | undefined;
+    let firstDescendantPid: number | undefined;
+    const originalStart = ContainedStdioClientTransport.prototype.start;
+    let firstTransportStarted = false;
+    let replacementTransportStarted = false;
+    let replacementStartedBeforeFirstDescendantReaped = false;
+    const start = vi.spyOn(ContainedStdioClientTransport.prototype, "start").mockImplementation(async function (
+      this: ContainedStdioClientTransport
+    ) {
+      if (firstTransportStarted) {
+        replacementTransportStarted = true;
+        if (firstDescendantPid !== undefined && fixtureProcessIsAlive(firstDescendantPid)) {
+          replacementStartedBeforeFirstDescendantReaped = true;
+        }
+      }
+      await originalStart.call(this);
+      firstTransportStarted = true;
+    });
     const manager = new UpstreamProcessManager(
       {
         transport: "stdio",
@@ -947,18 +964,28 @@ describe("upstream process manager", () => {
     try {
       await manager.get("work");
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      const firstDescendantPid = descendantPid;
+      firstDescendantPid = descendantPid;
       expect(Number.isSafeInteger(firstDescendantPid)).toBe(true);
+      if (firstDescendantPid === undefined) throw new Error("Expected first retained descendant PID");
+      const recordedFirstDescendantPid = firstDescendantPid;
 
-      await expect(manager.restart("work")).resolves.toBeDefined();
+      // The test runs under full V8 coverage alongside the rest of the suite,
+      // so the replacement's MCP initialization speed is intentionally not
+      // part of the containment contract. Observe the spawned transport
+      // boundary instead: a replacement must never begin while the old
+      // descendant remains alive.
+      const restarting = manager.restart("work");
+      void restarting.catch(() => undefined);
+      await waitFor(() => replacementTransportStarted, Boolean);
       await waitFor(
-        () => fixtureProcessIsAlive(firstDescendantPid),
+        () => fixtureProcessIsAlive(recordedFirstDescendantPid),
         (alive) => alive === false
       );
       await waitFor(
         () => countStarts(startCountPath),
         (starts) => starts === 2
       );
+      expect(replacementStartedBeforeFirstDescendantReaped).toBe(false);
 
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
       expect(Number.isSafeInteger(descendantPid)).toBe(true);
@@ -967,6 +994,7 @@ describe("upstream process manager", () => {
         terminateFixtureProcess(descendantPid);
       }
       await manager.close().catch(() => undefined);
+      start.mockRestore();
       await rm(directory, { recursive: true, force: true });
     }
   });
