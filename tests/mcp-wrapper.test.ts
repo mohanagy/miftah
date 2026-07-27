@@ -3202,6 +3202,9 @@ describe("Miftah MCP wrapper", () => {
             TEST_ACCOUNT_NAME: "work",
             TEST_RESOURCE_SUBSCRIPTIONS: "true",
             TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            // Reproduce aggregate child-process startup beyond Vitest's default
+            // expect.poll deadline without changing the test's own timeout.
+            TEST_SUBSCRIBE_START_DELAY_MS: "1100",
             TEST_SUBSCRIBE_DELAY_MS: "100"
           }
         },
@@ -3216,26 +3219,30 @@ describe("Miftah MCP wrapper", () => {
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-handshake-race-test", version: "1.0.0" });
+    let subscribeStarted: PathArrivalWatch | undefined;
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
+      subscribeStarted = watchForPathArrival(subscribeStartedPath);
       const subscribe = client.subscribeResource({ uri: "account://current" });
-      await expect
-        .poll(async () => {
-          try {
-            await access(subscribeStartedPath);
-            return true;
-          } catch {
-            return false;
+      await Promise.race([
+        subscribeStarted.wait,
+        subscribe.then(
+          () => {
+            throw new Error("Resource subscription completed before its started marker");
+          },
+          (error) => {
+            throw error;
           }
-        })
-        .toBe(true);
+        )
+      ]);
       await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
 
       await expect(subscribe).rejects.toThrow("RESOURCE_SUBSCRIPTION_NOT_FOUND");
       await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
     } finally {
+      subscribeStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });

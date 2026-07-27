@@ -44,6 +44,7 @@ const resourceSubscriptionStatefulUpdates = process.env.TEST_RESOURCE_SUBSCRIPTI
 const failSubscribe = process.env.TEST_FAIL_SUBSCRIBE === "true";
 const resourceUpdateUri = process.env.TEST_RESOURCE_UPDATE_URI;
 const resourceUpdateDelayMs = Number(process.env.TEST_RESOURCE_UPDATE_DELAY_MS ?? "0");
+const subscribeStartDelayMs = Number(process.env.TEST_SUBSCRIBE_START_DELAY_MS ?? "0");
 const subscribeDelayMs = Number(process.env.TEST_SUBSCRIBE_DELAY_MS ?? "0");
 const unsubscribeDelayMs = Number(process.env.TEST_UNSUBSCRIBE_DELAY_MS ?? "0");
 const subscribeCountPath = process.env.TEST_SUBSCRIBE_COUNT_PATH;
@@ -563,6 +564,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 server.setRequestHandler(SubscribeRequestSchema, async () => {
   if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
+  if (subscribeStartDelayMs > 0) await delay(subscribeStartDelayMs);
   if (subscribeStartedPath) writeFileSync(subscribeStartedPath, "started");
   if (subscribeCountPath) appendFileSync(subscribeCountPath, "1\n");
   if (subscribeDelayMs > 0) await delay(subscribeDelayMs);
