@@ -111,12 +111,17 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("verify-private-paths");
     expect(command).toContain("for ($index = 1; $index -lt $fields.Count; $index += 2)");
     expect(command).toContain("Test-MiftahPrivatePath $path $kind");
+    expect(command).toContain("Test-MiftahAncestors ([System.IO.DirectoryInfo]::new($fields[2]).Parent)");
   });
 
   it("fails closed before launch for an empty or NUL-containing batch verification request", async () => {
     await expect(verifyWindowsConfigPathsSecurity([])).resolves.toBe(false);
     await expect(verifyWindowsConfigPathsSecurity([
       { path: "C:\\Users\\miftah\\.config\\miftah\u0000unexpected", kind: "directory" }
+    ])).resolves.toBe(false);
+    await expect(verifyWindowsConfigPathsSecurity([
+      { path: "C:\\Users\\miftah\\.config\\miftah.json", kind: "file" },
+      { path: "C:\\Users\\miftah\\.config\\miftah", kind: "directory" }
     ])).resolves.toBe(false);
 
     expect(windowsAclMocks.spawn).not.toHaveBeenCalled();
@@ -217,7 +222,7 @@ describe("Windows migration ACL boundary", () => {
     const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
     expect(command).toContain("function Test-MiftahAncestors");
     expect(command).toContain("Test-MiftahPrivatePath $ancestor.FullName 'directory' $null $false $false");
-    expect(command).toContain("Test-MiftahAncestors $parent");
+    expect(command).toContain("Test-MiftahAncestors $parent.Parent");
   });
 
   it("keeps the encoded ACL helper below the conservative Windows command-line budget", async () => {

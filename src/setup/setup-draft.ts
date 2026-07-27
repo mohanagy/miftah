@@ -441,9 +441,14 @@ export class FileSetupDraftStore implements SetupDraftStore {
     const observed = await privateFileMetadata(this.path, false);
     if (observed === undefined) {
       // Returning an absent draft still influences which setup path the caller
-      // may take. Keep the directory's original fail-closed verification even
-      // though there is no file to include in a batch yet.
-      if (!(await verifyWindowsConfigPathSecurity(this.directory, "directory"))) setupDraftUnavailable();
+      // may take. Re-establish the parent-protected directory boundary even
+      // though there is no file to include in the batch yet.
+      if (!(await verifyWindowsConfigPathsSecurity([
+        { path: dirname(this.directory), kind: "directory" },
+        { path: this.directory, kind: "directory" }
+      ]))) {
+        setupDraftUnavailable();
+      }
       const verifiedDirectory = await privateDirectoryMetadata(this.directory, false);
       if (verifiedDirectory === undefined || !sameFileIdentity(directory, verifiedDirectory)) setupDraftUnavailable();
       return undefined;

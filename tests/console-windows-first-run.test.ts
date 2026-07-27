@@ -203,8 +203,8 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.createPrivateDirectory).not.toHaveBeenCalled();
     expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledTimes(2);
     expect(aclMocks.secureFile).toHaveBeenCalledTimes(2);
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(6);
-    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(2);
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(5);
+    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(3);
   });
 
   it("attributes Windows ACL helper launches across the complete first-run draft lifecycle", async () => {
@@ -259,8 +259,8 @@ describe("Console Windows first-run boundary", () => {
       afterSave: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 0 },
       afterLoad: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 1 },
       afterPublication: { create: 0, createInParent: 2, secure: 2, verify: 3, verifyBatch: 2 },
-      afterDraftRead: { create: 0, createInParent: 2, secure: 2, verify: 4, verifyBatch: 2 },
-      afterConfiguredRead: { create: 0, createInParent: 2, secure: 2, verify: 6, verifyBatch: 2 }
+      afterDraftRead: { create: 0, createInParent: 2, secure: 2, verify: 3, verifyBatch: 3 },
+      afterConfiguredRead: { create: 0, createInParent: 2, secure: 2, verify: 5, verifyBatch: 3 }
     });
   });
 
@@ -284,6 +284,30 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
       { path: directory, kind: "directory" },
       { path: expect.stringMatching(/setup-draft-v1\.json$/u), kind: "file" }
+    ]);
+  });
+
+  it("checks the protected parent chain before accepting an absent setup draft", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-setup-draft-windows-absent-"));
+    temporaryDirectories.push(parent);
+    const directory = join(parent, "setup-draft");
+    const store = new FileSetupDraftStore({ directory });
+    const draft = await store.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic",
+      stage: "connection"
+    });
+    await store.discard(draft.revision);
+    aclMocks.verifyPath.mockClear();
+    aclMocks.verifyPaths.mockClear();
+
+    await expect(store.load()).resolves.toBeUndefined();
+
+    expect(aclMocks.verifyPath).not.toHaveBeenCalled();
+    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+      { path: parent, kind: "directory" },
+      { path: directory, kind: "directory" }
     ]);
   });
 

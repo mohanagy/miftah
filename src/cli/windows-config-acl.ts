@@ -122,14 +122,15 @@ export async function verifyWindowsConfigPathSecurity(
 }
 
 /**
- * Verifies a bounded set of already-stable private paths in one trusted helper
- * process. Each path receives the same owner, DACL, and reparse-point checks
- * as verifyWindowsConfigPathSecurity; callers retain their own identity checks.
+ * Verifies a bounded stable private-directory boundary and its related paths
+ * in one trusted helper. The first path must be the protected directory; its
+ * full ancestor chain is checked before the helper accepts the boundary.
  */
 export async function verifyWindowsConfigPathsSecurity(paths: readonly WindowsPrivatePath[]): Promise<boolean> {
   if (
     paths.length === 0 ||
     paths.length > 8 ||
+    paths[0]?.kind !== "directory" ||
     paths.some((candidate) => (
       typeof candidate !== "object" ||
       candidate === null ||
@@ -268,18 +269,16 @@ function Test-MiftahPrivatePath {
   if ($kind -ne 'file' -and $kind -ne 'directory') { return $false }
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if ($null -eq $identity) { return $false }
-  $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
+  $reparse = [int][System.IO.FileAttributes]::ReparsePoint
   if ($kind -eq 'file') {
     $entry = [System.IO.FileInfo]::new($path)
-    $parent = $entry.Directory
     if (-not $entry.Exists) { return $false }
-    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+    if (([int]$entry.Attributes -band $reparse) -ne 0) { return $false }
     $acl = [System.IO.File]::GetAccessControl($path, $verifySections)
   } else {
     $entry = [System.IO.DirectoryInfo]::new($path)
-    $parent = $entry.Parent
     if (-not $entry.Exists) { return $false }
-    if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+    if (([int]$entry.Attributes -band $reparse) -ne 0) { return $false }
     $acl = [System.IO.Directory]::GetAccessControl($path, $verifySections)
   }
   $entry.Refresh()
@@ -290,11 +289,11 @@ function Test-MiftahPrivatePath {
   if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { return $false }
   if ($requireProtected -and -not $acl.AreAccessRulesProtected) { return $false }
   if ($expectedSddl.Length -gt 0 -and $acl.GetSecurityDescriptorSddlForm($dirSections) -ne $expectedSddl) { return $false }
-  if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
+  if (([int]$entry.Attributes -band $reparse) -ne 0) { return $false }
   $creatorOwner = 'S-1-3-0'
   $creatorGroup = 'S-1-3-1'
   $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
-  $restrictedRights = if ($kind -eq 'file') {
+  $restricted = if ($kind -eq 'file') {
     [int](
       [System.Security.AccessControl.FileSystemRights]::ReadData -bor
       [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor
@@ -328,9 +327,8 @@ function Test-MiftahPrivatePath {
       ($rule.IdentityReference.Value -ceq $creatorOwner -or $rule.IdentityReference.Value -ceq $creatorGroup) -and
       (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
     ) { continue }
-    if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { return $false }
+    if (([int]$rule.FileSystemRights -band $restricted) -ne 0) { return $false }
   }
-  if ($requireOwner -and -not (Test-MiftahAncestors $parent)) { return $false }
   return $true
 }
 function Test-MiftahAncestors {
@@ -401,6 +399,7 @@ try {
       $path = $fields[$index + 1]
       if (-not (Test-MiftahPrivatePath $path $kind)) { exit 1 }
     }
+    if($fields[1] -ne 'directory' -or -not(Test-MiftahAncestors ([System.IO.DirectoryInfo]::new($fields[2]).Parent))){exit 1}
     exit 0
   }
 
@@ -439,7 +438,7 @@ try {
       $directoryParent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($directory.FullName))
       if ([string]::IsNullOrEmpty($directoryParent)) { exit 1 }
       if (-not [string]::Equals($parentPath, $directoryParent.TrimEnd($trimCharacters), [System.StringComparison]::OrdinalIgnoreCase)) { exit 1 }
-      if (-not (Test-MiftahPrivatePath $parent 'directory')) { exit 1 }
+      if(-not(Test-MiftahPrivatePath $parent 'directory') -or -not(Test-MiftahAncestors $parent.Parent)){exit 1}
     }
     if ($directory.Exists) { exit 1 }
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
