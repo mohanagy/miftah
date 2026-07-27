@@ -244,6 +244,8 @@ async function reviewThenCreatePresetForm(
     readonly editDuringCreate?: boolean;
     readonly failFirstCreate?: boolean;
     readonly profileCountMismatch?: boolean;
+    readonly profileCountValue?: unknown;
+    readonly omitProfileCount?: boolean;
     readonly reReviewDuringCreate?: boolean;
     readonly unsafeReview?: boolean;
   } = {}
@@ -328,17 +330,21 @@ async function reviewThenCreatePresetForm(
     readonly status: 200;
     readonly json: () => Promise<{ readonly data: Record<string, unknown> }>;
   };
-  const previewData: Record<string, unknown> = {
-    configuration: {
-      sensitiveValues: reviewOptions.unsafeReview === true ? "included" : "omitted",
-      publication: "new-file-only",
-      name: "analytics",
-      defaultProfile: "default",
-      profileCount: reviewOptions.profileCountMismatch === true ? 3 : 1,
-      profiles: ["default"],
-      upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
-    }
+  const hasProfileCountValue = Object.prototype.hasOwnProperty.call(reviewOptions, "profileCountValue");
+  const previewConfiguration: Record<string, unknown> = {
+    sensitiveValues: reviewOptions.unsafeReview === true ? "included" : "omitted",
+    publication: "new-file-only",
+    name: "analytics",
+    defaultProfile: "default",
+    profiles: ["default"],
+    upstreams: [{ name: "default", kind: "local-process", transport: "stdio" }]
   };
+  if (!reviewOptions.omitProfileCount) {
+    previewConfiguration.profileCount = hasProfileCountValue
+      ? reviewOptions.profileCountValue
+      : reviewOptions.profileCountMismatch === true ? 3 : 1;
+  }
+  const previewData: Record<string, unknown> = { configuration: previewConfiguration };
   const response = (data: Record<string, unknown>): FakeResponse => ({
     ok: true,
     status: 200,
@@ -429,7 +435,11 @@ async function reviewThenCreatePresetForm(
   const createEnabledAfterSubmit = create.disabled === false;
   const reviewText = [reviewSummary.textContent, ...reviewDetails.children.map((item) => item.textContent)];
 
-  if (reviewOptions.unsafeReview === true || reviewOptions.profileCountMismatch === true) {
+  if (
+    reviewOptions.unsafeReview === true
+    || reviewOptions.profileCountMismatch === true
+    || (hasProfileCountValue && reviewOptions.profileCountValue !== 1)
+  ) {
     return {
       requests,
       reviewVisibleAfterSubmit,
@@ -1379,7 +1389,36 @@ describe("local Console control server", () => {
       });
       expect(unsafeReview.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
       const inconsistentProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountMismatch: true });
-      expect(inconsistentProfileCount.reviewText[0]).toContain("with 1 account profile(s)");
+      expect(inconsistentProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(inconsistentProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const malformedProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: "1" });
+      expect(malformedProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(malformedProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const nullProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: null });
+      expect(nullProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: false,
+        createEnabledAfterSubmit: false,
+        statusText: "Miftah did not return a safe configuration review."
+      });
+      expect(nullProfileCount.requests.map((request) => request.path)).toEqual(["/api/v1/onboarding/preset/preview"]);
+      const matchingProfileCount = await reviewThenCreatePresetForm(javascript, { profileCountValue: 1 });
+      expect(matchingProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: true,
+        createEnabledAfterSubmit: true
+      });
+      const omittedProfileCount = await reviewThenCreatePresetForm(javascript, { omitProfileCount: true });
+      expect(omittedProfileCount).toMatchObject({
+        reviewVisibleAfterSubmit: true,
+        createEnabledAfterSubmit: true
+      });
       await expect(submitMultiAccountGscPresetForm(javascript)).resolves.toMatchObject({
         request: {
           name: "gsc",

@@ -403,7 +403,7 @@ function selectedNativeOAuthUpstream(
   return selectedExistingUpstream(config, upstream);
 }
 
-function consoleAuditPath(configPath: string): string {
+export function consoleAuditPath(configPath: string): string {
   return join(dirname(resolvePath(configPath)), ".miftah", "audit", "console.jsonl");
 }
 

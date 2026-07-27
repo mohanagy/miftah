@@ -1215,6 +1215,9 @@ const script = `(() => {
       : [];
     const upstreams = Array.isArray(configuration.upstreams) ? configuration.upstreams.map(record) : [];
     const profileCount = profiles.length;
+    if (Object.prototype.hasOwnProperty.call(configuration, "profileCount") && configuration.profileCount !== profileCount) {
+      throw new Error("Miftah did not return a safe configuration review.");
+    }
     const name = typeof configuration.name === "string" ? configuration.name : "this configuration";
     const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "not set";
     if (presetReviewSummary instanceof HTMLElement) {
