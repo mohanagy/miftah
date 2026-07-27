@@ -11,6 +11,7 @@ import {
 } from "../src/oauth/local-lock.js";
 
 const connectTargets = vi.hoisted(() => ({ ports: [] as number[], paths: [] as string[] }));
+const listenTargets = vi.hoisted(() => ({ ports: [] as number[], paths: [] as string[] }));
 
 vi.mock("node:net", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:net")>();
@@ -23,6 +24,19 @@ vi.mock("node:net", async (importOriginal) => {
         connectTargets.ports.push(Number((options as { port: unknown }).port));
       }
       return Reflect.apply(actual.connect, undefined, args);
+    },
+    createServer: (...args: Parameters<typeof actual.createServer>) => {
+      const server = Reflect.apply(actual.createServer, undefined, args);
+      const listen = server.listen.bind(server);
+      server.listen = ((...listenArgs: unknown[]) => {
+        const options = listenArgs[0];
+        if (typeof options === "string") listenTargets.paths.push(options);
+        if (typeof options === "object" && options !== null && "port" in options) {
+          listenTargets.ports.push(Number((options as { port: unknown }).port));
+        }
+        return Reflect.apply(listen, undefined, listenArgs);
+      }) as typeof server.listen;
+      return server;
     }
   };
 });
@@ -321,8 +335,11 @@ describe("OAuth local lock", () => {
 
     const operation = vi.fn(async () => undefined);
     try {
+      listenTargets.ports.length = 0;
+      listenTargets.paths.length = 0;
       await withOAuthLocalLock(scope, value, 100, operation, "darwin");
       expect(operation).toHaveBeenCalledOnce();
+      expect(listenTargets.ports).not.toContain(firstCandidatePort(scope, value));
     } finally {
       await close(blocker);
     }

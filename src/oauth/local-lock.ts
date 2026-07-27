@@ -216,7 +216,9 @@ async function acquireLocalLock(
     const mustWait = acquiresLegacyEndpoint
       ? legacyState !== "available" && !canUseMacOSFallback
       : legacyState === "held";
-    if (!mustWait) {
+    // A positively unrelated legacy listener cannot become this lock through a bind retry. On
+    // macOS, go directly to the deterministic fallback scan instead of making that doomed bind.
+    if (!mustWait && !canUseMacOSFallback) {
       let primaryLock: LocalLock | undefined;
       try {
         primaryLock = await tryAcquireLocalLock(strategy.acquisitionEndpoint, strategy.key);
