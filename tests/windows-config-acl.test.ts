@@ -52,7 +52,12 @@ function createWritableChild(): EventEmitter & {
   return Object.assign(child, { stdin });
 }
 
-function decodePrivateFileWriteRequest(encoded: string): { readonly version: number; readonly path: string; readonly byteLength: number } {
+function decodePrivateFileWriteRequest(encoded: string): {
+  readonly version: number;
+  readonly path: string;
+  readonly byteLength: number;
+  readonly commitDeadlineUtcMilliseconds: number;
+} {
   const payload = Buffer.from(encoded, "base64");
   let offset = 0;
   const version = payload.readUInt8(offset);
@@ -63,8 +68,10 @@ function decodePrivateFileWriteRequest(encoded: string): { readonly version: num
   offset += pathLength;
   const byteLength = Number(payload.readBigInt64LE(offset));
   offset += 8;
+  const commitDeadlineUtcMilliseconds = Number(payload.readBigInt64LE(offset));
+  offset += 8;
   expect(offset).toBe(payload.byteLength);
-  return { version, path, byteLength };
+  return { version, path, byteLength, commitDeadlineUtcMilliseconds };
 }
 
 beforeEach(() => {
@@ -201,6 +208,7 @@ describe("Windows migration ACL boundary", () => {
 
   it("writes one new private configuration file through the checked no-delete directory chain helper", async () => {
     const child = createWritableChild();
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     windowsAclMocks.spawn.mockImplementation(() => {
       queueMicrotask(() => child.emit("close", 0));
       return child;
@@ -221,9 +229,10 @@ describe("Windows migration ACL boundary", () => {
     });
     expect(options?.env?.MIFTAH_CONFIG_ACL_REQUEST).toBeUndefined();
     expect(decodePrivateFileWriteRequest(options?.env?.MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST ?? "")).toEqual({
-      version: 2,
+      version: 3,
       path: "C:\\Users\\miftah\\.config\\miftah\\miftah.json",
-      byteLength: 16
+      byteLength: 16,
+      commitDeadlineUtcMilliseconds: 1_700_000_004_000
     });
     expect(child.stdin.end).toHaveBeenCalledWith(Buffer.from("{\"version\":\"3\"}\n", "utf8"));
   });

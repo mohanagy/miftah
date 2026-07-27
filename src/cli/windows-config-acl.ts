@@ -7,6 +7,7 @@ const requestEnvironmentName = "MIFTAH_CONFIG_ACL_REQUEST";
 const privateConfigWriteRequestEnvironmentName = "MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST";
 const maximumRequestBytes = 12 * 1024;
 const aclCommandTimeoutMs = 5_000;
+const privateConfigWriteCommitGraceMs = 1_000;
 // Node exposes no trusted Windows system-directory API. Use the protected default
 // system root rather than a caller-controlled environment override; unsupported
 // non-default layouts fail closed instead of launching an arbitrary executable.
@@ -43,6 +44,7 @@ interface SecurePrivateFileRequest {
 interface PrivateConfigWriteRequest {
   readonly path: string;
   readonly byteLength: number;
+  readonly commitDeadlineUtcMilliseconds: number;
 }
 
 interface VerifyPrivatePathRequest {
@@ -124,17 +126,22 @@ export async function writeWindowsPrivateConfigFile(
 ): Promise<WindowsPrivateConfigWriteResult> {
   if (process.platform !== "win32") return "failed";
   const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
-  const request: PrivateConfigWriteRequest = {
-    path,
-    byteLength: bytes.byteLength
-  };
-  if (path.includes("\u0000") || !Number.isSafeInteger(request.byteLength)) {
+  if (path.includes("\u0000") || !Number.isSafeInteger(bytes.byteLength)) {
     return "failed";
   }
-  const encodedRequest = encodePrivateFileWriteRequest(request);
-  if (encodedRequest === undefined) return "failed";
   const launcher = await resolveCheckedWindowsSecretJobExecutable();
-  return launcher === undefined ? "failed" : runWindowsPrivateFileWriteCommand(launcher, encodedRequest, bytes);
+  if (launcher === undefined) return "failed";
+  const request: PrivateConfigWriteRequest = {
+    path,
+    byteLength: bytes.byteLength,
+    // A forced process termination bypasses native finally blocks. The helper
+    // therefore refuses the irreversible move with one second left under the
+    // unchanged parent bound, leaving time to clean its secured temporary file.
+    commitDeadlineUtcMilliseconds: Date.now() + aclCommandTimeoutMs - privateConfigWriteCommitGraceMs
+  };
+  if (!Number.isSafeInteger(request.commitDeadlineUtcMilliseconds)) return "failed";
+  const encodedRequest = encodePrivateFileWriteRequest(request);
+  return encodedRequest === undefined ? "failed" : runWindowsPrivateFileWriteCommand(launcher, encodedRequest, bytes);
 }
 
 /** Backwards-compatible name for migration transaction directories. */
@@ -223,7 +230,7 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
 
 function encodePrivateFileWriteRequest(request: PrivateConfigWriteRequest): string | undefined {
   const path = Buffer.from(request.path, "utf8");
-  const requestLength = 1 + 4 + path.byteLength + 8;
+  const requestLength = 1 + 4 + path.byteLength + 8 + 8;
   if (
     request.byteLength < 0 ||
     requestLength > maximumRequestBytes ||
@@ -234,13 +241,15 @@ function encodePrivateFileWriteRequest(request: PrivateConfigWriteRequest): stri
 
   const payload = Buffer.allocUnsafe(requestLength);
   let offset = 0;
-  payload.writeUInt8(2, offset);
+  payload.writeUInt8(3, offset);
   offset += 1;
   payload.writeInt32LE(path.byteLength, offset);
   offset += 4;
   path.copy(payload, offset);
   offset += path.byteLength;
   payload.writeBigInt64LE(BigInt(request.byteLength), offset);
+  offset += 8;
+  payload.writeBigInt64LE(BigInt(request.commitDeadlineUtcMilliseconds), offset);
   return payload.toString("base64");
 }
 
