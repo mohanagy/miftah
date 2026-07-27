@@ -35,6 +35,19 @@ function firstCandidatePort(scope: string, value: string): number {
   return portStart + (Number.parseInt(key.slice(0, 8), 16) % portCount);
 }
 
+function fallbackCandidatePorts(scope: string, value: string): readonly number[] {
+  const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
+  const ports = new Set<number>([firstCandidatePort(scope, value)]);
+  const candidates: number[] = [];
+  for (let index = 1; index <= 7; index += 1) {
+    const port = portStart + (Number.parseInt(key.slice(index * 8, (index + 1) * 8), 16) % portCount);
+    if (ports.has(port)) continue;
+    ports.add(port);
+    candidates.push(port);
+  }
+  return candidates;
+}
+
 function lockGreeting(scope: string, value: string): string {
   const key = createHash("sha256").update(`${protocol}\u0000${scope}\u0000${value}`, "utf8").digest("hex");
   return `${protocol} ${key}\n`;
@@ -54,6 +67,18 @@ async function tryOccupy(port: number): Promise<Server | undefined> {
 
 async function tryHoldLegacyLock(port: number, greeting: string): Promise<Server | undefined> {
   const server = createServer((socket) => socket.end(greeting));
+  return new Promise((resolve) => {
+    const onError = (): void => resolve(undefined);
+    server.once("error", onError);
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.off("error", onError);
+      resolve(server);
+    });
+  });
+}
+
+async function tryHoldAmbiguousListener(port: number): Promise<Server | undefined> {
+  const server = createServer((socket) => socket.resume());
   return new Promise((resolve) => {
     const onError = (): void => resolve(undefined);
     server.once("error", onError);
@@ -220,7 +245,34 @@ describe("OAuth local lock", () => {
     }
   });
 
-  it("fails closed while the canonical macOS TCP candidate is occupied", async () => {
+  it("keeps distinct macOS locks independent when their legacy TCP candidates collide", async () => {
+    const scope = "macos-collision-regression";
+    const [firstValue, secondValue] = collidingValues(scope);
+    let releaseFirst!: () => void;
+    const holdFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const first = withOAuthLocalLock(scope, firstValue, 2_000, async () => {
+      markFirstEntered();
+      await holdFirst;
+    }, "darwin");
+    await firstEntered;
+
+    const secondOperation = vi.fn(async () => undefined);
+    try {
+      await withOAuthLocalLock(scope, secondValue, 200, secondOperation, "darwin");
+      expect(secondOperation).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirst();
+      await first;
+    }
+  });
+
+  it("uses a macOS fallback while an unrelated listener occupies the canonical TCP candidate", async () => {
     const scope = "occupied-candidate-regression";
     let value = "";
     let blocker: Server | undefined;
@@ -230,12 +282,124 @@ describe("OAuth local lock", () => {
     }
     if (blocker === undefined) throw new Error("Could not reserve a deterministic OAuth lock candidate for the regression test");
 
+    const operation = vi.fn(async () => undefined);
     try {
-      await expect(withOAuthLocalLock(scope, value, 100, async () => undefined, "darwin")).rejects.toBeInstanceOf(
-        OAuthLocalLockUnavailableError
-      );
+      await withOAuthLocalLock(scope, value, 100, operation, "darwin");
+      expect(operation).toHaveBeenCalledOnce();
     } finally {
       await close(blocker);
+    }
+  });
+
+  it("does not split one macOS key across fallback candidates", async () => {
+    const scope = "macos-fallback-serialization-regression";
+    const [primaryValue, value] = collidingValues(scope);
+    const [firstFallback] = fallbackCandidatePorts(scope, value);
+    if (firstFallback === undefined) throw new Error("Expected a macOS fallback candidate");
+    const blocker = await tryOccupy(firstFallback);
+    if (blocker === undefined) throw new Error("Could not reserve a macOS fallback candidate");
+    let blockerClosed = false;
+
+    let releasePrimary!: () => void;
+    const holdPrimary = new Promise<void>((resolve) => {
+      releasePrimary = resolve;
+    });
+    let markPrimaryEntered!: () => void;
+    const primaryEntered = new Promise<void>((resolve) => {
+      markPrimaryEntered = resolve;
+    });
+    const primary = withOAuthLocalLock(scope, primaryValue, 2_000, async () => {
+      markPrimaryEntered();
+      await holdPrimary;
+    }, "darwin");
+
+    let releaseFirst!: () => void;
+    const holdFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    let first: Promise<void> | undefined;
+    let duplicate: Promise<void> | undefined;
+    try {
+      await primaryEntered;
+      first = withOAuthLocalLock(scope, value, 2_000, async () => {
+        markFirstEntered();
+        await holdFirst;
+      }, "darwin");
+      await firstEntered;
+      await close(blocker);
+      blockerClosed = true;
+
+      let markDuplicateEntered!: () => void;
+      const duplicateEntered = new Promise<void>((resolve) => {
+        markDuplicateEntered = resolve;
+      });
+      duplicate = withOAuthLocalLock(scope, value, 2_000, async () => {
+        markDuplicateEntered();
+      }, "darwin");
+      const state = await Promise.race([
+        duplicateEntered.then(() => "entered" as const),
+        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 200))
+      ]);
+      expect(state).toBe("blocked");
+
+      releaseFirst();
+      await first;
+      await duplicate;
+    } finally {
+      releaseFirst();
+      releasePrimary();
+      if (!blockerClosed) await close(blocker);
+      await Promise.allSettled([
+        primary,
+        ...(first === undefined ? [] : [first]),
+        ...(duplicate === undefined ? [] : [duplicate])
+      ]);
+    }
+  });
+
+  it("fails closed when an ambiguous macOS legacy listener does not identify its holder", async () => {
+    const scope = "macos-ambiguous-legacy-listener-regression";
+    let value = "";
+    let blocker: Server | undefined;
+    for (let index = 0; index < 256 && blocker === undefined; index += 1) {
+      value = `connection-${index}`;
+      blocker = await tryHoldAmbiguousListener(firstCandidatePort(scope, value));
+    }
+    if (blocker === undefined) throw new Error("Could not reserve an ambiguous macOS OAuth lock candidate");
+
+    const operation = vi.fn(async () => undefined);
+    try {
+      await expect(withOAuthLocalLock(scope, value, 150, operation, "darwin")).rejects.toBeInstanceOf(
+        OAuthLocalLockUnavailableError
+      );
+      expect(operation).not.toHaveBeenCalled();
+    } finally {
+      await close(blocker);
+    }
+  });
+
+  it("does not bypass an exact older macOS holder through a fallback candidate", async () => {
+    const scope = "macos-legacy-holder-regression";
+    let value = "";
+    let holder: Server | undefined;
+    for (let index = 0; index < 256 && holder === undefined; index += 1) {
+      value = `connection-${index}`;
+      holder = await tryHoldLegacyLock(firstCandidatePort(scope, value), lockGreeting(scope, value));
+    }
+    if (holder === undefined) throw new Error("Could not reserve a legacy macOS OAuth lock candidate");
+
+    const operation = vi.fn(async () => undefined);
+    try {
+      await expect(withOAuthLocalLock(scope, value, 100, operation, "darwin")).rejects.toBeInstanceOf(
+        OAuthLocalLockUnavailableError
+      );
+      expect(operation).not.toHaveBeenCalled();
+    } finally {
+      await close(holder);
     }
   });
 
