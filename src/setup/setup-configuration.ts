@@ -1,4 +1,5 @@
 import { writeNewConfigFile } from "../cli/migrate-config.js";
+import { writeWindowsPrivateConfigFile } from "../cli/windows-config-acl.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig, TransportType, UpstreamConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
@@ -85,4 +86,19 @@ export function describeSetupConfiguration(input: MiftahConfig): SetupConfigurat
 /** Publishes only the previously validated bytes through the non-overwriting secure writer. */
 export function publishSetupConfigurationPlan(plan: SetupConfigurationPlan): Promise<void> {
   return writeNewConfigFile(plan.path, plan.content);
+}
+
+/**
+ * Publishes a Console first-run plan through a Windows-only writer that holds
+ * the verified directory chain until its private file creation is complete.
+ * Other setup callers retain the established generic writer contract.
+ */
+export async function publishFirstRunSetupConfigurationPlan(plan: SetupConfigurationPlan): Promise<void> {
+  if (process.platform !== "win32") return publishSetupConfigurationPlan(plan);
+  const result = await writeWindowsPrivateConfigFile(plan.path, plan.content);
+  if (result === "written") return;
+  if (result === "exists") {
+    throw Object.assign(new Error("Configuration file already exists."), { code: "EEXIST" });
+  }
+  throw new Error("Could not create and verify a private Windows configuration file.");
 }

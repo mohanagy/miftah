@@ -22,6 +22,7 @@ import {
   createWindowsPrivateDirectoryInPrivateParent,
   createWindowsPrivateMigrationDirectory,
   secureWindowsConfigFile,
+  writeWindowsPrivateConfigFile,
   verifyWindowsConfigPathSecurity,
   verifyWindowsConfigPathsSecurity
 } from "../src/cli/windows-config-acl.js";
@@ -32,6 +33,15 @@ function createChild(): EventEmitter & { readonly kill: ReturnType<typeof vi.fn>
   const child = new EventEmitter() as EventEmitter & { readonly kill: ReturnType<typeof vi.fn> };
   Object.assign(child, { kill: vi.fn() });
   return child;
+}
+
+function createWritableChild(): EventEmitter & {
+  readonly kill: ReturnType<typeof vi.fn>;
+  readonly stdin: EventEmitter & { readonly end: ReturnType<typeof vi.fn> };
+} {
+  const child = createChild();
+  const stdin = Object.assign(new EventEmitter(), { end: vi.fn() });
+  return Object.assign(child, { stdin });
 }
 
 beforeEach(() => {
@@ -160,6 +170,56 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("AreAccessRulesProtected");
     expect(command).toContain("Test-MiftahPrivatePath $path 'file' $null $true");
     expect(command).not.toContain("$actual = [System.IO.File]::GetAccessControl($path, $verifySections)");
+  });
+
+  it("writes one new private configuration file through a separately bounded no-delete directory chain helper", async () => {
+    const child = createWritableChild();
+    windowsAclMocks.spawn.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(writeWindowsPrivateConfigFile(
+      "C:\\Users\\miftah\\.config\\miftah\\miftah.json",
+      "{\"version\":\"3\"}\n"
+    )).resolves.toBe("written");
+
+    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(options).toMatchObject({
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "ignore", "ignore"]
+    });
+    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
+      "write-private-file\u0000C:\\Users\\miftah\\.config\\miftah\\miftah.json\u000016"
+    );
+    expect(child.stdin.end).toHaveBeenCalledWith(Buffer.from("{\"version\":\"3\"}\n", "utf8"));
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("MiftahPrivateConfigWrite");
+    expect(command).toContain("OpenDirectory");
+    expect(command).toContain("GetFileInformationByHandle");
+    expect(command).toContain("CreateFile(path, 0x00000080, 0x00000003");
+    expect(command).toContain("0x02200000");
+    expect(command).toContain("FileMode]::CreateNew");
+    expect(command).toContain("FileSystemRights]::FullControl");
+    expect(command).toContain("FileShare]::None");
+    expect(command).toContain("FileOptions]::WriteThrough");
+    expect(command).toContain("[Console]::OpenStandardInput()");
+    expect(command).toContain("$stream.Flush($true)");
+    expect(command).toContain("[System.IO.File]::Move($temporaryPath, $path)");
+    expect(command).toContain("Test-MiftahHeldPath");
+    expect(command).not.toContain("0x00000007");
+    expect(args?.[4].length).toBeLessThanOrEqual(30_000);
+  });
+
+  it("reports an existing configuration file without falling back to a pathname write", async () => {
+    const child = createWritableChild();
+    windowsAclMocks.spawn.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", 2));
+      return child;
+    });
+
+    await expect(writeWindowsPrivateConfigFile("C:\\Users\\miftah\\miftah.json", "{}\n")).resolves.toBe("exists");
   });
 
   it("creates and verifies a current-user-only private directory before returning", async () => {

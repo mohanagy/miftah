@@ -1,12 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const aclMocks = vi.hoisted(() => ({
   createPrivateDirectory: vi.fn<(directory: string) => Promise<boolean>>(),
   createPrivateDirectoryInParent: vi.fn<(parent: string, directory: string) => Promise<boolean>>(),
   secureFile: vi.fn<(path: string) => Promise<boolean>>(),
+  writePrivateFile: vi.fn<(path: string, content: string | Uint8Array) => Promise<"written" | "exists" | "failed">>(),
   verifyPath: vi.fn<(path: string, kind: "file" | "directory") => Promise<boolean>>(),
   verifyPaths: vi.fn<(paths: readonly { readonly path: string; readonly kind: "file" | "directory" }[]) => Promise<boolean>>()
 }));
@@ -15,6 +16,7 @@ vi.mock("../src/cli/windows-config-acl.js", () => ({
   createWindowsPrivateDirectory: aclMocks.createPrivateDirectory,
   createWindowsPrivateDirectoryInPrivateParent: aclMocks.createPrivateDirectoryInParent,
   secureWindowsConfigFile: aclMocks.secureFile,
+  writeWindowsPrivateConfigFile: aclMocks.writePrivateFile,
   verifyWindowsConfigPathSecurity: aclMocks.verifyPath,
   verifyWindowsConfigPathsSecurity: aclMocks.verifyPaths
 }));
@@ -30,7 +32,9 @@ vi.mock("../src/oauth/local-lock.js", () => ({
 }));
 
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
+import { AuditTrail } from "../src/audit/audit-trail.js";
 import { FileSetupDraftStore } from "../src/setup/setup-draft.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const temporaryDirectories: string[] = [];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -40,6 +44,18 @@ beforeEach(() => {
   aclMocks.verifyPath.mockResolvedValue(true);
   aclMocks.verifyPaths.mockResolvedValue(true);
   aclMocks.secureFile.mockResolvedValue(true);
+  aclMocks.writePrivateFile.mockImplementation(async (path, content) => {
+    try {
+      const directory = await lstat(dirname(path));
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return "failed";
+      await writeFile(path, content, { flag: "wx", mode: 0o600 });
+      return "written";
+    } catch (error) {
+      return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST"
+        ? "exists"
+        : "failed";
+    }
+  });
   aclMocks.createPrivateDirectory.mockImplementation(async (directory) => {
     try {
       await mkdir(directory);
@@ -63,8 +79,10 @@ afterEach(async () => {
   aclMocks.createPrivateDirectory.mockReset();
   aclMocks.createPrivateDirectoryInParent.mockReset();
   aclMocks.secureFile.mockReset();
+  aclMocks.writePrivateFile.mockReset();
   aclMocks.verifyPath.mockReset();
   aclMocks.verifyPaths.mockReset();
+  vi.restoreAllMocks();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -92,7 +110,7 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, expect.stringMatching(/[/\\]miftah$/u), "directory");
     expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
     expect(aclMocks.verifyPaths).not.toHaveBeenCalled();
-    expect(aclMocks.secureFile).toHaveBeenCalledWith(configPath);
+    expect(aclMocks.writePrivateFile).toHaveBeenCalledWith(configPath, expect.any(String));
   });
 
   it("fails closed if a created config directory becomes a symlink before the first write", async () => {
@@ -124,6 +142,34 @@ describe("Console Windows first-run boundary", () => {
     })).rejects.toMatchObject({ code: "CONFIG_CREATE_FAILED" });
 
     expect(swapStage).toBe("symlinked");
+    await expect(readFile(join(redirectedDirectory, "miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not write through a config directory replaced after the audit preflight", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-post-audit-swap-"));
+    temporaryDirectories.push(parent);
+    const configDirectory = join(parent, "miftah");
+    const redirectedDirectory = join(parent, "redirected");
+    const configPath = join(configDirectory, "miftah.json");
+    await mkdir(redirectedDirectory);
+    const originalEnsureWritable = AuditTrail.prototype.ensureWritable;
+    vi.spyOn(AuditTrail.prototype, "ensureWritable").mockImplementationOnce(async function(this: AuditTrail) {
+      await originalEnsureWritable.call(this);
+      await rm(configDirectory, { recursive: true });
+      await symlink(redirectedDirectory, configDirectory);
+    });
+    const service = new ConsoleDashboardApplicationService({ configDirectory, defaultConfigPath: configPath });
+
+    await expect(service.onboardNativeOAuth({
+      name: "first-run",
+      profile: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    })).rejects.toMatchObject({ code: "CONFIG_CREATE_FAILED" });
+
+    expect(aclMocks.writePrivateFile).toHaveBeenCalledWith(configPath, expect.any(String));
     await expect(readFile(join(redirectedDirectory, "miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -165,15 +211,20 @@ describe("Console Windows first-run boundary", () => {
     aclMocks.verifyPaths.mockResolvedValue(false);
     const service = new ConsoleDashboardApplicationService({ configDirectory, defaultConfigPath: configPath });
 
-    await expect(service.onboardNativeOAuth({
+    const failure = await service.onboardNativeOAuth({
       name: "first-run",
       profile: "default",
       resource: "https://mcp.example.test/mcp",
       issuer: "https://auth.example.test",
       clientRegistration: "dynamic",
       scopes: ["openid"]
-    })).rejects.toMatchObject({ code: "CONFIG_CREATE_FAILED" });
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
 
+    expect(failure).toMatchObject({ code: "CONFIG_CREATE_FAILED" });
+    expect((failure as MiftahError).details?.cause).toBeInstanceOf(Error);
     await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -234,7 +285,8 @@ describe("Console Windows first-run boundary", () => {
 
     expect(aclMocks.createPrivateDirectory).not.toHaveBeenCalled();
     expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledTimes(2);
-    expect(aclMocks.secureFile).toHaveBeenCalledTimes(2);
+    expect(aclMocks.secureFile).toHaveBeenCalledOnce();
+    expect(aclMocks.writePrivateFile).toHaveBeenCalledOnce();
     expect(aclMocks.verifyPath).toHaveBeenCalledTimes(5);
     expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(3);
   });
@@ -256,10 +308,11 @@ describe("Console Windows first-run boundary", () => {
       throw new Error("Expected the first-run service to expose the configured setup-draft capability.");
     }
 
-    const snapshot = (): Readonly<Record<"create" | "createInParent" | "secure" | "verify" | "verifyBatch", number>> => ({
+    const snapshot = (): Readonly<Record<"create" | "createInParent" | "secure" | "write" | "verify" | "verifyBatch", number>> => ({
       create: aclMocks.createPrivateDirectory.mock.calls.length,
       createInParent: aclMocks.createPrivateDirectoryInParent.mock.calls.length,
       secure: aclMocks.secureFile.mock.calls.length,
+      write: aclMocks.writePrivateFile.mock.calls.length,
       verify: aclMocks.verifyPath.mock.calls.length,
       verifyBatch: aclMocks.verifyPaths.mock.calls.length
     });
@@ -288,11 +341,11 @@ describe("Console Windows first-run boundary", () => {
     const afterConfiguredRead = snapshot();
 
     expect({ afterSave, afterLoad, afterPublication, afterDraftRead, afterConfiguredRead }).toEqual({
-      afterSave: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 0 },
-      afterLoad: { create: 0, createInParent: 1, secure: 1, verify: 0, verifyBatch: 1 },
-      afterPublication: { create: 0, createInParent: 2, secure: 2, verify: 3, verifyBatch: 2 },
-      afterDraftRead: { create: 0, createInParent: 2, secure: 2, verify: 3, verifyBatch: 3 },
-      afterConfiguredRead: { create: 0, createInParent: 2, secure: 2, verify: 5, verifyBatch: 3 }
+      afterSave: { create: 0, createInParent: 1, secure: 1, write: 0, verify: 0, verifyBatch: 0 },
+      afterLoad: { create: 0, createInParent: 1, secure: 1, write: 0, verify: 0, verifyBatch: 1 },
+      afterPublication: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 3, verifyBatch: 2 },
+      afterDraftRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 3, verifyBatch: 3 },
+      afterConfiguredRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 5, verifyBatch: 3 }
     });
   });
 

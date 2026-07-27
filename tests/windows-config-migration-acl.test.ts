@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
 import {
   createWindowsPrivateDirectoryInPrivateParent,
-  verifyWindowsConfigPathSecurity
+  verifyWindowsConfigPathSecurity,
+  writeWindowsPrivateConfigFile
 } from "../src/cli/windows-config-acl.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
@@ -498,6 +499,26 @@ async function windowsCopyFileSecurityProbe(
 }
 
 describe("Windows migration ACL contract", () => {
+  it.runIf(process.platform === "win32")(
+    "streams an exact first-run config through the held private directory chain",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "miftah-windows-private-first-run-write-"));
+      temporaryDirectories.push(root);
+      const privateParent = join(root, "private-parent");
+      const directory = join(privateParent, "miftah");
+      const path = join(directory, "miftah.json");
+      const content = "{\"version\":\"3\",\"name\":\"first-run\"}\n";
+      await windowsPrivateDirectoryProbe(privateParent);
+      await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, directory)).resolves.toBe(true);
+
+      await expect(writeWindowsPrivateConfigFile(path, content)).resolves.toBe("written");
+
+      await expect(readFile(path, "utf8")).resolves.toBe(content);
+      await expect(verifyWindowsConfigPathSecurity(path, "file")).resolves.toBe(true);
+    },
+    10_000
+  );
+
   it.runIf(process.platform === "win32")(
     "accepts a private child when only the terminal volume root grants DELETE",
     async () => {
