@@ -1728,7 +1728,7 @@ describe("local Console control server", () => {
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
     const configPath = join(directory, "miftah.json");
-    const draftStore = new FileSetupDraftStore({ directory: join(root, "setup-draft") });
+    const draftStore = new FileSetupDraftStore({ directory: join(privateParent, "setup-draft") });
     const server = await startConsoleServer(configPath, {
       bootstrapCredential: "test-only-bootstrap-credential",
       allowMissingConfig: true,

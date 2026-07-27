@@ -408,7 +408,7 @@ describe("Console dashboard application service", () => {
     const privateParent = await createPrivateConsoleDirectory(root);
     const directory = join(privateParent, "miftah");
     const configPath = join(directory, "miftah.json");
-    const draftStore = new FileSetupDraftStore({ directory: join(root, "setup-draft") });
+    const draftStore = new FileSetupDraftStore({ directory: join(privateParent, "setup-draft") });
     const service = new ConsoleDashboardApplicationService({
       defaultConfigPath: configPath,
       configDirectory: directory,
