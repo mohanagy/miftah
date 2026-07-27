@@ -254,14 +254,15 @@ function runWindowsAclCommand(launcher: string, request: string): Promise<boolea
 const aclCommand = String.raw`$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
 $accessSections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
-$directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+$dirSections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 $verifySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 function Test-MiftahPrivatePath {
   param(
     [string]$path,
     [string]$kind,
     [string]$expectedSddl = $null,
-    [bool]$requireProtected = $false
+    [bool]$requireProtected = $false,
+    [bool]$requireOwner = $true
   )
 
   if ($kind -ne 'file' -and $kind -ne 'directory') { return $false }
@@ -270,28 +271,28 @@ function Test-MiftahPrivatePath {
   $reparsePoint = [int][System.IO.FileAttributes]::ReparsePoint
   if ($kind -eq 'file') {
     $entry = [System.IO.FileInfo]::new($path)
+    $parent = $entry.Directory
     if (-not $entry.Exists) { return $false }
     if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
     $acl = [System.IO.File]::GetAccessControl($path, $verifySections)
   } else {
     $entry = [System.IO.DirectoryInfo]::new($path)
+    $parent = $entry.Parent
     if (-not $entry.Exists) { return $false }
     if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
     $acl = [System.IO.Directory]::GetAccessControl($path, $verifySections)
   }
   $entry.Refresh()
+  $trusted = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
   $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-  if ($null -eq $owner -or $owner.Value -cne $identity.Value) { return $false }
+  if ($null -eq $owner -or -not ($trusted -ccontains $owner.Value) -or ($requireOwner -and $owner.Value -cne $identity.Value)) { return $false }
   $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
   if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical) { return $false }
   if ($requireProtected -and -not $acl.AreAccessRulesProtected) { return $false }
-  if ($expectedSddl.Length -gt 0 -and $acl.GetSecurityDescriptorSddlForm($directorySections) -ne $expectedSddl) { return $false }
+  if ($expectedSddl.Length -gt 0 -and $acl.GetSecurityDescriptorSddlForm($dirSections) -ne $expectedSddl) { return $false }
   if (([int]$entry.Attributes -band $reparsePoint) -ne 0) { return $false }
-  # OWNER RIGHTS applies only to the owner. CREATOR OWNER/GROUP are safe only
-  # on inherit-only ACEs, where they have no access to this entry itself.
-  $trustedSids = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
-  $creatorOwnerSid = 'S-1-3-0'
-  $creatorGroupSid = 'S-1-3-1'
+  $creatorOwner = 'S-1-3-0'
+  $creatorGroup = 'S-1-3-1'
   $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
   $restrictedRights = if ($kind -eq 'file') {
     [int](
@@ -322,12 +323,23 @@ function Test-MiftahPrivatePath {
   if ($rules.Count -eq 0) { return $false }
   foreach ($rule in $rules) {
     if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-    if ($trustedSids -ccontains $rule.IdentityReference.Value) { continue }
+    if ($trusted -ccontains $rule.IdentityReference.Value) { continue }
     if (
-      ($rule.IdentityReference.Value -ceq $creatorOwnerSid -or $rule.IdentityReference.Value -ceq $creatorGroupSid) -and
+      ($rule.IdentityReference.Value -ceq $creatorOwner -or $rule.IdentityReference.Value -ceq $creatorGroup) -and
       (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)
     ) { continue }
     if (([int]$rule.FileSystemRights -band $restrictedRights) -ne 0) { return $false }
+  }
+  if ($requireOwner -and -not (Test-MiftahAncestors $parent)) { return $false }
+  return $true
+}
+function Test-MiftahAncestors {
+  param($ancestor)
+  while ($null -ne $ancestor) {
+    if(-not(Test-MiftahPrivatePath $ancestor.FullName 'directory' $null $false $false)){return $false}
+    $next = $ancestor.Parent
+    if($null -eq $next -or $next.FullName -ceq $ancestor.FullName){break}
+    $ancestor = $next
   }
   return $true
 }
@@ -444,7 +456,7 @@ try {
       [System.Security.AccessControl.AccessControlType]::Allow
     )
     $security.SetAccessRule($rule)
-    $expected = $security.GetSecurityDescriptorSddlForm($directorySections)
+    $expected = $security.GetSecurityDescriptorSddlForm($dirSections)
     $directory.Create($security)
     if (-not (Test-MiftahPrivatePath $directory 'directory' $expected $true)) { exit 1 }
     exit 0

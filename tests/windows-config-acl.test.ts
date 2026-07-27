@@ -201,6 +201,25 @@ describe("Windows migration ACL boundary", () => {
     expect(command).toContain("Test-MiftahPrivatePath $directory 'directory' $expected $true");
   });
 
+  it("requires a trusted non-mutable ancestor chain before accepting a private path", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateDirectoryInPrivateParent(
+      "C:\\Users\\miftah\\.config",
+      "C:\\Users\\miftah\\.config\\miftah"
+    )).resolves.toBe(true);
+
+    const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
+    expect(command).toContain("function Test-MiftahAncestors");
+    expect(command).toContain("Test-MiftahPrivatePath $ancestor.FullName 'directory' $null $false $false");
+    expect(command).toContain("Test-MiftahAncestors $parent");
+  });
+
   it("keeps the encoded ACL helper below the conservative Windows command-line budget", async () => {
     windowsAclMocks.spawn.mockImplementation(() => {
       const child = createChild();

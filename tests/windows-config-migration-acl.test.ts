@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
-import { verifyWindowsConfigPathSecurity } from "../src/cli/windows-config-acl.js";
+import {
+  createWindowsPrivateDirectoryInPrivateParent,
+  verifyWindowsConfigPathSecurity
+} from "../src/cli/windows-config-acl.js";
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
@@ -99,6 +102,27 @@ try {
 
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 const encodedHangingAclProbe = Buffer.from("Start-Sleep -Seconds 10", "utf16le").toString("base64");
+
+const unsafeAncestorProbe = String.raw`$ErrorActionPreference = 'Stop'
+$requestName = '${privateDirectoryRequestEnvironmentName}'
+try {
+  $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
+  $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
+  if ([string]::IsNullOrEmpty($path)) { exit 1 }
+  $security = [System.IO.Directory]::GetAccessControl($path)
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'),
+    [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles,
+    [System.Security.AccessControl.AccessControlType]::Allow
+  )
+  $security.AddAccessRule($rule)
+  [System.IO.Directory]::SetAccessControl($path, $security)
+  exit 0
+} catch {
+  exit 1
+}`;
+const encodedUnsafeAncestorProbe = Buffer.from(unsafeAncestorProbe, "utf16le").toString("base64");
 
 const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP')
 $ErrorActionPreference = 'Stop'
@@ -398,6 +422,37 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
   });
 }
 
+async function grantUntrustedAncestorMutation(directory: string): Promise<void> {
+  const request = Buffer.from(directory, "utf8").toString("base64");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      trustedPowerShellExecutable(),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedUnsafeAncestorProbe],
+      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: "ignore" }
+    );
+    const timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // The test probe has no verified result after its bounded execution time.
+      }
+      reject(new Error("Windows unsafe-ancestor ACL probe timed out"));
+    }, 5_000);
+    child.once("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Windows unsafe-ancestor ACL probe could not start"));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error("Windows unsafe-ancestor ACL probe failed"));
+    });
+  });
+}
+
 async function windowsCopyFileSecurityProbe(
   source: string,
   target: string,
@@ -443,6 +498,23 @@ async function windowsCopyFileSecurityProbe(
 }
 
 describe("Windows migration ACL contract", () => {
+  it.runIf(process.platform === "win32")(
+    "rejects a private child whose grandparent lets untrusted users replace its parent",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "miftah-windows-unsafe-ancestor-"));
+      temporaryDirectories.push(root);
+      const unsafeGrandparent = join(root, "unsafe-grandparent");
+      const privateParent = join(unsafeGrandparent, "private-parent");
+      const child = join(privateParent, "miftah");
+      await mkdir(unsafeGrandparent);
+      await grantUntrustedAncestorMutation(unsafeGrandparent);
+      await windowsPrivateDirectoryProbe(privateParent);
+
+      await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, child)).resolves.toBe(false);
+    },
+    10_000
+  );
+
   it.runIf(process.platform === "win32")(
     "creates a private migration directory under the production ACL environment",
     async () => {
