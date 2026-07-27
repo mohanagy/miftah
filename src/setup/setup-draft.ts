@@ -249,7 +249,10 @@ function sameFileIdentity(left: Pick<BigIntStats, "dev" | "ino">, right: Pick<Bi
 }
 
 /** Validates the private draft directory without following a final symlink. */
-async function privateDirectoryMetadata(path: string): Promise<BigIntStats | undefined> {
+async function privateDirectoryMetadata(
+  path: string,
+  verifyWindowsAcl: boolean = true
+): Promise<BigIntStats | undefined> {
   let metadata: BigIntStats;
   try {
     metadata = await lstat(path, { bigint: true });
@@ -259,7 +262,7 @@ async function privateDirectoryMetadata(path: string): Promise<BigIntStats | und
   }
   if (!metadata.isDirectory() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) setupDraftUnavailable();
   if (process.platform === "win32") {
-    if (!(await verifyWindowsConfigPathSecurity(path, "directory"))) setupDraftUnavailable();
+    if (verifyWindowsAcl && !(await verifyWindowsConfigPathSecurity(path, "directory"))) setupDraftUnavailable();
   } else if ((Number(metadata.mode) & 0o077) !== 0) {
     setupDraftUnavailable();
   }
@@ -267,7 +270,7 @@ async function privateDirectoryMetadata(path: string): Promise<BigIntStats | und
 }
 
 /** Returns the current secure file identity without following symlinks. */
-async function privateFileMetadata(path: string): Promise<BigIntStats | undefined> {
+async function privateFileMetadata(path: string, verifyWindowsAcl: boolean = true): Promise<BigIntStats | undefined> {
   let metadata: BigIntStats;
   try {
     metadata = await lstat(path, { bigint: true });
@@ -277,7 +280,7 @@ async function privateFileMetadata(path: string): Promise<BigIntStats | undefine
   }
   if (!metadata.isFile() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) setupDraftUnavailable();
   if (process.platform === "win32") {
-    if (!(await verifyWindowsConfigPathSecurity(path, "file"))) setupDraftUnavailable();
+    if (verifyWindowsAcl && !(await verifyWindowsConfigPathSecurity(path, "file"))) setupDraftUnavailable();
   } else if ((Number(metadata.mode) & 0o077) !== 0) {
     setupDraftUnavailable();
   }
@@ -304,7 +307,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
     const normalized = normalizeInput(input);
     if (expectedRevision !== undefined && !validExpectedRevision(expectedRevision)) setupDraftInputInvalid();
     return this.withLock(async () => {
-      const existing = await this.loadUnchecked();
+      const existing = await this.loadUnchecked(true);
       if (expectedRevision !== undefined && expectedRevision !== (existing?.revision ?? 0)) {
         setupDraftConflict();
       }
@@ -324,7 +327,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
   async discard(expectedRevision: number): Promise<void> {
     if (!validRevision(expectedRevision)) setupDraftInputInvalid();
     await this.withLock(async () => {
-      const existing = await this.loadUnchecked();
+      const existing = await this.loadUnchecked(true);
       if (existing === undefined) return;
       if (existing.revision !== expectedRevision) setupDraftConflict();
       try {
@@ -345,8 +348,8 @@ export class FileSetupDraftStore implements SetupDraftStore {
     }
   }
 
-  private async loadUnchecked(): Promise<SetupDraft | undefined> {
-    if (await privateDirectoryMetadata(this.directory) === undefined) return undefined;
+  private async loadUnchecked(directoryAlreadyVerified: boolean = false): Promise<SetupDraft | undefined> {
+    if (await privateDirectoryMetadata(this.directory, !directoryAlreadyVerified) === undefined) return undefined;
     const observed = await privateFileMetadata(this.path);
     if (observed === undefined) return undefined;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -355,7 +358,10 @@ export class FileSetupDraftStore implements SetupDraftStore {
     try {
       handle = await open(this.path, readOnlyFlags);
       const opened = await handle.stat({ bigint: true });
-      const afterOpen = await privateFileMetadata(this.path);
+      // The initial full ACL check establishes that untrusted principals cannot
+      // replace this file. Retain the lstat identity checks below to catch any
+      // pathname swap without spawning another Windows verifier per read step.
+      const afterOpen = await privateFileMetadata(this.path, false);
       if (
         afterOpen === undefined ||
         !sameFileIdentity(observed, opened) ||
@@ -369,7 +375,7 @@ export class FileSetupDraftStore implements SetupDraftStore {
       if (bytesRead > maximumDraftBytes) setupDraftInvalid();
       const bytes = boundedBytes.subarray(0, bytesRead);
       const afterRead = await handle.stat({ bigint: true });
-      const afterReadPath = await privateFileMetadata(this.path);
+      const afterReadPath = await privateFileMetadata(this.path, false);
       if (
         afterReadPath === undefined ||
         !sameFileIdentity(opened, afterRead) ||

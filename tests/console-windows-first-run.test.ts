@@ -112,4 +112,24 @@ describe("Console Windows first-run boundary", () => {
     await expect(store.discard(draft.revision)).resolves.toBeUndefined();
     expect(aclMocks.createPrivateDirectory).toHaveBeenCalledTimes(1);
   });
+
+  it("checks each stable setup-draft path ACL once before retaining its opened identity", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-setup-draft-windows-read-"));
+    temporaryDirectories.push(parent);
+    const directory = join(parent, "setup-draft");
+    const store = new FileSetupDraftStore({ directory });
+    const draft = await store.save({
+      source: "connector",
+      name: "posthog-work",
+      preset: "generic",
+      stage: "connection"
+    });
+    aclMocks.verifyPath.mockClear();
+
+    await expect(store.load()).resolves.toEqual(draft);
+
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, directory, "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/setup-draft-v1\.json$/u), "file");
+  });
 });
