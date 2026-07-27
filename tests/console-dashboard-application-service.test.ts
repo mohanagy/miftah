@@ -440,6 +440,23 @@ describe("Console dashboard application service", () => {
     await expect(loadSetupDraft()).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_SELECTION_REQUIRED" });
   });
 
+  it.runIf(process.platform === "win32")("cleans up a real first-run connector draft without configuration publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-cleanup-boundary-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root);
+    const draftStore = new FileSetupDraftStore({ directory: join(privateParent, "setup-draft") });
+
+    const saved = await draftStore.save({
+      source: "connector",
+      name: "support-tools",
+      preset: "generic",
+      stage: "connection"
+    });
+    await expect(draftStore.load()).resolves.toEqual(saved);
+    await expect(draftStore.discard(saved.revision)).resolves.toBeUndefined();
+    await expect(draftStore.load()).resolves.toBeUndefined();
+  });
+
   it("keeps a published first-run configuration when cached draft cleanup conflicts", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-draft-cleanup-"));
     temporaryDirectories.push(root);
