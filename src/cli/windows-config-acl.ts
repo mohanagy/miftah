@@ -414,40 +414,21 @@ try {
     exit 0
   }
 
-  if ($fields.Count -eq 2 -and $fields[0] -eq 'create-private-directory') {
-    $directory = [System.IO.DirectoryInfo]::new($fields[1])
-    if ($directory.Exists) { exit 1 }
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    if ($null -eq $identity) { exit 1 }
-    $security = [System.Security.AccessControl.DirectorySecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $security.SetOwner($identity)
-    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-      $identity,
-      [System.Security.AccessControl.FileSystemRights]::FullControl,
-      [System.Security.AccessControl.InheritanceFlags]$inheritance,
-      [System.Security.AccessControl.PropagationFlags]::None,
-      [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    $security.SetAccessRule($rule)
-    $expected = $security.GetSecurityDescriptorSddlForm($directorySections)
-    $directory.Create($security)
-    if (-not (Test-MiftahPrivatePath $directory 'directory' $expected $true)) { exit 1 }
-    exit 0
-  }
-
-  if ($fields.Count -eq 3 -and $fields[0] -eq 'create-private-directory-in-private-parent') {
-    $parent = [System.IO.DirectoryInfo]::new($fields[1])
-    $directory = [System.IO.DirectoryInfo]::new($fields[2])
-    $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-    $parentPath = [System.IO.Path]::GetFullPath($parent.FullName).TrimEnd($trimCharacters)
-    $directoryPath = [System.IO.Path]::GetFullPath($directory.FullName)
-    $directoryParent = [System.IO.Path]::GetDirectoryName($directoryPath)
-    if ([string]::IsNullOrEmpty($directoryParent)) { exit 1 }
-    $directoryParent = $directoryParent.TrimEnd($trimCharacters)
-    if (-not [string]::Equals($parentPath, $directoryParent, [System.StringComparison]::OrdinalIgnoreCase)) { exit 1 }
-    if (-not (Test-MiftahPrivatePath $parent 'directory')) { exit 1 }
+  if (
+    ($fields.Count -eq 2 -and $fields[0] -eq 'create-private-directory') -or
+    ($fields.Count -eq 3 -and $fields[0] -eq 'create-private-directory-in-private-parent')
+  ) {
+    $parentBound = $fields[0] -eq 'create-private-directory-in-private-parent'
+    $directory = [System.IO.DirectoryInfo]::new($fields[($fields.Count - 1)])
+    if ($parentBound) {
+      $parent = [System.IO.DirectoryInfo]::new($fields[1])
+      $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+      $parentPath = [System.IO.Path]::GetFullPath($parent.FullName).TrimEnd($trimCharacters)
+      $directoryParent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($directory.FullName))
+      if ([string]::IsNullOrEmpty($directoryParent)) { exit 1 }
+      if (-not [string]::Equals($parentPath, $directoryParent.TrimEnd($trimCharacters), [System.StringComparison]::OrdinalIgnoreCase)) { exit 1 }
+      if (-not (Test-MiftahPrivatePath $parent 'directory')) { exit 1 }
+    }
     if ($directory.Exists) { exit 1 }
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     if ($null -eq $identity) { exit 1 }

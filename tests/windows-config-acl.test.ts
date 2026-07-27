@@ -196,9 +196,27 @@ describe("Windows migration ACL boundary", () => {
     );
     const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
     expect(command).toContain("create-private-directory-in-private-parent");
-    expect(command).toContain("GetDirectoryName($directoryPath)");
+    expect(command).toContain("GetDirectoryName([System.IO.Path]::GetFullPath($directory.FullName))");
     expect(command).toContain("Test-MiftahPrivatePath $parent 'directory'");
     expect(command).toContain("Test-MiftahPrivatePath $directory 'directory' $expected $true");
+  });
+
+  it("keeps the encoded ACL helper below the conservative Windows command-line budget", async () => {
+    windowsAclMocks.spawn.mockImplementation(() => {
+      const child = createChild();
+      queueMicrotask(() => child.emit("close", 0));
+      return child;
+    });
+
+    await expect(createWindowsPrivateDirectoryInPrivateParent(
+      "C:\\Users\\miftah\\.config",
+      "C:\\Users\\miftah\\.config\\miftah"
+    )).resolves.toBe(true);
+
+    const [, args] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    // `-EncodedCommand` consumes most of the CreateProcess command line by
+    // itself. Keep room for the absolute System32 launcher and fixed flags.
+    expect(args?.[4].length).toBeLessThanOrEqual(30_000);
   });
 
   it("fails closed before launch when the parent-checked directory request contains a NUL byte", async () => {
