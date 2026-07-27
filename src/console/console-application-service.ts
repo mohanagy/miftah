@@ -426,8 +426,12 @@ async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> 
     if (!(await verifyWindowsConfigPathSecurity(parent, "directory"))) {
       throw new Error("unsafe configuration parent directory");
     }
-    await createWindowsPrivateDirectory(directory);
-    if (!(await verifyWindowsConfigPathSecurity(directory, "directory"))) {
+    const created = await createWindowsPrivateDirectory(directory);
+    // The trusted creator applies and verifies the private owner/DACL/reparse
+    // boundary before it reports success. A failed exclusive create may be a
+    // safe concurrent Miftah creation, so only that path needs an independent
+    // verifier before it can be accepted.
+    if (!created && !(await verifyWindowsConfigPathSecurity(directory, "directory"))) {
       throw new Error("unsafe configuration directory");
     }
   } catch (error) {

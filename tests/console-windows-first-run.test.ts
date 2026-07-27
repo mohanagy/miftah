@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 describe("Console Windows first-run boundary", () => {
-  it("creates and verifies the standard config directory before writing the first configuration", async () => {
+  it("reuses the trusted creator verification for a newly created config directory", async () => {
     const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-"));
     temporaryDirectories.push(parent);
     const configDirectory = join(parent, "miftah");
@@ -71,9 +71,40 @@ describe("Console Windows first-run boundary", () => {
     })).resolves.toMatchObject({ changed: true, write: true });
 
     expect(aclMocks.createPrivateDirectory).toHaveBeenCalledWith(configDirectory);
-    expect(aclMocks.verifyPath).toHaveBeenCalledWith(configDirectory, "directory");
+    // Catalog discovery independently verifies the created configuration after
+    // publication. The creator must not add a second directory probe before it.
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(3);
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, parent, "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah$/u), "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(3, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
     expect(aclMocks.secureFile).toHaveBeenCalledWith(configPath);
-    expect(aclMocks.verifyPath).toHaveBeenCalledWith(expect.stringMatching(/[/\\]miftah\.json$/u), "file");
+  });
+
+  it("fully verifies a first-run config directory created by another Windows process", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-race-"));
+    temporaryDirectories.push(parent);
+    const configDirectory = join(parent, "miftah");
+    const configPath = join(configDirectory, "miftah.json");
+    aclMocks.createPrivateDirectory.mockImplementationOnce(async (directory) => {
+      await mkdir(directory);
+      return false;
+    });
+    const service = new ConsoleDashboardApplicationService({ configDirectory, defaultConfigPath: configPath });
+
+    await expect(service.onboardNativeOAuth({
+      name: "first-run",
+      profile: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    })).resolves.toMatchObject({ changed: true, write: true });
+
+    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(4);
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, parent, "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, configDirectory, "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(3, expect.stringMatching(/[/\\]miftah$/u), "directory");
+    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(4, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
   });
 
   it("fails closed before audit or config creation when the standard directory cannot be verified", async () => {
