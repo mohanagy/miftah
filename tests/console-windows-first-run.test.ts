@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +93,38 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
     expect(aclMocks.verifyPaths).not.toHaveBeenCalled();
     expect(aclMocks.secureFile).toHaveBeenCalledWith(configPath);
+  });
+
+  it("fails closed if a created config directory becomes a symlink before the first write", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "miftah-console-windows-first-run-swap-"));
+    temporaryDirectories.push(parent);
+    const configDirectory = join(parent, "miftah");
+    const redirectedDirectory = join(parent, "redirected");
+    const configPath = join(configDirectory, "miftah.json");
+    let swapStage = "not-started";
+    await mkdir(redirectedDirectory);
+    aclMocks.createPrivateDirectoryInParent.mockImplementationOnce(async (_parent, directory) => {
+      await mkdir(directory);
+      swapStage = "created";
+      await rm(directory, { recursive: true });
+      swapStage = "removed";
+      await symlink(redirectedDirectory, directory);
+      swapStage = "symlinked";
+      return true;
+    });
+    const service = new ConsoleDashboardApplicationService({ configDirectory, defaultConfigPath: configPath });
+
+    await expect(service.onboardNativeOAuth({
+      name: "first-run",
+      profile: "default",
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: ["openid"]
+    })).rejects.toMatchObject({ code: "CONFIG_CREATE_FAILED" });
+
+    expect(swapStage).toBe("symlinked");
+    await expect(readFile(join(redirectedDirectory, "miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fully verifies a first-run config directory created by another Windows process", async () => {

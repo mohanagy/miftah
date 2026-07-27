@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
@@ -414,6 +414,19 @@ export function consoleAuditPath(configPath: string): string {
   return join(dirname(resolvePath(configPath)), ".miftah", "audit", "console.jsonl");
 }
 
+/**
+ * Rechecks the just-created final directory without following a replacement
+ * symlink before the first pathname-based configuration write.
+ */
+async function isStableWindowsCreatedDirectory(directory: string): Promise<boolean> {
+  try {
+    const metadata = await lstat(directory);
+    return metadata.isDirectory() && !metadata.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> {
   const directory = dirname(resolvePath(configPath));
   try {
@@ -425,9 +438,14 @@ async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> 
     await mkdir(parent, { recursive: true, mode: 0o700 });
     const created = await createWindowsPrivateDirectoryInPrivateParent(parent, directory);
     // The trusted creator applies and verifies the private owner/DACL/reparse
-    // boundary, including its parent, before it reports success. A failed
+    // boundary, including its parent, before it reports success. Retain a
+    // no-follow metadata check before the first pathname-based write so a
+    // replacement directory cannot turn into a reparse point in that gap. A failed
     // exclusive create may be a safe concurrent Miftah creation, so both path
     // components need an independent verifier before that race is accepted.
+    if (created && !(await isStableWindowsCreatedDirectory(directory))) {
+      throw new Error("created configuration directory changed before first write");
+    }
     if (!created && !(await verifyWindowsConfigPathsSecurity([
       { path: parent, kind: "directory" },
       { path: directory, kind: "directory" }
