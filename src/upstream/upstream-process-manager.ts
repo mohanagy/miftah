@@ -453,6 +453,12 @@ export class UpstreamProcessManager {
       const closeSignal = createCloseSignal();
       managedTransport.onclose = () => {
         closeSignal.resolve();
+        // A bounded close may already have returned while this verified close
+        // callback was flowing through the progress-preserving wrapper. Settle
+        // any deferred local teardown synchronously at this boundary so a
+        // caller cannot observe a dead process tree while its limiter slot is
+        // still held by a later promise microtask.
+        this.completeClosedDeferredTeardowns(profile);
         this.handleTransportClosed(profile, token, generation);
       };
       return closeSignal;
@@ -1159,16 +1165,29 @@ export class UpstreamProcessManager {
   /** Holds profile capacity until every timed-out local transport has actually closed. */
   private deferTeardown(profile: string, teardown: PendingTeardown): void {
     void Promise.all(teardown.signals.map((signal) => signal.promise)).then(() => {
-      if (!this.completeTeardown(profile, teardown)) return;
-      const activeReplacement = this.sessions.has(profile) || this.starts.has(profile);
-      if (!activeReplacement) this.releaseProfileCapacity(profile);
-      if (this.closed || activeReplacement || this.hasPendingTeardown(profile)) return;
-      this.setProcessState(profile, "stopped", {
-        pid: null,
-        resetCapabilities: true,
-        lastStopReason: teardown.reason
-      });
+      this.completeDeferredTeardown(profile, teardown);
     });
+  }
+
+  /** Completes one deferred teardown only after every protected local transport has closed. */
+  private completeDeferredTeardown(profile: string, teardown: PendingTeardown): void {
+    if (!this.completeTeardown(profile, teardown)) return;
+    const activeReplacement = this.sessions.has(profile) || this.starts.has(profile);
+    if (!activeReplacement) this.releaseProfileCapacity(profile);
+    if (this.closed || activeReplacement || this.hasPendingTeardown(profile)) return;
+    this.setProcessState(profile, "stopped", {
+      pid: null,
+      resetCapabilities: true,
+      lastStopReason: teardown.reason
+    });
+  }
+
+  /** Completes already-verified deferred teardowns before another event-loop turn can acquire capacity. */
+  private completeClosedDeferredTeardowns(profile: string): void {
+    for (const teardown of [...(this.pendingTeardowns.get(profile) ?? [])]) {
+      if (!teardown.blocksReplacement || !this.teardownIsComplete(teardown)) continue;
+      this.completeDeferredTeardown(profile, teardown);
+    }
   }
 
   /** Forcibly closes a transport without exceeding the configured shutdown bound. */

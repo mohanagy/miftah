@@ -1052,6 +1052,80 @@ describe("upstream process manager", () => {
     }
   });
 
+  it("releases a deferred contained teardown at its verified public close boundary", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-contained-close-boundary-"));
+    const descendantPidPath = join(directory, "descendant-pid");
+    const personalStartCountPath = join(directory, "personal-starts");
+    const originalStart = ContainedStdioClientTransport.prototype.start;
+    const originalForceTerminate = ContainedStdioClientTransport.prototype.forceTerminate;
+    let descendantPid: number | undefined;
+    let releaseForce!: () => void;
+    let resolveForceRequested!: () => void;
+    let resolveContainedClose!: () => void;
+    const forceGate = new Promise<void>((resolve) => {
+      releaseForce = resolve;
+    });
+    const forceRequested = new Promise<void>((resolve) => {
+      resolveForceRequested = resolve;
+    });
+    const containedClose = new Promise<void>((resolve) => {
+      resolveContainedClose = resolve;
+    });
+    let observedFirstTransport = false;
+    const start = vi.spyOn(ContainedStdioClientTransport.prototype, "start").mockImplementation(async function (
+      this: ContainedStdioClientTransport
+    ) {
+      await originalStart.call(this);
+      if (observedFirstTransport) return;
+      observedFirstTransport = true;
+      observeTransportClose(this, resolveContainedClose);
+    });
+    const forceTerminate = vi.spyOn(ContainedStdioClientTransport.prototype, "forceTerminate").mockImplementation(function (
+      this: ContainedStdioClientTransport
+    ) {
+      resolveForceRequested();
+      return forceGate.then(() => originalForceTerminate.call(this));
+    });
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [retainedStdioDescendantFixture],
+        env: { TEST_SHUTDOWN_DELAY_MS: "1000" }
+      },
+      {
+        work: { env: { TEST_RETAINED_STDIO_DESCENDANT_PID_PATH: descendantPidPath } },
+        personal: { args: [fixture], env: { TEST_START_COUNT_PATH: personalStartCountPath } }
+      },
+      { startupTimeoutMs: 1_000, shutdownTimeoutMs: 25, maxConcurrentProfiles: 1 }
+    );
+
+    try {
+      await manager.get("work");
+      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+
+      const closing = manager.closeProfile("work");
+      await forceRequested;
+      await closing;
+      releaseForce();
+      await containedClose;
+      descendantPid = undefined;
+
+      await expect(manager.get("personal")).resolves.toBeDefined();
+      expect(await countStarts(personalStartCountPath)).toBe(1);
+    } finally {
+      releaseForce();
+      if (descendantPid !== undefined && fixtureProcessIsAlive(descendantPid)) {
+        terminateFixtureProcess(descendantPid);
+      }
+      await manager.close().catch(() => undefined);
+      forceTerminate.mockRestore();
+      start.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("releases profile capacity when a second close follows contained stdio cleanup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-pending-stdio-capacity-"));
     const descendantPidPath = join(directory, "descendant-pid");
