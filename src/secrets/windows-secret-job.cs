@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 
 public static class MiftahSecretJob
@@ -9,6 +12,15 @@ public static class MiftahSecretJob
     private const int MaximumArgumentCount = 128;
     private const string RequestEnvironmentName = "MIFTAH_SECRET_RUNNER_REQUEST";
     private const string StandardInputEnvironmentName = "MIFTAH_SECRET_RUNNER_STDIN";
+    private const string PrivateConfigWriteRequestEnvironmentName = "MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST";
+    private const byte PrivateConfigWriteRequestVersion = 2;
+    private const uint FileReadAttributes = 0x00000080;
+    private const uint FileShareReadWrite = 0x00000003;
+    private const uint OpenExisting = 3;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileAttributeDirectory = 0x00000010;
+    private const uint FileAttributeReparsePoint = 0x00000400;
     private const uint JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint CreateNoWindow = 0x08000000;
@@ -27,6 +39,18 @@ public static class MiftahSecretJob
         {
             Executable = executable;
             Arguments = arguments;
+        }
+    }
+
+    private sealed class PrivateConfigWriteRequest
+    {
+        public readonly string Path;
+        public readonly long ByteLength;
+
+        public PrivateConfigWriteRequest(string path, long byteLength)
+        {
+            Path = path;
+            ByteLength = byteLength;
         }
     }
 
@@ -105,6 +129,21 @@ public static class MiftahSecretJob
         public uint dwThreadId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileInformation
+    {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateJobObjectW(IntPtr jobAttributes, string name);
 
@@ -124,6 +163,20 @@ public static class MiftahSecretJob
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(
+        string path,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandle(IntPtr handle, out FileInformation information);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
@@ -192,6 +245,11 @@ public static class MiftahSecretJob
 
     public static int Main(string[] arguments)
     {
+        if (arguments != null && arguments.Length == 1 &&
+            String.Equals(arguments[0], "--write-private-config", StringComparison.Ordinal))
+        {
+            return RunPrivateConfigWrite();
+        }
         if (arguments == null || arguments.Length != 0) return 1;
         try
         {
@@ -257,6 +315,250 @@ public static class MiftahSecretJob
         if (encodedStandardInput == null) return null;
         byte[] standardInput = Convert.FromBase64String(encodedStandardInput);
         return standardInput.Length <= MaximumRequestBytes ? standardInput : null;
+    }
+
+    private static int RunPrivateConfigWrite()
+    {
+        try
+        {
+            string encodedRequest = Environment.GetEnvironmentVariable(
+                PrivateConfigWriteRequestEnvironmentName,
+                EnvironmentVariableTarget.Process
+            );
+            Environment.SetEnvironmentVariable(
+                PrivateConfigWriteRequestEnvironmentName,
+                null,
+                EnvironmentVariableTarget.Process
+            );
+            PrivateConfigWriteRequest request = DecodePrivateConfigWriteRequest(encodedRequest);
+            return request == null ? 1 : WritePrivateConfigurationFile(request);
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private static PrivateConfigWriteRequest DecodePrivateConfigWriteRequest(string encodedRequest)
+    {
+        if (String.IsNullOrEmpty(encodedRequest)) return null;
+        byte[] payload = Convert.FromBase64String(encodedRequest);
+        if (payload.Length == 0 || payload.Length > MaximumRequestBytes) return null;
+        UTF8Encoding utf8 = new UTF8Encoding(false, true);
+        using (MemoryStream input = new MemoryStream(payload, false))
+        using (BinaryReader reader = new BinaryReader(input, utf8))
+        {
+            if (reader.ReadByte() != PrivateConfigWriteRequestVersion) return null;
+            string path = ReadString(reader, input, utf8);
+            if (String.IsNullOrEmpty(path) || path.IndexOf('\0') >= 0 || !Path.IsPathRooted(path)) return null;
+            long byteLength = reader.ReadInt64();
+            if (byteLength < 0 || input.Position != input.Length) return null;
+            return new PrivateConfigWriteRequest(Path.GetFullPath(path), byteLength);
+        }
+    }
+
+    private static int WritePrivateConfigurationFile(PrivateConfigWriteRequest request)
+    {
+        List<IntPtr> directoryHandles = new List<IntPtr>();
+        string temporaryPath = null;
+        bool temporaryCreated = false;
+        bool finalCreated = false;
+        FileStream stream = null;
+        int result = 1;
+        try
+        {
+            FileInfo target = new FileInfo(request.Path);
+            DirectoryInfo directory = target.Directory;
+            if (directory == null || String.IsNullOrEmpty(target.Name)) return 1;
+
+            List<string> directoryChain = new List<string>();
+            DirectoryInfo component = directory;
+            while (component != null)
+            {
+                directoryChain.Add(component.FullName);
+                DirectoryInfo parent = component.Parent;
+                if (parent == null || String.Equals(parent.FullName, component.FullName, StringComparison.OrdinalIgnoreCase)) break;
+                component = parent;
+            }
+            directoryChain.Reverse();
+            foreach (string path in directoryChain)
+            {
+                IntPtr handle = OpenDirectoryWithoutDeleteSharing(path);
+                if (!IsValidHandle(handle)) return 1;
+                directoryHandles.Add(handle);
+            }
+
+            if (!IsPrivatePath(directory.FullName, true, true, true)) return 1;
+            DirectoryInfo ancestor = directory.Parent;
+            bool firstAncestor = true;
+            while (ancestor != null)
+            {
+                DirectoryInfo parent = ancestor.Parent;
+                if (parent == null || String.Equals(parent.FullName, ancestor.FullName, StringComparison.OrdinalIgnoreCase)) break;
+                if (!IsPrivatePath(ancestor.FullName, true, firstAncestor, false)) return 1;
+                firstAncestor = false;
+                ancestor = parent;
+            }
+
+            if (File.Exists(request.Path) || Directory.Exists(request.Path)) return 2;
+            SecurityIdentifier identity = WindowsIdentity.GetCurrent().User;
+            if (identity == null) return 1;
+            FileSecurity security = new FileSecurity();
+            security.SetAccessRuleProtection(true, false);
+            security.SetOwner(identity);
+            security.SetAccessRule(new FileSystemAccessRule(
+                identity,
+                FileSystemRights.FullControl,
+                AccessControlType.Allow
+            ));
+            temporaryPath = Path.Combine(
+                directory.FullName,
+                "." + target.Name + "." + Guid.NewGuid().ToString("N") + ".tmp"
+            );
+            stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileSystemRights.FullControl,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough,
+                security
+            );
+            temporaryCreated = true;
+
+            Stream input = Console.OpenStandardInput();
+            byte[] buffer = new byte[65536];
+            long remaining = request.ByteLength;
+            while (remaining > 0)
+            {
+                int count = (int)Math.Min((long)buffer.Length, remaining);
+                int read = input.Read(buffer, 0, count);
+                if (read <= 0) return 1;
+                stream.Write(buffer, 0, read);
+                remaining -= read;
+            }
+            if (input.ReadByte() != -1) return 1;
+            stream.Flush(true);
+            stream.Dispose();
+            stream = null;
+            if (!IsPrivatePath(temporaryPath, false, true, true)) return 1;
+            File.Move(temporaryPath, request.Path);
+            temporaryCreated = false;
+            finalCreated = true;
+            if (!IsPrivatePath(request.Path, false, true, true)) return 1;
+            result = 0;
+            return 0;
+        }
+        catch (IOException exception)
+        {
+            return (exception.HResult & 0xFFFF) == 80 || (exception.HResult & 0xFFFF) == 183 ? 2 : 1;
+        }
+        catch
+        {
+            return 1;
+        }
+        finally
+        {
+            if (stream != null) stream.Dispose();
+            if (result != 0 && temporaryCreated && temporaryPath != null)
+            {
+                try { File.Delete(temporaryPath); } catch { }
+            }
+            if (result != 0 && finalCreated)
+            {
+                try { File.Delete(request.Path); } catch { }
+            }
+            foreach (IntPtr handle in directoryHandles)
+            {
+                if (IsValidHandle(handle)) CloseHandle(handle);
+            }
+        }
+    }
+
+    private static IntPtr OpenDirectoryWithoutDeleteSharing(string path)
+    {
+        IntPtr handle = CreateFileW(
+            path,
+            FileReadAttributes,
+            FileShareReadWrite,
+            IntPtr.Zero,
+            OpenExisting,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+            IntPtr.Zero
+        );
+        if (!IsValidHandle(handle)) return IntPtr.Zero;
+        FileInformation information;
+        if (!GetFileInformationByHandle(handle, out information) ||
+            (information.Attributes & (FileAttributeDirectory | FileAttributeReparsePoint)) != FileAttributeDirectory)
+        {
+            CloseHandle(handle);
+            return IntPtr.Zero;
+        }
+        return handle;
+    }
+
+    private static bool IsPrivatePath(string path, bool directory, bool requireCurrentOwner, bool requireProtected)
+    {
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+            directory != ((attributes & FileAttributes.Directory) != 0)) return false;
+        SecurityIdentifier identity = WindowsIdentity.GetCurrent().User;
+        if (identity == null) return false;
+        AccessControlSections sections = AccessControlSections.Access | AccessControlSections.Owner;
+        FileSystemSecurity security = directory
+            ? (FileSystemSecurity)Directory.GetAccessControl(path, sections)
+            : File.GetAccessControl(path, sections);
+        SecurityIdentifier owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+        if (owner == null || !IsTrustedIdentity(owner.Value, identity.Value) ||
+            (requireCurrentOwner && !String.Equals(owner.Value, identity.Value, StringComparison.Ordinal))) return false;
+        RawSecurityDescriptor descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
+        if (descriptor.DiscretionaryAcl == null || !security.AreAccessRulesCanonical ||
+            (requireProtected && !security.AreAccessRulesProtected)) return false;
+        int restrictedRights = directory
+            ? (int)(
+                FileSystemRights.WriteData |
+                FileSystemRights.AppendData |
+                FileSystemRights.DeleteSubdirectoriesAndFiles |
+                FileSystemRights.Delete |
+                FileSystemRights.WriteAttributes |
+                FileSystemRights.WriteExtendedAttributes |
+                FileSystemRights.ChangePermissions |
+                FileSystemRights.TakeOwnership
+            )
+            : (int)(
+                FileSystemRights.ReadData |
+                FileSystemRights.ReadExtendedAttributes |
+                FileSystemRights.ReadAttributes |
+                FileSystemRights.WriteData |
+                FileSystemRights.AppendData |
+                FileSystemRights.Delete |
+                FileSystemRights.WriteAttributes |
+                FileSystemRights.WriteExtendedAttributes |
+                FileSystemRights.ChangePermissions |
+                FileSystemRights.TakeOwnership
+            );
+        AuthorizationRuleCollection rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+        foreach (AuthorizationRule authorizationRule in rules)
+        {
+            FileSystemAccessRule rule = authorizationRule as FileSystemAccessRule;
+            if (rule == null) return false;
+            string ruleIdentity = rule.IdentityReference.Value;
+            if (rule.AccessControlType != AccessControlType.Allow || IsTrustedIdentity(ruleIdentity, identity.Value)) continue;
+            if ((String.Equals(ruleIdentity, "S-1-3-0", StringComparison.Ordinal) ||
+                 String.Equals(ruleIdentity, "S-1-3-1", StringComparison.Ordinal)) &&
+                (rule.PropagationFlags & PropagationFlags.InheritOnly) != 0) continue;
+            if (((int)rule.FileSystemRights & restrictedRights) != 0) return false;
+        }
+        return true;
+    }
+
+    private static bool IsTrustedIdentity(string value, string currentIdentity)
+    {
+        return String.Equals(value, currentIdentity, StringComparison.Ordinal) ||
+            String.Equals(value, "S-1-5-18", StringComparison.Ordinal) ||
+            String.Equals(value, "S-1-5-32-544", StringComparison.Ordinal) ||
+            String.Equals(value, "S-1-3-4", StringComparison.Ordinal) ||
+            String.Equals(value, "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", StringComparison.Ordinal);
     }
 
     public static bool Initialize()

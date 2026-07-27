@@ -87,6 +87,25 @@ describe("Windows secret command contract", () => {
     );
   });
 
+  it("routes first-run private configuration writes through the checked helper without runtime compilation", () => {
+    const commandSource = readFileSync(
+      new URL("../src/cli/windows-config-acl.ts", import.meta.url),
+      "utf8"
+    );
+    const helperSource = readFileSync(
+      new URL("../src/secrets/windows-secret-job.cs", import.meta.url),
+      "utf8"
+    );
+
+    expect(commandSource).toContain('spawn(launcher, ["--write-private-config"], {');
+    expect(commandSource).toContain("MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST");
+    expect(commandSource).not.toContain("Add-Type -TypeDefinition");
+    expect(helperSource).toContain("PrivateConfigWriteRequestEnvironmentName");
+    expect(helperSource).toContain("WritePrivateConfigurationFile");
+    expect(helperSource).toContain("OpenDirectoryWithoutDeleteSharing");
+    expect(helperSource).toContain("FileOptions.WriteThrough");
+  });
+
   it("contains no runtime C# compilation, compressed helper, or reflection loader", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 

@@ -6,6 +6,10 @@ const windowsAclMocks = vi.hoisted(() => ({
   spawn: vi.fn()
 }));
 
+const windowsSecretJobMocks = vi.hoisted(() => ({
+  resolveCheckedWindowsSecretJobExecutable: vi.fn<() => Promise<string | undefined>>()
+}));
+
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: windowsAclMocks.existsSync
@@ -14,6 +18,10 @@ vi.mock("node:fs", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: windowsAclMocks.spawn
+}));
+
+vi.mock("../src/secrets/windows-secret-command.js", () => ({
+  resolveCheckedWindowsSecretJobExecutable: windowsSecretJobMocks.resolveCheckedWindowsSecretJobExecutable
 }));
 
 import {
@@ -44,16 +52,35 @@ function createWritableChild(): EventEmitter & {
   return Object.assign(child, { stdin });
 }
 
+function decodePrivateFileWriteRequest(encoded: string): { readonly version: number; readonly path: string; readonly byteLength: number } {
+  const payload = Buffer.from(encoded, "base64");
+  let offset = 0;
+  const version = payload.readUInt8(offset);
+  offset += 1;
+  const pathLength = payload.readInt32LE(offset);
+  offset += 4;
+  const path = payload.subarray(offset, offset + pathLength).toString("utf8");
+  offset += pathLength;
+  const byteLength = Number(payload.readBigInt64LE(offset));
+  offset += 8;
+  expect(offset).toBe(payload.byteLength);
+  return { version, path, byteLength };
+}
+
 beforeEach(() => {
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   vi.stubEnv("SystemRoot", "C:\\Windows");
   windowsAclMocks.existsSync.mockReturnValue(true);
+  windowsSecretJobMocks.resolveCheckedWindowsSecretJobExecutable.mockResolvedValue(
+    "C:\\Program Files\\Miftah\\windows-secret-job.exe"
+  );
 });
 
 afterEach(() => {
   if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
   windowsAclMocks.existsSync.mockReset();
   windowsAclMocks.spawn.mockReset();
+  windowsSecretJobMocks.resolveCheckedWindowsSecretJobExecutable.mockReset();
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
@@ -172,7 +199,7 @@ describe("Windows migration ACL boundary", () => {
     expect(command).not.toContain("$actual = [System.IO.File]::GetAccessControl($path, $verifySections)");
   });
 
-  it("writes one new private configuration file through a separately bounded no-delete directory chain helper", async () => {
+  it("writes one new private configuration file through the checked no-delete directory chain helper", async () => {
     const child = createWritableChild();
     windowsAclMocks.spawn.mockImplementation(() => {
       queueMicrotask(() => child.emit("close", 0));
@@ -184,32 +211,21 @@ describe("Windows migration ACL boundary", () => {
       "{\"version\":\"3\"}\n"
     )).resolves.toBe("written");
 
-    const [, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    const [launcher, args, options] = windowsAclMocks.spawn.mock.calls[0] ?? [];
+    expect(launcher).toBe("C:\\Program Files\\Miftah\\windows-secret-job.exe");
+    expect(args).toEqual(["--write-private-config"]);
     expect(options).toMatchObject({
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "ignore", "ignore"]
     });
-    expect(Buffer.from(options?.env?.MIFTAH_CONFIG_ACL_REQUEST ?? "", "base64").toString("utf8")).toBe(
-      "write-private-file\u0000C:\\Users\\miftah\\.config\\miftah\\miftah.json\u000016"
-    );
+    expect(options?.env?.MIFTAH_CONFIG_ACL_REQUEST).toBeUndefined();
+    expect(decodePrivateFileWriteRequest(options?.env?.MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST ?? "")).toEqual({
+      version: 2,
+      path: "C:\\Users\\miftah\\.config\\miftah\\miftah.json",
+      byteLength: 16
+    });
     expect(child.stdin.end).toHaveBeenCalledWith(Buffer.from("{\"version\":\"3\"}\n", "utf8"));
-    const command = Buffer.from(args?.[4] ?? "", "base64").toString("utf16le");
-    expect(command).toContain("MiftahPrivateConfigWrite");
-    expect(command).toContain("OpenDirectory");
-    expect(command).toContain("GetFileInformationByHandle");
-    expect(command).toContain("CreateFile(path, 0x00000080, 0x00000003");
-    expect(command).toContain("0x02200000");
-    expect(command).toContain("FileMode]::CreateNew");
-    expect(command).toContain("FileSystemRights]::FullControl");
-    expect(command).toContain("FileShare]::None");
-    expect(command).toContain("FileOptions]::WriteThrough");
-    expect(command).toContain("[Console]::OpenStandardInput()");
-    expect(command).toContain("$stream.Flush($true)");
-    expect(command).toContain("[System.IO.File]::Move($temporaryPath, $path)");
-    expect(command).toContain("Test-MiftahHeldPath");
-    expect(command).not.toContain("0x00000007");
-    expect(args?.[4].length).toBeLessThanOrEqual(30_000);
   });
 
   it("reports an existing configuration file without falling back to a pathname write", async () => {

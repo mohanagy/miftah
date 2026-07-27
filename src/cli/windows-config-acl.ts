@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
+import { resolveCheckedWindowsSecretJobExecutable } from "../secrets/windows-secret-command.js";
 
 const requestEnvironmentName = "MIFTAH_CONFIG_ACL_REQUEST";
+const privateConfigWriteRequestEnvironmentName = "MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST";
 const maximumRequestBytes = 12 * 1024;
 const aclCommandTimeoutMs = 5_000;
 // Node exposes no trusted Windows system-directory API. Use the protected default
@@ -38,8 +40,7 @@ interface SecurePrivateFileRequest {
   readonly path: string;
 }
 
-interface WritePrivateFileRequest {
-  readonly operation: "write-private-file";
+interface PrivateConfigWriteRequest {
   readonly path: string;
   readonly byteLength: number;
 }
@@ -122,20 +123,18 @@ export async function writeWindowsPrivateConfigFile(
   content: string | Uint8Array
 ): Promise<WindowsPrivateConfigWriteResult> {
   if (process.platform !== "win32") return "failed";
-  const launcher = trustedPowerShellExecutable();
   const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
-  const request: WritePrivateFileRequest = {
-    operation: "write-private-file",
+  const request: PrivateConfigWriteRequest = {
     path,
     byteLength: bytes.byteLength
   };
-  if (launcher === undefined || requestHasNul(request) || !Number.isSafeInteger(request.byteLength)) {
+  if (path.includes("\u0000") || !Number.isSafeInteger(request.byteLength)) {
     return "failed";
   }
   const encodedRequest = encodePrivateFileWriteRequest(request);
-  return encodedRequest === undefined
-    ? "failed"
-    : runWindowsPrivateFileWriteCommand(launcher, encodedRequest, bytes);
+  if (encodedRequest === undefined) return "failed";
+  const launcher = await resolveCheckedWindowsSecretJobExecutable();
+  return launcher === undefined ? "failed" : runWindowsPrivateFileWriteCommand(launcher, encodedRequest, bytes);
 }
 
 /** Backwards-compatible name for migration transaction directories. */
@@ -186,7 +185,7 @@ async function runWindowsAclRequest(request: WindowsConfigAclRequest): Promise<b
   return runWindowsAclCommand(launcher, encodedRequest);
 }
 
-function requestHasNul(request: WindowsConfigAclRequest | WritePrivateFileRequest): boolean {
+function requestHasNul(request: WindowsConfigAclRequest): boolean {
   if (request.operation === "copy-file-security") {
     return request.source.includes("\u0000") || request.target.includes("\u0000");
   }
@@ -198,7 +197,6 @@ function requestHasNul(request: WindowsConfigAclRequest | WritePrivateFileReques
   }
   if (request.operation === "verify-private-paths") return request.paths.some((path) => path.path.includes("\u0000"));
   if (request.operation === "create-private-directory") return request.directory.includes("\u0000");
-  if (request.operation === "write-private-file") return request.path.includes("\u0000");
   return request.path.includes("\u0000");
 }
 
@@ -223,12 +221,27 @@ function encodeRequest(request: WindowsConfigAclRequest): string | undefined {
     : undefined;
 }
 
-function encodePrivateFileWriteRequest(request: WritePrivateFileRequest): string | undefined {
-  const payload = [request.operation, request.path, String(request.byteLength)].join("\u0000");
-  const bytes = Buffer.from(payload, "utf8");
-  return bytes.byteLength <= maximumRequestBytes && bytes.toString("utf8") === payload
-    ? bytes.toString("base64")
-    : undefined;
+function encodePrivateFileWriteRequest(request: PrivateConfigWriteRequest): string | undefined {
+  const path = Buffer.from(request.path, "utf8");
+  const requestLength = 1 + 4 + path.byteLength + 8;
+  if (
+    request.byteLength < 0 ||
+    requestLength > maximumRequestBytes ||
+    path.toString("utf8") !== request.path
+  ) {
+    return undefined;
+  }
+
+  const payload = Buffer.allocUnsafe(requestLength);
+  let offset = 0;
+  payload.writeUInt8(2, offset);
+  offset += 1;
+  payload.writeInt32LE(path.byteLength, offset);
+  offset += 4;
+  path.copy(payload, offset);
+  offset += path.byteLength;
+  payload.writeBigInt64LE(BigInt(request.byteLength), offset);
+  return payload.toString("base64");
 }
 
 function trustedPowerShellExecutable(): string | undefined {
@@ -249,6 +262,16 @@ function aclEnvironment(request: string): NodeJS.ProcessEnv {
     if (value !== undefined) environment[name] = value;
   }
   environment[requestEnvironmentName] = request;
+  return environment;
+}
+
+function privateConfigWriterEnvironment(request: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { SystemRoot: trustedWindowsRoot, windir: trustedWindowsRoot };
+  for (const name of ["ComSpec", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"]) {
+    const value = environmentValue(process.env, name);
+    if (value !== undefined) environment[name] = value;
+  }
+  environment[privateConfigWriteRequestEnvironmentName] = request;
   return environment;
 }
 
@@ -303,8 +326,8 @@ function runWindowsPrivateFileWriteCommand(
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(launcher, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPrivateFileWriteCommand], {
-        env: aclEnvironment(request),
+      child = spawn(launcher, ["--write-private-config"], {
+        env: privateConfigWriterEnvironment(request),
         shell: false,
         windowsHide: true,
         stdio: ["pipe", "ignore", "ignore"]
@@ -576,162 +599,3 @@ try {
 }`;
 
 const encodedAclCommand = Buffer.from(aclCommand, "utf16le").toString("base64");
-
-/**
- * This command is intentionally separate from the general ACL helper: that
- * command is already near the Windows command-line limit. It holds every
- * directory from the volume/share root through the target directory without
- * FILE_SHARE_DELETE, checks the held path, then streams one exclusive file
- * write from stdin before releasing those handles.
- */
-const privateFileWriteCommand = String.raw`$ErrorActionPreference = 'Stop'
-$requestName = '${requestEnvironmentName}'
-$sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
-Add-Type -TypeDefinition @'
-using System;
-using Microsoft.Win32.SafeHandles;
-using System.Runtime.InteropServices;
-public static class MiftahPrivateConfigWrite {
-  [StructLayout(LayoutKind.Sequential)]
-  private struct FileInformation {
-    public uint Attributes;
-    public System.Runtime.InteropServices.ComTypes.FILETIME Creation;
-    public System.Runtime.InteropServices.ComTypes.FILETIME Access;
-    public System.Runtime.InteropServices.ComTypes.FILETIME Write;
-    public uint VolumeSerial;
-    public uint SizeHigh;
-    public uint SizeLow;
-    public uint Links;
-    public uint IndexHigh;
-    public uint IndexLow;
-  }
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  private static extern SafeFileHandle CreateFile(
-    string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
-  [DllImport("kernel32.dll", SetLastError = true)]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
-  public static SafeFileHandle OpenDirectory(string path) {
-    SafeFileHandle handle = CreateFile(path, 0x00000080, 0x00000003, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
-    if (handle == null || handle.IsInvalid) return null;
-    FileInformation information;
-    if (!GetFileInformationByHandle(handle, out information) ||
-        (information.Attributes & 0x00000410) != 0x00000010) {
-      handle.Dispose();
-      return null;
-    }
-    return handle;
-  }
-}
-'@
-function Test-MiftahHeldPath {
-  param([string]$path, [string]$kind, [bool]$requireOwner, [bool]$requireProtected)
-  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-  if ($null -eq $identity) { return $false }
-  $entry = if ($kind -eq 'file') { [System.IO.FileInfo]::new($path) } else { [System.IO.DirectoryInfo]::new($path) }
-  if (-not $entry.Exists) { return $false }
-  $acl = if ($kind -eq 'file') { [System.IO.File]::GetAccessControl($path, $sections) } else { [System.IO.Directory]::GetAccessControl($path, $sections) }
-  $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-  $trusted = @($identity.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-  if ($null -eq $owner -or -not ($trusted -ccontains $owner.Value) -or ($requireOwner -and $owner.Value -cne $identity.Value)) { return $false }
-  $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
-  if ($null -eq $raw.DiscretionaryAcl -or -not $acl.AreAccessRulesCanonical -or ($requireProtected -and -not $acl.AreAccessRulesProtected)) { return $false }
-  $restricted = if ($kind -eq 'file') {
-    [int]([System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::ReadAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
-  } else {
-    [int]([System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
-  }
-  $inheritOnly = [int][System.Security.AccessControl.PropagationFlags]::InheritOnly
-  foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
-    if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $trusted -ccontains $rule.IdentityReference.Value) { continue }
-    if (($rule.IdentityReference.Value -ceq 'S-1-3-0' -or $rule.IdentityReference.Value -ceq 'S-1-3-1') -and (([int]$rule.PropagationFlags -band $inheritOnly) -ne 0)) { continue }
-    if (([int]$rule.FileSystemRights -band $restricted) -ne 0) { return $false }
-  }
-  return $true
-}
-$result = 1
-$temporaryCreated = $false
-$finalCreated = $false
-$temporaryPath = $null
-$stream = $null
-$handles = [System.Collections.Generic.List[System.IDisposable]]::new()
-try {
-  $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
-  if ([string]::IsNullOrEmpty($encoded) -or $encoded.Length -gt 16384) { throw 'invalid request' }
-  $fields = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
-  [Environment]::SetEnvironmentVariable($requestName, $null, [EnvironmentVariableTarget]::Process)
-  if ($fields.Count -ne 3 -or $fields[0] -ne 'write-private-file') { throw 'invalid request' }
-  $path = [System.IO.Path]::GetFullPath($fields[1])
-  $directory = [System.IO.FileInfo]::new($path).Directory
-  if ($null -eq $directory) { throw 'missing directory' }
-  [int64]$remaining = [Convert]::ToInt64($fields[2], [Globalization.CultureInfo]::InvariantCulture)
-  if ($remaining -lt 0) { throw 'invalid length' }
-  $chain = [System.Collections.Generic.List[string]]::new()
-  $current = $directory
-  while ($null -ne $current) {
-    [void]$chain.Add($current.FullName)
-    $parent = $current.Parent
-    if ($null -eq $parent -or $parent.FullName -ceq $current.FullName) { break }
-    $current = $parent
-  }
-  $chain.Reverse()
-  foreach ($component in $chain) {
-    $handle = [MiftahPrivateConfigWrite]::OpenDirectory($component)
-    if ($null -eq $handle) { throw 'unsafe path component' }
-    [void]$handles.Add($handle)
-  }
-  if (-not (Test-MiftahHeldPath $directory.FullName 'directory' $true $true)) { throw 'unsafe directory' }
-  $ancestor = $directory.Parent
-  $firstAncestor = $true
-  while ($null -ne $ancestor) {
-    $next = $ancestor.Parent
-    if ($null -eq $next -or $next.FullName -ceq $ancestor.FullName) { break }
-    if (-not (Test-MiftahHeldPath $ancestor.FullName 'directory' $firstAncestor $false)) { throw 'unsafe ancestor' }
-    $firstAncestor = $false
-    $ancestor = $next
-  }
-  if ([System.IO.File]::Exists($path) -or [System.IO.Directory]::Exists($path)) {
-    $result = 2
-  } else {
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    if ($null -eq $identity) { throw 'missing identity' }
-    $security = [System.Security.AccessControl.FileSecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $security.SetOwner($identity)
-    $security.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($identity, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
-    $temporaryPath = [System.IO.Path]::Combine($directory.FullName, "." + [System.IO.Path]::GetFileName($path) + "." + [System.Guid]::NewGuid().ToString("N") + ".tmp")
-    $stream = [System.IO.FileStream]::new($temporaryPath, [System.IO.FileMode]::CreateNew, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough, $security)
-    $temporaryCreated = $true
-    $input = [Console]::OpenStandardInput()
-    $buffer = [byte[]]::new(65536)
-    while ($remaining -gt 0) {
-      $count = [int][Math]::Min([int64]$buffer.Length, $remaining)
-      $read = $input.Read($buffer, 0, $count)
-      if ($read -le 0) { throw 'truncated input' }
-      $stream.Write($buffer, 0, $read)
-      $remaining -= $read
-    }
-    if ($input.ReadByte() -ne -1) { throw 'unexpected input' }
-    $stream.Flush($true)
-    $stream.Dispose()
-    $stream = $null
-    if (-not (Test-MiftahHeldPath $temporaryPath 'file' $true $true)) { throw 'unsafe temporary file' }
-    [System.IO.File]::Move($temporaryPath, $path)
-    $temporaryCreated = $false
-    $finalCreated = $true
-    if (-not (Test-MiftahHeldPath $path 'file' $true $true)) { throw 'unsafe file' }
-    $result = 0
-  }
-} catch [System.IO.IOException] {
-  $result = if (([int]$_.Exception.HResult -band 0xFFFF) -in @(80, 183)) { 2 } else { 1 }
-} catch {
-  $result = 1
-} finally {
-  if ($null -ne $stream) { try { $stream.Dispose() } catch {} }
-  if ($result -ne 0 -and $temporaryCreated) { try { [System.IO.File]::Delete($temporaryPath) } catch {} }
-  if ($result -ne 0 -and $finalCreated) { try { [System.IO.File]::Delete($path) } catch {} }
-  foreach ($handle in $handles) { try { $handle.Dispose() } catch {} }
-}
-exit $result`;
-
-const encodedPrivateFileWriteCommand = Buffer.from(privateFileWriteCommand, "utf16le").toString("base64");
