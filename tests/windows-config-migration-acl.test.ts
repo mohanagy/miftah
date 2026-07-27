@@ -520,6 +520,26 @@ describe("Windows migration ACL contract", () => {
   );
 
   it.runIf(process.platform === "win32")(
+    "recovers only an exact private first-run config after an unobserved prior completion",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "miftah-windows-private-first-run-recovery-"));
+      temporaryDirectories.push(root);
+      const privateParent = join(root, "private-parent");
+      const directory = join(privateParent, "miftah");
+      const path = join(directory, "miftah.json");
+      const content = "{\"version\":\"3\",\"name\":\"first-run\"}\n";
+      await windowsPrivateDirectoryProbe(privateParent);
+      await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, directory)).resolves.toBe(true);
+      await expect(writeWindowsPrivateConfigFile(path, content)).resolves.toBe("written");
+
+      await expect(writeWindowsPrivateConfigFile(path, content)).resolves.toBe("written");
+      await expect(writeWindowsPrivateConfigFile(path, "{\"version\":\"3\",\"name\":\"different\"}\n")).resolves.toBe("exists");
+      await expect(readFile(path, "utf8")).resolves.toBe(content);
+    },
+    10_000
+  );
+
+  it.runIf(process.platform === "win32")(
     "accepts a private child when only the terminal volume root grants DELETE",
     async () => {
       const root = await mkdtemp(join(tmpdir(), "miftah-windows-root-delete-"));

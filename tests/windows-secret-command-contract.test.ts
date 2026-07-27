@@ -104,6 +104,8 @@ describe("Windows secret command contract", () => {
     expect(helperSource).toContain("WritePrivateConfigurationFile");
     expect(helperSource).toContain("OpenDirectoryWithoutDeleteSharing");
     expect(helperSource).toContain("FileOptions.WriteThrough");
+    expect(helperSource).toContain("HasTimeForPrivateConfigCommit");
+    expect(helperSource).toContain("MatchesExistingPrivateConfigurationFile");
   });
 
   it("contains no runtime C# compilation, compressed helper, or reflection loader", () => {

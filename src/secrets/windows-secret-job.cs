@@ -13,7 +13,7 @@ public static class MiftahSecretJob
     private const string RequestEnvironmentName = "MIFTAH_SECRET_RUNNER_REQUEST";
     private const string StandardInputEnvironmentName = "MIFTAH_SECRET_RUNNER_STDIN";
     private const string PrivateConfigWriteRequestEnvironmentName = "MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST";
-    private const byte PrivateConfigWriteRequestVersion = 2;
+    private const byte PrivateConfigWriteRequestVersion = 3;
     private const uint FileReadAttributes = 0x00000080;
     private const uint FileShareReadWrite = 0x00000003;
     private const uint OpenExisting = 3;
@@ -46,11 +46,13 @@ public static class MiftahSecretJob
     {
         public readonly string Path;
         public readonly long ByteLength;
+        public readonly long CommitDeadlineUtcMilliseconds;
 
-        public PrivateConfigWriteRequest(string path, long byteLength)
+        public PrivateConfigWriteRequest(string path, long byteLength, long commitDeadlineUtcMilliseconds)
         {
             Path = path;
             ByteLength = byteLength;
+            CommitDeadlineUtcMilliseconds = commitDeadlineUtcMilliseconds;
         }
     }
 
@@ -352,8 +354,9 @@ public static class MiftahSecretJob
             string path = ReadString(reader, input, utf8);
             if (String.IsNullOrEmpty(path) || path.IndexOf('\0') >= 0 || !Path.IsPathRooted(path)) return null;
             long byteLength = reader.ReadInt64();
-            if (byteLength < 0 || input.Position != input.Length) return null;
-            return new PrivateConfigWriteRequest(Path.GetFullPath(path), byteLength);
+            long commitDeadlineUtcMilliseconds = reader.ReadInt64();
+            if (byteLength < 0 || commitDeadlineUtcMilliseconds < 0 || input.Position != input.Length) return null;
+            return new PrivateConfigWriteRequest(Path.GetFullPath(path), byteLength, commitDeadlineUtcMilliseconds);
         }
     }
 
@@ -400,7 +403,14 @@ public static class MiftahSecretJob
                 ancestor = parent;
             }
 
-            if (File.Exists(request.Path) || Directory.Exists(request.Path)) return 2;
+            // A prior helper can be terminated after its atomic move but before
+            // Node observes its exit. An already-private exact match is therefore
+            // a safe idempotent completion, never an overwrite.
+            if (File.Exists(request.Path) || Directory.Exists(request.Path))
+            {
+                return MatchesExistingPrivateConfigurationFile(request) ? 0 : 2;
+            }
+            if (!HasTimeForPrivateConfigCommit(request)) return 1;
             SecurityIdentifier identity = WindowsIdentity.GetCurrent().User;
             if (identity == null) return 1;
             FileSecurity security = new FileSecurity();
@@ -431,6 +441,7 @@ public static class MiftahSecretJob
             long remaining = request.ByteLength;
             while (remaining > 0)
             {
+                if (!HasTimeForPrivateConfigCommit(request)) return 1;
                 int count = (int)Math.Min((long)buffer.Length, remaining);
                 int read = input.Read(buffer, 0, count);
                 if (read <= 0) return 1;
@@ -442,10 +453,10 @@ public static class MiftahSecretJob
             stream.Dispose();
             stream = null;
             if (!IsPrivatePath(temporaryPath, false, true, true)) return 1;
+            if (!HasTimeForPrivateConfigCommit(request)) return 1;
             File.Move(temporaryPath, request.Path);
             temporaryCreated = false;
             finalCreated = true;
-            if (!IsPrivatePath(request.Path, false, true, true)) return 1;
             result = 0;
             return 0;
         }
@@ -473,6 +484,66 @@ public static class MiftahSecretJob
                 if (IsValidHandle(handle)) CloseHandle(handle);
             }
         }
+    }
+
+    private static bool MatchesExistingPrivateConfigurationFile(PrivateConfigWriteRequest request)
+    {
+        Stream input = Console.OpenStandardInput();
+        FileStream existing = null;
+        bool matches = false;
+        try
+        {
+            if (File.Exists(request.Path) && IsPrivatePath(request.Path, false, true, true))
+            {
+                existing = new FileStream(request.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                matches = existing.Length == request.ByteLength;
+            }
+            byte[] inputBuffer = new byte[4096];
+            byte[] existingBuffer = new byte[4096];
+            long remaining = request.ByteLength;
+            while (remaining > 0)
+            {
+                int count = (int)Math.Min((long)inputBuffer.Length, remaining);
+                int inputRead = input.Read(inputBuffer, 0, count);
+                if (inputRead <= 0) return false;
+                if (matches)
+                {
+                    int offset = 0;
+                    while (offset < inputRead)
+                    {
+                        int existingRead = existing.Read(existingBuffer, offset, inputRead - offset);
+                        if (existingRead <= 0)
+                        {
+                            matches = false;
+                            break;
+                        }
+                        for (int index = offset; index < offset + existingRead; index++)
+                        {
+                            if (inputBuffer[index] != existingBuffer[index]) matches = false;
+                        }
+                        offset += existingRead;
+                    }
+                }
+                remaining -= inputRead;
+            }
+            if (input.ReadByte() != -1) return false;
+            return matches && existing != null && existing.ReadByte() == -1;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (existing != null) existing.Dispose();
+        }
+    }
+
+    private static bool HasTimeForPrivateConfigCommit(PrivateConfigWriteRequest request)
+    {
+        const long UnixEpochMilliseconds = 62135596800000L;
+        long utcMilliseconds = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond - UnixEpochMilliseconds;
+        return utcMilliseconds < request.CommitDeadlineUtcMilliseconds;
     }
 
     private static IntPtr OpenDirectoryWithoutDeleteSharing(string path)
