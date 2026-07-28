@@ -12,8 +12,9 @@ export default defineConfig({
     clearMocks: true,
     // Real upstream fixtures have one-second startup limits; run files serially to prevent contention.
     fileParallelism: false,
-    // Reuse that serial worker instead of cold-forking once per file; module isolation remains enabled.
-    poolOptions: { forks: { singleFork: true, isolate: true } },
+    // Replace the fork between serial files so process-backed tests cannot retain
+    // handles or lifecycle state from an earlier file; module isolation remains enabled.
+    poolOptions: { forks: { singleFork: false, isolate: true } },
     coverage: {
       provider: "v8",
       include: [
