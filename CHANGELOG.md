@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- [#204](https://github.com/mohanagy/miftah/issues/204) Made guided setup an explicit first-use product front door: the terminal wizard now presents numbered source choices, visible setup steps, safe back/cancel handling before connection details, and current-step recovery for invalid choices; the README now places both `miftah setup` and the `miftah dashboard` browser Console ahead of the optional scripted `init` example and distinguishes the browser UI from the lower-level `console` API command. Existing local STDIO, returning provider-owned account, no-secret, no-shell, no-overwrite, OAuth ownership, import, validation, and shared CLI/Console setup boundaries are unchanged. External evaluator acceptance remains open and is not claimed.
 - [#290](https://github.com/mohanagy/miftah/issues/290) Redesigned the README as a concise product front door: first-screen fit guidance, one connector with named profiles, one safe GitHub first-success path, distinct secret/native-OAuth/upstream-owned-OAuth routes, visible client/wizard/Console choices, and progressively disclosed security, architecture, reference, and troubleshooting links. External evaluator acceptance remains open and is not claimed by this documentation change.
 
 ### Fixed
