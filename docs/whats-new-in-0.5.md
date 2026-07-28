@@ -7,7 +7,7 @@ npm install -g @lubab/miftah@0.5.0
 miftah version
 ```
 
-The short version of 0.5.0 compared with 0.4.0 is: Miftah now has guided and resumable setup, safer setup previews, account-profile maintenance commands, client-entry import, and a complete multi-account Google Search Console onboarding path.
+The short version of 0.5.0 compared with 0.4.0 is: Miftah now has guided and resumable setup, safer setup previews, account-profile maintenance commands, client-entry import, and an implemented multi-account Google Search Console onboarding path, with external validation still in progress.
 
 Native OAuth and the optional Console first shipped in 0.4.0. 0.5.0 makes them easier to discover, configure, and maintain; it does not introduce universal OAuth support or a hosted Miftah service.
 
@@ -124,7 +124,7 @@ Use `CONFIG_FILE`, `PROFILE_NAME`, and the other uppercase values below as liter
 | Native OAuth | Supported remote discovery, browser authorization, OS-vault storage, refresh, reauth, and exact local disconnect | Use `miftah setup --native-oauth` only with a real HTTPS MCP endpoint that satisfies the documented standards. |
 | upstream-owned OAuth | Passing reviewed configuration to the upstream while leaving its browser and cache lifecycle alone | Use a reviewed adapter such as Google Search Console and follow its upstream login. |
 
-Miftah does not support OAuth for every MCP server or provider. A successful login, resolvable credential, or profile label is not proof of scopes or account identity. See the [OAuth guide](oauth-support.md) for native connection lifecycle commands and the exact support matrix.
+Miftah does not support OAuth for every MCP server or provider. A successful login, resolvable credential, or profile label is not proof of scopes or account identity. See the [OAuth guide](oauth-support.md#support-matrix) for native connection lifecycle commands and the exact support matrix.
 
 ## 7. Use the optional local Console
 

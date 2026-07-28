@@ -13,6 +13,26 @@ function readGuide(): string {
   return existsSync(guideUrl) ? readFileSync(guideUrl, "utf8") : "";
 }
 
+function gfmHeadingSlugs(markdown: string): Set<string> {
+  const slugs = new Set<string>();
+  const counts = new Map<string, number>();
+
+  for (const match of markdown.matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gmu)) {
+    const base = match[1]!
+      .toLowerCase()
+      .replace(/<[^>]*>/gu, "")
+      .replace(/[`*_~]/gu, "")
+      .replace(/[^\p{L}\p{N}\s-]/gu, "")
+      .trim()
+      .replace(/\s+/gu, "-");
+    const duplicateIndex = counts.get(base) ?? 0;
+    counts.set(base, duplicateIndex + 1);
+    slugs.add(duplicateIndex === 0 ? base : `${base}-${duplicateIndex}`);
+  }
+
+  return slugs;
+}
+
 function documentedMiftahCommands(markdown: string): string[] {
   const bashBlocks = [...markdown.matchAll(/```bash\n([\s\S]*?)```/gu)].map((match) => match[1]!);
   const fencedCommands = bashBlocks.flatMap((block) =>
@@ -38,6 +58,10 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("guided and resumable setup");
     expect(guide).toContain("Native OAuth and the optional Console first shipped in 0.4.0");
     expect(guide).toContain("0.5.0 makes them easier to discover, configure, and maintain");
+    expect(guide).toContain(
+      "an implemented multi-account Google Search Console onboarding path, with external validation still in progress"
+    );
+    expect(guide).not.toContain("a complete multi-account Google Search Console onboarding path");
     expect(readme.split("\n").slice(0, 80).join("\n")).toContain(
       "[What is in 0.5 and how to use it](docs/whats-new-in-0.5.md)"
     );
@@ -82,7 +106,7 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("[#25]");
     expect(guide).toContain("[#88]");
     expect(guide).toContain("[CLI reference](cli.md)");
-    expect(guide).toContain("[OAuth guide](oauth-support.md)");
+    expect(guide).toContain("[OAuth guide](oauth-support.md#support-matrix)");
     expect(guide).toContain("[provider-adapter guide](provider-adapters.md)");
     expect(guide).toContain("[full changelog](../CHANGELOG.md)");
   });
@@ -133,9 +157,14 @@ describe("Miftah 0.5 owner guide", () => {
 
     for (const link of links) {
       if (/^(?:https?:|mailto:)/u.test(link)) continue;
-      const path = link.split("#", 1)[0]!;
+      const [path = "", encodedFragment] = link.split("#", 2);
       const target = new URL(path, guideUrl);
       expect(existsSync(target), `missing guide link target: ${link}`).toBe(true);
+      if (encodedFragment === undefined || encodedFragment === "") continue;
+
+      const fragment = decodeURIComponent(encodedFragment);
+      const targetMarkdown = readFileSync(target, "utf8");
+      expect(gfmHeadingSlugs(targetMarkdown), `missing guide link fragment: ${link}`).toContain(fragment);
     }
   });
 });
