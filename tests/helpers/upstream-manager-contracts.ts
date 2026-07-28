@@ -1009,7 +1009,7 @@ function registerTeardown(): void {
         (alive) => alive === false
       );
       expect(replacementStartedBeforeFirstDescendantReaped).toBe(false);
-      await restarting.catch(() => undefined);
+      await expect(restarting).resolves.toBeDefined();
     } finally {
       if (descendantPid !== undefined) {
         terminateFixtureProcess(descendantPid);
