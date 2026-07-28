@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthConnectionRegistry } from "../src/oauth/connection-registry.js";
 import {
   createOAuthConfigIdentity,
@@ -24,6 +24,7 @@ import {
   MemoryProfileRenameCredentialStore as MemoryCredentialStore,
   MemoryProfileRenameMetadataStore as MemoryMetadataStore
 } from "./helpers/profile-rename-oauth-dependencies.js";
+import { stubFileSyncForLogicalTest } from "./helpers/logical-file-sync.js";
 
 type ProfileRenameTimeoutDiagnosticPhase =
   | "test-setup"
@@ -82,6 +83,10 @@ vi.mock("../src/cli/migrate-config.js", async (importOriginal) => {
 const directories: string[] = [];
 const connectionRef = "oauthconn:11111111-1111-4111-8111-111111111111";
 let profileRenameTimeoutDiagnosticStop: (() => void) | undefined;
+
+beforeEach(async () => {
+  await stubFileSyncForLogicalTest();
+});
 
 afterEach(async () => {
   const stopTimeoutDiagnostic = profileRenameTimeoutDiagnosticStop;

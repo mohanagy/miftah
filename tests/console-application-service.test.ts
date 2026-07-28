@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConsoleApplicationService, consoleAuditPath } from "../src/console/console-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
 import {
@@ -21,6 +21,7 @@ import { MiftahError } from "../src/utils/errors.js";
 import { createPrivateConsoleDirectory } from "./helpers/private-console-directory.js";
 import { environmentProfileConfig } from "./helpers/environment-profile-config.js";
 import { createMemoryProfileRenameOAuthDependencies } from "./helpers/profile-rename-oauth-dependencies.js";
+import { stubFileSyncForLogicalTest } from "./helpers/logical-file-sync.js";
 import {
   startOAuthCompatibilityProbe,
   type OAuthCompatibilityProbe
@@ -30,6 +31,10 @@ const temporaryDirectories: string[] = [];
 const oauthUpstreams: OAuthCompatibilityProbe[] = [];
 const connectionRef = "oauthconn:31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c";
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+beforeEach(async () => {
+  await stubFileSyncForLogicalTest();
+});
 
 function supportedKnownConnectorOptions(): {
   readonly preset: string;

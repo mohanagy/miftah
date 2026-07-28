@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file. The format 
 
 - [#290](https://github.com/mohanagy/miftah/issues/290) Redesigned the README as a concise product front door: first-screen fit guidance, one connector with named profiles, one safe GitHub first-success path, distinct secret/native-OAuth/upstream-owned-OAuth routes, visible client/wizard/Console choices, and progressively disclosed security, architecture, reference, and troubleshooting links. External evaluator acceptance remains open and is not claimed by this documentation change.
 
+### Fixed
+
+- [#255](https://github.com/mohanagy/miftah/issues/255) Isolated logical audit, Console, and OAuth profile-rename contracts from host-dependent file-flush latency while retaining dedicated real-sync audit and OAuth transaction integration tests and the broader durability suites. Process-tree tests now stop at their real containment boundary, drain bounded restart work, and use a minimal MCP fixture for the shutdown-timing contract. Production audit writes, fail-closed locking, transactional recovery, containment, test timeouts, coverage, and platform gates are unchanged.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added
