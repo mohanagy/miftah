@@ -3,7 +3,11 @@ import { constants, type BigIntStats, type Stats } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createConfigMigrationSource } from "../cli/migrate-config.js";
-import { verifyWindowsConfigPathSecurity } from "../cli/windows-config-acl.js";
+import {
+  verifyWindowsConfigPathSecurity,
+  verifyWindowsConfigPathsSecurity,
+  type WindowsPrivatePath
+} from "../cli/windows-config-acl.js";
 import { loadConfigFromText } from "../config/load-config.js";
 import {
   consoleInitializedConfigMetadata,
@@ -26,6 +30,8 @@ export interface ConsoleConfigCatalogDiscoveryOptions {
   readonly ownerUid?: number;
   /** Test seam for Windows DACL verification. */
   readonly windowsAclVerifier?: WindowsConfigAclVerifier;
+  /** Test seam for batched Windows DACL verification of one stable boundary. */
+  readonly windowsAclPathsVerifier?: WindowsConfigAclPathsVerifier;
   /** Test-only opaque diagnostic observer for one catalog invocation. */
   readonly candidateStageObserver?: ConsoleConfigCatalogCandidateStageObserver;
   /** Test-only comparison of number and BigInt file-handle identities. */
@@ -33,6 +39,8 @@ export interface ConsoleConfigCatalogDiscoveryOptions {
 }
 
 export type WindowsConfigAclVerifier = (path: string, kind: "file" | "directory") => Promise<boolean>;
+
+export type WindowsConfigAclPathsVerifier = (paths: readonly WindowsPrivatePath[]) => Promise<boolean>;
 
 /** Opaque test-only stages for diagnosing a rejected catalog candidate. */
 export type ConsoleConfigCatalogCandidateStage =
@@ -80,6 +88,10 @@ export type ConsoleConfigCatalogCandidateIdentityDiagnosticObserver = (
 ) => void;
 
 type TrustedConfigurationFileHandle = Awaited<ReturnType<typeof open>>;
+
+interface WindowsCatalogAclBoundary {
+  verified: boolean;
+}
 
 function observeCandidateStage(
   observer: ConsoleConfigCatalogCandidateStageObserver | undefined,
@@ -168,14 +180,19 @@ function defaultOwnerUid(platform: NodeJS.Platform): number | undefined {
 }
 
 async function hasTrustedWindowsAcl(
-  path: string,
-  kind: "file" | "directory",
+  paths: readonly WindowsPrivatePath[],
   platform: NodeJS.Platform,
-  verifier: WindowsConfigAclVerifier
+  verifier: WindowsConfigAclVerifier,
+  pathsVerifier: WindowsConfigAclPathsVerifier,
+  useBatchedVerifier: boolean
 ): Promise<boolean> {
   if (platform !== "win32") return true;
   try {
-    return await verifier(path, kind);
+    if (useBatchedVerifier) return await pathsVerifier(paths);
+    for (const path of paths) {
+      if (!(await verifier(path.path, path.kind))) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -185,7 +202,9 @@ async function trustedDirectory(
   directory: string,
   ownerUid: number | undefined,
   platform: NodeJS.Platform,
-  windowsAclVerifier: WindowsConfigAclVerifier
+  windowsAclVerifier: WindowsConfigAclVerifier,
+  windowsAclPathsVerifier: WindowsConfigAclPathsVerifier,
+  useBatchedWindowsAclVerifier: boolean
 ): Promise<string | undefined> {
   let observed: BigIntStats;
   try {
@@ -200,7 +219,13 @@ async function trustedDirectory(
   if (!isTrustedDirectory(resolved, ownerUid, platform) || !sameBigIntFileIdentity(observed, resolved)) {
     throw new Error("unsafe configuration directory");
   }
-  if (!(await hasTrustedWindowsAcl(canonical, "directory", platform, windowsAclVerifier))) {
+  if (!useBatchedWindowsAclVerifier && !(await hasTrustedWindowsAcl(
+    [{ path: canonical, kind: "directory" }],
+    platform,
+    windowsAclVerifier,
+    windowsAclPathsVerifier,
+    false
+  ))) {
     throw new Error("unsafe configuration directory");
   }
   return canonical;
@@ -227,6 +252,9 @@ async function readTrustedConfiguration(
   ownerUid: number | undefined,
   platform: NodeJS.Platform,
   windowsAclVerifier: WindowsConfigAclVerifier,
+  windowsAclPathsVerifier: WindowsConfigAclPathsVerifier,
+  useBatchedWindowsAclVerifier: boolean,
+  windowsAclBoundary: WindowsCatalogAclBoundary,
   candidateIndex: number,
   candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined,
   candidateIdentityObserver: ConsoleConfigCatalogCandidateIdentityDiagnosticObserver | undefined
@@ -244,10 +272,20 @@ async function readTrustedConfiguration(
   if (!isWithin(directory, canonical)) return undefined;
   const resolved = await stat(canonical, { bigint: true });
   if (!isTrustedFile(resolved, ownerUid, platform) || !sameBigIntFileIdentity(observed, resolved)) return undefined;
-  if (!(await hasTrustedWindowsAcl(canonical, "file", platform, windowsAclVerifier))) {
+  const aclPaths: readonly WindowsPrivatePath[] = useBatchedWindowsAclVerifier
+    ? [{ path: directory, kind: "directory" }, { path: canonical, kind: "file" }]
+    : [{ path: canonical, kind: "file" }];
+  if (!(await hasTrustedWindowsAcl(
+    aclPaths,
+    platform,
+    windowsAclVerifier,
+    windowsAclPathsVerifier,
+    useBatchedWindowsAclVerifier
+  ))) {
     observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "rejected");
     return undefined;
   }
+  if (useBatchedWindowsAclVerifier) windowsAclBoundary.verified = true;
   observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "success");
 
   let handle: TrustedConfigurationFileHandle;
@@ -353,11 +391,22 @@ export async function discoverConsoleConfigCatalog(
   const platform = options.platform ?? process.platform;
   const ownerUid = options.ownerUid ?? defaultOwnerUid(platform);
   const windowsAclVerifier = options.windowsAclVerifier ?? verifyWindowsConfigPathSecurity;
+  const windowsAclPathsVerifier = options.windowsAclPathsVerifier ?? verifyWindowsConfigPathsSecurity;
+  const useBatchedWindowsAclVerifier = platform === "win32" && (
+    options.windowsAclPathsVerifier !== undefined || options.windowsAclVerifier === undefined
+  );
   const candidateStageObserver = options.candidateStageObserver;
   const candidateIdentityObserver = options.candidateIdentityObserver;
   let directory: string | undefined;
   try {
-    directory = await trustedDirectory(resolve(options.configDirectory), ownerUid, platform, windowsAclVerifier);
+    directory = await trustedDirectory(
+      resolve(options.configDirectory),
+      ownerUid,
+      platform,
+      windowsAclVerifier,
+      windowsAclPathsVerifier,
+      useBatchedWindowsAclVerifier
+    );
   } catch {
     return {
       catalog: { source: "standard-config-directory", discoveryState: "unavailable", configurations: [] },
@@ -371,6 +420,10 @@ export async function discoverConsoleConfigCatalog(
     };
   }
 
+  // The default Windows path verifies the canonical directory and each
+  // candidate together below. Names are not surfaced until that bounded
+  // trusted boundary succeeds; an empty or rejected catalog still verifies
+  // the directory alone before it can report readiness.
   let names: readonly string[];
   try {
     names = (await readdir(directory)).filter((name) => configurationFileName.test(name)).sort((left, right) => left.localeCompare(right));
@@ -384,6 +437,7 @@ export async function discoverConsoleConfigCatalog(
   const identities = new Set<string>();
   const numberIdentities = candidateIdentityObserver === undefined ? undefined : new Set<string>();
   const configurations: DiscoveredConsoleConfiguration[] = [];
+  const windowsAclBoundary: WindowsCatalogAclBoundary = { verified: !useBatchedWindowsAclVerifier };
   for (const [candidateIndex, name] of names.entries()) {
     try {
       const discovered = await readTrustedConfiguration(
@@ -392,6 +446,9 @@ export async function discoverConsoleConfigCatalog(
         ownerUid,
         platform,
         windowsAclVerifier,
+        windowsAclPathsVerifier,
+        useBatchedWindowsAclVerifier,
+        windowsAclBoundary,
         candidateIndex,
         candidateStageObserver,
         candidateIdentityObserver
@@ -440,6 +497,18 @@ export async function discoverConsoleConfigCatalog(
       observeCandidateStage(candidateStageObserver, candidateIndex, "candidate", "error");
       // A malformed, raced, or untrusted candidate is never a Console entry.
     }
+  }
+  if (useBatchedWindowsAclVerifier && !windowsAclBoundary.verified && !(await hasTrustedWindowsAcl(
+    [{ path: directory, kind: "directory" }],
+    platform,
+    windowsAclVerifier,
+    windowsAclPathsVerifier,
+    true
+  ))) {
+    return {
+      catalog: { source: "standard-config-directory", discoveryState: "unavailable", configurations: [] },
+      configurations: []
+    };
   }
   configurations.sort((left, right) =>
     left.metadata.name.localeCompare(right.metadata.name) || left.metadata.id.localeCompare(right.metadata.id)

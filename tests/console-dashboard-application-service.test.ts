@@ -1,4 +1,4 @@
-import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,8 @@ import {
   discoverConsoleConfigCatalog,
   sameBigIntFileIdentity,
   type ConsoleConfigCatalogCandidateIdentityDiagnosticEvent,
-  type ConsoleConfigCatalogCandidateStageEvent
+  type ConsoleConfigCatalogCandidateStageEvent,
+  type ConsoleConfigCatalogDiscoveryOptions
 } from "../src/console/console-config-catalog.js";
 import { ConsoleDashboardApplicationService } from "../src/console/console-dashboard-application-service.js";
 import { buildPresetConfig } from "../src/config/presets.js";
@@ -1085,6 +1086,45 @@ describe("Console dashboard application service", () => {
       catalog: { discoveryState: "unavailable", configurations: [] },
       configurations: []
     });
+  });
+
+  it("batches Windows ACL verification for a trusted directory and candidate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-windows-acl-batch-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    const configPath = join(directory, "gsc.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+
+    const legacyCalls: Array<{ readonly path: string; readonly kind: "file" | "directory" }> = [];
+    const batches: Array<readonly { readonly path: string; readonly kind: "file" | "directory" }[]> = [];
+    const options: ConsoleConfigCatalogDiscoveryOptions = {
+      configDirectory: directory,
+      platform: "win32" as const,
+      windowsAclVerifier: async (path: string, kind: "file" | "directory") => {
+        legacyCalls.push({ path, kind });
+        return false;
+      },
+      windowsAclPathsVerifier: async (paths) => {
+        batches.push(paths);
+        return true;
+      }
+    };
+
+    await expect(discoverConsoleConfigCatalog(options)).resolves.toMatchObject({
+      catalog: { discoveryState: "ready", configurations: [{ name: "gsc" }] }
+    });
+    const [canonicalDirectory, canonicalConfigPath] = await Promise.all([realpath(directory), realpath(configPath)]);
+    expect(legacyCalls).toEqual([]);
+    expect(batches).toEqual([[
+      { path: canonicalDirectory, kind: "directory" },
+      { path: canonicalConfigPath, kind: "file" }
+    ]]);
   });
 
   it.skipIf(process.platform === "win32")("revalidates a selected configuration before any later Console operation", async () => {

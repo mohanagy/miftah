@@ -105,11 +105,13 @@ describe("Console Windows first-run boundary", () => {
 
     expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledWith(parent, configDirectory);
     // Catalog discovery independently verifies the created configuration after
-    // publication. The creator must not add a second directory probe before it.
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, expect.stringMatching(/[/\\]miftah$/u), "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
-    expect(aclMocks.verifyPaths).not.toHaveBeenCalled();
+    // publication, but it keeps the directory and file in one trusted boundary.
+    expect(aclMocks.verifyPath).not.toHaveBeenCalled();
+    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(1);
+    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+      { path: expect.stringMatching(/[/\\]miftah$/u), kind: "directory" },
+      { path: expect.stringMatching(/[/\\]miftah\.json$/u), kind: "file" }
+    ]);
     expect(aclMocks.writePrivateFile).toHaveBeenCalledWith(configPath, expect.any(String));
   });
 
@@ -193,13 +195,15 @@ describe("Console Windows first-run boundary", () => {
       scopes: ["openid"]
     })).resolves.toMatchObject({ changed: true, write: true });
 
-    expect(aclMocks.verifyPaths).toHaveBeenCalledWith([
+    expect(aclMocks.verifyPaths).toHaveBeenNthCalledWith(1, [
       { path: parent, kind: "directory" },
       { path: configDirectory, kind: "directory" }
     ]);
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(2);
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(1, expect.stringMatching(/[/\\]miftah$/u), "directory");
-    expect(aclMocks.verifyPath).toHaveBeenNthCalledWith(2, expect.stringMatching(/[/\\]miftah\.json$/u), "file");
+    expect(aclMocks.verifyPaths).toHaveBeenNthCalledWith(2, [
+      { path: expect.stringMatching(/[/\\]miftah$/u), kind: "directory" },
+      { path: expect.stringMatching(/[/\\]miftah\.json$/u), kind: "file" }
+    ]);
+    expect(aclMocks.verifyPath).not.toHaveBeenCalled();
   });
 
   it("fails closed before audit or config creation when the standard directory cannot be verified", async () => {
@@ -287,8 +291,8 @@ describe("Console Windows first-run boundary", () => {
     expect(aclMocks.createPrivateDirectoryInParent).toHaveBeenCalledTimes(2);
     expect(aclMocks.secureFile).toHaveBeenCalledOnce();
     expect(aclMocks.writePrivateFile).toHaveBeenCalledOnce();
-    expect(aclMocks.verifyPath).toHaveBeenCalledTimes(5);
-    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(3);
+    expect(aclMocks.verifyPath).toHaveBeenCalledOnce();
+    expect(aclMocks.verifyPaths).toHaveBeenCalledTimes(5);
   });
 
   it("attributes Windows ACL helper launches across the complete first-run draft lifecycle", async () => {
@@ -343,9 +347,9 @@ describe("Console Windows first-run boundary", () => {
     expect({ afterSave, afterLoad, afterPublication, afterDraftRead, afterConfiguredRead }).toEqual({
       afterSave: { create: 0, createInParent: 1, secure: 1, write: 0, verify: 0, verifyBatch: 0 },
       afterLoad: { create: 0, createInParent: 1, secure: 1, write: 0, verify: 0, verifyBatch: 1 },
-      afterPublication: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 3, verifyBatch: 2 },
-      afterDraftRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 3, verifyBatch: 3 },
-      afterConfiguredRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 5, verifyBatch: 3 }
+      afterPublication: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 1, verifyBatch: 3 },
+      afterDraftRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 1, verifyBatch: 4 },
+      afterConfiguredRead: { create: 0, createInParent: 2, secure: 1, write: 1, verify: 1, verifyBatch: 5 }
     });
   });
 
