@@ -75,7 +75,7 @@ All connection details must be entered again after resume; the checkpoint does n
 
 Choose **import** in `miftah setup`, provide one absolute client JSON path, and select one listed entry. Miftah displays entry names only. It does not print the source command, arguments, environment values, headers, or credentials, and it never modifies the source client file.
 
-The import path accepts only a supported local STDIO entry or a credential-free HTTPS remote entry. It does not guess authentication ownership. Use `--import-file` and `--import-entry` for the equivalent explicit noninteractive path; review it first with `--plan`.
+The import path accepts only a supported local STDIO entry or a credential-free HTTPS remote entry. It does not guess authentication ownership. Use `--import-file` and `--import-entry` for the equivalent explicit noninteractive path. Import has its own bounded source inspection and candidate review; `--plan` cannot be combined with import.
 
 ## 4. Set up and maintain multiple Google accounts
 
@@ -85,7 +85,7 @@ Google Search Console is the reviewed provider-adapter example in 0.5:
 miftah setup gsc --preset google-search-console
 ```
 
-The guided flow collects each profile name and asks which profile should be the durable default. Every generated configuration/profile pair receives a distinct `GSC_CONFIG_DIR`. The `mcp-search-console` upstream owns browser login, refresh, reauthentication, revocation, and the token cache inside that directory. Miftah never reads or copies the upstream-owned token cache.
+The guided flow collects each profile name and asks which profile should be the durable default. Every generated configuration/profile pair receives a distinct `GSC_CONFIG_DIR`. The `mcp-search-console` upstream owns browser login, refresh, reauthentication, and the token cache inside that directory. Miftah never reads or copies the upstream-owned token cache. Provider-side disconnect and revocation stay manual through the upstream and Google account controls; Miftah cannot promise provider-side revocation.
 
 Add a returning account to an existing reviewed configuration with:
 
@@ -97,7 +97,7 @@ miftah setup --add-profile \
   --verify
 ```
 
-This is a configuration mutation, not a preview. It adds one isolated profile through the reviewed adapter contract, records a redacted lifecycle event, and runs only the declared `get_capabilities` readiness probe when `--verify` is present. That probe is health evidence; it does not prove the authorized Google account or property.
+This is a configuration mutation, not a preview. It adds one isolated profile through the reviewed adapter contract, records a redacted lifecycle event when configured audit is enabled, and runs only the declared `get_capabilities` readiness probe when `--verify` is present. That probe is health evidence; it does not prove the authorized Google account or property.
 
 Read the [provider-adapter guide](provider-adapters.md) for prerequisites, service-account alternatives, cache ownership, and recovery.
 

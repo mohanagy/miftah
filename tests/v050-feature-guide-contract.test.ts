@@ -87,6 +87,16 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("[full changelog](../CHANGELOG.md)");
   });
 
+  it("keeps import review, provider revocation, and audit ownership conditional", () => {
+    const guide = readGuide();
+
+    expect(guide).toContain("`--plan` cannot be combined with import");
+    expect(guide).toContain("Provider-side disconnect and revocation stay manual");
+    expect(guide).toContain("when configured audit is enabled");
+    expect(guide).not.toContain("review it first with `--plan`");
+    expect(guide).not.toContain("owns browser login, refresh, reauthentication, revocation");
+  });
+
   it("binds every documented Miftah command and flag to generated CLI help", () => {
     const commands = documentedMiftahCommands(readGuide());
     expect(commands.length).toBeGreaterThan(5);
