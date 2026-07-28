@@ -92,10 +92,11 @@ describe("product README", () => {
   });
 
   it("puts both human-first setup surfaces before the scripted quick-start path", () => {
-    const quickStart = readme.slice(
-      readme.indexOf("## Quick start"),
-      readme.indexOf("## Choose your setup and authentication path")
-    );
+    const quickStartStart = readme.indexOf("## Quick start");
+    const quickStartEnd = readme.indexOf("## Choose your setup and authentication path");
+    expect(quickStartStart).toBeGreaterThanOrEqual(0);
+    expect(quickStartEnd).toBeGreaterThan(quickStartStart);
+    const quickStart = readme.slice(quickStartStart, quickStartEnd);
     const terminalWizardIndex = quickStart.indexOf("miftah setup");
     const browserConsoleIndex = quickStart.indexOf("miftah dashboard");
     const scriptedInitIndex = quickStart.indexOf("miftah init");

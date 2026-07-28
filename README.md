@@ -48,7 +48,7 @@ Miftah exposes management tools such as `miftah_list_profiles`, `miftah_current_
 
 ## Quick start
 
-Install Miftah, then choose the terminal wizard or the browser Console. Both use the same validated setup services and can start from a known connector, remote HTTPS MCP, reviewed local executable, supported browser sign-in, or one existing client entry.
+Install Miftah, then choose the terminal wizard or the browser Console. Both use the same validated setup services. The terminal wizard can start from a known connector, remote HTTPS MCP, reviewed local executable, supported browser sign-in, or one existing client entry. The browser Console provides first-run setup for a known connector or a standards-compatible remote MCP with native OAuth.
 
 ### 1. Install the current release
 
