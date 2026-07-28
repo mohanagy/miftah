@@ -81,7 +81,35 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
-    "esbuild": "0.28.1"
+    "@vitest/coverage-v8": {
+      "test-exclude": {
+        "glob": {
+          ".": "13.0.6",
+          "minimatch": {
+            "brace-expansion": "5.0.8"
+          }
+        },
+        "minimatch": {
+          "brace-expansion": "5.0.8"
+        }
+      }
+    },
+    "esbuild": "0.28.1",
+    "eslint": {
+      "minimatch": {
+        "brace-expansion": "5.0.8"
+      }
+    },
+    "typescript-eslint": {
+      "minimatch": {
+        "brace-expansion": "5.0.8"
+      }
+    },
+    "vitest": {
+      "vite": {
+        "postcss": "8.5.23"
+      }
+    }
   },
   "license": "MIT",
   "publishConfig": {
