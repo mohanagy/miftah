@@ -48,7 +48,7 @@ Miftah exposes management tools such as `miftah_list_profiles`, `miftah_current_
 
 ## Quick start
 
-This example creates one Claude Desktop connector with `work` and `personal` GitHub profiles. It requires Node.js 20 or newer and Docker.
+Install Miftah, then choose the terminal wizard or the browser Console. Both use the same validated setup services and can start from a known connector, remote HTTPS MCP, reviewed local executable, supported browser sign-in, or one existing client entry.
 
 ### 1. Install the current release
 
@@ -57,7 +57,31 @@ npm install -g @lubab/miftah@0.5.0
 miftah version
 ```
 
-### 2. Generate the configuration and client snippet
+### 2. Choose a human-first setup
+
+**Terminal wizard**
+
+```bash
+miftah setup
+```
+
+The wizard shows numbered choices, lets you go back before entering connection details, validates before writing, and can print client JSON for manual review.
+
+**Browser Console**
+
+```bash
+miftah dashboard
+```
+
+Keep the foreground terminal open, enter its one-time code in the local browser page, then choose **Set up an MCP**. `miftah dashboard` is the browser UI; the similarly named `miftah console` command starts the lower-level local control API.
+
+Neither path asks for a token, password, or browser cookie. Miftah does not silently edit Claude Desktop, Claude Code, Cursor, or VS Code settings.
+
+Follow the generated handoff to review one client connector, merge it into your client settings, and restart or reconnect that client.
+
+### Optional: scripted GitHub example
+
+Use `miftah init` when you want a repeatable preset command instead of either human-first flow. This example creates one Claude Desktop connector with `work` and `personal` GitHub profiles. It requires Docker.
 
 ```bash
 miftah init github --preset github --output ~/.config/miftah/github.json --client claude-desktop
@@ -67,7 +91,7 @@ Miftah creates `~/.config/miftah/github.json` and prints a Claude Desktop `mcpSe
 
 The generated profiles refer to `GITHUB_WORK_TOKEN` and `GITHUB_PERSONAL_TOKEN`. Provide least-privilege tokens through a supported [secret provider](docs/config.md#secret-providers), not as raw values in the Miftah or Claude JSON. OS keychain references use `secretref:keychain://`; 1Password references use `secretref:op://`. Claude Desktop is a GUI app and does not normally inherit variables from terminal startup files such as `~/.zshrc`.
 
-### 3. Validate before connecting the client
+#### Validate before connecting the client
 
 After those credential references are available to the process that will launch Miftah, run:
 
@@ -79,7 +103,7 @@ miftah test-profile --config ~/.config/miftah/github.json --profile work
 
 `validate` checks configuration shape. `doctor` checks redacted credential and upstream readiness. `test-profile` starts and initializes only the selected profile. None proves provider scopes or account identity beyond the evidence it actually reports.
 
-### 4. Connect and select the account
+#### Connect and select the account
 
 Merge the printed `mcpServers` entry into Claude Desktop through **Developer → Edit Config**, save, and restart Claude Desktop. Then ask:
 
@@ -118,7 +142,7 @@ On Windows, `generic`, `sentry`, and `generic-npx` are unavailable. Miftah refus
 ## Wizard, CLI, clients, and optional Console
 
 - `miftah setup` is the guided terminal wizard. It asks what you already have, collects only the metadata needed for that path, validates before writing, and never asks for a token, password, or browser cookie.
-- `miftah init` is the scripted preset path used in the quick start.
+- `miftah init` is the optional scripted preset path shown in the quick start.
 - `miftah dashboard` opens the optional foreground-only local Console for reviewed setup, profiles, health, and OAuth lifecycle work. It is not required to run Miftah.
 - Client generation can print reviewable snippets for Claude Desktop, Claude Code, Cursor, and VS Code. Miftah never silently edits their settings.
 

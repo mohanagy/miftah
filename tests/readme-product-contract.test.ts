@@ -91,6 +91,22 @@ describe("product README", () => {
     expect(readme).toContain("Claude Desktop is a GUI app and does not normally inherit variables");
   });
 
+  it("puts both human-first setup surfaces before the scripted quick-start path", () => {
+    const quickStart = readme.slice(
+      readme.indexOf("## Quick start"),
+      readme.indexOf("## Choose your setup and authentication path")
+    );
+    const terminalWizardIndex = quickStart.indexOf("miftah setup");
+    const browserConsoleIndex = quickStart.indexOf("miftah dashboard");
+    const scriptedInitIndex = quickStart.indexOf("miftah init");
+
+    expect(terminalWizardIndex).toBeGreaterThan(0);
+    expect(browserConsoleIndex).toBeGreaterThan(terminalWizardIndex);
+    expect(scriptedInitIndex).toBeGreaterThan(browserConsoleIndex);
+    expect(quickStart).toContain("Terminal wizard");
+    expect(quickStart).toContain("Browser Console");
+  });
+
   it("separates secret, native OAuth, and upstream-owned authentication", () => {
     expect(readme).toContain("## Choose your setup and authentication path");
     expect(readme).toContain("API key, token, or another secret");
@@ -106,7 +122,7 @@ describe("product README", () => {
   it("makes the wizard, CLI, optional Console, and client paths easy to find", () => {
     expect(readme).toContain("## Wizard, CLI, clients, and optional Console");
     expect(readme).toContain("`miftah setup` is the guided terminal wizard");
-    expect(readme).toContain("`miftah init` is the scripted preset path");
+    expect(readme).toContain("`miftah init` is the optional scripted preset path");
     expect(readme).toContain("`miftah dashboard` opens the optional foreground-only local Console");
     expect(readme).toContain("It is not required to run Miftah.");
     expect(readme).toContain("Claude Desktop, Claude Code, Cursor, and VS Code");
@@ -143,9 +159,8 @@ describe("product README", () => {
     expect(presetDocs).toContain("Claude Code");
     expect(presetDocs).toContain("Cursor");
     expect(presetDocs).toContain("VS Code");
-    expect(presetDocs).toContain(
-      "What do you already have? (connector, remote HTTPS, local executable, browser sign-in, import) [connector]"
-    );
+    expect(presetDocs).toContain("Its first step lists five numbered starting points");
+    expect(presetDocs).toContain("enter `back` there to return to the starting-point list");
     expect(presetDocs).not.toContain("choose `remote sign-in`");
     expect(oauthDocs).toContain("Miftah does not support OAuth for every MCP server or provider.");
     expect(oauthDocs).toContain("## Local and provider-owned OAuth");

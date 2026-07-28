@@ -30,7 +30,7 @@ Run:
 miftah setup
 ```
 
-The wizard asks what you already have:
+The wizard shows these as numbered choices:
 
 - **connector** — a reviewed built-in connector or exact-pinned package;
 - **remote HTTPS** — a strict Streamable HTTP endpoint without contacting it during generic setup;
@@ -38,7 +38,7 @@ The wizard asks what you already have:
 - **browser sign-in** — a remote HTTPS MCP that advertises Miftah's supported standards-based OAuth flow;
 - **import** — one explicitly selected entry from one existing client JSON file.
 
-The wizard asks for environment-variable names and non-secret metadata, not token or password values. It validates the complete candidate before publication and prints client configuration for manual review. Miftah does not silently edit Claude Desktop, Claude Code, Cursor, or VS Code.
+Enter a number or name, then review the selected path. You can enter `back` before connection details are collected or `cancel` before a configuration is written. The wizard asks for environment-variable names and non-secret metadata, not token or password values. It validates the complete candidate before publication and prints client configuration for manual review. Miftah does not silently edit Claude Desktop, Claude Code, Cursor, or VS Code.
 
 After merging the generated client entry, restart the MCP client. A running client process does not automatically adopt configuration or profile changes made later.
 

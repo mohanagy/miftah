@@ -22,7 +22,8 @@ import { environmentProfileConfig } from "./helpers/environment-profile-config.j
 import { startOAuthCompatibilityProbe } from "./helpers/fake-remote-upstream.js";
 
 const outputRoot = resolve(process.cwd(), ".setup-command-test-output");
-const guidedSourcePrompt = "What do you already have? (connector, remote HTTPS, local executable, browser sign-in, import) [connector]";
+const guidedSourcePrompt = "Choose a starting point (1-5 or name) [1]";
+const guidedSourceConfirmationPrompt = "Continue with this setup path? (yes/back/cancel) [yes]";
 
 function importableClientEntry(): { readonly command: string; readonly args: readonly string[] } {
   return process.platform === "win32"
@@ -71,6 +72,15 @@ async function answer(
   streams.input.write(`${value}\n`);
 }
 
+async function chooseGuidedSource(
+  streams: ReturnType<typeof createStreams>,
+  value: string,
+  occurrences = 1
+): Promise<void> {
+  await answer(streams, guidedSourcePrompt, value, occurrences);
+  await answer(streams, guidedSourceConfirmationPrompt, "yes", occurrences);
+}
+
 beforeEach(async () => {
   await rm(outputRoot, { recursive: true, force: true });
 });
@@ -91,7 +101,61 @@ describe("setup command", () => {
 
   it("makes the guided setup flow a first-class command", () => {
     expect(parseCli(["setup"])).toEqual({ kind: "run", command: "setup", options: {} });
-    expect(renderCommandHelp("setup")).toContain("guided MCP setup flow");
+    expect(renderCommandHelp("setup")).toContain("guided terminal MCP setup wizard");
+  });
+
+  it("presents the first setup decision as a numbered, progress-labelled wizard step", async () => {
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    try {
+      await streams.transcript.waitFor(guidedSourcePrompt);
+      expect(streams.transcript.contents).toContain("Step 1 — Choose what you already have");
+      expect(streams.transcript.contents).toContain("1. Known connector or pinned package");
+      expect(streams.transcript.contents).toContain("2. Remote HTTPS endpoint");
+      expect(streams.transcript.contents).toContain("3. Local executable");
+      expect(streams.transcript.contents).toContain("4. Remote MCP with browser sign-in");
+      expect(streams.transcript.contents).toContain("5. Existing client entry");
+      expect(streams.transcript.contents).toContain("Enter a number or name");
+    } finally {
+      streams.input.end();
+      await command.catch(() => undefined);
+    }
+  });
+
+  it("accepts numbered choices and returns safely to the source step on back", async () => {
+    const streams = createStreams();
+    const command = runSetupCommand({}, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: {
+        command: process.execPath,
+        args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"]
+      }
+    });
+
+    await answer(streams, guidedSourcePrompt, "2");
+    await answer(streams, guidedSourceConfirmationPrompt, "back");
+    await answer(streams, guidedSourcePrompt, "3", 2);
+    await answer(streams, guidedSourceConfirmationPrompt, "cancel", 2);
+
+    await expect(command).rejects.toThrow("Guided setup was cancelled.");
+    streams.input.end();
+    expect(streams.transcript.contents).toContain("Selected: Remote HTTPS endpoint");
+    expect(streams.transcript.contents).toContain("Returning to the starting-point choices.");
+    expect(streams.transcript.contents).toContain("Selected: Local executable");
+    await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
   });
 
   it("checkpoints only a bare connector intent before asking for connection details", async () => {
@@ -113,7 +177,7 @@ describe("setup command", () => {
     });
 
     try {
-      await answer(streams, guidedSourcePrompt, "connector");
+      await chooseGuidedSource(streams, "connector");
       await answer(streams, "Name [miftah-wrapper]", "posthog-work");
       await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
       await streams.transcript.waitFor("Docker image (digest-pinned)");
@@ -818,7 +882,7 @@ describe("setup command", () => {
     });
 
     try {
-      await answer(streams, guidedSourcePrompt, "remote-sign-in");
+      await chooseGuidedSource(streams, "remote-sign-in");
       await answer(streams, "Configuration name [miftah-remote]", "posthog-work");
       await answer(streams, "Account profile name [default]", "production");
       await answer(streams, "Account profile description (optional)", "Production analytics");
@@ -874,7 +938,7 @@ describe("setup command", () => {
       nativeOAuthFetch
     });
 
-    await answer(streams, guidedSourcePrompt, "remote");
+    await chooseGuidedSource(streams, "remote");
     await answer(streams, "Name [miftah-wrapper]", "remote-tools");
     await answer(streams, "Streamable HTTPS URL", "https://mcp.example.test/mcp");
     await answer(streams, "Credential environment variable name (optional)", "");
@@ -913,7 +977,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "local executable");
+    await chooseGuidedSource(streams, "local executable");
     await answer(streams, "Name [miftah-wrapper]", "local-tools");
     await answer(streams, "Local executable (no shell)", localCommand);
     await answer(streams, "Add a local argument? (yes/no) [no]", "no");
@@ -950,7 +1014,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "new");
+    await chooseGuidedSource(streams, "new");
     await answer(streams, "Name [miftah-wrapper]", "guided");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "generic-docker");
     await answer(
@@ -1081,7 +1145,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "1");
     await answer(streams, "Configuration name [miftah-import]", "analytics");
@@ -1129,7 +1193,7 @@ describe("setup command", () => {
       },
       nativeOAuthFetch
     });
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "analytics");
     await answer(streams, "Configuration name [miftah-import]", "analytics");
@@ -1196,7 +1260,7 @@ describe("setup command", () => {
       },
       nativeOAuthFetch
     });
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "analytics");
     await answer(streams, "Configuration name [miftah-import]", "analytics");
@@ -1255,7 +1319,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "2");
     await answer(streams, "Configuration name [miftah-import]", "numeric-entry");
@@ -1289,7 +1353,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await streams.transcript.waitFor("MCP entry to import (number or exact name)");
     await writeFile(source, JSON.stringify({
@@ -1323,7 +1387,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     await answer(streams, "MCP entry to import (number or exact name)", "missing");
 
@@ -1353,7 +1417,7 @@ describe("setup command", () => {
         }
       });
 
-      await answer(streams, guidedSourcePrompt, "import");
+      await chooseGuidedSource(streams, "import");
       await streams.transcript.waitFor("Client configuration file (absolute path)");
       cancel(streams);
 
@@ -1379,7 +1443,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "import");
+    await chooseGuidedSource(streams, "import");
     await answer(streams, "Client configuration file (absolute path)", source);
     streams.input.end();
 
@@ -1413,7 +1477,7 @@ describe("setup command", () => {
     }
   });
 
-  it("rejects an unsupported guided setup starting point before any configuration write", async () => {
+  it("keeps an unsupported guided setup starting point on the current step without writing", async () => {
     const streams = createStreams();
     const command = runSetupCommand({}, {
       input: streams.input,
@@ -1426,9 +1490,12 @@ describe("setup command", () => {
     });
 
     await answer(streams, guidedSourcePrompt, "unsupported");
-    await expect(command).rejects.toThrow(
-      "Choose 'connector' for a known connector or pinned package, 'remote' for a generic HTTPS MCP endpoint, 'local' for an executable plus arguments, 'browser-sign-in' when the MCP opens a browser, or 'import' for an existing client entry."
+    await streams.transcript.waitFor(guidedSourcePrompt, 2);
+    expect(streams.transcript.contents).toContain(
+      "Choose 1-5, or enter connector, remote, local, browser sign-in, or import."
     );
+    await answer(streams, guidedSourcePrompt, "cancel", 2);
+    await expect(command).rejects.toThrow("Guided setup was cancelled.");
     streams.input.end();
     await expect(readFile(resolve(outputRoot, "miftah-wrapper.miftah.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -2066,7 +2133,7 @@ describe("setup command", () => {
       }
     });
 
-    await answer(streams, guidedSourcePrompt, "new");
+    await chooseGuidedSource(streams, "new");
     await answer(streams, "Name [miftah-wrapper]", "gsc");
     await answer(streams, "What do you want to set up? (connector name, remote, or local)", "google-search-console");
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");
