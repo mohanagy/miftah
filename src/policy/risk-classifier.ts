@@ -6,6 +6,8 @@ import { destructiveRiskNamePattern, readRiskNamePattern, writeRiskNamePattern }
 export interface ToolRiskMetadata {
   readonly trusted?: boolean;
   readonly annotations?: ToolRiskAnnotations;
+  /** A Miftah-owned provider-adapter declaration for one exact, empty-object readiness probe. */
+  readonly providerAdapterSafeRead?: true;
   /** Command payload from Miftah's origin-pinned PostHog adapter; never supplied by an upstream tool. */
   readonly posthogCommand?: { readonly command: unknown };
 }
@@ -25,6 +27,8 @@ export function classifyToolRisk(
   if (override !== undefined && Object.hasOwn(override, toolName)) {
     return { risk: override[toolName]!, riskSource: "local-override", riskConfidence: "high" };
   }
+
+  if (metadata.providerAdapterSafeRead === true) return trustedProviderAdapter("read");
 
   if (metadata.posthogCommand !== undefined) {
     return trustedCommandAdapter(classifyPosthogCommandRisk(metadata.posthogCommand.command));
@@ -74,6 +78,11 @@ function trusted(risk: RiskLevel): RiskClassification {
 /** Marks a risk derived by Miftah's origin-pinned command adapter as high confidence. */
 function trustedCommandAdapter(risk: RiskLevel): RiskClassification {
   return { risk, riskSource: "trusted-command-adapter", riskConfidence: "high" };
+}
+
+/** Marks a built-in provider-adapter readiness declaration as high-confidence local safety metadata. */
+function trustedProviderAdapter(risk: RiskLevel): RiskClassification {
+  return { risk, riskSource: "trusted-provider-adapter", riskConfidence: "high" };
 }
 
 function heuristic(risk: RiskLevel): RiskClassification {

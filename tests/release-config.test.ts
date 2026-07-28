@@ -6,6 +6,7 @@ const checkoutPin = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
 const npmVersionComparisonPattern = /const npmIsCurrentEnough =\s*([\s\S]*?);\n\n\s+if \(Number/u;
 const reflectiveArrayMethodPattern = /\.(?:every|some|findIndex)\(/u;
 const setupNodePin = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+type PackageOverride = string | { [name: string]: PackageOverride };
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -15,6 +16,22 @@ function readPackageScripts(): Record<string, string> {
   const packageJson = JSON.parse(readRepositoryFile("package.json")) as { scripts?: Record<string, string> };
   if (!packageJson.scripts) throw new Error("package.json does not define scripts.");
   return packageJson.scripts;
+}
+
+function readPackageOverrides(): Record<string, PackageOverride> {
+  const packageJson = JSON.parse(readRepositoryFile("package.json")) as {
+    overrides?: Record<string, PackageOverride>;
+  };
+  if (!packageJson.overrides) throw new Error("package.json does not define overrides.");
+  return packageJson.overrides;
+}
+
+function readLockedPackages(): Record<string, { version?: string; dev?: boolean }> {
+  const lockfile = JSON.parse(readRepositoryFile("package-lock.json")) as {
+    packages?: Record<string, { version?: string; dev?: boolean }>;
+  };
+  if (!lockfile.packages) throw new Error("package-lock.json does not define packages.");
+  return lockfile.packages;
 }
 
 function actionReferences(workflow: string): string[] {
@@ -126,6 +143,32 @@ describe("continuous integration workflow contract", () => {
     expect(config).toContain(
       'exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"]'
     );
+  });
+
+  it("pins patched transitive test-toolchain dependencies", () => {
+    const overrides = readPackageOverrides();
+    const lockedPackages = readLockedPackages();
+
+    expect(overrides).toMatchObject({
+      "@vitest/coverage-v8": {
+        "test-exclude": {
+          glob: {
+            ".": "13.0.6",
+            minimatch: { "brace-expansion": "5.0.8" }
+          },
+          minimatch: { "brace-expansion": "5.0.8" }
+        }
+      },
+      eslint: { minimatch: { "brace-expansion": "5.0.8" } },
+      "typescript-eslint": { minimatch: { "brace-expansion": "5.0.8" } },
+      vitest: { vite: { postcss: "8.5.23" } }
+    });
+    for (const name of ["brace-expansion", "glob", "postcss"]) {
+      expect(overrides).not.toHaveProperty(name);
+    }
+    expect(lockedPackages["node_modules/brace-expansion"]).toMatchObject({ version: "5.0.8", dev: true });
+    expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
+    expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });
   });
 
   it("keeps serial process-backed tests in one isolated fork", () => {

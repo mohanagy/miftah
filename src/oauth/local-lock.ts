@@ -4,7 +4,9 @@ import type { ListenOptions, Server, Socket } from "node:net";
 
 const localLockPortStart = 49_152;
 const localLockPortCount = 16_384;
-// macOS retains one canonical candidate to preserve coordination with older Miftah versions.
+export const macOSFallbackCandidateCount = 7;
+// macOS retains one canonical candidate to preserve coordination with older Miftah versions, then
+// uses a bounded deterministic fallback set only when that candidate is proven unrelated.
 // Windows and Linux recognize an exact holder on that legacy candidate and hold a best-effort
 // companion listener for rolling upgrades, but acquire collision-free kernel endpoints. Windows
 // uses a named pipe because this entire TCP range is also its default ephemeral range; Linux uses
@@ -66,6 +68,19 @@ export function createOAuthLocalLockStrategy(
     return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint };
   }
   return { key, probeEndpoints: [legacyEndpoint], acquisitionEndpoint: legacyEndpoint };
+}
+
+function macOSFallbackEndpoints(key: string, legacyEndpoint: OAuthLocalLockProbeEndpoint): readonly OAuthLocalLockProbeEndpoint[] {
+  const ports = new Set<number>([legacyEndpoint.port]);
+  const endpoints: OAuthLocalLockProbeEndpoint[] = [];
+  for (let index = 1; index <= macOSFallbackCandidateCount; index += 1) {
+    const chunk = key.slice(index * 8, (index + 1) * 8);
+    const port = localLockPortStart + (Number.parseInt(chunk, 16) % localLockPortCount);
+    if (ports.has(port)) continue;
+    ports.add(port);
+    endpoints.push({ kind: "tcp", port });
+  }
+  return endpoints;
 }
 
 function sameLocalLockEndpoint(left: OAuthLocalLockEndpoint, right: OAuthLocalLockEndpoint): boolean {
@@ -150,6 +165,28 @@ async function tryAcquireLocalLock(endpoint: OAuthLocalLockEndpoint, key: string
   });
 }
 
+async function tryAcquireMacOSFallback(
+  endpoints: readonly OAuthLocalLockProbeEndpoint[],
+  key: string
+): Promise<LocalLock | undefined> {
+  // Every endpoint must be inspected before choosing a fallback because a later matching or
+  // incomplete probe overrides an earlier available one. Run that complete inspection together
+  // so the bounded fallback scan takes one probe round trip rather than one per endpoint.
+  const states = await Promise.all(endpoints.map((endpoint) => inspectLocalLockEndpoint(endpoint, key)));
+  let candidate: OAuthLocalLockProbeEndpoint | undefined;
+  for (const [index, state] of states.entries()) {
+    // A matching holder or incomplete probe may be a same-key process acquiring a fallback. Do not
+    // choose another endpoint until that state has resolved, or one key could split across locks.
+    if (state === "held" || state === "unknown") return undefined;
+    if (state === "occupied") continue;
+    candidate ??= endpoints[index];
+  }
+  if (candidate === undefined) return undefined;
+  // All contenders choose the first available endpoint. If it is won concurrently, retry from the
+  // complete stable set instead of moving to another candidate and splitting a same-key lock.
+  return tryAcquireLocalLock(candidate, key);
+}
+
 async function releaseLocalLock(lock: LocalLock): Promise<void> {
   for (const client of lock.clients) client.destroy();
   await new Promise<void>((resolve) => {
@@ -171,11 +208,17 @@ async function acquireLocalLock(
   const strategy = createOAuthLocalLockStrategy(scope, value, platform);
   const legacyEndpoint = strategy.probeEndpoints[0];
   const acquiresLegacyEndpoint = sameLocalLockEndpoint(legacyEndpoint, strategy.acquisitionEndpoint);
+  const fallbackEndpoints = platform === "darwin" ? macOSFallbackEndpoints(strategy.key, legacyEndpoint) : undefined;
   while (true) {
     if (Date.now() - startedAt >= waitMilliseconds) throw new OAuthLocalLockUnavailableError();
     const legacyState = await inspectLocalLockEndpoint(legacyEndpoint, strategy.key);
-    const mustWait = acquiresLegacyEndpoint ? legacyState !== "available" : legacyState === "held";
-    if (!mustWait) {
+    const canUseMacOSFallback = legacyState === "occupied" && fallbackEndpoints !== undefined;
+    const mustWait = acquiresLegacyEndpoint
+      ? legacyState !== "available" && !canUseMacOSFallback
+      : legacyState === "held";
+    // A positively unrelated legacy listener cannot become this lock through a bind retry. On
+    // macOS, go directly to the deterministic fallback scan instead of making that doomed bind.
+    if (!mustWait && !canUseMacOSFallback) {
       let primaryLock: LocalLock | undefined;
       try {
         primaryLock = await tryAcquireLocalLock(strategy.acquisitionEndpoint, strategy.key);
@@ -211,6 +254,15 @@ async function acquireLocalLock(
           }
         };
       }
+    }
+    if (canUseMacOSFallback) {
+      let fallbackLock: LocalLock | undefined;
+      try {
+        fallbackLock = await tryAcquireMacOSFallback(fallbackEndpoints, strategy.key);
+      } catch {
+        throw new OAuthLocalLockUnavailableError();
+      }
+      if (fallbackLock !== undefined) return async () => releaseLocalLock(fallbackLock);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

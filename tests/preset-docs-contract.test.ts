@@ -47,7 +47,8 @@ describe("preset documentation contract", () => {
       "@sentry/mcp-server@0.36.0",
       "--skills=inspect",
       "mcp-search-console@0.3.2",
-      "GSC_OAUTH_CLIENT_SECRETS_FILE"
+      "GSC_OAUTH_CLIENT_SECRETS_FILE",
+      "GSC_CONFIG_DIR"
     ]) {
       expect(compatibility).toContain(requiredFact);
     }
@@ -75,6 +76,7 @@ describe("preset documentation contract", () => {
 
     expect(readme).toContain("[Preset and client compatibility](docs/presets-and-clients.md)");
     expect(cli).toContain("[preset and client compatibility](presets-and-clients.md)");
+    expect(cli).toContain("except `--interactive`, plus `--native-oauth` and `--verify`");
     expect(claudeDesktop).toContain("Merge the generated top-level `mcpServers` property");
     expect(claudeDesktop).toMatch(/merge the generated server entry into that object instead of nesting/iu);
     expect(claudeDesktop).not.toContain("Paste the generated JSON into the `mcpServers` object");
@@ -92,10 +94,19 @@ describe("preset documentation contract", () => {
       "--url",
       "--header-name",
       "--header-prefix",
-      "--oauth-client-secrets-file"
+      "--oauth-client-secrets-file",
+      "--local-command",
+      "--arg",
+      "--cwd",
+      "--accept-local-command",
+      "--verify",
+      "--add-profile"
     ]) {
       expect(cli).toContain(option);
     }
+    expect(compatibility).toContain("Each `--arg` is one literal argv element");
+    expect(compatibility).toContain("never uses a shell");
+    expect(compatibility).toContain("direct native absolute `.exe` or `.com` binary on Windows");
     expect(compatibility).not.toContain("runtime construction");
     expect(compatibility).toContain(
       "Miftah does not generate equivalent per-tool client permission guidance for Claude Desktop, Cursor, or VS Code"
@@ -104,20 +115,36 @@ describe("preset documentation contract", () => {
     const issue19 = changelogIssueEntry(changelog, 19);
     const issue98 = changelogIssueEntry(changelog, 98);
     const issue87 = changelogIssueEntry(changelog, 87);
+    const issue204 = changelogIssueEntry(changelog, 204);
     expect(issue19).toContain("catalog");
     expect(issue19).toContain("onboarding");
     expect(issue98).toContain("permission");
     expect(issue98).not.toContain("runtime construction");
     expect(issue87).toContain("upstream-owned");
+    expect(issue204).toContain("local STDIO");
+    expect(issue204).toContain("returning provider-owned account");
     expect(providerAdapters).toContain("## Google Search Console pilot");
     expect(providerAdapters).toContain("Credential ownership | Upstream");
-    expect(providerAdapters).toContain("Miftah never reads, copies, exports, or deletes that cache");
+    expect(providerAdapters).toContain("Each generated Miftah configuration/profile pair passes a distinct `GSC_CONFIG_DIR`");
+    expect(providerAdapters).toContain("The upstream creates and maintains its token cache there");
+    expect(providerAdapters).toContain("Miftah never creates, reads, copies, exports, or deletes that cache");
+    expect(providerAdapters).toContain("This is cache isolation, not Google-account identity verification");
     expect(providerAdapters).toContain("GSC_CREDENTIALS_PATH");
     expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
     expect(providerAdapters).toContain("get_capabilities");
+    expect(providerAdapters).toContain("`setup --verify`");
+    expect(providerAdapters).toContain("`miftah setup --add-profile`");
+    expect(providerAdapters).toContain("Add another provider account");
+    expect(providerAdapters).toContain("Console action");
+    expect(providerAdapters).toContain("`PROFILE_READINESS_UNSUPPORTED`");
+    expect(providerAdapters).toContain("configuration-controlled `PATH`");
+    expect(providerAdapters).toContain("does not start a provider process");
     expect(providerAdapters).toContain("reauthenticate");
     expect(providerAdapters).toContain("GSC_ALLOW_DESTRUCTIVE");
     expect(oauthSupport).not.toContain("No provider-adapter API exists today");
     expect(oauthSupport).toContain("Google Search Console pilot");
+    expect(cli).toContain("If the post-write readiness prompt is cancelled, Miftah keeps the configuration, reports incomplete verification, and exits 1.");
+    expect(cli).toContain("A non-ready `setup --verify` result also keeps the configuration and exits 1.");
+    expect(cli).toContain("`miftah setup --add-profile --config <file>`");
   });
 });

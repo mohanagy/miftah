@@ -179,6 +179,318 @@ describe("CLI parser", () => {
     expectUsageError(["init", "example", "--name", "named-example"]);
   });
 
+  it("offers the opt-in provider readiness check only from guided setup", () => {
+    expect(parseCli(["setup", "--verify"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { verify: true }
+    });
+    expect(renderCommandHelp("setup")).toContain("--verify");
+    expectUsageError(["init", "--verify"]);
+  });
+
+  it("offers a non-writing setup plan only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--plan",
+      "--name", "posthog-work",
+      "--preset", "streamable-http",
+      "--url", "https://mcp.example.test/mcp",
+      "--output", "posthog-work.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        plan: true,
+        name: "posthog-work",
+        preset: "streamable-http",
+        url: "https://mcp.example.test/mcp",
+        output: "posthog-work.json"
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--plan");
+    expectUsageError(["init", "--plan"]);
+  });
+
+  it("offers private connector-draft controls only from guided setup", () => {
+    expect(parseCli(["setup", "--resume"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { resume: true }
+    });
+    expect(parseCli(["setup", "--discard-draft"])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { discardDraft: true }
+    });
+    expect(renderCommandHelp("setup")).toContain("--resume");
+    expect(renderCommandHelp("setup")).toContain("--discard-draft");
+    expectUsageError(["init", "--resume"]);
+    expectUsageError(["init", "--discard-draft"]);
+  });
+
+  it("offers endpoint-first native OAuth only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--native-oauth",
+      "--name", "posthog-work",
+      "--profile", "production",
+      "--url", "https://mcp.example.test/mcp",
+      "--output", "posthog-work.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        nativeOAuth: true,
+        name: "posthog-work",
+        profile: "production",
+        url: "https://mcp.example.test/mcp",
+        output: "posthog-work.json"
+      }
+    });
+    expect(parseCli([
+      "setup",
+      "--native-oauth",
+      "--config", "posthog-work.json",
+      "--profile", "personal",
+      "--description", "Personal analytics",
+      "--upstream", "default",
+      "--make-default"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        nativeOAuth: true,
+        config: "posthog-work.json",
+        profile: "personal",
+        description: "Personal analytics",
+        upstream: "default",
+        makeDefault: true
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--native-oauth");
+    expect(renderCommandHelp("setup")).toContain("--make-default");
+    expectUsageError(["init", "--native-oauth"]);
+  });
+
+  it("offers safe provider-owned and environment-backed account addition only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "--add-profile",
+      "--config", "gsc.json",
+      "--profile", "google-third",
+      "--oauth-client-secrets-file", "/Users/example/gsc-client-secrets.json",
+      "--make-default",
+      "--verify"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        addProfile: true,
+        config: "gsc.json",
+        profile: "google-third",
+        oauthClientSecretsFile: "/Users/example/gsc-client-secrets.json",
+        makeDefault: true,
+        verify: true
+      }
+    });
+    expect(parseCli([
+      "setup",
+      "--add-profile",
+      "--config", "sentry.json",
+      "--profile", "personal",
+      "--credential-env", "SENTRY_PERSONAL_ACCESS_TOKEN",
+      "--make-default"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        addProfile: true,
+        config: "sentry.json",
+        profile: "personal",
+        credentialEnv: "SENTRY_PERSONAL_ACCESS_TOKEN",
+        makeDefault: true
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--add-profile");
+    expect(renderCommandHelp("setup")).toContain("environment-backed account");
+    expectUsageError(["init", "--add-profile"]);
+  });
+
+  it("accepts explicit client-entry import only from guided setup", () => {
+    expect(parseCli([
+      "setup",
+      "analytics",
+      "--import-file=/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
+      "--import-entry=posthog",
+      "--output=analytics.json"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        name: "analytics",
+        importFile: "/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
+        importEntry: "posthog",
+        output: "analytics.json"
+      }
+    });
+    expect(renderCommandHelp("setup")).toContain("--import-file <file>");
+    expect(renderCommandHelp("setup")).toContain("--import-entry <name>");
+    expectUsageError(["init", "--import-file", "/Users/example/config.json", "--import-entry", "posthog"]);
+  });
+
+  it("parses an explicitly reviewed local executable as a literal argument array", () => {
+    expect(parseCli([
+      "setup",
+      "local-tools",
+      "--preset=local-stdio",
+      "--local-command=node",
+      "--arg=server.mjs",
+      "--arg=--stdio",
+      "--arg=$pageview",
+      "--cwd=/Users/example/projects/local-tools",
+      "--credential-env=LOCAL_MCP_TOKEN",
+      "--accept-local-command"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: {
+        name: "local-tools",
+        preset: "local-stdio",
+        localCommand: "node",
+        args: ["server.mjs", "--stdio", "$pageview"],
+        cwd: "/Users/example/projects/local-tools",
+        credentialEnv: "LOCAL_MCP_TOKEN",
+        acceptLocalCommand: true
+      }
+    });
+    expectUsageError(["setup", "--arg", "--stdio"]);
+    expectUsageError(["validate", "--local-command", "node"]);
+  });
+
+  it("parses an explicit durable default-profile change", () => {
+    expect(parseCli([
+      "profile",
+      "set-default",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-default",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal"
+      }
+    });
+  });
+
+  it("parses an explicit provider-declared profile readiness check", () => {
+    expect(parseCli([
+      "profile",
+      "test",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--upstream=default"
+    ])).toEqual({
+      kind: "run",
+      command: "profile test",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        upstream: "default"
+      }
+    });
+    expect(renderCommandHelp("profile test")).toContain("reviewed safe readiness check");
+  });
+
+  it("parses a read-only configured-profile inventory", () => {
+    expect(parseCli([
+      "profile",
+      "list",
+      "--config=/Users/example/.config/miftah/gsc.json"
+    ])).toEqual({
+      kind: "run",
+      command: "profile list",
+      options: { config: "/Users/example/.config/miftah/gsc.json" }
+    });
+    expect(renderCommandHelp("profile list")).toContain("configured account profiles");
+  });
+
+  it("parses an explicit set or clear profile-description change", () => {
+    expect(parseCli([
+      "profile",
+      "set-description",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--description=Personal Search Console"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-description",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        description: "Personal Search Console"
+      }
+    });
+    expect(parseCli([
+      "profile",
+      "set-description",
+      "--config", "/Users/example/.config/miftah/gsc.json",
+      "--profile", "google-personal",
+      "--clear-description"
+    ])).toEqual({
+      kind: "run",
+      command: "profile set-description",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        clearDescription: true
+      }
+    });
+    expect(renderCommandHelp("profile set-description")).toContain("--clear-description");
+    expectUsageError(["profile", "list", "--description", "not-allowed"]);
+  });
+
+  it("parses explicit safe profile removal with an optional replacement", () => {
+    expect(parseCli([
+      "profile",
+      "remove",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--replacement-profile=google-work"
+    ])).toEqual({
+      kind: "run",
+      command: "profile remove",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        replacementProfile: "google-work"
+      }
+    });
+    expect(renderCommandHelp("profile remove")).toContain("--replacement-profile <name>");
+    expectUsageError(["profile", "remove", "--description", "not-allowed"]);
+  });
+
+  it("parses an explicit guarded profile rename", () => {
+    expect(parseCli([
+      "profile",
+      "rename",
+      "--config=/Users/example/.config/miftah/gsc.json",
+      "--profile=google-personal",
+      "--new-profile=google-studio"
+    ])).toEqual({
+      kind: "run",
+      command: "profile rename",
+      options: {
+        config: "/Users/example/.config/miftah/gsc.json",
+        profile: "google-personal",
+        newProfile: "google-studio"
+      }
+    });
+    expect(renderCommandHelp("profile rename")).toContain("--new-profile <name>");
+    expectUsageError(["profile", "rename", "--replacement-profile", "not-allowed"]);
+  });
+
   it("parses all init-only onboarding options before or after init, including equals values", () => {
     expect(
       parseCli([

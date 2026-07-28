@@ -4,7 +4,10 @@ type ValueOptionName =
   | "output"
   | "preset"
   | "name"
+  | "description"
   | "client"
+  | "importFile"
+  | "importEntry"
   | "credentialEnv"
   | "npmPackage"
   | "dockerImage"
@@ -12,14 +15,35 @@ type ValueOptionName =
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "localCommand"
+  | "args"
+  | "cwd"
   | "transport"
   | "connection"
   | "upstream"
+  | "replacementProfile"
+  | "newProfile"
   | "issuer"
   | "clientRegistration"
   | "scopes"
   | "port";
-type BooleanOptionName = "follow" | "json" | "interactive" | "includeArguments" | "write" | "nonInteractive" | "noOpen";
+type BooleanOptionName =
+  | "follow"
+  | "json"
+  | "interactive"
+  | "includeArguments"
+  | "write"
+  | "nonInteractive"
+  | "noOpen"
+  | "plan"
+  | "verify"
+  | "nativeOAuth"
+  | "addProfile"
+  | "makeDefault"
+  | "clearDescription"
+  | "acceptLocalCommand"
+  | "resume"
+  | "discardDraft";
 type CliOptionName = ValueOptionName | BooleanOptionName;
 
 export interface CliOptions {
@@ -28,7 +52,12 @@ export interface CliOptions {
   readonly output?: string;
   readonly preset?: string;
   readonly name?: string;
+  readonly description?: string;
   readonly client?: string;
+  /** Explicit absolute source file for a reviewed existing local stdio MCP entry. */
+  readonly importFile?: string;
+  /** Explicit MCP entry name selected from the source client configuration. */
+  readonly importEntry?: string;
   readonly credentialEnv?: string;
   readonly npmPackage?: string;
   readonly dockerImage?: string;
@@ -36,9 +65,21 @@ export interface CliOptions {
   readonly headerName?: string;
   readonly headerPrefix?: string;
   readonly oauthClientSecretsFile?: string;
+  /** One literal executable for the explicitly reviewed local stdio setup flow. */
+  readonly localCommand?: string;
+  /** Repeated literal argv elements for the explicitly reviewed local stdio setup flow. */
+  readonly args?: readonly string[];
+  /** Optional native absolute working directory for the local stdio setup flow. */
+  readonly cwd?: string;
+  /** Required acknowledgement before persisting an unreviewed local executable. */
+  readonly acceptLocalCommand?: true;
   readonly transport?: "stdio" | "http";
   readonly connection?: string;
   readonly upstream?: string;
+  /** Existing profile that should receive durable references before a removal. */
+  readonly replacementProfile?: string;
+  /** New safe identifier for a durable profile rename. */
+  readonly newProfile?: string;
   readonly issuer?: string;
   readonly clientRegistration?: string;
   readonly scopes?: readonly string[];
@@ -50,6 +91,22 @@ export interface CliOptions {
   readonly write?: true;
   readonly nonInteractive?: true;
   readonly noOpen?: true;
+  /** Validates and prints a non-secret setup plan without creating a configuration. */
+  readonly plan?: true;
+  /** Runs the provider-declared safe readiness check after `miftah setup` writes the configuration. */
+  readonly verify?: true;
+  /** Discovers standards-based OAuth from one remote HTTPS MCP endpoint before creating the configuration. */
+  readonly nativeOAuth?: true;
+  /** Adds one reviewed provider-owned or simple environment-backed account to an existing configuration. */
+  readonly addProfile?: true;
+  /** Makes the newly added endpoint-first OAuth account the durable default profile. */
+  readonly makeDefault?: true;
+  /** Explicitly removes a non-secret profile description. */
+  readonly clearDescription?: true;
+  /** Resumes only a private, non-secret connector intent and re-prompts connection details. */
+  readonly resume?: true;
+  /** Deletes the private, non-secret connector setup intent without creating a configuration. */
+  readonly discardDraft?: true;
 }
 
 interface CliCommandMetadata {
@@ -98,8 +155,70 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
-      "oauthClientSecretsFile"
+      "oauthClientSecretsFile",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand"
     ]
+  },
+  setup: {
+    description: "Start the guided MCP setup flow.",
+    arguments: "[name]",
+    options: [
+      "name",
+      "description",
+      "profile",
+      "config",
+      "upstream",
+      "preset",
+      "output",
+      "client",
+      "importFile",
+      "importEntry",
+      "credentialEnv",
+      "npmPackage",
+      "dockerImage",
+      "url",
+      "headerName",
+      "headerPrefix",
+      "oauthClientSecretsFile",
+      "localCommand",
+      "args",
+      "cwd",
+      "acceptLocalCommand",
+      "nativeOAuth",
+      "addProfile",
+      "makeDefault",
+      "plan",
+      "verify",
+      "resume",
+      "discardDraft"
+    ]
+  },
+  "profile set-default": {
+    description: "Change the durable default profile for future MCP sessions.",
+    options: ["config", "profile"]
+  },
+  "profile set-description": {
+    description: "Set or explicitly clear a non-secret account profile description.",
+    options: ["config", "profile", "description", "clearDescription"]
+  },
+  "profile rename": {
+    description: "Safely rename one account profile and its durable configuration references.",
+    options: ["config", "profile", "newProfile"]
+  },
+  "profile remove": {
+    description: "Safely remove one account profile and explicitly reassign any durable references.",
+    options: ["config", "profile", "replacementProfile"]
+  },
+  "profile test": {
+    description: "Run one reviewed safe readiness check for an explicit account profile.",
+    options: ["config", "profile", "upstream"]
+  },
+  "profile list": {
+    description: "List configured account profiles without reading credentials or starting an upstream.",
+    options: ["config"]
   },
   "list-tools": {
     description: "List tools available for a profile.",
@@ -213,11 +332,29 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--name <name>",
     description: "Configuration name."
   },
+  description: {
+    name: "description",
+    takesValue: true,
+    usage: "--description <text>",
+    description: "Optional non-secret description for a newly added account profile."
+  },
   client: {
     name: "client",
     takesValue: true,
     usage: "--client <claude-desktop|claude-code|cursor|vscode|all>",
     description: "Print client configuration snippets."
+  },
+  importFile: {
+    name: "importFile",
+    takesValue: true,
+    usage: "--import-file <file>",
+    description: "Absolute existing MCP client JSON file to import without modifying it."
+  },
+  importEntry: {
+    name: "importEntry",
+    takesValue: true,
+    usage: "--import-entry <name>",
+    description: "Explicit local stdio MCP entry selected from the import file."
   },
   credentialEnv: {
     name: "credentialEnv",
@@ -261,6 +398,24 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--oauth-client-secrets-file <file>",
     description: "Absolute Google OAuth client-secrets file for the GSC preset."
   },
+  localCommand: {
+    name: "localCommand",
+    takesValue: true,
+    usage: "--local-command <executable>",
+    description: "Literal executable for the explicitly reviewed local-stdio preset."
+  },
+  args: {
+    name: "args",
+    takesValue: true,
+    usage: "--arg <value>",
+    description: "One local-stdio argv value; repeat and use --arg=--flag for a leading dash."
+  },
+  cwd: {
+    name: "cwd",
+    takesValue: true,
+    usage: "--cwd <directory>",
+    description: "Native absolute working directory for the local-stdio preset."
+  },
   transport: {
     name: "transport",
     takesValue: true,
@@ -278,6 +433,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: true,
     usage: "--upstream <name>",
     description: "Named upstream, or 'default' for a singleton upstream."
+  },
+  replacementProfile: {
+    name: "replacementProfile",
+    takesValue: true,
+    usage: "--replacement-profile <name>",
+    description: "Existing profile that receives durable references before removal."
+  },
+  newProfile: {
+    name: "newProfile",
+    takesValue: true,
+    usage: "--new-profile <name>",
+    description: "New safe identifier for a durable profile rename."
   },
   issuer: {
     name: "issuer",
@@ -344,6 +511,60 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     takesValue: false,
     usage: "--no-open",
     description: "Print the local dashboard URL without opening a browser."
+  },
+  plan: {
+    name: "plan",
+    takesValue: false,
+    usage: "--plan",
+    description: "Validate and print a non-secret setup plan without writing a configuration."
+  },
+  verify: {
+    name: "verify",
+    takesValue: false,
+    usage: "--verify",
+    description: "Run declared safe readiness checks after setup writes the configuration."
+  },
+  nativeOAuth: {
+    name: "nativeOAuth",
+    takesValue: false,
+    usage: "--native-oauth",
+    description: "Discover standards-based OAuth from a remote HTTPS MCP endpoint before creating its configuration."
+  },
+  addProfile: {
+    name: "addProfile",
+    takesValue: false,
+    usage: "--add-profile",
+    description: "Add one reviewed provider-owned or simple environment-backed account to an existing configuration."
+  },
+  makeDefault: {
+    name: "makeDefault",
+    takesValue: false,
+    usage: "--make-default",
+    description: "Make the newly added account the durable default profile."
+  },
+  clearDescription: {
+    name: "clearDescription",
+    takesValue: false,
+    usage: "--clear-description",
+    description: "Explicitly remove the selected profile's non-secret description."
+  },
+  resume: {
+    name: "resume",
+    takesValue: false,
+    usage: "--resume",
+    description: "Resume a private connector choice and re-enter all connection details."
+  },
+  discardDraft: {
+    name: "discardDraft",
+    takesValue: false,
+    usage: "--discard-draft",
+    description: "Discard the private connector choice without writing a configuration."
+  },
+  acceptLocalCommand: {
+    name: "acceptLocalCommand",
+    takesValue: false,
+    usage: "--accept-local-command",
+    description: "Confirm review of an untrusted local executable before writing it."
   }
 };
 
@@ -353,7 +574,10 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--output": OPTION_DEFINITIONS.output,
   "--preset": OPTION_DEFINITIONS.preset,
   "--name": OPTION_DEFINITIONS.name,
+  "--description": OPTION_DEFINITIONS.description,
   "--client": OPTION_DEFINITIONS.client,
+  "--import-file": OPTION_DEFINITIONS.importFile,
+  "--import-entry": OPTION_DEFINITIONS.importEntry,
   "--credential-env": OPTION_DEFINITIONS.credentialEnv,
   "--npm-package": OPTION_DEFINITIONS.npmPackage,
   "--docker-image": OPTION_DEFINITIONS.dockerImage,
@@ -361,9 +585,14 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
+  "--local-command": OPTION_DEFINITIONS.localCommand,
+  "--arg": OPTION_DEFINITIONS.args,
+  "--cwd": OPTION_DEFINITIONS.cwd,
   "--transport": OPTION_DEFINITIONS.transport,
   "--connection": OPTION_DEFINITIONS.connection,
   "--upstream": OPTION_DEFINITIONS.upstream,
+  "--replacement-profile": OPTION_DEFINITIONS.replacementProfile,
+  "--new-profile": OPTION_DEFINITIONS.newProfile,
   "--issuer": OPTION_DEFINITIONS.issuer,
   "--client-registration": OPTION_DEFINITIONS.clientRegistration,
   "--scope": OPTION_DEFINITIONS.scopes,
@@ -375,6 +604,15 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--write": OPTION_DEFINITIONS.write,
   "--non-interactive": OPTION_DEFINITIONS.nonInteractive,
   "--no-open": OPTION_DEFINITIONS.noOpen,
+  "--plan": OPTION_DEFINITIONS.plan,
+  "--verify": OPTION_DEFINITIONS.verify,
+  "--native-oauth": OPTION_DEFINITIONS.nativeOAuth,
+  "--add-profile": OPTION_DEFINITIONS.addProfile,
+  "--make-default": OPTION_DEFINITIONS.makeDefault,
+  "--clear-description": OPTION_DEFINITIONS.clearDescription,
+  "--resume": OPTION_DEFINITIONS.resume,
+  "--discard-draft": OPTION_DEFINITIONS.discardDraft,
+  "--accept-local-command": OPTION_DEFINITIONS.acceptLocalCommand,
   "--help": "help",
   "-h": "help",
   "--version": "version",
@@ -397,9 +635,9 @@ function isCliCommand(value: string): value is CliCommand {
 }
 
 function setValueOption(options: { [name: string]: unknown }, name: ValueOptionName, value: string): void {
-  if (name === "scopes") {
-    const existing = options.scopes;
-    options.scopes = [...(Array.isArray(existing) ? existing : []), value];
+  if (name === "scopes" || name === "args") {
+    const existing = options[name];
+    options[name] = [...(Array.isArray(existing) ? existing : []), value];
     return;
   }
   if (options[name] !== undefined) usageError(`Duplicate option '--${name}'.`);
@@ -484,7 +722,7 @@ function parseFlag(token: string): { readonly flag: string; readonly assignedVal
 export function parseCli(argv: readonly string[]): CliInvocation {
   const options: { [name: string]: unknown } = {};
   let command: CliCommand | undefined;
-  let commandGroup: "connection" | "auth" | undefined;
+  let commandGroup: "connection" | "auth" | "profile" | undefined;
   let help = false;
   let version = false;
 
@@ -524,7 +762,7 @@ export function parseCli(argv: readonly string[]): CliInvocation {
     }
 
     if (command === undefined) {
-      if (commandGroup === undefined && (token === "connection" || token === "auth")) {
+      if (commandGroup === undefined && (token === "connection" || token === "auth" || token === "profile")) {
         commandGroup = token;
         continue;
       }
@@ -535,11 +773,11 @@ export function parseCli(argv: readonly string[]): CliInvocation {
       continue;
     }
 
-    if (command === "init" && options.name === undefined) {
+    if ((command === "init" || command === "setup") && options.name === undefined) {
       options.name = token;
       continue;
     }
-    if (command === "init") usageError("The init command accepts only one name.");
+    if (command === "init" || command === "setup") usageError(`The ${command} command accepts only one name.`);
     usageError(`Unexpected positional argument '${token}'.`);
   }
 

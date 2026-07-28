@@ -1,6 +1,11 @@
 import { isAbsolute } from "node:path";
 import type { MiftahConfig, ProfileConfig } from "./types.js";
-import { PROVIDER_ADAPTER_CATALOG } from "./provider-adapters.js";
+import {
+  buildProviderAdapterAccountProfile,
+  isLiteralAbsolutePath,
+  PROVIDER_ADAPTER_CATALOG,
+  ProviderAdapterAccountProfileError
+} from "./provider-adapters.js";
 import { CURRENT_CONFIG_VERSION } from "./versions.js";
 
 /** Pinned GitHub MCP server image used by the GitHub preset. */
@@ -16,6 +21,24 @@ const exactSemver =
   /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const canonicalDigestImage =
   /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?\/)?(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)*[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@sha256:[A-Fa-f0-9]{64}$/u;
+const shellMetacharacter = /[|&;<>`'"]/u;
+const credentialFlag = /^(?:-(?:H|b|u).*$|--?(?:access[-_]?key|access[-_]?token|api[-_]?key|auth(?:orization)?|bearer|client[-_]?secret|cookie|credential(?:s)?|env(?:ironment)?|headers?|jwt|key|pass|password|passwd|private[-_]?key|secret|sig(?:nature)?|token|user)(?:=.*)?)$/iu;
+const credentialOptionName = /(?:^|[-_])(?:access[-_]?key|access[-_]?token|api[-_]?key|auth(?:orization)?|bearer|client[-_]?secret|cookie|credential(?:s)?|env(?:ironment)?|headers?|jwt|key|pass|password|passwd|private[-_]?key|secret|sig(?:nature)?|token|user)(?:$|[-_])/iu;
+const credentialValue = /^(?:(?:(?:proxy-)?authorization|cookie|(?:x-)?api[-_]?key|x[-_]?access[-_]?token|x[-_]?auth(?:orization)?)\s*:\s*\S+|(?:basic|bearer|jwt|token)\s+\S+)$/iu;
+const credentialAssignment = /(?:^|[^A-Za-z0-9])(?:access[-_]?key|access[-_]?token|api[-_]?key|auth(?:orization)?|bearer|client[-_]?secret|cookie|credential(?:s)?|jwt|key|password|passwd|private[-_]?key|secret|sig(?:nature)?|token)(?==|:|[-_]|["']\s*:)/iu;
+const embeddedCredentialScheme = /(?:^|=|,|:|\{|\[|"|')(?:api[-_ ]?key|basic|bearer|jwt|token)\s+\S+/iu;
+const credentialUrlUserinfo = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s@]+@/u;
+const credentialQueryParameter = /[?&](?:access[-_]?key|access[-_]?token|api[-_]?key|auth(?:orization)?|bearer|client[-_]?secret|cookie|credential(?:s)?|jwt|key|password|passwd|private[-_]?key|secret|sig(?:nature)?|token)=[^&\s]+/iu;
+const uriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
+const shellExecutable = /^(?:bash|cmd|command|fish|powershell|pwsh|sh|zsh)$/iu;
+const environmentWrapper = /^env(?:\.exe)?$/iu;
+const bareExecutable = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
+const windowsDirectExecutable = /\.(?:com|exe)$/iu;
+const environmentReferenceArgument = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u;
+const maximumLocalArgumentCount = 128;
+const maximumLocalArgumentBytes = 4 * 1024;
+const maximumLocalArgumentTotalBytes = 16 * 1024;
+const windowsUnsupportedNpxPresets = new Set(["generic", "generic-npx", "sentry"]);
 
 type CurrentMiftahConfig = Extract<MiftahConfig, { version: "3" }>;
 type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
@@ -29,6 +52,29 @@ export interface PresetBuildOptions {
   headerName?: string;
   headerPrefix?: string;
   oauthClientSecretsFile?: string;
+  googleSearchConsoleProfiles?: readonly GoogleSearchConsoleProfileOptions[];
+  defaultProfile?: string;
+  /** One literal executable for the explicitly-reviewed local stdio setup path. */
+  localCommand?: string;
+  /** Each item is one literal argv element; Miftah never parses a command line. */
+  args?: readonly string[];
+  /** Optional native absolute working directory for a local stdio upstream. */
+  cwd?: string;
+  /** Required acknowledgement before persisting an unreviewed local executable. */
+  acceptLocalCommand?: boolean;
+}
+
+/** Trusted creation context that is deliberately separate from user-configurable preset options. */
+export interface PresetBuildContext {
+  /** Resolved destination of a configuration being created by Miftah. */
+  readonly configurationPath?: string;
+}
+
+/** One upstream-owned Google account isolated by its own GSC token directory. */
+export interface GoogleSearchConsoleProfileOptions {
+  readonly name: string;
+  readonly description?: string;
+  readonly oauthClientSecretsFile: string;
 }
 
 type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
@@ -44,6 +90,14 @@ export class PresetCatalogError extends Error {
 
 function catalogError(message: string): never {
   throw new PresetCatalogError(message);
+}
+
+/** True when a catalog preset would require npm's Windows command-shell runner. */
+export function isWindowsNpxPresetUnavailable(
+  preset: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return platform === "win32" && windowsUnsupportedNpxPresets.has(preset);
 }
 
 function environmentReference(name: unknown): string {
@@ -122,10 +176,19 @@ function buildStandardPreset(
   };
 }
 
+/** Builds safe shared defaults for a caller that already owns a validated upstream launch shape. */
+export function buildSafeStandardConfig(
+  name: string,
+  upstream: CurrentUpstreamConfig,
+  credentialEnv?: string
+): MiftahConfig {
+  return buildStandardPreset(name, upstream, credentialEnv);
+}
+
 /** Builds the generic reference MCP server preset. */
 function buildGenericPreset(name: string, options: PresetBuildOptions): MiftahConfig {
   // npm registry metadata for this package does not declare an upstream Node engine floor.
-  return buildStandardPreset(
+  return buildSafeStandardConfig(
     name,
     {
       transport: "stdio",
@@ -156,37 +219,148 @@ function requireOAuthClientSecretsFile(value: unknown): string {
   if (typeof value !== "string") {
     catalogError("Preset option 'oauthClientSecretsFile' must be a string.");
   }
-  if (
-    !value ||
-    value.trim() !== value ||
-    !isAbsolute(value) ||
-    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(value) ||
-    Array.from(value).some((character) => {
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
-    })
-  ) {
+  if (!isLiteralAbsolutePath(value)) {
     catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
   }
   return value;
 }
 
-function buildGoogleSearchConsolePreset(name: string, options: PresetBuildOptions): MiftahConfig {
+const googleSearchConsoleProfileName = /^[a-z0-9](?:[a-z0-9-]{0,63})$/u;
+
+function requireGoogleSearchConsoleProfileName(value: unknown): string {
+  if (typeof value !== "string" || !googleSearchConsoleProfileName.test(value)) {
+    catalogError("Google Search Console profile names must use 1-64 lowercase letters, digits, or hyphens and start with a letter or digit.");
+  }
+  return value;
+}
+
+function requireGoogleSearchConsoleDescription(value: unknown): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+    })
+  ) {
+    catalogError("Google Search Console profile descriptions must be trimmed text without controls and at most 1024 characters.");
+  }
+  return value;
+}
+
+function buildGoogleSearchConsoleProfile(
+  configurationName: string,
+  profile: string,
+  description: string | undefined,
+  oauthClientSecretsFile: string,
+  context: PresetBuildContext
+): ProfileConfig {
+  try {
+    return buildProviderAdapterAccountProfile(
+      PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"],
+      {
+        configurationName,
+        ...(context.configurationPath === undefined ? {} : { configurationPath: context.configurationPath }),
+        profile,
+        ...(description === undefined ? {} : { description }),
+        credentialFile: oauthClientSecretsFile
+      }
+    );
+  } catch (error) {
+    if (error instanceof ProviderAdapterAccountProfileError) {
+      catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
+    }
+    throw error;
+  }
+}
+
+function buildGoogleSearchConsoleProfiles(
+  configurationName: string,
+  options: PresetBuildOptions,
+  context: PresetBuildContext
+): {
+  readonly defaultProfile: string;
+  readonly profiles: Record<string, ProfileConfig>;
+} {
+  const configuredProfiles = options.googleSearchConsoleProfiles;
+  if (configuredProfiles === undefined) {
+    if (options.defaultProfile !== undefined) {
+      catalogError("Preset 'google-search-console' accepts defaultProfile only with googleSearchConsoleProfiles.");
+    }
+    const profile = "default";
+    return {
+      defaultProfile: profile,
+      profiles: {
+        [profile]: buildGoogleSearchConsoleProfile(
+          configurationName,
+          profile,
+          undefined,
+          requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
+          context
+        )
+      }
+    };
+  }
+
+  if (options.oauthClientSecretsFile !== undefined) {
+    catalogError("Preset 'google-search-console' accepts oauthClientSecretsFile or googleSearchConsoleProfiles, not both.");
+  }
+  if (!Array.isArray(configuredProfiles) || configuredProfiles.length === 0) {
+    catalogError("Google Search Console setup requires at least one named profile.");
+  }
+
+  const profiles: Record<string, ProfileConfig> = Object.create(null) as Record<string, ProfileConfig>;
+  for (const configuredProfile of configuredProfiles) {
+    if (typeof configuredProfile !== "object" || configuredProfile === null || Array.isArray(configuredProfile)) {
+      catalogError("Google Search Console profiles must be objects with name and oauthClientSecretsFile.");
+    }
+    const profile = requireGoogleSearchConsoleProfileName(configuredProfile.name);
+    if (Object.hasOwn(profiles, profile)) {
+      catalogError(`Google Search Console profile '${profile}' is duplicated.`);
+    }
+    const description = requireGoogleSearchConsoleDescription(configuredProfile.description);
+    profiles[profile] = buildGoogleSearchConsoleProfile(
+      configurationName,
+      profile,
+      description,
+      requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
+      context
+    );
+  }
+
+  if (configuredProfiles.length > 1 && options.defaultProfile === undefined) {
+    catalogError("Google Search Console setup requires an explicit default profile when more than one account is configured.");
+  }
+  const defaultProfile = requireGoogleSearchConsoleProfileName(options.defaultProfile ?? configuredProfiles[0]!.name);
+  if (!Object.hasOwn(profiles, defaultProfile)) {
+    catalogError(`Google Search Console default profile '${defaultProfile}' is not configured.`);
+  }
+  return { defaultProfile, profiles };
+}
+
+function buildGoogleSearchConsolePreset(
+  name: string,
+  options: PresetBuildOptions,
+  context: PresetBuildContext
+): MiftahConfig {
   const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
-  const config = buildStandardPreset(name, {
-    transport: adapter.launch.transport,
-    command: adapter.launch.command,
-    args: [...adapter.launch.args]
-  });
-  config.profiles.default = {
-    description: "Google Search Console account (OAuth owned by upstream)",
-    env: {
-      GSC_OAUTH_CLIENT_SECRETS_FILE: requireOAuthClientSecretsFile(options.oauthClientSecretsFile)
+  const accounts = buildGoogleSearchConsoleProfiles(name, options, context);
+  return {
+    version: CURRENT_CONFIG_VERSION,
+    name,
+    description: `${name} wrapped by Miftah`,
+    defaultProfile: accounts.defaultProfile,
+    upstream: {
+      transport: adapter.launch.transport,
+      command: adapter.launch.command,
+      args: [...adapter.launch.args]
     },
-    policy: "readonly"
+    profiles: accounts.profiles,
+    policies: buildReadonlyPolicies(),
+    ...buildSharedDefaults({ multiProfile: Object.keys(accounts.profiles).length > 1 })
   };
-  config.policies = buildReadonlyPolicies();
-  return config;
 }
 
 /** Builds the multi-profile GitHub preset and its referenced policies. */
@@ -276,6 +450,132 @@ function buildGenericDockerPreset(name: string, options: PresetBuildOptions): Mi
   );
 }
 
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
+}
+
+function foreignPlatformAbsolutePath(value: string): boolean {
+  if (process.platform === "win32") return value.startsWith("/");
+  return /^(?:[A-Za-z]:[\\/]|\\)/u.test(value);
+}
+
+function nativeAbsolutePath(value: string): boolean {
+  return isAbsolute(value) && !foreignPlatformAbsolutePath(value);
+}
+
+function executableStem(command: string): string {
+  const executableName = command.replaceAll("\\", "/").split("/").at(-1) ?? command;
+  return executableName.replace(/\.(?:cmd|com|exe)$/iu, "").toLowerCase();
+}
+
+function normalizeCredentialText(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/gu, "$1-$2");
+}
+
+function credentialBearingArgument(value: string): boolean {
+  const normalized = normalizeCredentialText(value);
+  const optionName = normalized.split(/[=:]/u, 1)[0] ?? normalized;
+  return credentialOptionName.test(optionName)
+    || credentialFlag.test(value)
+    || credentialValue.test(value)
+    || credentialAssignment.test(normalized)
+    || embeddedCredentialScheme.test(normalized)
+    || credentialUrlUserinfo.test(value)
+    || credentialQueryParameter.test(value);
+}
+
+function requireLocalCommand(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumLocalArgumentBytes ||
+    value.trim() !== value ||
+    hasControlCharacter(value) ||
+    shellMetacharacter.test(value) ||
+    uriScheme.test(value) ||
+    credentialBearingArgument(value) ||
+    foreignPlatformAbsolutePath(value) ||
+    (!nativeAbsolutePath(value) && !bareExecutable.test(value))
+  ) {
+    catalogError("Preset 'local-stdio' requires one literal local executable, not a command line or credential-bearing value.");
+  }
+  if (process.platform === "win32" && (!nativeAbsolutePath(value) || !windowsDirectExecutable.test(value))) {
+    catalogError("Preset 'local-stdio' requires an absolute .exe or .com executable on Windows to preserve direct argument-array execution.");
+  }
+  const executable = executableStem(value);
+  if (shellExecutable.test(executable) || environmentWrapper.test(executable)) {
+    catalogError("Preset 'local-stdio' does not accept shell or environment-wrapper executables.");
+  }
+  return value;
+}
+
+function requireLocalArguments(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > maximumLocalArgumentCount) {
+    catalogError("Preset 'local-stdio' accepts at most 128 literal argument-array values.");
+  }
+  let totalBytes = 0;
+  return value.map((argument) => {
+    if (typeof argument !== "string" || hasControlCharacter(argument)) {
+      catalogError("Preset 'local-stdio' arguments must be strings without control characters.");
+    }
+    const bytes = Buffer.byteLength(argument, "utf8");
+    totalBytes += bytes;
+    if (bytes > maximumLocalArgumentBytes || totalBytes > maximumLocalArgumentTotalBytes) {
+      catalogError("Preset 'local-stdio' argument input exceeds its bounded size limit.");
+    }
+    if (credentialBearingArgument(argument) || environmentReferenceArgument.test(argument)) {
+      catalogError("Preset 'local-stdio' arguments cannot contain credentials or environment-reference syntax. Use credentialEnv instead.");
+    }
+    return argument;
+  });
+}
+
+function requireLocalCwd(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumLocalArgumentBytes ||
+    value.trim() !== value ||
+    hasControlCharacter(value) ||
+    !nativeAbsolutePath(value)
+  ) {
+    catalogError("Preset 'local-stdio' working directory must be a native absolute path without controls or surrounding whitespace.");
+  }
+  return value;
+}
+
+function buildLocalStdioPreset(name: string, options: PresetBuildOptions): MiftahConfig {
+  if (options.acceptLocalCommand !== true) {
+    catalogError("Preset 'local-stdio' requires explicit acknowledgement before writing a local executable configuration.");
+  }
+  const command = requireLocalCommand(options.localCommand);
+  const args = requireLocalArguments(options.args);
+  const cwd = requireLocalCwd(options.cwd);
+  const config = buildStandardPreset(
+    name,
+    {
+      transport: "stdio",
+      command,
+      args,
+      ...(cwd === undefined ? {} : { cwd })
+    },
+    options.credentialEnv
+  );
+  config.profiles.default = {
+    ...buildCredentialProfile(options.credentialEnv),
+    description: "Locally configured MCP executable; configure authentication with secret references when required.",
+    policy: "readonly"
+  };
+  config.policies = buildReadonlyPolicies();
+  config.tooling = { ...config.tooling, unknownToolRisk: "destructive" };
+  return config;
+}
+
 function requireHttpsUrl(value: unknown): string {
   if (value === undefined) {
     catalogError("Preset 'streamable-http' requires an HTTPS URL.");
@@ -342,7 +642,7 @@ function buildStreamableHttpPreset(name: string, options: PresetBuildOptions): M
  * caller-supplied inputs each builder may receive.
  */
 export const PRESET_CATALOG = {
-  version: "2",
+  version: "3",
   presets: {
     generic: {
       requirements: { credentialEnv: "optional" },
@@ -357,8 +657,12 @@ export const PRESET_CATALOG = {
       build: buildSentryPreset
     },
     "google-search-console": {
-      requirements: { oauthClientSecretsFile: "required" },
-      build: buildGoogleSearchConsolePreset
+      requirements: {
+        oauthClientSecretsFile: "required",
+        googleSearchConsoleProfiles: "optional",
+        defaultProfile: "optional"
+      },
+      build: (name, options) => buildGoogleSearchConsolePreset(name, options, {})
     },
     "generic-npx": {
       requirements: { npmPackage: "required", credentialEnv: "optional" },
@@ -367,6 +671,16 @@ export const PRESET_CATALOG = {
     "generic-docker": {
       requirements: { dockerImage: "required", credentialEnv: "optional" },
       build: buildGenericDockerPreset
+    },
+    "local-stdio": {
+      requirements: {
+        localCommand: "required",
+        args: "optional",
+        cwd: "optional",
+        credentialEnv: "optional",
+        acceptLocalCommand: "required"
+      },
+      build: buildLocalStdioPreset
     },
     "streamable-http": {
       requirements: {
@@ -407,13 +721,26 @@ function validatePresetOptions(
 }
 
 /** Builds a catalog preset strictly, rejecting unknown names instead of falling back. */
-export function buildPresetConfig(name: string, preset: string, options: PresetBuildOptions = {}): MiftahConfig {
+export function buildPresetConfig(
+  name: string,
+  preset: string,
+  options: PresetBuildOptions = {},
+  context: PresetBuildContext = {}
+): MiftahConfig {
   if (!Object.hasOwn(PRESET_CATALOG.presets, preset)) {
     catalogError(`Unknown preset '${preset}'. Supported presets: ${Object.keys(PRESET_CATALOG.presets).join(", ")}.`);
   }
   const definition = PRESET_CATALOG.presets[preset as PresetCatalogName];
   validatePresetOptions(preset, definition.requirements, options);
-  return definition.build(name, options);
+  const config = preset === "google-search-console"
+    ? buildGoogleSearchConsolePreset(name, options, context)
+    : definition.build(name, options);
+  if (isWindowsNpxPresetUnavailable(preset)) {
+    catalogError(
+      `Preset '${preset}' uses npm's npx package runner, which requires a Windows command shell. Use a direct .exe or .com local-stdio executable, a direct-executable preset, or a remote MCP instead.`
+    );
+  }
+  return config;
 }
 
 /** Builds a named legacy configuration preset, retaining its generic fallback behavior. */

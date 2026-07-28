@@ -1,6 +1,4 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { homedir, platform } from "node:os";
-import { isAbsolute, join } from "node:path";
 import type { MiftahConfig } from "../config/types.js";
 import type { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
@@ -25,6 +23,12 @@ import {
   type OAuthIdentityState
 } from "./connection-types.js";
 import { createLoopbackOAuthAuthorizationHandoff } from "./loopback-authorization-handoff.js";
+import { defaultOAuthConnectionMetadataPath } from "./local-state-paths.js";
+import {
+  canonicalOAuthProfileRenameConfigPath,
+  recoverOAuthProfileRename,
+  type OAuthProfileRenameJournalStore
+} from "./profile-rename-transaction.js";
 import {
   RemoteOAuthClientProvider,
   type OAuthAuthorizationHandoff
@@ -38,6 +42,8 @@ import {
 export interface RemoteOAuthRuntimeOptions {
   readonly metadataStore?: OAuthConnectionMetadataStore;
   readonly credentialStore?: OAuthCredentialStore;
+  /** Injectable only for bounded recovery tests; production uses the private config-adjacent journal. */
+  readonly profileRenameJournalStore?: OAuthProfileRenameJournalStore;
   readonly fetch?: FetchLike;
   readonly createHandoff?: () => Promise<OAuthAuthorizationHandoff>;
   readonly now?: () => Date;
@@ -81,23 +87,7 @@ class DeferredOAuthAuditSink implements OAuthConnectionLifecycleAuditSink {
 }
 
 /** Returns the restrictive non-secret OAuth metadata location for the current OS user. */
-export function defaultOAuthConnectionMetadataPath(): string {
-  if (platform() === "win32") {
-    const configured = process.env.LOCALAPPDATA;
-    const root = configured !== undefined && isAbsolute(configured)
-      ? configured
-      : join(homedir(), "AppData", "Local");
-    return join(root, "Miftah", "oauth-connections.json");
-  }
-  if (platform() === "darwin") {
-    return join(homedir(), "Library", "Application Support", "Miftah", "oauth-connections.json");
-  }
-  const configured = process.env.XDG_STATE_HOME;
-  const root = configured !== undefined && isAbsolute(configured)
-    ? configured
-    : join(homedir(), ".local", "state");
-  return join(root, "miftah", "oauth-connections.json");
-}
+export { defaultOAuthConnectionMetadataPath } from "./local-state-paths.js";
 
 /** Owns exact profile/upstream OAuth providers for one resolved Miftah configuration. */
 export class RemoteOAuthRuntime {
@@ -218,6 +208,18 @@ export async function createRemoteOAuthRuntime(
     options.metadataStore ?? new FileOAuthConnectionMetadataStore(defaultOAuthConnectionMetadataPath())
   );
   const store = options.credentialStore ?? await createPlatformOAuthCredentialStore(redactor);
+  const canonicalConfigPath = await canonicalOAuthProfileRenameConfigPath(configPath);
+  const recoveredProfileRename = await recoverOAuthProfileRename(canonicalConfigPath, {
+    registry,
+    credentialStore: store,
+    ...(options.profileRenameJournalStore === undefined ? {} : { journalStore: options.profileRenameJournalStore })
+  });
+  if (recoveredProfileRename) {
+    throw new MiftahError(
+      "PROFILE_SELECTION_STALE",
+      "PROFILE_SELECTION_STALE: OAuth profile-rename recovery completed; reload configuration before starting the connection"
+    );
+  }
   const metadataGuard = new OAuthMetadataFetchGuard(options.fetch);
   const refresher = new RemoteOAuthCredentialRefresher({
     fetch: metadataGuard.fetch,
@@ -232,7 +234,7 @@ export async function createRemoteOAuthRuntime(
     audit,
     ...(options.now === undefined ? {} : { now: options.now })
   });
-  const configIdentity = createOAuthConfigIdentity(configPath);
+  const configIdentity = createOAuthConfigIdentity(canonicalConfigPath);
   const bindings = new Map<string, OAuthConnectionBinding>();
   for (const [connectionRef, connection] of Object.entries(config.oauth?.connections ?? {})) {
     const binding = createOAuthConnectionBinding({

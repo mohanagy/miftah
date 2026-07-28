@@ -5,16 +5,9 @@ import { validateConfig } from "./validate-config.js";
 import type { MiftahConfig } from "./types.js";
 import { MiftahError } from "../utils/errors.js";
 
-export async function loadConfig(path: string): Promise<MiftahConfig> {
+/** Parses configuration text that was obtained by a caller-controlled safe read. */
+export function loadConfigFromText(content: string, path: string): MiftahConfig {
   const resolvedPath = resolvePath(path);
-  let content: string;
-  try {
-    content = await readFile(resolvedPath, "utf8");
-  } catch (error) {
-    throw new MiftahError("CONFIG_NOT_FOUND", `CONFIG_NOT_FOUND: unable to read config '${resolvedPath}'`, {
-      cause: error instanceof Error ? error.message : String(error)
-    });
-  }
   let input: unknown;
   try {
     input = JSON.parse(content);
@@ -124,4 +117,18 @@ export async function loadConfig(path: string): Promise<MiftahConfig> {
       ? { ...config.audit, path: resolvePath(config.audit.path, dirname(resolvedPath)) }
       : config.audit
   };
+}
+
+/** Loads and parses a configuration from its pathname for ordinary CLI/runtime callers. */
+export async function loadConfig(path: string): Promise<MiftahConfig> {
+  const resolvedPath = resolvePath(path);
+  let content: string;
+  try {
+    content = await readFile(resolvedPath, "utf8");
+  } catch (error) {
+    throw new MiftahError("CONFIG_NOT_FOUND", `CONFIG_NOT_FOUND: unable to read config '${resolvedPath}'`, {
+      cause: error instanceof Error ? error.message : String(error)
+    });
+  }
+  return loadConfigFromText(content, resolvedPath);
 }

@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -15,6 +15,13 @@ import { CliUsageError, parseCli, renderCommandHelp, renderRootHelp } from "./pa
 import { exitCodeForError } from "./exit-codes.js";
 import { runLogsCommand } from "./logs.js";
 import { runInitCommand } from "./init.js";
+import { runSetupCommand } from "./setup.js";
+import { runProfileReadinessCommand } from "./profile-readiness-command.js";
+import { runProfileListCommand } from "./profile-list-command.js";
+import { runDefaultProfileChange } from "../setup/profile-default-onboarding.js";
+import { runProfileDescriptionChange } from "../setup/profile-description-onboarding.js";
+import { runProfileRename } from "../setup/profile-rename-onboarding.js";
+import { runProfileRemoval } from "../setup/profile-removal-onboarding.js";
 import { runAuditExportCommand } from "./audit-export.js";
 import { formatAuditVerifyReport, runAuditVerifyCommand } from "./audit-verify.js";
 import { runMigrateConfigCommand } from "./migrate-config.js";
@@ -24,6 +31,8 @@ import { CLIENT_NAMES, renderClientSnippets, type ClientSelection } from "./clie
 import { resolvePath } from "../config/path-resolve.js";
 import { startConsoleServer } from "../console/console-server.js";
 import { openSystemBrowser } from "../console/open-browser.js";
+import { ConsoleDashboardApplicationService } from "../console/console-dashboard-application-service.js";
+import { FileSetupDraftStore } from "../setup/setup-draft.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -117,17 +126,34 @@ function defaultDashboardConfigPath(): string {
 async function dashboardServe(
   configPath: string,
   port: string | undefined,
-  openBrowser: boolean
+  openBrowser: boolean,
+  discoverExistingConfigurations: boolean
 ): Promise<void> {
+  const launcher = { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] };
+  const application = discoverExistingConfigurations
+    ? new ConsoleDashboardApplicationService({
+        defaultConfigPath: configPath,
+        configDirectory: dirname(resolvePath(configPath)),
+        launcher,
+        setupDraftStore: new FileSetupDraftStore()
+      })
+    : undefined;
   const server = await startConsoleServer(configPath, {
     port: consolePort(port),
     allowMissingConfig: true,
-    launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+    ...(discoverExistingConfigurations ? { deferConfigValidation: true } : {}),
+    launcher,
+    ...(application === undefined ? {} : { application })
   });
   process.stdout.write(
     [
       `Miftah Console listening on ${server.url.toString()}`,
-      `Configuration: ${resolvePath(configPath)}`,
+      ...(discoverExistingConfigurations
+        ? [
+            `Configuration catalog: ${dirname(resolvePath(configPath))} (direct safe JSON files only)`,
+            `First-run configuration location: ${resolvePath(configPath)}`
+          ]
+        : [`Configuration: ${resolvePath(configPath)}`]),
       `One-time bootstrap code: ${server.bootstrapCredential}`,
       "Enter this code only in the local Miftah Console. It expires after first use or shutdown."
     ].join("\n") + "\n"
@@ -165,8 +191,27 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     });
     return;
   }
+  if (command === "setup") {
+    const result = await runSetupCommand(args, {
+      input: process.stdin,
+      output: process.stdout,
+      cwd: process.cwd(),
+      launcher: {
+        command: process.execPath,
+        args: [fileURLToPath(import.meta.url), "serve"]
+      },
+      setupDraftStore: new FileSetupDraftStore()
+    });
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
+    return;
+  }
   if (command === "dashboard") {
-    await dashboardServe(args.config ?? defaultDashboardConfigPath(), args.port, args.noOpen !== true);
+    await dashboardServe(
+      args.config ?? defaultDashboardConfigPath(),
+      args.port,
+      args.noOpen !== true,
+      args.config === undefined
+    );
     return;
   }
   if (!args.config) {
@@ -177,6 +222,56 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "migrate-config") {
     const report = await runMigrateConfigCommand({ configPath: args.config, write: args.write === true });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile set-default") {
+    const report = await runDefaultProfileChange({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile)
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile set-description") {
+    const report = await runProfileDescriptionChange({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      ...(args.description === undefined ? {} : { description: args.description }),
+      ...(args.clearDescription === true ? { clearDescription: true } : {})
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile rename") {
+    const report = await runProfileRename({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      newProfile: requireOption(command, "new-profile", args.newProfile)
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile remove") {
+    const report = await runProfileRemoval({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      ...(args.replacementProfile === undefined ? {} : { replacementProfile: args.replacementProfile })
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+  if (command === "profile test") {
+    const result = await runProfileReadinessCommand({
+      configPath: args.config,
+      profile: requireOption(command, "profile", args.profile),
+      ...(args.upstream === undefined ? {} : { upstream: args.upstream })
+    });
+    process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
+    process.exitCode = result.exitCode;
+    return;
+  }
+  if (command === "profile list") {
+    process.stdout.write(`${JSON.stringify(await runProfileListCommand({ configPath: args.config }), null, 2)}\n`);
     return;
   }
   if (command === "connection add") {

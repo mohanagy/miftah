@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { startFakeRemoteUpstream } from "./helpers/fake-remote-upstream.js";
 
 interface PackageManifest {
   name?: string;
@@ -107,6 +108,18 @@ function assertPatchedFastUriLockEntries(lock: PackageLock): void {
   expect(entries, "fast-uri must exist in the package lock").not.toHaveLength(0);
   for (const [packagePath, packageEntry] of entries) {
     expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.4");
+  }
+}
+
+function assertPatchedHonoNodeServerLockEntries(lock: PackageLock): void {
+  const suffix = "node_modules/@hono/node-server";
+  const entries = Object.entries(lock.packages ?? {}).filter(
+    ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
+  );
+
+  expect(entries, "@hono/node-server must exist in the package lock").not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of entries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("2.0.10");
   }
 }
 
@@ -213,6 +226,11 @@ type NpmSpawner = (
   options: NpmSpawnOptions
 ) => NpmProcess;
 
+function npmProcessEnvironment(): NodeJS.ProcessEnv {
+  // Node propagates V8 coverage to descendants unless an explicit empty value opts out.
+  return { ...process.env, NODE_V8_COVERAGE: "", npm_config_loglevel: "silent" };
+}
+
 const spawnNpm: NpmSpawner = (command, args, options) =>
   spawn(command, args, {
     cwd: options.cwd,
@@ -232,7 +250,7 @@ async function runNpm(
   return new Promise<NpmCommandResult>((resolve, reject) => {
     const child = spawnProcess(invocation.command, invocation.args, {
       cwd,
-      env: { ...process.env, npm_config_loglevel: "silent" },
+      env: npmProcessEnvironment(),
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
@@ -306,6 +324,10 @@ class TermIgnoringNpmProcess extends EventEmitter implements NpmProcess {
   readonly stderr = new PassThrough();
   readonly signals: NodeJS.Signals[] = [];
 
+  constructor(readonly pid?: number) {
+    super();
+  }
+
   kill(signal?: NodeJS.Signals): boolean {
     if (signal !== undefined) this.signals.push(signal);
     return true;
@@ -355,23 +377,199 @@ function buildWindowsCommand(binary: string, args: readonly string[]): string {
 }
 
 function runInstalledBinary(binary: string, args: readonly string[], cwd: string) {
-  if (process.platform !== "win32") {
-    return spawnSync(binary, args, {
-      cwd,
-      encoding: "utf8",
-      timeout: npmCommandTimeoutMs
-    });
+  const invocation = installedBinaryInvocation(binary, args);
+  return spawnSync(invocation.command, invocation.args, {
+    cwd,
+    encoding: "utf8",
+    timeout: npmCommandTimeoutMs,
+    ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {})
+  });
+}
+
+interface InstalledBinaryResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+interface InstalledBinaryProcess {
+  readonly stdout: Readable;
+  readonly stderr: Readable;
+  readonly pid?: number;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "close", listener: (status: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+interface InstalledBinarySpawnOptions {
+  readonly cwd: string;
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly windowsVerbatimArguments?: true;
+  readonly stdio: ["ignore", "pipe", "pipe"];
+}
+
+type InstalledBinarySpawner = (
+  command: string,
+  args: readonly string[],
+  options: InstalledBinarySpawnOptions
+) => InstalledBinaryProcess;
+
+interface InstalledBinaryRuntime {
+  readonly platform: NodeJS.Platform;
+  terminateWindowsProcessTree(pid: number): Promise<void>;
+}
+
+function installedBinaryInvocation(binary: string, args: readonly string[]): { command: string; args: readonly string[] } {
+  if (process.platform !== "win32") return { command: binary, args };
+
+  return {
+    command: process.env.ComSpec ?? "cmd.exe",
+    args: ["/d", "/s", "/c", buildWindowsCommand(binary, args)]
+  };
+}
+
+const spawnInstalledBinary: InstalledBinarySpawner = (command, args, options) => {
+  const child = spawn(command, args, options);
+  if (child.stdout === null || child.stderr === null) {
+    throw new Error("Installed binary must be spawned with piped stdout and stderr.");
   }
-  return spawnSync(
-    process.env.ComSpec ?? "cmd.exe",
-    ["/d", "/s", "/c", buildWindowsCommand(binary, args)],
-    {
-      cwd,
-      encoding: "utf8",
-      timeout: npmCommandTimeoutMs,
-      windowsVerbatimArguments: true
+  return child;
+};
+
+function windowsTaskkillPath(): string {
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  if (!systemRoot) throw new Error("SystemRoot is required to terminate a Windows process tree safely.");
+  return join(systemRoot, "System32", "taskkill.exe");
+}
+
+async function terminateWindowsProcessTree(pid: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const taskkill = spawn(windowsTaskkillPath(), ["/pid", String(pid), "/t", "/f"], {
+      shell: false,
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    taskkill.once("error", (error) => reject(error));
+    taskkill.once("close", (status, signal) => {
+      if (status === 0 || status === 128) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `taskkill could not terminate process tree ${pid}: ${
+            status === null ? `terminated by ${signal ?? "an unknown signal"}` : `exited with status ${status}`
+          }`
+        )
+      );
+    });
+  });
+}
+
+const defaultInstalledBinaryRuntime: InstalledBinaryRuntime = {
+  platform: process.platform,
+  terminateWindowsProcessTree
+};
+
+async function terminateInstalledBinary(
+  child: InstalledBinaryProcess,
+  runtime: InstalledBinaryRuntime,
+  force: boolean
+): Promise<void> {
+  if (runtime.platform === "win32") {
+    if (child.pid === undefined) {
+      throw new Error("Windows installed binary process did not expose a PID for process-tree cleanup.");
     }
-  );
+    await runtime.terminateWindowsProcessTree(child.pid);
+    return;
+  }
+  child.kill(force ? "SIGKILL" : "SIGTERM");
+}
+
+async function runInstalledBinaryAsync(
+  binary: string,
+  args: readonly string[],
+  cwd: string,
+  timeoutMs = npmCommandTimeoutMs,
+  spawnProcess: InstalledBinarySpawner = spawnInstalledBinary,
+  runtime: InstalledBinaryRuntime = defaultInstalledBinaryRuntime
+): Promise<InstalledBinaryResult> {
+  const invocation = installedBinaryInvocation(binary, args);
+  return new Promise<InstalledBinaryResult>((resolve, reject) => {
+    const child = spawnProcess(invocation.command, invocation.args, {
+      cwd,
+      shell: false,
+      windowsHide: true,
+      ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {}),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = () =>
+      new Error(`Installed binary ${args.join(" ")} timed out after ${timeoutMs}ms.${npmDiagnostics(stdout, stderr)}`);
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKill !== undefined) clearTimeout(forceKill);
+      outcome();
+    };
+    const cleanupFailure = (error: unknown): void => {
+      child.kill("SIGKILL");
+      settle(() => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(new Error(`Installed binary cleanup failed: ${message}.${npmDiagnostics(stdout, stderr)}`));
+      });
+    };
+    const terminate = (force: boolean): void => {
+      void terminateInstalledBinary(child, runtime, force).catch(cleanupFailure);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminate(false);
+      forceKill = setTimeout(() => {
+        if (settled) return;
+        if (runtime.platform !== "win32") {
+          child.kill("SIGKILL");
+          settle(() => reject(timeoutError()));
+          return;
+        }
+        void terminateInstalledBinary(child, runtime, true).then(
+          () => settle(() => reject(timeoutError())),
+          cleanupFailure
+        );
+      }, npmTerminationGraceMs);
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => reject(new Error(`Installed binary ${args.join(" ")} could not start: ${error.message}.${npmDiagnostics(stdout, stderr)}`)));
+    });
+    child.once("close", (status, signal) => {
+      settle(() => {
+        if (timedOut) {
+          reject(timeoutError());
+          return;
+        }
+        if (status === null) {
+          reject(new Error(`Installed binary ${args.join(" ")} terminated by ${signal ?? "an unknown signal"}.${npmDiagnostics(stdout, stderr)}`));
+          return;
+        }
+        resolve({ status, stdout, stderr });
+      });
+    });
+  });
 }
 
 function quoteForPosixShell(value: string): string {
@@ -545,6 +743,15 @@ describe("package metadata contract", () => {
     assertPatchedFastUriLockEntries(lock);
   });
 
+  it("locks the patched MCP SDK and Hono Node server releases for GHSA-frvp-7c67-39w9", () => {
+    const manifest = readPackageManifest();
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    expect(manifest.dependencies?.["@modelcontextprotocol/sdk"]).toBe("^1.30.0");
+    expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
+    assertPatchedHonoNodeServerLockEntries(lock);
+  });
+
   it("rejects stale nested esbuild lock entries", () => {
     const lock: PackageLock = {
       packages: {
@@ -565,6 +772,19 @@ describe("package metadata contract", () => {
     };
 
     expect(() => assertPatchedFastUriLockEntries(lock)).toThrow(/node_modules\/ajv\/node_modules\/fast-uri/);
+  });
+
+  it("rejects stale nested Hono Node server lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/@hono/node-server": { version: "2.0.10" },
+        "node_modules/@modelcontextprotocol/sdk/node_modules/@hono/node-server": { version: "1.19.9" }
+      }
+    };
+
+    expect(() => assertPatchedHonoNodeServerLockEntries(lock)).toThrow(
+      /node_modules\/@modelcontextprotocol\/sdk\/node_modules\/@hono\/node-server/
+    );
   });
 });
 
@@ -598,6 +818,53 @@ describe("packed artifact contract", () => {
     await expect(running).resolves.toMatchObject({ status: 0 });
   });
 
+  it("keeps the test worker responsive while a remote-backed installed binary is pending", async () => {
+    let completed = false;
+    const child = new DelayedNpmProcess(100);
+    const running = runInstalledBinaryAsync(
+      "miftah",
+      ["doctor", "--config", "remote.json"],
+      repositoryRoot,
+      1_000,
+      () => child
+    ).finally(() => {
+      completed = true;
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(completed).toBe(false);
+    await expect(running).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("kills the whole Windows command tree when an async installed binary times out", async () => {
+    const child = new TermIgnoringNpmProcess(42_424);
+    const killedTreePids: number[] = [];
+    const result = await Promise.race([
+      runInstalledBinaryAsync(
+        "miftah.cmd",
+        ["doctor", "--config", "remote.json"],
+        repositoryRoot,
+        5,
+        () => child,
+        {
+          platform: "win32",
+          terminateWindowsProcessTree: async (pid) => {
+            killedTreePids.push(pid);
+            child.emit("close", null, "SIGKILL");
+          }
+        }
+      ).then(
+        () => "resolved",
+        (error: unknown) => error
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 500))
+    ]);
+
+    expect(result).toBeInstanceOf(Error);
+    expect(killedTreePids).toEqual([42_424]);
+    expect(child.signals).toEqual([]);
+  });
+
   it("keeps an active npm command alive when output proves forward progress", async () => {
     const child = new ProgressingNpmProcess(15, 25);
     const spawnProgressingChild: NpmSpawner = () => child;
@@ -606,6 +873,31 @@ describe("packed artifact contract", () => {
       status: 0,
       stdout: "still-building"
     });
+  });
+
+  it("does not pass test-only V8 coverage collection to npm subprocesses", async () => {
+    const coverageDirectory = await mkdtemp(join(tmpdir(), "miftah-npm-coverage-"));
+    const previousCoverageDirectory = process.env.NODE_V8_COVERAGE;
+    process.env.NODE_V8_COVERAGE = coverageDirectory;
+
+    try {
+      const child = await runNpm([
+        "exec",
+        "--",
+        process.execPath,
+        "--eval",
+        "process.stdout.write(process.env.NODE_V8_COVERAGE ?? '')"
+      ]);
+
+      expect(child.stdout).toBe("");
+    } finally {
+      if (previousCoverageDirectory === undefined) {
+        delete process.env.NODE_V8_COVERAGE;
+      } else {
+        process.env.NODE_V8_COVERAGE = previousCoverageDirectory;
+      }
+      await rm(coverageDirectory, { recursive: true, force: true });
+    }
   });
 
   it("includes captured output when an npm command exits unsuccessfully", async () => {
@@ -934,7 +1226,7 @@ describe("packed artifact contract", () => {
             TEST_INITIALIZED_PATH: healthyInitializedPath
           })
         );
-        const healthyDoctor = runInstalledBinary(binary, ["doctor", "--config", healthyConfigPath], directory);
+        const healthyDoctor = await runInstalledBinaryAsync(binary, ["doctor", "--config", healthyConfigPath], directory);
         expect(
           healthyDoctor.status,
           [healthyDoctor.stderr || healthyDoctor.stdout, fixtureLifecycleDiagnostic(healthyStartedPath, healthyInitializedPath)]
@@ -951,7 +1243,7 @@ describe("packed artifact contract", () => {
           "doctor-degraded.json",
           doctorConfig("packed-doctor-degraded", { TEST_FAIL_LIST_RESOURCES: "true" })
         );
-        const degradedDoctor = runInstalledBinary(
+        const degradedDoctor = await runInstalledBinaryAsync(
           binary,
           ["doctor", "--json", "--config", degradedConfigPath],
           directory
@@ -1027,6 +1319,20 @@ describe("packed artifact contract", () => {
           process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
           ...extras
         });
+        const remoteCliConfig = (
+          name: string,
+          profiles: Record<string, unknown>,
+          url: string,
+          extras: Record<string, unknown> = {}
+        ) => ({
+          version: "1",
+          name,
+          defaultProfile: "work",
+          upstream: { transport: "streamable-http", url },
+          profiles,
+          process: { startupTimeoutMs: 1_000, shutdownTimeoutMs: 1_000 },
+          ...extras
+        });
 
         const httpServeConfigPath = await writeCliConfig(
           "http serve config.json",
@@ -1062,6 +1368,162 @@ describe("packed artifact contract", () => {
           await consoleServe.stop();
         }
 
+        const unsupportedProfileReadiness = runInstalledBinary(
+          binary,
+          ["profile", "test", "--config", httpServeConfigPath, "--profile", "work"],
+          cliContractDirectory
+        );
+        expect(unsupportedProfileReadiness.status, unsupportedProfileReadiness.stderr || unsupportedProfileReadiness.stdout).toBe(1);
+        expect(unsupportedProfileReadiness.stderr).toBe("");
+        expect(JSON.parse(unsupportedProfileReadiness.stdout)).toEqual({
+          status: "unsupported",
+          profile: "work",
+          upstream: "default",
+          safeRead: { status: "unavailable", errorCode: "PROFILE_READINESS_UNSUPPORTED" },
+          identity: { status: "not-checked" }
+        });
+        const profileReadinessWithoutExplicitProfile = runInstalledBinary(
+          binary,
+          ["profile", "test", "--config", httpServeConfigPath],
+          cliContractDirectory
+        );
+        expect(profileReadinessWithoutExplicitProfile.status).toBe(2);
+        expect(profileReadinessWithoutExplicitProfile.stdout).toBe("");
+        expect(profileReadinessWithoutExplicitProfile.stderr).toContain(
+          "Command 'profile test' requires '--profile <value>'"
+        );
+
+        const profileList = runInstalledBinary(
+          binary,
+          ["profile", "list", "--config", httpServeConfigPath],
+          cliContractDirectory
+        );
+        expect(profileList.status, profileList.stderr || profileList.stdout).toBe(0);
+        expect(profileList.stderr).toBe("");
+        expect(JSON.parse(profileList.stdout)).toEqual({
+          defaultProfile: "work",
+          profiles: [{ name: "work" }]
+        });
+
+        const profileDescriptionConfigPath = await writeCliConfig(
+          "profile description config.json",
+          cliConfig("packed-cli-profile-description", {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { description: "Personal account", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          })
+        );
+        const setProfileDescription = runInstalledBinary(
+          binary,
+          [
+            "profile", "set-description",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--description", "Personal analytics"
+          ],
+          cliContractDirectory
+        );
+        expect(setProfileDescription.status, setProfileDescription.stderr || setProfileDescription.stdout).toBe(0);
+        expect(setProfileDescription.stderr).toBe("");
+        expect(JSON.parse(setProfileDescription.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          cleared: false,
+          actions: [
+            "Updated config version from 1 to 2.",
+            "Updated config version from 2 to 3.",
+            "Set profile description for 'personal'."
+          ],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(setProfileDescription.stdout).not.toContain("Personal analytics");
+        expect(setProfileDescription.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { description: "Personal analytics", env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
+        const clearProfileDescription = runInstalledBinary(
+          binary,
+          [
+            "profile", "set-description",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--clear-description"
+          ],
+          cliContractDirectory
+        );
+        expect(clearProfileDescription.status, clearProfileDescription.stderr || clearProfileDescription.stdout).toBe(0);
+        expect(clearProfileDescription.stderr).toBe("");
+        expect(JSON.parse(clearProfileDescription.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          cleared: true,
+          actions: ["Cleared profile description for 'personal'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            personal: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
+        const renameProfile = runInstalledBinary(
+          binary,
+          [
+            "profile", "rename",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "personal",
+            "--new-profile", "studio"
+          ],
+          cliContractDirectory
+        );
+        expect(renameProfile.status, renameProfile.stderr || renameProfile.stdout).toBe(0);
+        expect(renameProfile.stderr).toBe("");
+        expect(JSON.parse(renameProfile.stdout)).toEqual({
+          changed: true,
+          profile: "personal",
+          newProfile: "studio",
+          actions: ["Renamed profile 'personal' to 'studio'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(renameProfile.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: {
+            work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } },
+            studio: { env: { API_KEY: "${PERSONAL_API_KEY}" } }
+          }
+        });
+        const removeProfile = runInstalledBinary(
+          binary,
+          [
+            "profile", "remove",
+            "--config", profileDescriptionConfigPath,
+            "--profile", "studio"
+          ],
+          cliContractDirectory
+        );
+        expect(removeProfile.status, removeProfile.stderr || removeProfile.stdout).toBe(0);
+        expect(removeProfile.stderr).toBe("");
+        expect(JSON.parse(removeProfile.stdout)).toEqual({
+          changed: true,
+          profile: "studio",
+          actions: ["Removed profile 'studio'."],
+          write: true,
+          backupPath: expect.any(String)
+        });
+        expect(removeProfile.stdout).not.toContain("PERSONAL_API_KEY");
+        expect(JSON.parse(await readFile(profileDescriptionConfigPath, "utf8"))).toMatchObject({
+          defaultProfile: "work",
+          profiles: { work: { description: "Work account", env: { API_KEY: "${WORK_API_KEY}" } } }
+        });
+
         const dashboardConfigPath = join(cliContractDirectory, "first dashboard config.json");
         const dashboardServe = await startInstalledCli(
           installedCliEntry,
@@ -1083,6 +1545,45 @@ describe("packed artifact contract", () => {
         expect(rootHelp.status, rootHelp.stderr || rootHelp.stdout).toBe(0);
         expect(rootHelp.stderr).toBe("");
         expect(rootHelp.stdout).toContain("Usage: miftah [command] [options]");
+        expect(rootHelp.stdout).toContain("profile test");
+        expect(rootHelp.stdout).toContain("profile list");
+        expect(rootHelp.stdout).toContain("profile set-description");
+        expect(rootHelp.stdout).toContain("profile rename");
+        expect(rootHelp.stdout).toContain("profile remove");
+        const profileTestHelp = runInstalledBinary(binary, ["profile", "test", "--help"], cliContractDirectory);
+        expect(profileTestHelp.status, profileTestHelp.stderr || profileTestHelp.stdout).toBe(0);
+        expect(profileTestHelp.stderr).toBe("");
+        expect(profileTestHelp.stdout).toContain("Usage: miftah profile test");
+        expect(profileTestHelp.stdout).toContain("--config <file>");
+        expect(profileTestHelp.stdout).toContain("--profile <name>");
+        expect(profileTestHelp.stdout).toContain("--upstream <name>");
+        const profileListHelp = runInstalledBinary(binary, ["profile", "list", "--help"], cliContractDirectory);
+        expect(profileListHelp.status, profileListHelp.stderr || profileListHelp.stdout).toBe(0);
+        expect(profileListHelp.stderr).toBe("");
+        expect(profileListHelp.stdout).toContain("Usage: miftah profile list");
+        expect(profileListHelp.stdout).toContain("--config <file>");
+        const profileDescriptionHelp = runInstalledBinary(
+          binary,
+          ["profile", "set-description", "--help"],
+          cliContractDirectory
+        );
+        expect(profileDescriptionHelp.status, profileDescriptionHelp.stderr || profileDescriptionHelp.stdout).toBe(0);
+        expect(profileDescriptionHelp.stderr).toBe("");
+        expect(profileDescriptionHelp.stdout).toContain("Usage: miftah profile set-description");
+        expect(profileDescriptionHelp.stdout).toContain("--description <text>");
+        expect(profileDescriptionHelp.stdout).toContain("--clear-description");
+        const profileRenameHelp = runInstalledBinary(binary, ["profile", "rename", "--help"], cliContractDirectory);
+        expect(profileRenameHelp.status, profileRenameHelp.stderr || profileRenameHelp.stdout).toBe(0);
+        expect(profileRenameHelp.stderr).toBe("");
+        expect(profileRenameHelp.stdout).toContain("Usage: miftah profile rename");
+        expect(profileRenameHelp.stdout).toContain("--profile <name>");
+        expect(profileRenameHelp.stdout).toContain("--new-profile <name>");
+        const profileRemovalHelp = runInstalledBinary(binary, ["profile", "remove", "--help"], cliContractDirectory);
+        expect(profileRemovalHelp.status, profileRemovalHelp.stderr || profileRemovalHelp.stdout).toBe(0);
+        expect(profileRemovalHelp.stderr).toBe("");
+        expect(profileRemovalHelp.stdout).toContain("Usage: miftah profile remove");
+        expect(profileRemovalHelp.stdout).toContain("--profile <name>");
+        expect(profileRemovalHelp.stdout).toContain("--replacement-profile <name>");
         const commandOptions = {
           serve: ["--config <file>"],
           console: ["--config <file>", "--port <number>"],
@@ -1151,7 +1652,19 @@ describe("packed artifact contract", () => {
         const initOutputPath = join(cliContractDirectory, "generated output with spaces", "starter config with spaces.json");
         const initialized = runInstalledBinaryThroughShell(
           binary,
-          ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
+          process.platform === "win32"
+            ? [
+                "init",
+                "starter config with spaces",
+                "--preset",
+                "local-stdio",
+                "--local-command",
+                process.execPath,
+                "--accept-local-command",
+                "--output",
+                initOutputPath
+              ]
+            : ["init", "starter config with spaces", "--preset", "generic", "--output", initOutputPath],
           cliContractDirectory
         );
         expect(initialized.status, initialized.stderr || initialized.stdout).toBe(0);
@@ -1187,7 +1700,18 @@ describe("packed artifact contract", () => {
         expect(initializedGsc.stderr).toBe("");
         expect(initializedGsc.stdout).toContain("Credential ownership: upstream");
         expect(initializedGsc.stdout).not.toContain(gscClientSecretsPath);
-        expect(JSON.parse(await readFile(gscOutputPath, "utf8"))).toMatchObject({
+        const generatedGscConfig = JSON.parse(await readFile(gscOutputPath, "utf8")) as {
+          readonly name: string;
+          readonly upstream: { readonly command: string; readonly args: readonly string[] };
+          readonly profiles: Record<string, {
+            readonly env: {
+              readonly GSC_OAUTH_CLIENT_SECRETS_FILE?: string;
+              readonly GSC_CONFIG_DIR?: string;
+            };
+            readonly policy?: string;
+          }>;
+        };
+        expect(generatedGscConfig).toMatchObject({
           name: "gsc-pilot",
           upstream: { command: "uvx", args: ["mcp-search-console@0.3.2"] },
           profiles: {
@@ -1197,53 +1721,69 @@ describe("packed artifact contract", () => {
             }
           }
         });
+        expect(generatedGscConfig.profiles.default?.env.GSC_CONFIG_DIR).toEqual(expect.any(String));
 
-        const automationConfigPath = await writeCliConfig(
-          "automation config with spaces.json",
-          cliConfig("packed-cli-automation", {
-            work: { env: { TEST_ACCOUNT_NAME: "automation-account" } }
-          })
-        );
-        const schemaAutomation = runInstalledBinary(binary, ["schema"], cliContractDirectory);
-        expect(schemaAutomation.status, schemaAutomation.stderr || schemaAutomation.stdout).toBe(0);
-        expect(schemaAutomation.stderr).toBe("");
-        expect(JSON.parse(schemaAutomation.stdout)).toMatchObject({
-          $schema: "https://json-schema.org/draft/2019-09/schema#"
-        });
-        const validateAutomation = runInstalledBinary(
-          binary,
-          ["validate", "--config", automationConfigPath],
-          cliContractDirectory
-        );
-        expect(validateAutomation.status, validateAutomation.stderr || validateAutomation.stdout).toBe(0);
-        expect(validateAutomation.stderr).toBe("");
-        expect(JSON.parse(validateAutomation.stdout)).toMatchObject({ ok: true, name: "packed-cli-automation" });
-        const doctorAutomation = runInstalledBinary(
-          binary,
-          ["doctor", "--json", "--config", automationConfigPath],
-          cliContractDirectory
-        );
-        expect(doctorAutomation.status, doctorAutomation.stderr || doctorAutomation.stdout).toBe(0);
-        expect(doctorAutomation.stderr).toBe("");
-        expect(JSON.parse(doctorAutomation.stdout)).toMatchObject({ ok: true, overallStatus: "healthy" });
-        const listedTools = runInstalledBinary(
-          binary,
-          ["list-tools", "--config", automationConfigPath, "--profile", "work"],
-          cliContractDirectory
-        );
-        expect(listedTools.status, listedTools.stderr || listedTools.stdout).toBe(0);
-        expect(listedTools.stderr).toBe("");
-        expect(JSON.parse(listedTools.stdout)).toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: "whoami" })])
-        );
-        const testedProfile = runInstalledBinary(
-          binary,
-          ["test-profile", "--config", automationConfigPath, "--profile", "work"],
-          cliContractDirectory
-        );
-        expect(testedProfile.status, testedProfile.stderr || testedProfile.stdout).toBe(0);
-        expect(testedProfile.stderr).toBe("");
-        expect(JSON.parse(testedProfile.stdout)).toEqual({ ok: true, profile: "work" });
+        const automationUpstream = await startFakeRemoteUpstream();
+        try {
+          const automationConfigPath = await writeCliConfig(
+            "automation config with spaces.json",
+            remoteCliConfig(
+              "packed-cli-automation",
+              { work: { headers: { "X-Profile": "automation-account" } } },
+              automationUpstream.streamableHttpUrl
+            )
+          );
+          const schemaAutomation = runInstalledBinary(binary, ["schema"], cliContractDirectory);
+          expect(schemaAutomation.status, schemaAutomation.stderr || schemaAutomation.stdout).toBe(0);
+          expect(schemaAutomation.stderr).toBe("");
+          expect(JSON.parse(schemaAutomation.stdout)).toMatchObject({
+            $schema: "https://json-schema.org/draft/2019-09/schema#"
+          });
+          const validateAutomation = runInstalledBinary(
+            binary,
+            ["validate", "--config", automationConfigPath],
+            cliContractDirectory
+          );
+          expect(validateAutomation.status, validateAutomation.stderr || validateAutomation.stdout).toBe(0);
+          expect(validateAutomation.stderr).toBe("");
+          expect(JSON.parse(validateAutomation.stdout)).toMatchObject({ ok: true, name: "packed-cli-automation" });
+          const doctorAutomation = await runInstalledBinaryAsync(
+            binary,
+            ["doctor", "--json", "--config", automationConfigPath],
+            cliContractDirectory
+          );
+          expect(doctorAutomation.status, doctorAutomation.stderr || doctorAutomation.stdout).toBe(0);
+          expect(doctorAutomation.stderr).toBe("");
+          expect(JSON.parse(doctorAutomation.stdout)).toMatchObject({ ok: true, overallStatus: "healthy" });
+          const listedTools = await runInstalledBinaryAsync(
+            binary,
+            ["list-tools", "--config", automationConfigPath, "--profile", "work"],
+            cliContractDirectory
+          );
+          expect(listedTools.status, listedTools.stderr || listedTools.stdout).toBe(0);
+          expect(listedTools.stderr).toBe("");
+          expect(JSON.parse(listedTools.stdout)).toEqual(
+            expect.arrayContaining([expect.objectContaining({ name: "whoami" })])
+          );
+          const testedProfile = await runInstalledBinaryAsync(
+            binary,
+            ["test-profile", "--config", automationConfigPath, "--profile", "work"],
+            cliContractDirectory
+          );
+          expect(testedProfile.status, testedProfile.stderr || testedProfile.stdout).toBe(0);
+          expect(testedProfile.stderr).toBe("");
+          expect(JSON.parse(testedProfile.stdout)).toEqual({ ok: true, profile: "work" });
+          expect(automationUpstream.requests()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                path: "/mcp",
+                headers: expect.objectContaining({ "x-profile": "automation-account" })
+              })
+            ])
+          );
+        } finally {
+          await automationUpstream.close();
+        }
 
         const noRuntimeStartPath = join(cliContractDirectory, "runtime must not start");
         const unavailableSecretName = "MIFTAH_PACKED_CONTRACT_MISSING_SECRET";
@@ -1320,7 +1860,7 @@ describe("packed artifact contract", () => {
             { secrets: { allowPlaintextSecrets: true } }
           )
         );
-        const failedInit = runInstalledBinary(
+        const failedInit = await runInstalledBinaryAsync(
           binary,
           ["test-profile", "--config", failedInitConfigPath],
           cliContractDirectory

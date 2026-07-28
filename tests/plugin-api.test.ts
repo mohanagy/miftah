@@ -86,6 +86,36 @@ describe("plugin API", () => {
     );
   });
 
+  it("does not launch plugin manifest preflight when cancellation arrives during root resolution", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-plugin-cancel-root-"));
+    temporaryDirectories.push(directory);
+    const markerPath = join(directory, "manifest-started");
+    const pluginPath = join(directory, "cancel-root-plugin.mjs");
+    await writeFile(
+      pluginPath,
+      `import { writeFile } from "node:fs/promises";
+await writeFile(${JSON.stringify(markerPath)}, "started", "utf8");
+export default {
+  apiVersion: ${JSON.stringify(MIFTAH_PLUGIN_API_VERSION)},
+  id: "cancel-root",
+  kind: "secret-provider",
+  async resolve() { return { value: "unused" }; }
+};\n`,
+      "utf8"
+    );
+
+    const controller = new AbortController();
+    const pending = loadPluginRegistry(
+      { allowlist: [{ id: "cancel-root", kind: "secret-provider", path: pluginPath }] },
+      { rootDirectory: directory, signal: controller.signal }
+    );
+    // Abort as soon as asynchronous root resolution begins, before manifest preflight can start.
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: "PLUGIN_API_INCOMPATIBLE" });
+    await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("runs an allowlisted secret provider in a clean child with only its canonical reference", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-plugin-api-"));
     temporaryDirectories.push(directory);

@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { isAbsolute, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildPresetConfig,
   PRESET_CATALOG,
@@ -13,10 +13,19 @@ function serializedConfig(config: unknown): string {
 }
 
 const gscClientSecretsFile = resolve("fixtures", "gsc", "client-secrets.json");
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function localExecutable(): string {
+  return process.platform === "win32" ? process.execPath : "node";
+}
+
+afterEach(() => {
+  if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
+});
 
 describe("preset catalog", () => {
   it("publishes one versioned catalog with inspectable preset requirements", () => {
-    expect(PRESET_CATALOG.version).toBe("2");
+    expect(PRESET_CATALOG.version).toBe("3");
     expect(Object.keys(PRESET_CATALOG.presets)).toEqual([
       "generic",
       "github",
@@ -24,10 +33,13 @@ describe("preset catalog", () => {
       "google-search-console",
       "generic-npx",
       "generic-docker",
+      "local-stdio",
       "streamable-http"
     ]);
     expect(PRESET_CATALOG.presets["generic-npx"].requirements.npmPackage).toBe("required");
     expect(PRESET_CATALOG.presets["generic-docker"].requirements.dockerImage).toBe("required");
+    expect(PRESET_CATALOG.presets["local-stdio"].requirements.localCommand).toBe("required");
+    expect(PRESET_CATALOG.presets["local-stdio"].requirements.acceptLocalCommand).toBe("required");
     expect(PRESET_CATALOG.presets["streamable-http"].requirements.url).toBe("required");
     expect(PRESET_CATALOG.presets["google-search-console"].requirements.oauthClientSecretsFile).toBe("required");
   });
@@ -35,26 +47,36 @@ describe("preset catalog", () => {
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
     const genericOptions = { credentialEnv: "GENERIC_TOKEN" };
     const configs = [
-      buildPresetConfig("generic", "generic", genericOptions),
       buildPresetConfig("github", "github"),
-      buildPresetConfig("sentry", "sentry"),
       buildPresetConfig("gsc", "google-search-console", {
         oauthClientSecretsFile: gscClientSecretsFile
-      }),
-      buildPresetConfig("npx", "generic-npx", {
-        npmPackage: "@scope/server@1.2.3",
-        credentialEnv: "NPM_SERVER_TOKEN"
       }),
       buildPresetConfig("docker", "generic-docker", {
         dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         credentialEnv: "DOCKER_SERVER_TOKEN"
+      }),
+      buildPresetConfig("local", "local-stdio", {
+        localCommand: localExecutable(),
+        args: ["server.mjs"],
+        acceptLocalCommand: true,
+        credentialEnv: "LOCAL_MCP_TOKEN"
       }),
       buildPresetConfig("remote", "streamable-http", {
         url: "https://mcp.example.com/v1",
         credentialEnv: "REMOTE_TOKEN",
         headerName: "Authorization",
         headerPrefix: "Bearer "
-      })
+      }),
+      ...(process.platform === "win32"
+        ? []
+        : [
+            buildPresetConfig("generic", "generic", genericOptions),
+            buildPresetConfig("sentry", "sentry"),
+            buildPresetConfig("npx", "generic-npx", {
+              npmPackage: "@scope/server@1.2.3",
+              credentialEnv: "NPM_SERVER_TOKEN"
+            })
+          ])
     ];
 
     for (const config of configs) {
@@ -64,11 +86,8 @@ describe("preset catalog", () => {
   });
 
   it("builds exact provider contracts with only environment secret references", () => {
-    const generic = buildPresetConfig("generic", "generic");
     const github = buildPresetConfig("github", "github");
-    const sentry = buildPresetConfig("sentry", "sentry");
 
-    expect(generic.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
     expect(github.upstream?.args).toEqual([
       "run",
       "-i",
@@ -84,6 +103,12 @@ describe("preset catalog", () => {
       work: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_WORK_TOKEN}" }, policy: "readonly" },
       personal: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_TOKEN}" }, policy: "readonly" }
     });
+
+    if (process.platform === "win32") return;
+
+    const generic = buildPresetConfig("generic", "generic");
+    const sentry = buildPresetConfig("sentry", "sentry");
+    expect(generic.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
     expect(sentry.upstream?.args).toEqual(["--yes", "@sentry/mcp-server@0.36.0", "--skills=inspect"]);
     expect(sentry.profiles.default).toMatchObject({
       env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
@@ -106,9 +131,77 @@ describe("preset catalog", () => {
       env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
       policy: "readonly"
     });
+    expect(config.profiles.default?.env?.GSC_CONFIG_DIR).toSatisfy(
+      (directory: unknown) => typeof directory === "string" && isAbsolute(directory)
+    );
     expect(config).not.toHaveProperty("oauth");
     expect(config.profiles.default?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
     expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("gives every named GSC account a separate upstream-owned OAuth state directory", () => {
+    const config = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        {
+          name: "google-govalidate",
+          description: "GoValidate Google account",
+          oauthClientSecretsFile: gscClientSecretsFile
+        },
+        {
+          name: "google-craftmyletter",
+          description: "CraftMyLetter Google account",
+          oauthClientSecretsFile: gscClientSecretsFile
+        }
+      ],
+      defaultProfile: "google-govalidate"
+    });
+
+    expect(config.defaultProfile).toBe("google-govalidate");
+    expect(config.profiles).toMatchObject({
+      "google-govalidate": {
+        description: "GoValidate Google account",
+        env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
+        policy: "readonly"
+      },
+      "google-craftmyletter": {
+        description: "CraftMyLetter Google account",
+        env: { GSC_OAUTH_CLIENT_SECRETS_FILE: gscClientSecretsFile },
+        policy: "readonly"
+      }
+    });
+    const stateDirectories = Object.values(config.profiles).map((profile) => profile.env?.GSC_CONFIG_DIR);
+    expect(stateDirectories.every((directory) => typeof directory === "string" && isAbsolute(directory))).toBe(true);
+    expect(new Set(stateDirectories).size).toBe(2);
+    expect(config).not.toHaveProperty("oauth");
+    expect(config.profiles["google-govalidate"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
+    expect(config.profiles["google-craftmyletter"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("namespaces generated GSC OAuth state by configuration as well as profile", () => {
+    const options = {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile }
+      ]
+    } as const;
+
+    const first = buildPresetConfig("gsc", "google-search-console", options, {
+      configurationPath: "/tmp/customer-a/gsc.json"
+    });
+    const second = buildPresetConfig("gsc", "google-search-console", options, {
+      configurationPath: "/tmp/customer-b/gsc.json"
+    });
+
+    expect(first.profiles.work?.env?.GSC_CONFIG_DIR).not.toBe(second.profiles.work?.env?.GSC_CONFIG_DIR);
+  });
+
+  it("requires an explicit durable GSC default when more than one account is configured", () => {
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile },
+        { name: "client", oauthClientSecretsFile: gscClientSecretsFile }
+      ]
+    })).toThrow(PresetCatalogError);
   });
 
   it("requires one safe absolute OAuth client-secrets file path for the GSC pilot", () => {
@@ -127,12 +220,14 @@ describe("preset catalog", () => {
   });
 
   it("requires and validates exact generic preset inputs", () => {
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3" })).not.toThrow();
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).not.toThrow();
-    expect(buildPresetConfig("npx", "generic-npx", { npmPackage: "@sentry/mcp-server@0.36.0" }).upstream?.args).toEqual([
-      "--yes",
-      "@sentry/mcp-server@0.36.0"
-    ]);
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3" })).not.toThrow();
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).not.toThrow();
+      expect(buildPresetConfig("npx", "generic-npx", { npmPackage: "@sentry/mcp-server@0.36.0" }).upstream?.args).toEqual([
+        "--yes",
+        "@sentry/mcp-server@0.36.0"
+      ]);
+    }
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@latest" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@^1.2.3" })).toThrow(PresetCatalogError);
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server" })).toThrow(PresetCatalogError);
@@ -142,8 +237,10 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-alpha.01" })).toThrow(
       PresetCatalogError
     );
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-0" })).not.toThrow();
-    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01alpha" })).not.toThrow();
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-0" })).not.toThrow();
+      expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "server@1.2.3-01alpha" })).not.toThrow();
+    }
     expect(() => buildPresetConfig("docker", "generic-docker", { dockerImage: "ghcr.io/acme/server:latest" })).toThrow(
       PresetCatalogError
     );
@@ -156,6 +253,94 @@ describe("preset catalog", () => {
     expect(() => buildPresetConfig("docker", "generic-docker", {
       dockerImage: "ghcr.io/acme/server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     })).not.toThrow();
+  });
+
+  it("requires explicit acknowledgement before creating a restricted local stdio configuration", () => {
+    const localCommand = localExecutable();
+    const args = [resolve("fixtures", "fake-local-mcp.mjs"), "--stdio", "$pageview"];
+
+    expect(() => buildPresetConfig("local-tools", "local-stdio", { localCommand, args })).toThrow(PresetCatalogError);
+
+    const config = buildPresetConfig("local-tools", "local-stdio", {
+      localCommand,
+      args,
+      acceptLocalCommand: true,
+      credentialEnv: "LOCAL_MCP_TOKEN"
+    });
+
+    expect(config.upstream).toEqual({ transport: "stdio", command: localCommand, args });
+    expect(config.profiles.default).toEqual({
+      description: "Locally configured MCP executable; configure authentication with secret references when required.",
+      env: { LOCAL_MCP_TOKEN: "${LOCAL_MCP_TOKEN}" },
+      policy: "readonly"
+    });
+    expect(config.policies).toEqual({
+      readonly: { allowRisk: ["read"], denyRisk: ["write", "destructive"] }
+    });
+    expect(config.tooling?.unknownToolRisk).toBe("destructive");
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("rejects shell-shaped, credential-bearing, and non-native local stdio inputs without echoing them", () => {
+    const secret = "local-secret-that-must-not-appear";
+    const base = { localCommand: localExecutable(), args: ["server.mjs"], acceptLocalCommand: true } as const;
+    const foreignPath = process.platform === "win32" ? "/tmp/server" : "C:\\tools\\server.exe";
+    const unsafe = [
+      { ...base, localCommand: "/bin/sh" },
+      { ...base, localCommand: "env" },
+      { ...base, localCommand: `node?token=${secret}` },
+      { ...base, args: [`--token=${secret}`] },
+      { ...base, args: [`https://example.test/mcp?signature=${secret}`] },
+      { ...base, args: ["${LOCAL_MCP_TOKEN}"] },
+      { ...base, args: ["--config=${LOCAL_MCP_CONFIG}"] },
+      { ...base, cwd: "relative-directory" },
+      { ...base, cwd: foreignPath }
+    ];
+
+    for (const options of unsafe) {
+      try {
+        buildPresetConfig("local-tools", "local-stdio", options);
+        throw new Error("Expected local stdio input to be rejected.");
+      } catch (error) {
+        expect(error).toBeInstanceOf(PresetCatalogError);
+        expect(error instanceof Error ? error.message : "").not.toContain(secret);
+      }
+    }
+  });
+
+  it("rejects the legacy Windows command interpreter as a local stdio executable", () => {
+    expect(() => buildPresetConfig("local-tools", "local-stdio", {
+      localCommand: "COMMAND.COM",
+      args: ["/c", "server"],
+      acceptLocalCommand: true
+    })).toThrow(PresetCatalogError);
+  });
+
+  it("requires a direct Windows binary for local stdio instead of a command-processor shim", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const base = { args: ["server.mjs"], acceptLocalCommand: true } as const;
+
+    for (const localCommand of ["node", "server.cmd", "server.bat"]) {
+      expect(() => buildPresetConfig("local-tools", "local-stdio", { ...base, localCommand })).toThrow(PresetCatalogError);
+    }
+  });
+
+  it("does not create npx-backed presets on Windows where npm requires a command shell", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() => buildPresetConfig("generic", "generic")).toThrow(PresetCatalogError);
+    expect(() => buildPresetConfig("sentry", "sentry")).toThrow(PresetCatalogError);
+    expect(() => buildPresetConfig("npx", "generic-npx", { npmPackage: "@scope/server@1.2.3" })).toThrow(
+      PresetCatalogError
+    );
+  });
+
+  it("validates generic-npx input before rejecting its Windows package runner", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() =>
+      buildPresetConfig("npx", "generic-npx", { npmPackage: null as unknown as string })
+    ).toThrow("Preset option 'npmPackage' must be a string.");
   });
 
   it("accepts only safe streamable HTTP credential header inputs", () => {
@@ -300,7 +485,9 @@ describe("preset catalog", () => {
   );
 
   it("accepts explicitly undefined optional preset inputs", () => {
-    expect(() => buildPresetConfig("generic", "generic", { credentialEnv: undefined })).not.toThrow();
+    if (process.platform !== "win32") {
+      expect(() => buildPresetConfig("generic", "generic", { credentialEnv: undefined })).not.toThrow();
+    }
     expect(() => buildPresetConfig("remote", "streamable-http", {
       url: "https://mcp.example.com/v1",
       credentialEnv: undefined,

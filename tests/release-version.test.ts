@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.4.0";
+const releaseVersion = "0.5.0";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,10 +21,10 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.4.0 release artifacts", () => {
+describe("v0.5.0 release artifacts", () => {
   it.each([
-    "## [0.4.0] - 2026-7-23\n\n### Added\n",
-    "Release candidate: ## [0.4.0] - 2026-07-23\n\n### Added\n"
+    "## [0.5.0] - 2026-7-28\n\n### Added\n",
+    "Release candidate: ## [0.5.0] - 2026-07-28\n\n### Added\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
       `Unable to find the ${releaseVersion} changelog entry.`
@@ -65,18 +65,21 @@ describe("v0.4.0 release artifacts", () => {
     }
   });
 
-  it("documents the OAuth and Console release while retaining the experimental package status", () => {
+  it("documents guided multi-account onboarding while retaining the experimental package status", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(changelog).toContain("Miftah is experimental and pre-1.0");
     expect(notes).toContain("### Added");
     expect(notes).toContain("### Fixed");
-    expect(notes).toMatch(/standards-compatible OAuth/iu);
-    expect(notes).toMatch(/miftah dashboard/iu);
+    expect(notes).toMatch(/guided multi-account/iu);
+    expect(notes).toMatch(/resumable connector-setup/iu);
     expect(notes).toMatch(/Google Search Console/iu);
-    expect(notes).toMatch(/Windows secret-provider/iu);
-    expect(notes).toMatch(/profile runtime isolation/iu);
+    expect(notes).toMatch(/native OAuth-bound profile rename/iu);
+    expect(notes).toMatch(/external design-partner validation/iu);
+    expect(notes).toMatch(/MCP SDK Hono runtime dependency chain/iu);
+    expect(notes).toMatch(/patched development toolchain dependencies/iu);
+    expect(notes).toMatch(/batched Windows Console catalog ACL verification/iu);
     const readme = readRepositoryFile("README.md");
     expect(readme).toContain("One MCP connector. Deliberate account selection.");
     expect(readme).toContain("experimental and pre-1.0");

@@ -61,7 +61,7 @@ describe("Windows secret command contract", () => {
       windowsSecretJobSourceSha256
     );
     expect(createHash("sha256").update(executable).digest("hex")).toBe(windowsSecretJobExecutableSha256);
-    expect(executable.byteLength).toBeLessThanOrEqual(16 * 1024);
+    expect(executable.byteLength).toBeLessThanOrEqual(20 * 1024);
     expect(executable.subarray(0, 2).toString("ascii")).toBe("MZ");
   });
 
@@ -87,6 +87,27 @@ describe("Windows secret command contract", () => {
     );
   });
 
+  it("routes first-run private configuration writes through the checked helper without runtime compilation", () => {
+    const commandSource = readFileSync(
+      new URL("../src/cli/windows-config-acl.ts", import.meta.url),
+      "utf8"
+    );
+    const helperSource = readFileSync(
+      new URL("../src/secrets/windows-secret-job.cs", import.meta.url),
+      "utf8"
+    );
+
+    expect(commandSource).toContain('spawn(launcher, ["--write-private-config"], {');
+    expect(commandSource).toContain("MIFTAH_CONFIG_PRIVATE_FILE_WRITE_REQUEST");
+    expect(commandSource).not.toContain("Add-Type -TypeDefinition");
+    expect(helperSource).toContain("PrivateConfigWriteRequestEnvironmentName");
+    expect(helperSource).toContain("WritePrivateConfigurationFile");
+    expect(helperSource).toContain("OpenDirectoryWithoutDeleteSharing");
+    expect(helperSource).toContain("FileOptions.WriteThrough");
+    expect(helperSource).toContain("HasTimeForPrivateConfigCommit");
+    expect(helperSource).toContain("MatchesExistingPrivateConfigurationFile");
+  });
+
   it("contains no runtime C# compilation, compressed helper, or reflection loader", () => {
     const source = readFileSync(new URL("../src/secrets/windows-secret-command.ts", import.meta.url), "utf8");
 
@@ -104,5 +125,17 @@ describe("Windows secret command contract", () => {
     );
 
     expect(source.trimEnd()).toMatch(/\}\nexit 0$/u);
+    expect(source).toContain("$maximumArtifactBytes = 20 * 1024");
+    expect(source).toContain("RunPrivateConfigWrite");
+    expect(source).toContain("WritePrivateConfigurationFile");
+  });
+
+  it("keeps the checked helper export under the same explicit artifact ceiling", () => {
+    const source = readFileSync(
+      new URL("../scripts/export-windows-secret-job-assembly.ps1", import.meta.url),
+      "utf8"
+    );
+
+    expect(source).toContain("$maximumArtifactBytes = 20 * 1024");
   });
 });

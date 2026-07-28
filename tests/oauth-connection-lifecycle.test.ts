@@ -1,11 +1,17 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { OAuthConnectionLifecycle, type OAuthCredentialRefresher } from "../src/oauth/connection-lifecycle.js";
+import {
+  OAuthConnectionLifecycle,
+  oauthConnectionLifecycleLockKeys,
+  type OAuthCredentialRefresher
+} from "../src/oauth/connection-lifecycle.js";
 import type { OAuthConnectionLifecycleAuditEvent, OAuthConnectionLifecycleAuditSink } from "../src/oauth/audit.js";
 import { OAuthConnectionRegistry, type OAuthConnectionMetadataStore, type OAuthConnectionRecord } from "../src/oauth/connection-registry.js";
 import {
   createOAuthConfigIdentity,
   createOAuthConnectionBinding,
+  connectionCredentialKey,
+  connectionProfileTargetKey,
   parseOAuthConnectionRef,
   type OAuthConnectionBinding
 } from "../src/oauth/connection-types.js";
@@ -106,6 +112,20 @@ function deferred<Value>() {
 }
 
 describe("OAuth connection lifecycle", () => {
+  it("reserves one lifecycle lock for competing connection refs on the same profile/upstream target", () => {
+    const first = binding();
+    const competing = binding({ connectionRef: "oauthconn:1d915a13-f8a5-45e0-8343-1e82e0939129" });
+    const keys = oauthConnectionLifecycleLockKeys([first, competing]);
+
+    expect(connectionProfileTargetKey(first)).toBe(connectionProfileTargetKey(competing));
+    expect(keys).toEqual(expect.arrayContaining([
+      connectionCredentialKey(first),
+      connectionCredentialKey(competing),
+      connectionProfileTargetKey(first)
+    ]));
+    expect(keys.filter((key) => key === connectionProfileTargetKey(first))).toHaveLength(1);
+  });
+
   it("reports persisted credentials as expired when wall-clock time passes their expiry", async () => {
     let now = "2026-07-22T00:00:00.000Z";
     const metadata = new MemoryMetadataStore();

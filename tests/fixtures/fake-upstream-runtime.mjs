@@ -21,6 +21,7 @@ const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const responseText =
   process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
 const listToolsDelayMs = Number(process.env.TEST_LIST_TOOLS_DELAY_MS ?? "0");
+const listToolsStartDelayMs = Number(process.env.TEST_LIST_TOOLS_START_DELAY_MS ?? "0");
 const listToolsDelayAfterNotificationMs = Number(process.env.TEST_LIST_TOOLS_DELAY_AFTER_NOTIFICATION_MS ?? "0");
 const listResourcesDelayMs = Number(process.env.TEST_LIST_RESOURCES_DELAY_MS ?? "0");
 const listPromptsDelayMs = Number(process.env.TEST_LIST_PROMPTS_DELAY_MS ?? "0");
@@ -43,6 +44,7 @@ const resourceSubscriptionStatefulUpdates = process.env.TEST_RESOURCE_SUBSCRIPTI
 const failSubscribe = process.env.TEST_FAIL_SUBSCRIBE === "true";
 const resourceUpdateUri = process.env.TEST_RESOURCE_UPDATE_URI;
 const resourceUpdateDelayMs = Number(process.env.TEST_RESOURCE_UPDATE_DELAY_MS ?? "0");
+const subscribeStartDelayMs = Number(process.env.TEST_SUBSCRIBE_START_DELAY_MS ?? "0");
 const subscribeDelayMs = Number(process.env.TEST_SUBSCRIBE_DELAY_MS ?? "0");
 const unsubscribeDelayMs = Number(process.env.TEST_UNSUBSCRIBE_DELAY_MS ?? "0");
 const subscribeCountPath = process.env.TEST_SUBSCRIBE_COUNT_PATH;
@@ -100,6 +102,16 @@ const identityInputSchema =
       ? { type: "object", properties: { account: { type: "string" } }, allOf: [{ required: ["account"] }] }
       : process.env.TEST_IDENTITY_SCHEMA === "additional-properties-false"
         ? { type: "object", properties: {}, additionalProperties: false }
+      : { type: "object", properties: {} };
+const safeReadTool = process.env.TEST_INCLUDE_SAFE_READ_TOOL === "true" ? "get_capabilities" : undefined;
+const safeReadCallPath = process.env.TEST_SAFE_READ_CALL_PATH;
+const safeReadResponse = process.env.TEST_SAFE_READ_RESPONSE ?? "safe-read";
+const safeReadAnnotations = parseOptionalJson(process.env.TEST_SAFE_READ_ANNOTATIONS, "TEST_SAFE_READ_ANNOTATIONS");
+const safeReadInputSchema =
+  process.env.TEST_SAFE_READ_SCHEMA === "required"
+    ? { type: "object", properties: { account: { type: "string" } }, required: ["account"] }
+    : process.env.TEST_SAFE_READ_SCHEMA === "all-of-required"
+      ? { type: "object", properties: {}, allOf: [{ required: ["account"] }] }
       : { type: "object", properties: {} };
 
 let toolListRequests = 0;
@@ -257,6 +269,9 @@ if (failInitialize || clientInfoPath) {
 server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   toolListRequests += 1;
   const changedToolList = changeToolListAfterFirstRequest && toolListRequests > 1;
+  if (listToolsStartDelayMs > 0) {
+    await delay(listToolsStartDelayMs);
+  }
   if (process.env.TEST_LIST_TOOLS_STARTED_PATH) {
     writeFileSync(process.env.TEST_LIST_TOOLS_STARTED_PATH, "started");
   }
@@ -367,6 +382,16 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
             }
           ]
         : []),
+      ...(safeReadTool && !secondPage
+        ? [
+            {
+              name: safeReadTool,
+              description: "Run the provider-declared empty-object readiness probe.",
+              inputSchema: safeReadInputSchema,
+              ...(safeReadAnnotations === undefined ? {} : { annotations: safeReadAnnotations })
+            }
+          ]
+        : []),
       ...(process.env.TEST_INCLUDE_MANAGEMENT_TOOL === "true"
         ? [
             {
@@ -439,6 +464,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (request.params.name === "identity") {
     return { content: [{ type: "text", text: identityResponse }] };
+  }
+  if (request.params.name === safeReadTool) {
+    if (safeReadCallPath) {
+      writeFileSync(safeReadCallPath, JSON.stringify({
+        name: request.params.name,
+        arguments: request.params.arguments ?? {}
+      }));
+    }
+    return { content: [{ type: "text", text: safeReadResponse }] };
   }
   if (request.params.name === "echo") {
     return { content: [{ type: "text", text: String(request.params.arguments?.message ?? "") }] };
@@ -530,6 +564,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 server.setRequestHandler(SubscribeRequestSchema, async () => {
   if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
+  if (subscribeStartDelayMs > 0) await delay(subscribeStartDelayMs);
   if (subscribeStartedPath) writeFileSync(subscribeStartedPath, "started");
   if (subscribeCountPath) appendFileSync(subscribeCountPath, "1\n");
   if (subscribeDelayMs > 0) await delay(subscribeDelayMs);

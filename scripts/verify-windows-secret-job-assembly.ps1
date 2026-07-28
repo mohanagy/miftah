@@ -1,6 +1,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$maximumArtifactBytes = 20 * 1024
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $sourcePath = Join-Path $repositoryRoot 'src/secrets/windows-secret-job.cs'
 $metadataPath = Join-Path $repositoryRoot 'src/secrets/windows-secret-job-artifact.ts'
@@ -22,7 +23,7 @@ try {
   # equality is not a stable provenance check. Validate canonical source compilation independently,
   # then validate the checked runtime artifact and both committed fingerprints.
   $compiled = [IO.File]::ReadAllBytes($compiledPath)
-  if ($compiled.Length -eq 0 -or $compiled.Length -gt 16384 -or $compiled[0] -ne 0x4d -or $compiled[1] -ne 0x5a) {
+  if ($compiled.Length -eq 0 -or $compiled.Length -gt $maximumArtifactBytes -or $compiled[0] -ne 0x4d -or $compiled[1] -ne 0x5a) {
     throw 'Canonical Windows Job Object source did not compile to a valid bounded executable.'
   }
 
@@ -58,14 +59,17 @@ try {
   if ($artifactHash -cne $artifactHashMatch.Groups[1].Value) {
     throw 'Checked Windows Job Object executable fingerprint does not match its runtime artifact.'
   }
-  if ($artifact.Length -eq 0 -or $artifact.Length -gt 16384 -or $artifact[0] -ne 0x4d -or $artifact[1] -ne 0x5a) {
+  if ($artifact.Length -eq 0 -or $artifact.Length -gt $maximumArtifactBytes -or $artifact[0] -ne 0x4d -or $artifact[1] -ne 0x5a) {
     throw 'Checked Windows Job Object executable is invalid or exceeds its runtime bound.'
   }
 
   $assembly = [Reflection.Assembly]::LoadFile($artifactPath)
   $type = $assembly.GetType('MiftahSecretJob', $true)
+  $nonPublicStatic = [Reflection.BindingFlags]::NonPublic -bor [Reflection.BindingFlags]::Static
   if ($null -eq $type.GetMethod('Main') -or $null -eq $type.GetMethod('Initialize', [Type[]]@()) -or
-      $type.GetMethods().Where({ $_.Name -eq 'Run' }).Count -ne 2) {
+      $type.GetMethods().Where({ $_.Name -eq 'Run' }).Count -ne 2 -or
+      $null -eq $type.GetMethod('RunPrivateConfigWrite', $nonPublicStatic) -or
+      $null -eq $type.GetMethod('WritePrivateConfigurationFile', $nonPublicStatic)) {
     throw 'Checked Windows Job Object executable does not expose the required helper contract.'
   }
   & $artifactPath

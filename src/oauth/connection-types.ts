@@ -181,6 +181,21 @@ export function connectionCredentialKey(binding: OAuthConnectionBinding): string
   return `v1-${digest}`;
 }
 
+/** Produces a stable opaque lock key for the unique config/profile/upstream connection target. */
+export function connectionProfileTargetKey(binding: OAuthConnectionBinding): string {
+  const digest = createHash("sha256")
+    .update(
+      lengthPrefixed([
+        "miftah.oauth.profile-target-key.v1",
+        binding.configIdentity,
+        binding.profile,
+        binding.upstream
+      ])
+    )
+    .digest("base64url");
+  return `profile-target-v1-${digest}`;
+}
+
 /** Performs exact tuple comparison; partial profile/provider matching is intentionally impossible. */
 export function sameOAuthConnectionBinding(left: OAuthConnectionBinding, right: OAuthConnectionBinding): boolean {
   return (
@@ -194,5 +209,24 @@ export function sameOAuthConnectionBinding(left: OAuthConnectionBinding, right: 
     left.clientRegistration === right.clientRegistration &&
     left.scopes.length === right.scopes.length &&
     left.scopes.every((scope, index) => scope === right.scopes[index])
+  );
+}
+
+/** Allows only the profile label to change while preserving one exact OAuth connection identity. */
+export function sameOAuthConnectionBindingExceptProfile(
+  from: OAuthConnectionBinding,
+  to: OAuthConnectionBinding
+): boolean {
+  return (
+    from.version === to.version &&
+    from.configIdentity === to.configIdentity &&
+    from.connectionRef === to.connectionRef &&
+    from.profile !== to.profile &&
+    from.upstream === to.upstream &&
+    from.canonicalResource === to.canonicalResource &&
+    from.issuer === to.issuer &&
+    from.clientRegistration === to.clientRegistration &&
+    from.scopes.length === to.scopes.length &&
+    from.scopes.every((scope, index) => scope === to.scopes[index])
   );
 }

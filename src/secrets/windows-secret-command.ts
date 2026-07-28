@@ -32,6 +32,16 @@ export interface ResolvedWindowsSecretCommand extends WindowsSecretCommand {
 }
 
 /**
+ * Controls the helper's inherited standard input without changing its checked
+ * request envelope. The stdio transport uses `pipe` so the Job Object helper
+ * can proxy an MCP conversation to its contained provider.
+ */
+export interface WindowsSecretCommandLaunchOptions {
+  readonly stdin?: "ignore" | "pipe";
+  readonly cwd?: string;
+}
+
+/**
  * Resolves both the checked helper and the provider executable before spawn so
  * Node never performs a current-directory lookup for a bare command.
  */
@@ -41,7 +51,7 @@ export async function resolveWindowsSecretCommand(
   const executable = await resolveTargetExecutable(command.executable, command.environment);
   if (executable === undefined || isBatchFile(executable)) return undefined;
 
-  const launcher = await trustedWindowsSecretJobExecutable();
+  const launcher = await resolveCheckedWindowsSecretJobExecutable();
   if (launcher === undefined) return undefined;
   return { ...command, executable, launcher };
 }
@@ -51,7 +61,10 @@ export async function resolveWindowsSecretCommand(
  * before it creates the provider process. Provider command data is carried only
  * in the helper's bounded environment envelope, never in its command line.
  */
-export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand): ChildProcess {
+export function spawnWindowsSecretCommand(
+  command: ResolvedWindowsSecretCommand,
+  options: WindowsSecretCommandLaunchOptions = {}
+): ChildProcess {
   const request = encodeRequest(command);
   const standardInput = encodeStandardInput(command.stdin);
   if (request === undefined || (command.stdin !== undefined && standardInput === undefined)) {
@@ -62,7 +75,8 @@ export function spawnWindowsSecretCommand(command: ResolvedWindowsSecretCommand)
     env: helperEnvironment(command.environment, request, standardInput),
     shell: false,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"] as const
+    stdio: [options.stdin ?? "ignore", "pipe", "pipe"] as const,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd })
   });
 }
 
@@ -83,7 +97,8 @@ async function resolveTargetExecutable(
   return resolveExecutablePath(executable, { environment, platform: "win32" });
 }
 
-async function trustedWindowsSecretJobExecutable(): Promise<string | undefined> {
+/** Resolves only the checked native helper, never an ambient executable lookup. */
+export async function resolveCheckedWindowsSecretJobExecutable(): Promise<string | undefined> {
   for (const executable of windowsSecretJobExecutableCandidates) {
     let contents: Buffer;
     try {

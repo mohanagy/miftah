@@ -12,7 +12,7 @@ import {
 } from "../src/secrets/external-secret-providers.js";
 import { createBuiltinSecretProviders } from "../src/secrets/builtin-secret-providers.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
-import { SecretProcessError, runSecretCommand } from "../src/secrets/secret-process-runner.js";
+import { SecretProcessError, runSecretCommand, type SecretCommand } from "../src/secrets/secret-process-runner.js";
 import { SecretResolver } from "../src/secrets/secret-resolver.js";
 import { MiftahError } from "../src/utils/errors.js";
 
@@ -251,6 +251,46 @@ async function readPosixDescendantPid(directory: string, observed: Promise<unkno
   return (await readPosixProcessIds(directory, observed)).descendantPid;
 }
 
+async function readPosixProcessGroupId(pid: number): Promise<number | undefined> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/ps", ["-o", "pgid=", "-p", String(pid)], {
+      shell: false,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const output: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    const finish = (value: number | undefined) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    child.stdout?.on("data", (value: Buffer) => {
+      outputBytes += value.length;
+      if (outputBytes <= 128) output.push(value);
+    });
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (code !== 0 || outputBytes > 128) {
+        finish(undefined);
+        return;
+      }
+      const text = Buffer.concat(output).toString("utf8").trim();
+      if (!/^\d+$/u.test(text)) {
+        finish(undefined);
+        return;
+      }
+      const processGroupId = Number(text);
+      finish(Number.isSafeInteger(processGroupId) && processGroupId > 0 ? processGroupId : undefined);
+    });
+  });
+}
+
 async function waitForPosixCondition(
   condition: () => Promise<boolean> | boolean,
   observed: Promise<unknown>,
@@ -278,6 +318,15 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+function isPosixProcessGroupRunning(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) === "EPERM";
+  }
+}
+
 async function waitForProcessExit(pid: number): Promise<void> {
   await waitForCondition(() => !isProcessRunning(pid), `descendant process ${pid} to exit`);
 }
@@ -291,6 +340,20 @@ async function terminateTestProcess(pid: number): Promise<void> {
     throw error;
   }
   await waitForProcessExit(pid);
+}
+
+async function terminateTestProcessGroup(processGroupId: number): Promise<void> {
+  if (!isPosixProcessGroupRunning(processGroupId)) return;
+  try {
+    process.kill(-processGroupId, "SIGKILL");
+  } catch (error) {
+    if (errorCode(error) === "ESRCH") return;
+    throw error;
+  }
+  await waitForCondition(
+    () => !isPosixProcessGroupRunning(processGroupId),
+    "fixture process group to exit"
+  );
 }
 
 function observeCommand<T>(pending: Promise<T>): Promise<{ value: T } | { error: unknown }> {
@@ -1225,6 +1288,28 @@ describe("secret command runner", () => {
         });
       });
 
+  it.runIf(process.platform !== "win32")(
+    "cancels a child when its signal aborts while spawn options are materialized",
+    async () => {
+      const controller = new AbortController();
+      let environmentReads = 0;
+      const command: SecretCommand = {
+        executable: process.execPath,
+        args: ["-e", "setTimeout(() => undefined, 1_000)"],
+        get environment() {
+          environmentReads += 1;
+          controller.abort();
+          return {};
+        }
+      };
+
+      await expect(
+        runSecretCommand(command, { signal: controller.signal, timeoutMs: 100 })
+      ).rejects.toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "cancelled" }));
+      expect(environmentReads).toBeGreaterThan(0);
+    }
+  );
+
   it("classifies a missing executable without retaining its path", async () => {
     await inSandbox(async (directory) => {
       const missingExecutable = join(directory, "missing-provider");
@@ -1386,6 +1471,8 @@ describe("secret command runner", () => {
         }
         const observed = observeCommand(pending);
         let descendantPid: number | undefined;
+        let restoreProcessKill: (() => void) | undefined;
+        let commandStillUnsettledAfterDiagnosticCleanup = false;
 
         try {
           const processIds = await readPosixProcessIds(directory, observed);
@@ -1405,19 +1492,87 @@ describe("secret command runner", () => {
           await waitForProcessExit(processIds.providerPid);
           await new Promise<void>((resolve) => realSetImmediate(resolve));
 
+          const descendantInProviderGroup =
+            (await readPosixProcessGroupId(processIds.descendantPid)) === processIds.providerPid;
+          expect(descendantInProviderGroup).toBe(true);
+
+          const originalProcessKill = process.kill;
+          let attemptedProviderGroupSignal = false;
+          let providerGroupSignalFailed = false;
+          process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+            const isProviderGroupSignal = pid === -processIds.providerPid && signal !== 0;
+            if (isProviderGroupSignal) attemptedProviderGroupSignal = true;
+            try {
+              return originalProcessKill(pid, signal);
+            } catch (error) {
+              if (isProviderGroupSignal) providerGroupSignalFailed = true;
+              throw error;
+            }
+          }) as typeof process.kill;
+          restoreProcessKill = () => {
+            process.kill = originalProcessKill;
+          };
+
           timeoutGate.trigger();
           timeoutTriggered = true;
-          const outcome = await observed;
+          let diagnosticTimer: NodeJS.Timeout | undefined;
+          const result = await new Promise<
+            | { readonly kind: "settled"; readonly outcome: Awaited<typeof observed> }
+            | { readonly kind: "stalled" }
+          >((resolve) => {
+            diagnosticTimer = realSetTimeout(() => resolve({ kind: "stalled" }), 2_000);
+            void observed.then((outcome) => {
+              if (diagnosticTimer !== undefined) clearTimeout(diagnosticTimer);
+              resolve({ kind: "settled", outcome });
+            });
+          });
+          if (result.kind === "stalled") {
+            const diagnostic = {
+              descendantInProviderGroup,
+              providerGroupRunning: isPosixProcessGroupRunning(processIds.providerPid),
+              descendantRunning: isProcessRunning(processIds.descendantPid),
+              timeoutTriggered,
+              attemptedProviderGroupSignal,
+              providerGroupSignalFailed,
+              commandSettled: false
+            };
+            let diagnosticGroupCleanupFailed = false;
+            try {
+              await terminateTestProcessGroup(processIds.providerPid);
+            } catch {
+              diagnosticGroupCleanupFailed = true;
+              await terminateTestProcess(processIds.descendantPid);
+            }
+            const settledAfterDiagnosticCleanup = await new Promise<boolean>((resolve) => {
+              const cleanupTimer = realSetTimeout(() => resolve(false), 500);
+              void observed.then(() => {
+                clearTimeout(cleanupTimer);
+                resolve(true);
+              });
+            });
+            commandStillUnsettledAfterDiagnosticCleanup = !settledAfterDiagnosticCleanup;
+            throw new Error(
+              `Retained descendant containment diagnostic: ${Object.entries({
+                ...diagnostic,
+                diagnosticGroupCleanupFailed,
+                settledAfterDiagnosticCleanup
+              })
+                .map(([name, value]) => `${name}=${value}`)
+                .join(" ")}`
+            );
+          }
+          const outcome = result.outcome;
           if ("value" in outcome) throw new Error("Expected secret command to reject");
           expect(outcome.error).toEqual(expect.objectContaining<Partial<SecretProcessError>>({ kind: "timeout" }));
           await expect(readFile(signalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
           await waitForProcessExit(descendantPid);
         } finally {
+          restoreProcessKill?.();
           timeoutGate.restore();
           if (!timeoutTriggered) {
             timeoutGate.trigger();
           }
-          await observed;
+          if (!commandStillUnsettledAfterDiagnosticCleanup) await observed;
           if (descendantPid !== undefined) await terminateTestProcess(descendantPid);
         }
       });

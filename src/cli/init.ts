@@ -1,16 +1,27 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { validateConfig } from "../config/validate-config.js";
 import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
-import type { PresetBuildOptions } from "../config/presets.js";
+import type { GoogleSearchConsoleProfileOptions, PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
 import {
+  createSetupConfigurationPlan,
+  describeSetupConfiguration,
+  publishSetupConfigurationPlan,
+  type SetupConfigurationPlan,
+  type SetupConfigurationPreview
+} from "../setup/setup-configuration.js";
+import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
+import type { SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
+import {
   CLIENT_NAMES,
   ClientSnippetError,
+  formatClientSnippetHandoff,
   renderClaudeCodePermissionGuidance,
   renderClientSnippets
 } from "./client-snippets.js";
@@ -22,6 +33,7 @@ import type {
 } from "./client-snippets.js";
 import { CliUsageError } from "./parse.js";
 import type { CliOptions } from "./parse.js";
+import { MiftahError } from "../utils/errors.js";
 
 export type InitCommandOptions = Pick<
   CliOptions,
@@ -37,13 +49,26 @@ export type InitCommandOptions = Pick<
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
->;
+  | "localCommand"
+  | "args"
+  | "cwd"
+  | "acceptLocalCommand"
+> & Pick<PresetBuildOptions, "googleSearchConsoleProfiles" | "defaultProfile">;
 
 export interface InitCommandContext {
   readonly input: Readable & { readonly isTTY?: boolean };
   readonly output: Writable & { readonly isTTY?: boolean };
   readonly cwd: string;
   readonly launcher: ClientLauncher;
+  /** Internal test/runtime seam for endpoint-first OAuth metadata discovery. */
+  readonly nativeOAuthFetch?: FetchLike;
+  /** Shared private checkpoint store used only by the guided `setup` command. */
+  readonly setupDraftStore?: SetupDraftStore;
+  /**
+   * Internal guided-setup seam invoked after safe name/preset selection and before any
+   * connection, credential, path, client, or OAuth prompt is collected.
+   */
+  readonly onSetupDraftIntent?: (intent: SetupDraftInput) => Promise<void>;
 }
 
 interface InitValues extends PresetBuildOptions {
@@ -56,9 +81,33 @@ interface InitValues extends PresetBuildOptions {
 interface InitPlan {
   readonly output: string;
   readonly config: MiftahConfig;
+  readonly configuration: SetupConfigurationPlan;
   readonly snippets: readonly ClientSnippet[];
   readonly claudeCodePermissionGuidance?: ClaudeCodePermissionGuidance;
   readonly providerAdapter?: ProviderAdapterDefinition;
+}
+
+/** Safe result of publishing a generated configuration. It contains no raw secret values. */
+export interface InitCommandResult {
+  readonly output: string;
+  readonly config: MiftahConfig;
+  readonly providerAdapter?: ProviderAdapterDefinition;
+  /** Whether this invocation displayed copy-only client JSON. */
+  readonly clientHandoff?: SetupCompletionClientHandoff;
+}
+
+/**
+ * A side-effect-free CLI review artifact. It deliberately keeps the resolved
+ * output path for the local caller while the nested configuration summary omits
+ * launch arguments, credential references, endpoints, and other sensitive values.
+ */
+export interface InitConfigurationPreview {
+  readonly schemaVersion: 1;
+  readonly kind: "setup-plan";
+  readonly output: string;
+  readonly configuration: SetupConfigurationPreview;
+  /** A requested client is not rendered or verified while a plan is printed. */
+  readonly clientHandoff: "not-requested" | "requested";
 }
 
 interface Cancellation {
@@ -70,6 +119,32 @@ type PromptInterface = ReturnType<typeof createInterface>;
 
 function usageError(message: string): never {
   throw new CliUsageError(message);
+}
+
+function defaultPresetForPlatform(): string | undefined {
+  return process.platform === "win32" ? undefined : "generic";
+}
+
+function requirePresetSelection(preset: string | undefined): string {
+  if (preset !== undefined) return preset;
+  if (process.platform === "win32") {
+    usageError(
+      "On Windows, specify --preset explicitly. The generic default uses npm's npx package runner, which requires a command shell; choose a direct .exe or .com local-stdio executable, a direct-executable preset, or a remote MCP."
+    );
+  }
+  return "generic";
+}
+
+/** Maps the small set of outcome-first guided answers onto the strict preset catalog. */
+function resolveGuidedPreset(preset: string | undefined): string | undefined {
+  switch (preset?.toLocaleLowerCase("en-US")) {
+    case "remote":
+      return "streamable-http";
+    case "local":
+      return "local-stdio";
+    default:
+      return preset;
+  }
 }
 
 function isTty(context: InitCommandContext): boolean {
@@ -117,6 +192,18 @@ async function prompt(
   return value === "" ? defaultValue : value;
 }
 
+/** Reads one literal argv value without trimming whitespace that belongs to the argument itself. */
+async function rawPrompt(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  label: string,
+  defaultValue?: string
+): Promise<string | undefined> {
+  const suffix = defaultValue === undefined ? ": " : ` [${defaultValue}]: `;
+  const answer = await Promise.race([line.question(`${label}${suffix}`), cancellation.promise]);
+  return answer === "" ? defaultValue : answer;
+}
+
 async function collectStreamableOptions(
   line: PromptInterface,
   cancellation: Cancellation,
@@ -146,21 +233,152 @@ async function collectStreamableOptions(
   };
 }
 
+function parseYesNo(value: string | undefined, label: string): boolean {
+  switch (value?.toLowerCase()) {
+    case "y":
+    case "yes":
+      return true;
+    case "n":
+    case "no":
+      return false;
+    default:
+      usageError(`Answer 'yes' or 'no' when asked to ${label}.`);
+  }
+}
+
+async function collectLocalStdioOptions(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  options: InitCommandOptions,
+  output: Writable
+): Promise<PresetBuildOptions> {
+  const localCommand = options.localCommand ?? (await prompt(line, cancellation, "Local executable (no shell)"));
+  if (localCommand === undefined) {
+    usageError("Local stdio setup requires one executable.");
+  }
+
+  const args = options.args === undefined ? [] : [...options.args];
+  if (options.args === undefined) {
+    while (parseYesNo(
+      await prompt(line, cancellation, "Add a local argument? (yes/no)", "no"),
+      "add another local argument"
+    )) {
+      const argument = await rawPrompt(line, cancellation, `Argument ${args.length + 1}`);
+      if (argument === undefined) usageError("Local stdio setup requires an argument value after confirmation.");
+      args.push(argument);
+    }
+  }
+
+  const cwd = options.cwd ?? (await prompt(line, cancellation, "Working directory (absolute path, optional)"));
+  const credentialEnv = options.credentialEnv ?? (await prompt(
+    line,
+    cancellation,
+    "Credential environment variable name (optional)"
+  ));
+  output.write(
+    `Local command review: 1 executable with ${args.length} argument(s); working directory: ${
+      cwd === undefined ? "not set" : "configured"
+    }; credential environment: ${credentialEnv === undefined ? "not set" : "configured"}.\n`
+  );
+  const confirmed = options.acceptLocalCommand === true
+    ? true
+    : parseYesNo(
+      await prompt(
+        line,
+        cancellation,
+        "Miftah will not run this during setup. It will save this executable and argument array without a shell. Continue only if you trust it and entered no credential (yes/no)",
+        "no"
+      ),
+      "confirm the local executable"
+    );
+  if (!confirmed) usageError("Local executable setup was not confirmed.");
+
+  return {
+    localCommand,
+    args,
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(credentialEnv === undefined ? {} : { credentialEnv }),
+    acceptLocalCommand: true
+  };
+}
+
+function parseAdditionalGoogleSearchConsoleAccount(value: string | undefined): boolean {
+  switch (value?.toLowerCase()) {
+    case "y":
+    case "yes":
+      return true;
+    case "n":
+    case "no":
+      return false;
+    default:
+      usageError("Answer 'yes' or 'no' when asked to add another Google Search Console account.");
+  }
+}
+
+async function collectGoogleSearchConsoleOptions(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  options: InitCommandOptions
+): Promise<PresetBuildOptions> {
+  if (options.googleSearchConsoleProfiles !== undefined) {
+    return {
+      oauthClientSecretsFile: options.oauthClientSecretsFile,
+      googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
+      defaultProfile: options.defaultProfile
+    };
+  }
+
+  const googleSearchConsoleProfiles: GoogleSearchConsoleProfileOptions[] = [];
+  do {
+    const name = await prompt(
+      line,
+      cancellation,
+      "Google account profile name",
+      googleSearchConsoleProfiles.length === 0 ? "google-account-1" : undefined
+    );
+    const description = await prompt(line, cancellation, "Google account description (optional)");
+    const oauthClientSecretsFile = options.oauthClientSecretsFile ?? (await prompt(
+      line,
+      cancellation,
+      "Google OAuth client-secrets file (absolute path)"
+    ));
+    if (name === undefined || oauthClientSecretsFile === undefined) {
+      usageError("Google Search Console setup requires a profile name and OAuth client-secrets file.");
+    }
+    googleSearchConsoleProfiles.push({
+      name,
+      ...(description === undefined ? {} : { description }),
+      oauthClientSecretsFile
+    });
+  } while (parseAdditionalGoogleSearchConsoleAccount(await prompt(
+    line,
+    cancellation,
+    "Add another Google account? (yes/no)",
+    "no"
+  )));
+
+  const defaultProfile = options.defaultProfile ?? (await prompt(
+    line,
+    cancellation,
+    "Default Google account profile",
+    googleSearchConsoleProfiles[0]?.name
+  ));
+  if (defaultProfile === undefined) {
+    usageError("Google Search Console setup requires an explicit default profile.");
+  }
+  return { googleSearchConsoleProfiles, defaultProfile };
+}
+
 async function collectPresetOptions(
   line: PromptInterface,
   cancellation: Cancellation,
   preset: string,
-  options: InitCommandOptions
+  options: InitCommandOptions,
+  output: Writable
 ): Promise<PresetBuildOptions> {
   switch (preset) {
     case "google-search-console":
-      return {
-        oauthClientSecretsFile: options.oauthClientSecretsFile ?? (await prompt(
-          line,
-          cancellation,
-          "Google OAuth client-secrets file (absolute path)"
-        ))
-      };
+      return collectGoogleSearchConsoleOptions(line, cancellation, options);
     case "generic-npx":
       return {
         credentialEnv: options.credentialEnv,
@@ -171,6 +389,8 @@ async function collectPresetOptions(
         credentialEnv: options.credentialEnv,
         dockerImage: options.dockerImage ?? (await prompt(line, cancellation, "Docker image (digest-pinned)"))
       };
+    case "local-stdio":
+      return collectLocalStdioOptions(line, cancellation, options, output);
     case "streamable-http":
       return collectStreamableOptions(line, cancellation, options);
     default:
@@ -181,7 +401,11 @@ async function collectPresetOptions(
         url: options.url,
         headerName: options.headerName,
         headerPrefix: options.headerPrefix,
-        oauthClientSecretsFile: options.oauthClientSecretsFile
+        oauthClientSecretsFile: options.oauthClientSecretsFile,
+        localCommand: options.localCommand,
+        args: options.args,
+        cwd: options.cwd,
+        acceptLocalCommand: options.acceptLocalCommand
       };
   }
 }
@@ -195,8 +419,17 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   const cancellation = createCancellation(line);
   try {
     const name = options.name ?? (await prompt(line, cancellation, "Name", "miftah-wrapper"));
-    const preset = options.preset ?? (await prompt(line, cancellation, "Catalog preset", "generic"));
-    const presetOptions = await collectPresetOptions(line, cancellation, preset ?? "generic", options);
+    if (name === undefined) usageError("Interactive init requires a name, preset, and output location.");
+    const preset = requirePresetSelection(resolveGuidedPreset(
+      options.preset ?? (await prompt(
+        line,
+        cancellation,
+        "What do you want to set up? (connector name, remote, or local)",
+        defaultPresetForPlatform()
+      ))
+    ));
+    await context.onSetupDraftIntent?.({ source: "connector", name, preset, stage: "connection" });
+    const presetOptions = await collectPresetOptions(line, cancellation, preset, options, context.output);
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
       line,
@@ -204,12 +437,12 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
       "Client (claude-desktop, claude-code, cursor, vscode, all; blank for config only)"
     ));
 
-    if (name === undefined || preset === undefined || output === undefined) {
+    if (output === undefined) {
       usageError("Interactive init requires a name, preset, and output location.");
     }
     return { name, preset, output, client, ...presetOptions };
   } catch (error) {
-    if (error instanceof CliUsageError) throw error;
+    if (error instanceof CliUsageError || error instanceof MiftahError) throw error;
     throw new CliUsageError("Interactive init was cancelled.");
   } finally {
     cancellation.dispose();
@@ -221,7 +454,7 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
   const name = options.name ?? "miftah-wrapper";
   return {
     name,
-    preset: options.preset ?? "generic",
+    preset: requirePresetSelection(options.preset ?? defaultPresetForPlatform()),
     output: options.output ?? `${name}.miftah.json`,
     client: options.client,
     credentialEnv: options.credentialEnv,
@@ -230,12 +463,24 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     url: options.url,
     headerName: options.headerName,
     headerPrefix: options.headerPrefix,
-    oauthClientSecretsFile: options.oauthClientSecretsFile
+    oauthClientSecretsFile: options.oauthClientSecretsFile,
+    localCommand: options.localCommand,
+    args: options.args,
+    cwd: options.cwd,
+    acceptLocalCommand: options.acceptLocalCommand,
+    googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
+    defaultProfile: options.defaultProfile
   };
 }
 
 function isClientSelection(value: string): value is ClientSelection {
   return value === "all" || (CLIENT_NAMES as readonly string[]).includes(value);
+}
+
+function validateClientSelection(client: string | undefined): asserts client is ClientSelection | undefined {
+  if (client !== undefined && !isClientSelection(client)) {
+    usageError(`Unsupported client '${client}'.`);
+  }
 }
 
 function resolveOutputPath(output: string, cwd: string): string {
@@ -250,9 +495,7 @@ function isExistingOutputError(error: unknown): boolean {
 /** Resolves user input into a validated, side-effect-free plan for `miftah init`. */
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
-  if (values.client !== undefined && !isClientSelection(values.client)) {
-    usageError(`Unsupported client '${values.client}'.`);
-  }
+  validateClientSelection(values.client);
 
   let config: MiftahConfig;
   try {
@@ -263,7 +506,15 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       url: values.url,
       headerName: values.headerName,
       headerPrefix: values.headerPrefix,
-      oauthClientSecretsFile: values.oauthClientSecretsFile
+      oauthClientSecretsFile: values.oauthClientSecretsFile,
+      localCommand: values.localCommand,
+      args: values.args,
+      cwd: values.cwd,
+      acceptLocalCommand: values.acceptLocalCommand,
+      googleSearchConsoleProfiles: values.googleSearchConsoleProfiles,
+      defaultProfile: values.defaultProfile
+    }, {
+      configurationPath: output
     });
     validateConfig(config);
   } catch (error) {
@@ -295,9 +546,27 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
   return {
     output,
     config,
+    configuration: createSetupConfigurationPlan({ configPath: output, config }),
     snippets,
     claudeCodePermissionGuidance,
     providerAdapter: getProviderAdapterForPreset(values.preset)
+  };
+}
+
+/**
+ * Validates a noninteractive setup request without creating directories, writing
+ * files, launching an upstream, or producing client-setting snippets.
+ */
+export function previewInitCommand(options: InitCommandOptions, context: InitCommandContext): InitConfigurationPreview {
+  const values = nonInteractiveValues(options);
+  validateClientSelection(values.client);
+  const plan = buildInitPlan({ ...values, client: undefined }, context);
+  return {
+    schemaVersion: 1,
+    kind: "setup-plan",
+    output: plan.output,
+    configuration: describeSetupConfiguration(plan.config),
+    clientHandoff: values.client === undefined ? "not-requested" : "requested"
   };
 }
 
@@ -329,7 +598,7 @@ function writeSnippets(
   claudeCodePermissionGuidance: ClaudeCodePermissionGuidance | undefined
 ): void {
   for (const snippet of snippets) {
-    output.write(`${snippet.target.label} (${snippet.client}):\n${snippet.json}\n`);
+    output.write(formatClientSnippetHandoff(snippet));
   }
   if (claudeCodePermissionGuidance === undefined) return;
   if (claudeCodePermissionGuidance.kind === "manual") {
@@ -343,7 +612,7 @@ function writeSnippets(
 }
 
 /** Creates a strict catalog config and optionally prints copy-paste client snippets. */
-export async function runInitCommand(options: InitCommandOptions, context: InitCommandContext): Promise<void> {
+export async function runInitCommand(options: InitCommandOptions, context: InitCommandContext): Promise<InitCommandResult> {
   const values = options.interactive === true
     ? await collectInteractiveValues(options, context)
     : nonInteractiveValues(options);
@@ -351,7 +620,7 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
 
   await mkdir(dirname(plan.output), { recursive: true });
   try {
-    await writeFile(plan.output, `${JSON.stringify(plan.config, null, 2)}\n`, { flag: "wx" });
+    await publishSetupConfigurationPlan(plan.configuration);
   } catch (error) {
     if (isExistingOutputError(error)) {
       usageError(`Output '${plan.output}' already exists.`);
@@ -361,4 +630,10 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
   context.output.write(`Created ${plan.output}\n`);
   writeProviderAdapterGuidance(context.output, plan.providerAdapter);
   writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
+  return {
+    output: plan.output,
+    config: plan.config,
+    providerAdapter: plan.providerAdapter,
+    clientHandoff: plan.snippets.length === 0 ? "not-generated" : "shown"
+  };
 }

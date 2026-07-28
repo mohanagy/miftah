@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from "node:net";
 import { z } from "zod";
 import { loadConfig } from "../config/load-config.js";
+import { PRESET_CATALOG } from "../config/presets.js";
 import { MiftahError } from "../utils/errors.js";
 import { CLIENT_NAMES, type ClientLauncher, type ClientSelection } from "../cli/client-snippets.js";
 import { consoleAsset, type ConsoleAsset } from "./console-assets.js";
@@ -15,6 +16,9 @@ export type { ConsoleControlApplication } from "./console-application-service.js
 
 const loopbackHost = "127.0.0.1";
 const defaultMaximumRequestBytes = 64 * 1024;
+const maximumClientEntryDocumentBytes = 64 * 1024;
+/** The pasted JSON is subsequently limited to 64 KiB; this only leaves bounded room for JSON string escaping and the request envelope. */
+const maximumClientEntryOnboardingRequestBytes = maximumClientEntryDocumentBytes * 2 + 8 * 1024;
 const defaultMaximumSessions = 8;
 const defaultBootstrapTtlMs = 5 * 60_000;
 const defaultMaximumRequestsPerMinute = 240;
@@ -28,6 +32,7 @@ const connectionsCheckingIntervalMs = 5_000;
 const maximumHeaderBytes = 16 * 1024;
 const sessionCookieName = "miftah_console_session";
 const bootstrapSchema = z.object({}).strict();
+const httpsUrlSchema = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:");
 const connectionAddSchema = z.object({
   connectionRef: z.string().min(1).max(512).optional(),
   profile: z.string().min(1).max(256),
@@ -35,6 +40,63 @@ const connectionAddSchema = z.object({
   issuer: z.string().url().max(2_048),
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
+}).strict();
+const discoveredNativeOAuthConnectionSchema = z.object({
+  profile: z.string().min(1).max(256),
+  upstream: z.string().min(1).max(256)
+}).strict();
+const discoveredNativeOAuthAccountSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().max(1_024).optional(),
+  upstream: z.string().min(1).max(256),
+  makeDefault: z.literal(true).optional()
+}).strict();
+const providerAccountAdditionSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().max(1_024).optional(),
+  credentialFile: z.string().min(1).max(4_096),
+  makeDefault: z.literal(true).optional()
+}).strict();
+const environmentProfileAdditionSchema = z.object({
+  profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().min(1).max(1_024).optional(),
+  credentialEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
+  makeDefault: z.literal(true).optional()
+}).strict();
+const defaultProfileChangeSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence in the guarded configuration transaction rather
+  // than imposing the narrower preset-onboarding slug grammar here.
+  profile: z.string().min(1)
+}).strict();
+// Keep the HTTP boundary bounded, while the guarded configuration change owns
+// all description-format rules and its safe public error mapping.
+const profileDescriptionTextSchema = z.string().max(1_024);
+const profileDescriptionChangeSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence in the guarded configuration transaction rather
+  // than imposing the narrower preset-onboarding slug grammar here.
+  profile: z.string().min(1),
+  description: profileDescriptionTextSchema.optional(),
+  clearDescription: z.literal(true).optional()
+}).strict().superRefine((value, context) => {
+  if ((value.description === undefined) === (value.clearDescription !== true)) {
+    context.addIssue({ code: "custom", message: "Provide a description or explicitly clear it." });
+  }
+});
+const profileRemovalSchema = z.object({
+  // Profile keys are compatibility data owned by the selected configuration.
+  // Validate their existence and any durable references in the guarded
+  // configuration transaction rather than imposing preset-onboarding grammar.
+  profile: z.string().min(1),
+  replacementProfile: z.string().min(1).optional()
+}).strict();
+const profileRenameSchema = z.object({
+  // Preserve compatibility with existing profile keys for the selected source
+  // profile. The guarded lifecycle owns existence checks; a new profile name
+  // is bounded here and fully safety-validated before it becomes an object key.
+  profile: z.string().min(1),
+  newProfile: z.string().min(1).max(256)
 }).strict();
 const nativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
@@ -44,6 +106,73 @@ const nativeOAuthOnboardingSchema = z.object({
   issuer: z.string().url().max(2_048),
   clientRegistration: z.string().min(1).max(2_048),
   scopes: z.array(z.string().min(1).max(512)).max(128)
+}).strict();
+const discoveredNativeOAuthOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  profile: z.string().min(1).max(256),
+  description: z.string().max(1_024).optional(),
+  resource: httpsUrlSchema
+}).strict();
+const googleSearchConsoleProfileSchema = z.object({
+  name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
+  description: z.string().min(1).max(1_024).optional(),
+  oauthClientSecretsFile: z.string().min(1).max(4_096)
+}).strict();
+const presetOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  preset: z.string().min(1).max(128),
+  credentialEnv: z.string().min(1).max(256).optional(),
+  npmPackage: z.string().min(1).max(1_024).optional(),
+  dockerImage: z.string().min(1).max(2_048).optional(),
+  url: z.string().min(1).max(2_048).optional(),
+  headerName: z.string().min(1).max(256).optional(),
+  headerPrefix: z.string().max(256).optional(),
+  oauthClientSecretsFile: z.string().min(1).max(4_096).optional(),
+  localCommand: z.string().min(1).max(4_096).optional(),
+  args: z.array(z.string().max(4_096)).max(128).optional(),
+  cwd: z.string().min(1).max(4_096).optional(),
+  acceptLocalCommand: z.literal(true).optional(),
+  googleSearchConsoleProfiles: z.array(googleSearchConsoleProfileSchema).min(1).optional(),
+  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional()
+}).strict().superRefine((request, context) => {
+  if (
+    request.preset === "google-search-console" &&
+    (request.googleSearchConsoleProfiles?.length ?? 0) > 1 &&
+    request.defaultProfile === undefined
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["defaultProfile"],
+      message: "Google Search Console setup requires an explicit default profile when more than one account is configured."
+    });
+  }
+  if (request.preset === "local-stdio" && request.acceptLocalCommand !== true) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["acceptLocalCommand"],
+      message: "Local stdio setup requires explicit acknowledgement before a command is saved."
+    });
+  }
+});
+const setupDraftSchema = z.object({
+  source: z.literal("connector"),
+  name: z.string().regex(/^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u),
+  preset: z.string().max(128).refine((value) => Object.hasOwn(PRESET_CATALOG.presets, value)),
+  stage: z.literal("connection"),
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
+}).strict();
+const setupDraftDiscardSchema = z.object({
+  revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+}).strict();
+const clientEntryOnboardingSchema = z.object({
+  name: z.string().min(1).max(256),
+  entry: z.string().min(1).max(256),
+  /** Parsed in memory only; it is never persisted, echoed, or added to audit records. */
+  document: z.string().min(1).max(maximumClientEntryDocumentBytes)
+}).strict();
+const profileReadinessSchema = z.object({
+  profile: z.string().min(1).max(256),
+  upstream: z.string().min(1).max(256).optional()
 }).strict();
 
 interface BrowserSession {
@@ -75,10 +204,17 @@ export interface ConsoleServerOptions {
   readonly now?: () => number;
   /** Allows the dashboard to start before its first configuration is created. */
   readonly allowMissingConfig?: boolean;
+  /** Lets the no-config dashboard application safely inspect its bounded catalog before a default path is valid. */
+  readonly deferConfigValidation?: boolean;
   /** Exact installed CLI launcher used only to generate copyable client snippets. */
   readonly launcher?: ClientLauncher;
   /** Internal embedding/test seam; production CLI uses the native in-process application service. */
   readonly application?: ConsoleControlApplication;
+}
+
+interface ResolvedConsoleServerOptions extends Required<Pick<ConsoleServerOptions, "maximumRequestBytes" | "maximumSessions" | "bootstrapTtlMs" | "maximumRequestsPerMinute" | "maximumBootstrapAttemptsPerMinute" | "idleSessionMs" | "absoluteSessionMs" | "now">> {
+  /** The default leaves bounded JSON-escaping room for a 64 KiB document; an explicit global cap remains authoritative. */
+  readonly maximumClientEntryOnboardingRequestBytes: number;
 }
 
 class ConsoleHttpError extends Error {
@@ -169,6 +305,15 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   if (error.code === "OAUTH_CONNECTION_NOT_FOUND") {
     return new ConsoleHttpError(404, "oauth_connection_not_found", "The OAuth connection does not exist.");
   }
+  if (error.code === "CONSOLE_CONFIGURATION_NOT_FOUND") {
+    return new ConsoleHttpError(404, "configuration_not_found", "The selected configuration is not available.");
+  }
+  if (error.code === "CONSOLE_CONFIGURATION_SELECTION_REQUIRED") {
+    return new ConsoleHttpError(409, "configuration_selection_required", "Select a configuration before using this Console control.");
+  }
+  if (error.code === "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE") {
+    return new ConsoleHttpError(503, "configuration_discovery_unavailable", "The standard configuration directory is unavailable.");
+  }
   if (error.code === "CONFIG_ALREADY_EXISTS") {
     return new ConsoleHttpError(409, "config_already_exists", "A configuration already exists at this location.");
   }
@@ -180,6 +325,123 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
       503,
       "console_launcher_unavailable",
       "Client snippets are unavailable because the Console launcher is not configured."
+    );
+  }
+  if (error.code === "CLIENT_ENTRY_STATIC_LAUNCH_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "client_entry_static_launch_unsupported",
+      "This entry needs manual transport setup. Miftah did not import it or write a configuration. It did not retain its arguments, headers, environment values, or credentials. Re-enter a reviewed executable and literal arguments, or a canonical HTTPS endpoint; configure authentication separately."
+    );
+  }
+  if (error.code === "OAUTH_DISCOVERY_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_discovery_unsupported",
+      "The endpoint does not support the required standards-based OAuth setup."
+    );
+  }
+  if (error.code === "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_client_registration_unsupported",
+      "The endpoint does not support automatic OAuth setup. Use its documented manual registration details."
+    );
+  }
+  if (error.code === "OAUTH_RESOURCE_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "oauth_resource_invalid",
+      "The MCP endpoint must be an exact HTTPS Streamable HTTP URL."
+    );
+  }
+  if (error.code === "PROFILE_ALREADY_EXISTS") {
+    return new ConsoleHttpError(422, "profile_already_exists", "That account profile already exists.");
+  }
+  if (error.code === "PROVIDER_ACCOUNT_ADDITION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "provider_account_addition_unsupported",
+      "This configuration does not support reviewed provider-owned account addition."
+    );
+  }
+  if (error.code === "PROVIDER_ACCOUNT_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "provider_account_input_invalid",
+      "Choose an absolute literal credential-file path."
+    );
+  }
+  if (error.code === "ENVIRONMENT_PROFILE_ADDITION_UNSUPPORTED") {
+    return new ConsoleHttpError(
+      422,
+      "environment_profile_addition_unsupported",
+      "This configuration does not have one simple local environment credential binding to copy safely."
+    );
+  }
+  if (error.code === "ENVIRONMENT_PROFILE_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "environment_profile_input_invalid",
+      "Choose a safe profile name and an environment variable name, not a credential value."
+    );
+  }
+  if (error.code === "PROFILE_DESCRIPTION_INPUT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "profile_description_input_invalid",
+      "Choose a trimmed non-secret profile description or explicitly clear it."
+    );
+  }
+  if (error.code === "PROFILE_REMOVAL_INPUT_INVALID") {
+    return new ConsoleHttpError(422, "profile_removal_input_invalid", "Choose an existing configured account.");
+  }
+  if (error.code === "PROFILE_RENAME_INPUT_INVALID") {
+    return new ConsoleHttpError(422, "profile_rename_input_invalid", "Choose a distinct safe account name.");
+  }
+  if (error.code === "PROFILE_LAST_PROFILE") {
+    return new ConsoleHttpError(422, "profile_last_profile", "At least one configured account must remain.");
+  }
+  if (error.code === "PROFILE_REPLACEMENT_REQUIRED") {
+    return new ConsoleHttpError(
+      422,
+      "profile_replacement_required",
+      "Choose a different configured account to receive the durable references."
+    );
+  }
+  if (error.code === "PROFILE_REPLACEMENT_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "profile_replacement_invalid",
+      "Choose a different existing configured account as the replacement."
+    );
+  }
+  if (error.code === "PROFILE_REMOVAL_OAUTH_CONNECTION") {
+    return new ConsoleHttpError(
+      422,
+      "profile_removal_oauth_connection",
+      "This account has a native OAuth binding. Miftah refuses to split configuration removal from OS-vault cleanup."
+    );
+  }
+  if (error.code === "PROFILE_RENAME_OAUTH_CONNECTION") {
+    return new ConsoleHttpError(
+      422,
+      "profile_rename_oauth_connection",
+      "This account has a native OAuth binding. Miftah refuses to split the rename from OS-vault credential migration."
+    );
+  }
+  if (error.code === "PROFILE_SELECTION_STALE") {
+    return new ConsoleHttpError(
+      409,
+      "profile_selection_stale",
+      "The configuration changed during recovery; reload it before retrying."
+    );
+  }
+  if (error.code === "OAUTH_PROFILE_RENAME_RECOVERY_REQUIRED") {
+    return new ConsoleHttpError(
+      409,
+      "oauth_profile_rename_recovery_required",
+      "Miftah must complete a prior local OAuth profile-rename recovery before retrying."
     );
   }
   if (
@@ -270,7 +532,7 @@ class LocalConsoleServer implements ConsoleServer {
     readonly bootstrapCredential: string,
     private readonly listener: Server,
     private readonly application: ConsoleControlApplication,
-    private readonly options: Required<Pick<ConsoleServerOptions, "maximumRequestBytes" | "maximumSessions" | "bootstrapTtlMs" | "maximumRequestsPerMinute" | "maximumBootstrapAttemptsPerMinute" | "idleSessionMs" | "absoluteSessionMs" | "now">>
+    private readonly options: ResolvedConsoleServerOptions
   ) {
     this.bootstrap = bootstrapCredential;
     this.bootstrapIssuedAt = options.now();
@@ -349,6 +611,118 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
+    if (request.url === "/api/v1/setup-draft") {
+      if (request.method === "GET") {
+        if (this.application.loadSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          const draft = await this.application.loadSetupDraft();
+          session.lastUsedAt = this.options.now();
+          writeJson(response, 200, { data: draft ?? null });
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      if (request.method === "PUT") {
+        this.requireCsrf(request, session);
+        const parsed = setupDraftSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+        if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+        if (this.application.saveSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          const draft = await this.application.saveSetupDraft({
+            source: parsed.data.source,
+            name: parsed.data.name,
+            preset: parsed.data.preset,
+            stage: parsed.data.stage
+          }, parsed.data.expectedRevision);
+          session.lastUsedAt = this.options.now();
+          writeJson(response, 200, { data: draft });
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      if (request.method === "DELETE") {
+        this.requireCsrf(request, session);
+        const parsed = setupDraftDiscardSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+        if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+        if (this.application.discardSetupDraft === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        try {
+          await this.application.discardSetupDraft(parsed.data.revision);
+          session.lastUsedAt = this.options.now();
+          response.writeHead(204, { "cache-control": "no-store" });
+          response.end();
+        } catch (error) {
+          throw publicApplicationError(error);
+        }
+        return;
+      }
+      throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET, PUT, DELETE" });
+    }
+    if (request.url === "/api/v1/configurations") {
+      if (request.method !== "GET") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET" });
+      }
+      try {
+        const metadata = await this.application.configMetadata();
+        if (metadata.catalog === undefined) {
+          throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+        }
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: metadata.catalog });
+      } catch (error) {
+        if (error instanceof ConsoleHttpError) throw error;
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    const configurationSelection = /^\/api\/v1\/configurations\/([A-Za-z0-9_-]{16,128})\/select$/u.exec(request.url ?? "");
+    if (configurationSelection !== null) {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = bootstrapSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.selectConfiguration === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const metadata = await this.application.selectConfiguration(configurationSelection[1]!);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: metadata });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/native-oauth/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthOnboardingSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardDiscoveredNativeOAuth === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardDiscoveredNativeOAuth(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
     if (request.url === "/api/v1/onboarding/native-oauth") {
       if (request.method !== "POST") {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
@@ -358,6 +732,63 @@ class LocalConsoleServer implements ConsoleServer {
       if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
       try {
         const result = await this.application.onboardNativeOAuth(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/preset/preview") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = presetOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.previewPreset === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.previewPreset(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/preset") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = presetOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardPreset === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardPreset(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/onboarding/client-entry") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = clientEntryOnboardingSchema.safeParse(await readJsonBody(request, this.options.maximumClientEntryOnboardingRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.onboardClientEntry === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.onboardClientEntry(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result });
       } catch (error) {
@@ -391,6 +822,110 @@ class LocalConsoleServer implements ConsoleServer {
       }
       return;
     }
+    if (request.url === "/api/v1/profile-readiness") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileReadinessSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.profileReadiness === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      const controller = new AbortController();
+      const abortReadiness = (): void => {
+        if (!response.writableEnded) controller.abort();
+      };
+      request.once("aborted", abortReadiness);
+      response.once("close", abortReadiness);
+      try {
+        const result = await this.application.profileReadiness({ ...parsed.data, signal: controller.signal });
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      } finally {
+        request.off("aborted", abortReadiness);
+        response.off("close", abortReadiness);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/default") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = defaultProfileChangeSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.setDefaultProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.setDefaultProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/description") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileDescriptionChangeSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.setProfileDescription === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.setProfileDescription(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/remove") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileRemovalSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.removeProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.removeProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/rename") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = profileRenameSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.renameProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.renameProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 200, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
     if (request.url === "/api/v1/connections") {
       if (request.method === "GET") {
         try {
@@ -410,6 +945,89 @@ class LocalConsoleServer implements ConsoleServer {
       if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
       try {
         const result = await this.application.addConnection(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/native-oauth/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthAccountSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addDiscoveredNativeOAuthAccount === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addDiscoveredNativeOAuthAccount(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/provider-account") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = providerAccountAdditionSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addProviderAccount === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addProviderAccount(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    if (request.url === "/api/v1/profiles/environment-account") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = environmentProfileAdditionSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addEnvironmentProfile === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addEnvironmentProfile(parsed.data);
+        session.lastUsedAt = this.options.now();
+        writeJson(response, 201, { data: result });
+      } catch (error) {
+        throw publicApplicationError(error);
+      }
+      return;
+    }
+    // This exact route must precede the broad /connections/:reference status route below.
+    if (request.url === "/api/v1/connections/discover") {
+      if (request.method !== "POST") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "POST" });
+      }
+      this.requireCsrf(request, session);
+      const parsed = discoveredNativeOAuthConnectionSchema.safeParse(
+        await readJsonBody(request, this.options.maximumRequestBytes)
+      );
+      if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
+      if (this.application.addDiscoveredNativeOAuthConnection === undefined) {
+        throw new ConsoleHttpError(404, "not_found", "The requested resource does not exist.");
+      }
+      try {
+        const result = await this.application.addDiscoveredNativeOAuthConnection(parsed.data);
         session.lastUsedAt = this.options.now();
         writeJson(response, 201, { data: result }, { location: `/api/v1/connections/${encodeURIComponent(result.connectionRef)}` });
       } catch (error) {
@@ -635,12 +1253,16 @@ export async function startConsoleServer(
   configPath: string,
   options: ConsoleServerOptions = {}
 ): Promise<ConsoleServer> {
-  try {
-    await loadConfig(configPath);
-  } catch (error) {
-    if (!(options.allowMissingConfig === true && error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND")) {
-      throw error;
+  if (options.deferConfigValidation !== true) {
+    try {
+      await loadConfig(configPath);
+    } catch (error) {
+      if (!(options.allowMissingConfig === true && error instanceof MiftahError && error.code === "CONFIG_NOT_FOUND")) {
+        throw error;
+      }
     }
+  } else if (options.application === undefined) {
+    throw new Error("Unable to start the Miftah Console server.");
   }
   const bootstrapCredential = options.bootstrapCredential ?? randomCredential();
   if (bootstrapCredential.length < 16 || bootstrapCredential.length > 4_096) {
@@ -674,6 +1296,10 @@ export async function startConsoleServer(
     throw new Error("Unable to start the Miftah Console server.");
   }
   const url = new URL(`http://${loopbackHost}:${address.port}/`);
+  const maximumRequestBytes = options.maximumRequestBytes ?? defaultMaximumRequestBytes;
+  const maximumClientEntryOnboardingBytes = options.maximumRequestBytes === undefined
+    ? maximumClientEntryOnboardingRequestBytes
+    : Math.min(maximumRequestBytes, maximumClientEntryOnboardingRequestBytes);
   const server = new LocalConsoleServer(
     url,
     bootstrapCredential,
@@ -682,7 +1308,8 @@ export async function startConsoleServer(
       ...(options.launcher === undefined ? {} : { launcher: options.launcher })
     }),
     {
-      maximumRequestBytes: options.maximumRequestBytes ?? defaultMaximumRequestBytes,
+      maximumRequestBytes,
+      maximumClientEntryOnboardingRequestBytes: maximumClientEntryOnboardingBytes,
       maximumSessions: options.maximumSessions ?? defaultMaximumSessions,
       bootstrapTtlMs: options.bootstrapTtlMs ?? defaultBootstrapTtlMs,
       maximumRequestsPerMinute: options.maximumRequestsPerMinute ?? defaultMaximumRequestsPerMinute,

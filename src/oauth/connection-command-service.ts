@@ -2,7 +2,8 @@ import { AuditLogger } from "../audit/audit-logger.js";
 import { AuditTrail } from "../audit/audit-trail.js";
 import { loadConfig } from "../config/load-config.js";
 import { resolvePath } from "../config/path-resolve.js";
-import { createRuntime } from "../runtime/create-runtime.js";
+import type { MiftahConfig } from "../config/types.js";
+import { createRuntime, createRuntimeFromLoadedConfig } from "../runtime/create-runtime.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";
 import { realpath } from "node:fs/promises";
@@ -182,8 +183,11 @@ function identityState(status: string): OAuthIdentityState {
 
 /** Production adapter; it is intentionally in-process and never shells out to Miftah commands. */
 export class NativeOAuthCommandRuntimeFactory implements OAuthCommandRuntimeFactory {
+  /** A Console-selected snapshot is consumed directly and never reloaded by pathname. */
+  constructor(private readonly trustedConfig?: MiftahConfig) {}
+
   async connections(configPath: string): Promise<readonly RedactedOAuthConnection[]> {
-    const config = await loadConfig(configPath);
+    const config = this.trustedConfig ?? await loadConfig(configPath);
     if (config.version !== "3") return [];
     return Object.entries(config.oauth?.connections ?? {})
       .map(([connectionRef, connection]) => ({
@@ -201,8 +205,10 @@ export class NativeOAuthCommandRuntimeFactory implements OAuthCommandRuntimeFact
   async open(configPath: string, options: OAuthCommandRuntimeOptions): Promise<OAuthCommandRuntime> {
     if (options.upstreamAccess !== true) {
       const configuredPath = resolvePath(configPath);
-      const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
-      const config = await loadConfig(runtimeConfigPath);
+      const runtimeConfigPath = this.trustedConfig === undefined
+        ? await realpath(configuredPath).catch(() => configuredPath)
+        : configuredPath;
+      const config = this.trustedConfig ?? await loadConfig(runtimeConfigPath);
       const redactor = new SecretRedactor();
       const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, {
         interactiveAuthorization: false
@@ -222,12 +228,15 @@ export class NativeOAuthCommandRuntimeFactory implements OAuthCommandRuntimeFact
         close: async () => undefined
       };
     }
-    const runtime = await createRuntime(configPath, undefined, {
+    const runtimeOptions = {
       oauth: {
         interactiveAuthorization: options.interactiveAuthorization,
         ...(options.forceAuthorization === undefined ? {} : { forceAuthorization: options.forceAuthorization })
       }
-    });
+    };
+    const runtime = this.trustedConfig === undefined
+      ? await createRuntime(configPath, undefined, runtimeOptions)
+      : await createRuntimeFromLoadedConfig(configPath, this.trustedConfig, undefined, runtimeOptions);
     const oauth = runtime.oauth;
     if (oauth === undefined) {
       await runtime.manager.close();

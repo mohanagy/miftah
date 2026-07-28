@@ -84,7 +84,7 @@ export function createKeychainSecretProvider(
       const reference = parseExternalSecretReference(value);
       return reference?.provider === "keychain" ? reference : undefined;
     },
-    async resolve(reference) {
+    async resolve(reference, context) {
       if (!isKeychainPlatform(platform)) {
         throw providerError(
           "SECRET_PROVIDER_UNAVAILABLE",
@@ -109,7 +109,7 @@ export function createKeychainSecretProvider(
             args: keychainArguments(platform, descriptor.prefixArgs ?? [], reference),
             environment: keychainEnvironment(environment, platform, reference)
           },
-          commandOptions(options)
+          commandOptions(options, context.signal)
         );
         const value = removeOneTerminalLineEnding(decodeOutput(result.stdout, "keychain", reference.canonicalReference));
         if (value.length === 0) {
@@ -171,7 +171,7 @@ export function createOnePasswordSecretProvider(
             args: [...(descriptor.prefixArgs ?? []), "read", "--no-newline", reference.canonicalReference.slice("secretref:".length)],
             environment: childEnvironment(environment)
           },
-          commandOptions(options)
+          commandOptions(options, context.signal)
         );
         const value = decodeOutput(result.stdout, "op", reference.canonicalReference);
         if (value.length === 0) {
@@ -265,8 +265,8 @@ function childEnvironment(
   return child;
 }
 
-function commandOptions(options: SecretCommandOptions): SecretCommandOptions {
-  return { timeoutMs: options.timeoutMs ?? defaultTimeoutMs, signal: options.signal };
+function commandOptions(options: SecretCommandOptions, signal: AbortSignal | undefined): SecretCommandOptions {
+  return { timeoutMs: options.timeoutMs ?? defaultTimeoutMs, signal: signal ?? options.signal };
 }
 
 function removeOneTerminalLineEnding(value: string): string {

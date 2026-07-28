@@ -35,6 +35,8 @@ export type SecretProviderReference =
 export interface SecretProviderResolveContext {
   readonly values: Readonly<Record<string, string>>;
   readonly allowPlaintextSecrets: boolean;
+  /** Cancels the current bounded resolution without exposing provider output. */
+  readonly signal?: AbortSignal;
   /** Registers a provider credential before it can be sent to a child process. */
   readonly registerSecret: (value: string) => void;
 }

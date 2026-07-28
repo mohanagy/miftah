@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { presetConfig } from "../src/config/presets.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { PresetCatalogError, presetConfig } from "../src/config/presets.js";
+
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+afterEach(() => {
+  if (platformDescriptor !== undefined) Object.defineProperty(process, "platform", platformDescriptor);
+});
 
 describe("preset config", () => {
   it("generates a pinned, token-forwarding GitHub Docker preset with profile-specific env refs", () => {
@@ -44,6 +50,10 @@ describe("preset config", () => {
   });
 
   it("preserves the generic preset defaults", () => {
+    if (process.platform === "win32") {
+      expect(() => presetConfig("example")).toThrow(PresetCatalogError);
+      return;
+    }
     const config = presetConfig("example");
 
     expect(config).toMatchObject({
@@ -61,12 +71,28 @@ describe("preset config", () => {
   });
 
   it("retains the public generic fallback for unknown preset names", () => {
+    if (process.platform === "win32") {
+      expect(() => presetConfig("example", "not-a-catalog-preset")).toThrow(PresetCatalogError);
+      return;
+    }
     const config = presetConfig("example", "not-a-catalog-preset");
 
     expect(config.upstream?.args).toEqual(["--yes", "@modelcontextprotocol/server-everything@2026.7.4", "stdio"]);
   });
 
+  it("fails closed for legacy npx-backed presets on Windows", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+
+    expect(() => presetConfig("generic")).toThrow(PresetCatalogError);
+    expect(() => presetConfig("fallback", "not-a-catalog-preset")).toThrow(PresetCatalogError);
+    expect(() => presetConfig("sentry", "sentry")).toThrow(PresetCatalogError);
+  });
+
   it("uses the Sentry package with the shared preset defaults", () => {
+    if (process.platform === "win32") {
+      expect(() => presetConfig("sentry", "sentry")).toThrow(PresetCatalogError);
+      return;
+    }
     const config = presetConfig("sentry", "sentry");
 
     expect(config).toMatchObject({

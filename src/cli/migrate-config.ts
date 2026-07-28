@@ -1,5 +1,5 @@
 import { chmod, link, lstat, mkdtemp, open, readFile, rename, rm, rmdir, unlink } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { resolvePath } from "../config/path-resolve.js";
@@ -7,8 +7,9 @@ import { planConfigMigration, type ConfigMigrationPlan } from "../config/migrate
 import { validateConfig } from "../config/validate-config.js";
 import { MiftahError } from "../utils/errors.js";
 import {
-  copyWindowsConfigSecurityDescriptor,
-  createWindowsPrivateMigrationDirectory
+  copyWindowsConfigSecurityDescriptors,
+  createWindowsPrivateMigrationDirectory,
+  secureWindowsConfigFile
 } from "./windows-config-acl.js";
 
 export interface MigrateConfigCommandOptions {
@@ -25,7 +26,7 @@ export interface MigrateConfigReport {
   readonly backupCreated: boolean;
 }
 
-interface MigrationSourceFingerprint {
+export interface ConfigMigrationSourceFingerprint {
   readonly dev: number;
   readonly ino: number;
   readonly size: number;
@@ -37,7 +38,7 @@ interface MigrationSourceFingerprint {
 /** A byte-identical regular-file snapshot used only by the explicit migration transaction. */
 export interface ConfigMigrationSource {
   readonly originalBytes: Buffer;
-  readonly fingerprint: MigrationSourceFingerprint;
+  readonly fingerprint: ConfigMigrationSourceFingerprint;
 }
 
 class MigrationSourceChangedError extends Error {
@@ -57,6 +58,19 @@ class MigrationTransactionError extends Error {
   ) {
     super("The migration transaction could not safely complete.");
     this.name = "MigrationTransactionError";
+  }
+}
+
+class MigrationFilePreparationError extends Error {
+  readonly code: string | undefined;
+
+  constructor(
+    readonly phase: "backup" | "candidate" | "descriptor",
+    cause: unknown
+  ) {
+    super("The migration files could not be prepared.");
+    this.name = "MigrationFilePreparationError";
+    this.code = errorCode(cause);
   }
 }
 
@@ -90,11 +104,13 @@ function transactionWriteError(path: string, error: MigrationTransactionError): 
   return migrationWriteError(`could not safely complete the non-overwriting migration transaction${recovery}`);
 }
 
-function isRegularNonSymlink(stats: Stats): boolean {
+function isRegularNonSymlink(stats: Pick<Stats, "isFile" | "isSymbolicLink">): boolean {
   return stats.isFile() && !stats.isSymbolicLink();
 }
 
-function fingerprint(stats: Stats): MigrationSourceFingerprint {
+function fingerprint(
+  stats: Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "mode">
+): ConfigMigrationSourceFingerprint {
   return {
     dev: stats.dev,
     ino: stats.ino,
@@ -105,7 +121,18 @@ function fingerprint(stats: Stats): MigrationSourceFingerprint {
   };
 }
 
-function matchesFingerprint(stats: Stats, expected: MigrationSourceFingerprint): boolean {
+/** Creates a guarded mutation source from bytes read through an already verified file handle. */
+export function createConfigMigrationSource(
+  originalBytes: Buffer,
+  stats: Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "mode">
+): ConfigMigrationSource {
+  return {
+    originalBytes: Buffer.from(originalBytes),
+    fingerprint: fingerprint(stats)
+  };
+}
+
+function matchesFingerprint(stats: Stats, expected: ConfigMigrationSourceFingerprint): boolean {
   const current = fingerprint(stats);
   return (
     current.dev === expected.dev &&
@@ -118,7 +145,7 @@ function matchesFingerprint(stats: Stats, expected: MigrationSourceFingerprint):
 }
 
 /** A rename changes ctime without changing the captured source content or permissions. */
-function matchesFingerprintAfterMove(stats: Stats, expected: MigrationSourceFingerprint): boolean {
+function matchesFingerprintAfterMove(stats: Stats, expected: ConfigMigrationSourceFingerprint): boolean {
   const current = fingerprint(stats);
   return (
     current.dev === expected.dev &&
@@ -133,8 +160,16 @@ function sameRegularFile(first: Stats, second: Stats): boolean {
   return isRegularNonSymlink(first) && isRegularNonSymlink(second) && matchesFingerprint(second, fingerprint(first));
 }
 
-function sameRegularFileIdentity(first: Stats, second: Stats): boolean {
-  return isRegularNonSymlink(first) && isRegularNonSymlink(second) && first.dev === second.dev && first.ino === second.ino;
+/** Uses exact-width file IDs because default-number IDs can be lossy on Windows. */
+function sameRegularBigIntFileIdentity(first: BigIntStats, second: BigIntStats): boolean {
+  return (
+    isRegularNonSymlink(first) &&
+    isRegularNonSymlink(second) &&
+    first.ino !== 0n &&
+    second.ino !== 0n &&
+    first.dev === second.dev &&
+    first.ino === second.ino
+  );
 }
 
 async function closeAndRemove(handle: Awaited<ReturnType<typeof open>> | undefined, path: string): Promise<void> {
@@ -158,13 +193,16 @@ async function writeSyncedExclusive(
   path: string,
   content: string | Uint8Array,
   mode: number,
-  beforeWrite?: (path: string) => Promise<void>
+  beforeWrite?: (path: string) => Promise<void>,
+  preopenedHandle?: Awaited<ReturnType<typeof open>>
 ): Promise<void> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  let created = false;
+  let handle = preopenedHandle;
+  let created = preopenedHandle !== undefined;
   try {
-    handle = await open(path, "wx", mode);
-    created = true;
+    if (handle === undefined) {
+      handle = await open(path, "wx", mode);
+      created = true;
+    }
     if (beforeWrite !== undefined) await beforeWrite(path);
     await handle.writeFile(content);
     await handle.sync();
@@ -188,21 +226,54 @@ async function writeSyncedExclusive(
 }
 
 /** Creates one synced owner-only configuration file without replacing any existing path. */
-export async function writeNewConfigFile(path: string, content: string): Promise<void> {
-  await writeSyncedExclusive(path, content, 0o600);
-}
-
-async function writeMigrationFile(
-  path: string,
-  content: string | Uint8Array,
-  mode: number,
-  sourcePath: string
-): Promise<void> {
-  await writeSyncedExclusive(path, content, mode, async (targetPath) => {
-    if (!(await copyWindowsConfigSecurityDescriptor(sourcePath, targetPath))) {
-      throw migrationWriteError("could not preserve and verify the source Windows security descriptor");
+export async function writeNewConfigFile(path: string, content: string | Uint8Array): Promise<void> {
+  await writeSyncedExclusive(path, content, 0o600, async (targetPath) => {
+    if (!(await secureWindowsConfigFile(targetPath))) {
+      throw migrationWriteError("could not apply and verify a private Windows security descriptor");
     }
   });
+}
+
+interface PreparedMigrationFiles {
+  readonly backupHandle: Awaited<ReturnType<typeof open>>;
+  readonly candidateHandle: Awaited<ReturnType<typeof open>>;
+}
+
+/**
+ * Creates both migration targets exclusively before one descriptor copy. The
+ * files remain empty until the descriptor copy has been verified.
+ */
+async function prepareMigrationFiles(
+  transaction: MigrationTransaction,
+  mode: number,
+  sourcePath: string
+): Promise<PreparedMigrationFiles> {
+  let backupHandle: Awaited<ReturnType<typeof open>> | undefined;
+  let candidateHandle: Awaited<ReturnType<typeof open>> | undefined;
+  let backupCreated = false;
+  let candidateCreated = false;
+  let phase: MigrationFilePreparationError["phase"] = "backup";
+  try {
+    backupHandle = await open(transaction.backupPath, "wx", mode);
+    backupCreated = true;
+    phase = "candidate";
+    candidateHandle = await open(transaction.candidatePath, "wx", mode);
+    candidateCreated = true;
+    phase = "descriptor";
+    if (!(await copyWindowsConfigSecurityDescriptors(sourcePath, [transaction.backupPath, transaction.candidatePath]))) {
+      throw migrationWriteError("could not preserve and verify the source Windows security descriptor");
+    }
+    return { backupHandle, candidateHandle };
+  } catch (error) {
+    const cleanup: Promise<void>[] = [];
+    if (candidateCreated) cleanup.push(closeAndRemove(candidateHandle, transaction.candidatePath));
+    if (backupCreated) cleanup.push(closeAndRemove(backupHandle, transaction.backupPath));
+    const cleanupResults = await Promise.allSettled(cleanup);
+    if (cleanupResults.some((result) => result.status === "rejected")) {
+      throw migrationWriteError("could not clean up an incomplete migration file");
+    }
+    throw new MigrationFilePreparationError(phase, error);
+  }
 }
 
 interface MigrationTransaction {
@@ -279,7 +350,7 @@ async function discardUnmovedTransaction(transaction: MigrationTransaction): Pro
 async function restoreHeldSource(
   transaction: MigrationTransaction,
   path: string,
-  expected: MigrationSourceFingerprint
+  expected: ConfigMigrationSourceFingerprint
 ): Promise<boolean> {
   let held: Stats;
   try {
@@ -310,7 +381,7 @@ async function restoreCurrentHeldSource(transaction: MigrationTransaction, path:
 async function matchesHeldSourceSnapshot(
   holdingPath: string,
   expectedBytes: Buffer,
-  expectedFingerprint: MigrationSourceFingerprint
+  expectedFingerprint: ConfigMigrationSourceFingerprint
 ): Promise<boolean> {
   let bytes: Buffer;
   let afterRead: Stats;
@@ -357,8 +428,8 @@ async function installWithoutOverwriting(
   path: string,
   transaction: MigrationTransaction,
   source: ConfigMigrationSource,
-  candidateContent: string,
-  publishedBackupPath: string
+  candidateContent: string | Uint8Array,
+  publishedBackupPath?: string
 ): Promise<void> {
   try {
     await rename(path, transaction.holdingPath);
@@ -385,14 +456,52 @@ async function installWithoutOverwriting(
     await restoreSourceChangedOrEscalate(transaction, path);
   }
 
+  let preparedFiles: PreparedMigrationFiles | undefined;
   try {
-    await writeMigrationFile(transaction.backupPath, source.originalBytes, source.fingerprint.mode, transaction.holdingPath);
-    await link(transaction.backupPath, publishedBackupPath);
-    const [privateBackup, publishedBackup] = await Promise.all([lstat(transaction.backupPath), lstat(publishedBackupPath)]);
-    if (!sameRegularFileIdentity(privateBackup, publishedBackup)) {
-      throw new Error("migration backup publication did not retain the private backup file");
+    preparedFiles = await prepareMigrationFiles(transaction, source.fingerprint.mode, transaction.holdingPath);
+    await writeSyncedExclusive(
+      transaction.backupPath,
+      source.originalBytes,
+      source.fingerprint.mode,
+      undefined,
+      preparedFiles.backupHandle
+    );
+    if (publishedBackupPath !== undefined) {
+      await link(transaction.backupPath, publishedBackupPath);
+      const [privateBackup, publishedBackup] = await Promise.all([
+        lstat(transaction.backupPath, { bigint: true }),
+        lstat(publishedBackupPath, { bigint: true })
+      ]);
+      if (!sameRegularBigIntFileIdentity(privateBackup, publishedBackup)) {
+        throw new Error("migration backup publication did not retain the private backup file");
+      }
     }
   } catch (error) {
+    if (preparedFiles !== undefined) {
+      try {
+        await closeAndRemove(preparedFiles.candidateHandle, transaction.candidatePath);
+      } catch {
+        await restoreAndEscalate(
+          transaction,
+          () => restoreHeldSource(transaction, path, heldFingerprint),
+          migrationWriteError("could not clean up an incomplete migration file")
+        );
+      }
+    }
+    if (error instanceof MigrationFilePreparationError && error.phase === "candidate") {
+      await restoreAndEscalate(
+        transaction,
+        () => restoreHeldSource(transaction, path, heldFingerprint),
+        migrationWriteError("could not create the synced migration candidate; the original configuration was restored")
+      );
+    }
+    if (error instanceof MigrationFilePreparationError && error.phase === "descriptor") {
+      await restoreAndEscalate(
+        transaction,
+        () => restoreHeldSource(transaction, path, heldFingerprint),
+        migrationWriteError("could not preserve and verify the source Windows security descriptor; the original configuration was restored")
+      );
+    }
     const restoredError = errorCode(error) === "EEXIST"
       ? new MiftahError(
         "CONFIG_MIGRATION_BACKUP_EXISTS",
@@ -403,7 +512,16 @@ async function installWithoutOverwriting(
   }
 
   try {
-    await writeMigrationFile(transaction.candidatePath, candidateContent, source.fingerprint.mode, transaction.holdingPath);
+    if (preparedFiles === undefined) {
+      throw new Error("migration files were not prepared");
+    }
+    await writeSyncedExclusive(
+      transaction.candidatePath,
+      candidateContent,
+      source.fingerprint.mode,
+      undefined,
+      preparedFiles.candidateHandle
+    );
   } catch {
     await restoreAndEscalate(
       transaction,
@@ -427,14 +545,17 @@ async function installWithoutOverwriting(
     );
   }
 
-  let privateCandidate: Stats;
-  let publishedCandidate: Stats;
+  let privateCandidate: BigIntStats;
+  let publishedCandidate: BigIntStats;
   try {
-    [privateCandidate, publishedCandidate] = await Promise.all([lstat(transaction.candidatePath), lstat(path)]);
+    [privateCandidate, publishedCandidate] = await Promise.all([
+      lstat(transaction.candidatePath, { bigint: true }),
+      lstat(path, { bigint: true })
+    ]);
   } catch {
     throw new MigrationTransactionError(transaction.directory);
   }
-  if (!sameRegularFileIdentity(privateCandidate, publishedCandidate)) {
+  if (!sameRegularBigIntFileIdentity(privateCandidate, publishedCandidate)) {
     throw new MigrationTransactionError(transaction.directory);
   }
 
@@ -483,7 +604,7 @@ export async function readConfigMigrationSource(path: string): Promise<ConfigMig
     if (!sameRegularFile(opened, afterRead) || !sameRegularFile(afterRead, afterReadPath)) {
       throw new MigrationSourceChangedError();
     }
-    result = { originalBytes, fingerprint: fingerprint(afterRead) };
+    result = createConfigMigrationSource(originalBytes, afterRead);
   } catch (error) {
     failure = error;
   }
@@ -531,12 +652,12 @@ export async function applyConfigMigration(
  * Applies an already planned, schema-valid configuration replacement through the same guarded
  * transaction as migration while publishing a unique recovery backup for repeatable mutations.
  */
-export async function applyConfigReplacement(
+async function replaceConfigContent(
   path: string,
   source: ConfigMigrationSource,
-  config: unknown
-): Promise<string> {
-  validateConfig(config);
+  candidateContent: string | Uint8Array,
+  publishBackup = true
+): Promise<string | undefined> {
   try {
     await assertMigrationSourceUnchanged(path, source);
   } catch (error) {
@@ -544,25 +665,53 @@ export async function applyConfigReplacement(
     throw error;
   }
   const transaction = await createMigrationTransaction(path);
-  const backupPath = join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`);
+  const backupPath = publishBackup ? join(dirname(path), `${basename(path)}.miftah-backup-${randomUUID()}`) : undefined;
   try {
-    await installWithoutOverwriting(
-      path,
-      transaction,
-      source,
-      `${JSON.stringify(config, null, 2)}\n`,
-      backupPath
-    );
+    await installWithoutOverwriting(path, transaction, source, candidateContent, backupPath);
     return backupPath;
   } catch (error) {
     if (error instanceof MigrationSourceChangedError) {
       throw sourceChangedWriteError(error.recoveryPath, error.replacementApplied, path);
     }
-    if (error instanceof MigrationTransactionError) {
-      throw transactionWriteError(path, error);
-    }
+    if (error instanceof MigrationTransactionError) throw transactionWriteError(path, error);
     throw error;
   }
+}
+
+export async function applyConfigReplacement(
+  path: string,
+  source: ConfigMigrationSource,
+  config: unknown
+): Promise<string> {
+  validateConfig(config);
+  const backupPath = await replaceConfigContent(path, source, `${JSON.stringify(config, null, 2)}\n`);
+  if (backupPath === undefined) throw migrationWriteError("could not publish the required recovery backup");
+  return backupPath;
+}
+
+/**
+ * Restores an already validated configuration snapshot through the same
+ * guarded, non-overwriting transaction used for forward replacements. The
+ * original bytes are retained exactly so a failed dependent durability step
+ * can leave no rewritten configuration behind.
+ */
+export async function restoreConfigReplacement(
+  path: string,
+  source: ConfigMigrationSource,
+  original: ConfigMigrationSource
+): Promise<string> {
+  const backupPath = await replaceConfigContent(path, source, original.originalBytes);
+  if (backupPath === undefined) throw migrationWriteError("could not publish the required recovery backup");
+  return backupPath;
+}
+
+/** Restores an internal failed replacement without retaining a second rejected-candidate backup. */
+export async function restoreConfigReplacementWithoutPublishingBackup(
+  path: string,
+  source: ConfigMigrationSource,
+  original: ConfigMigrationSource
+): Promise<void> {
+  await replaceConfigContent(path, source, original.originalBytes, false);
 }
 
 async function readConfigBytes(path: string): Promise<Buffer> {

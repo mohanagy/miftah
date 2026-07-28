@@ -4,6 +4,8 @@ Provider adapters describe a narrow, reviewed integration with an MCP server who
 
 Every adapter declares one credential owner: Miftah, the upstream, or manual-only. The typed ownership union prevents an upstream-owned adapter from claiming Miftah's browser callback or OS vault. Adapter diagnostics are metadata-only. They never inspect arbitrary credential files or token caches, and an adapter cannot turn a provider-specific flow into a native `oauth.connections` binding.
 
+When the local Console opens a recognized adapter configuration, it displays this ownership boundary and removes the native OAuth editor for that configuration. It can show that the provider owns login and reauthentication, but it never reads the adapter's cache, credentials, client-secrets path, or browser state. For an adapter that declares reviewed account provisioning, the Console can show **Add another provider account** only after the whole selected configuration proves it has safe, isolated existing account bindings. The form accepts a new account's credential-file reference but never shows existing references or cache content.
+
 ## Google Search Console pilot
 
 The initial pilot wraps the community [`mcp-search-console`](https://github.com/AminForou/mcp-gsc) STDIO server. It is deliberately upstream-owned:
@@ -13,8 +15,8 @@ The initial pilot wraps the community [`mcp-search-console`](https://github.com/
 | Launch | `uvx mcp-search-console@0.3.2`; Python 3.11 or newer and `uvx` are prerequisites. |
 | Credential ownership | Upstream |
 | Browser handoff | The upstream opens the browser on first authenticated use. Miftah does not run this OAuth callback. |
-| Token cache | The upstream chooses and maintains its platform user-config cache. Miftah never reads, copies, exports, or deletes that cache. |
-| Safe health evidence | The upstream `get_capabilities` tool can report authentication readiness. It is health metadata, not verified Google-account identity. |
+| Token cache | Each generated Miftah configuration/profile pair passes a distinct `GSC_CONFIG_DIR`. The upstream creates and maintains its token cache there; Miftah never creates, reads, copies, exports, or deletes that cache. |
+| Safe health evidence | The upstream `get_capabilities` tool is the only declared first-success probe. `setup --verify` and the explicit Console action can call it once with `{}` only after audit and policy preflight. It is health metadata, not verified Google-account identity. |
 | Reauthentication | The upstream owns the `reauthenticate` MCP tool. The generated read-only Miftah policy does not silently grant it. |
 | Disconnect and revoke | Manual-only. Remove/revoke access with the upstream and Google account controls; Miftah cannot promise provider-side revocation. |
 | Identity evidence | Unavailable by default. OAuth success and `get_capabilities` do not prove the intended Google account or property. |
@@ -30,13 +32,35 @@ miftah init gsc \
   --client claude-desktop
 ```
 
-The generated profile passes that path as `GSC_OAUTH_CLIENT_SECRETS_FILE`, pins `mcp-search-console@0.3.2`, applies Miftah's read-only policy, and does not create an `oauth.connections` entry. `init` prints the safe ownership summary but never echoes the configured client-secrets path. Complete the upstream browser flow on first use, then call `get_capabilities` when you need its coarse auth health. Use the upstream's `reauthenticate` tool only after explicitly reviewing and authorizing that lifecycle operation.
+The generated profile passes that path as `GSC_OAUTH_CLIENT_SECRETS_FILE`, gives the upstream its own `GSC_CONFIG_DIR` namespaced by the generated configuration file and profile, pins `mcp-search-console@0.3.2`, applies Miftah's read-only policy, and does not create an `oauth.connections` entry. `init` prints the safe ownership summary but never echoes the configured client-secrets path. Use `miftah setup --verify` or the explicit Console action when you want Miftah to run the declared `get_capabilities` probe once; it reports only bounded status, never raw provider output. Complete the upstream browser flow on first use. Use the upstream's `reauthenticate` tool only after explicitly reviewing and authorizing that lifecycle operation.
+
+That automatic check is intentionally narrower than normal manual configuration. It trusts only the reviewed `uvx` launch with its inherited working directory, no profile isolation, and the generated GSC environment keys (`GSC_OAUTH_CLIENT_SECRETS_FILE` and `GSC_CONFIG_DIR`), plus the documented service-account pair `GSC_CREDENTIALS_PATH` and `GSC_SKIP_OAUTH`. A configuration-controlled `PATH`, package-resolution setting, command, working directory, isolation setting, `GSC_ALLOW_DESTRUCTIVE`, or another environment key makes the check return `PROFILE_READINESS_UNSUPPORTED`; it does not start a provider process. This does not prevent a manually reviewed configuration from running. It prevents Miftah from guessing that a changed process is still the reviewed adapter.
+
+For more than one Google account, run the guided flow instead:
+
+```sh
+miftah setup gsc --preset google-search-console
+```
+
+It asks for each profile name, optional description, and client-secrets path, then asks which profile should be the durable default. It generates a distinct `GSC_CONFIG_DIR` for every generated configuration file and named profile. The upstream creates its own cache in that directory, and Miftah still never opens or manages it.
+
+For a returning configuration, add one account without replaying first-run setup:
+
+```sh
+miftah setup --add-profile \
+  --config ~/.config/miftah/gsc.json \
+  --profile google-personal \
+  --oauth-client-secrets-file "$HOME/.config/gsc/personal-client-secrets.json" \
+  --verify
+```
+
+`miftah setup --add-profile` is available only when every existing profile still matches the exact reviewed GSC launch and has an absolute literal client-secrets reference plus a distinct canonical `GSC_CONFIG_DIR`. It creates the new profile through the adapter contract, gives it a new isolated state directory, records a redacted lifecycle event, and never reads or copies the credential file or provider cache. `--verify` runs `get_capabilities` once for the new profile only. The Console exposes the same flow under **Add another provider account**; it is hidden rather than guessed for manual, mixed, changed, or shared-state configurations.
 
 Manual configuration remains supported. If `uvx` is installed at an absolute path, or the upstream needs another documented environment value, edit the generated config and run `miftah validate` followed by `miftah doctor`. Do not add the upstream token-cache path as a Miftah secret provider and do not copy a cache between profiles.
 
 ### OAuth versus service accounts
 
-OAuth is convenient for an interactive desktop user, but the upstream-owned cache can make two profiles look separate in Miftah while they still share one Google login under the same operating-system user. Do not claim deterministic multi-profile account isolation from different client-secrets files alone. Use separate OS-level homes/profile isolation only when you understand the upstream's cache layout and lifecycle.
+OAuth is convenient for an interactive desktop user. The guided GSC setup gives every generated configuration file and profile a distinct upstream-owned cache directory, so same-named configurations do not share the upstream token file. Complete consent separately for every profile. This is cache isolation, not Google-account identity verification: OAuth success and `get_capabilities` still do not prove the intended account or property. Use separate OS-level homes only when you need a stronger operating-system boundary and understand the upstream lifecycle.
 
 For unattended or deterministic automation, the upstream also documents a service-account path through `GSC_CREDENTIALS_PATH` with `GSC_SKIP_OAUTH=true`. A service account avoids browser consent and a user refresh-token cache, but it must be granted access to each Search Console property and its private key needs stricter file handling. This remains a manual configuration path in the pilot; Miftah does not import, display, or rotate the key file.
 

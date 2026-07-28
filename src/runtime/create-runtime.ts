@@ -4,8 +4,13 @@ import { ProfileRuntimeIsolation } from "../isolation/profile-runtime-isolation.
 import { resolvePath } from "../config/path-resolve.js";
 import { MultiUpstreamProcessManager } from "../upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../upstream/upstream-process-manager.js";
-import { resolveRuntimeConfig, type RuntimeResolutionScope } from "./resolve-runtime-config.js";
-import type { StateConfig } from "../config/types.js";
+import {
+  resolveRuntimeConfig,
+  resolveRuntimeConfigFromLoadedConfig,
+  type ResolvedRuntimeConfig,
+  type RuntimeResolutionScope
+} from "./resolve-runtime-config.js";
+import type { MiftahConfig, StateConfig } from "../config/types.js";
 import {
   createRemoteOAuthRuntime,
   type RemoteOAuthRuntimeOptions
@@ -20,6 +25,10 @@ import {
 export interface RuntimeCreationOptions {
   /** Overrides profile-state persistence without changing the resolved public configuration. */
   profileState?: StateConfig;
+  /** Limits a short-lived setup check to its selected runtime dependencies. */
+  dependencyMode?: "full" | "profile-readiness";
+  /** Cancels dependency resolution before managers or upstream children are constructed. */
+  signal?: AbortSignal;
   /** Internal protocol dependencies used by deterministic OAuth fixtures and native runtime wiring. */
   oauth?: RemoteOAuthRuntimeOptions;
   /** Internal persistence seam for deterministic identity-binding tests. */
@@ -39,13 +48,44 @@ export async function createRuntime(
 ) {
   const configuredPath = resolvePath(configPath);
   const runtimeConfigPath = await realpath(configuredPath).catch(() => configuredPath);
-  const { config, upstream, secretValues, redactor, plugins } = await resolveRuntimeConfig(runtimeConfigPath, scope);
+  const resolved = await resolveRuntimeConfig(runtimeConfigPath, scope, { signal: options.signal });
+  return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
+}
+
+/**
+ * Constructs a runtime from configuration that a trusted caller has already
+ * opened and validated. It deliberately does not reopen configPath.
+ */
+export async function createRuntimeFromLoadedConfig(
+  configPath: string,
+  config: MiftahConfig,
+  scope?: RuntimeResolutionScope,
+  options: RuntimeCreationOptions = {}
+) {
+  const runtimeConfigPath = resolvePath(configPath);
+  const resolved = await resolveRuntimeConfigFromLoadedConfig(runtimeConfigPath, config, scope, { signal: options.signal });
+  return createRuntimeFromResolvedConfig(runtimeConfigPath, resolved, options);
+}
+
+async function createRuntimeFromResolvedConfig(
+  runtimeConfigPath: string,
+  resolved: ResolvedRuntimeConfig,
+  options: RuntimeCreationOptions
+) {
+  const { config, upstream, secretValues, redactor, plugins } = resolved;
+  const readinessDependencies = options.dependencyMode === "profile-readiness";
   const isolation = new ProfileRuntimeIsolation({ configPath: runtimeConfigPath, redactor });
-  const oauth = await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
+  const oauth = readinessDependencies
+    ? undefined
+    : await createRemoteOAuthRuntime(runtimeConfigPath, config, redactor, options.oauth);
   const identities = new IdentityManager(config, {
-    bindingStore:
-      options.identity?.bindingStore ??
-      new FileIdentityBindingStore(defaultIdentityBindingPath(runtimeConfigPath))
+    ...(readinessDependencies
+      ? options.identity
+      : {
+          bindingStore:
+            options.identity?.bindingStore ??
+            new FileIdentityBindingStore(defaultIdentityBindingPath(runtimeConfigPath))
+        })
   });
   await identities.initialize();
   const managerOptions = {
@@ -63,7 +103,7 @@ export async function createRuntime(
   const manager = config.upstreams
     ? new MultiUpstreamProcessManager(config, managerOptions)
     : new UpstreamProcessManager(upstream!, config.profiles, managerOptions);
-  const profileState = options.profileState ?? config.state;
+  const profileState = readinessDependencies ? undefined : options.profileState ?? config.state;
   const profileManager = new ProfileManager(
     config,
     config.security,

@@ -22,6 +22,8 @@ export interface SecretResolverOptions {
   redactor?: SecretRedactor;
   /** Internal runtime-owned allowlisted plugin registry. */
   plugins?: PluginRegistry;
+  /** Cancels every provider invocation belonging to this resolver instance. */
+  signal?: AbortSignal;
   /** Internal injection point for provider integration tests and runtime composition. */
   providers?: Partial<BuiltinSecretProviders>;
 }
@@ -63,6 +65,7 @@ export class SecretResolver {
   }
 
   async load(): Promise<void> {
+    this.throwIfCancelled();
     for (const path of this.options.envFiles ?? []) {
       let content: string;
       try {
@@ -72,6 +75,7 @@ export class SecretResolver {
           cause: error instanceof Error ? error.message : String(error)
         });
       }
+      this.throwIfCancelled();
       for (const [key, value] of Object.entries(parse(content))) {
         if (this.values[key] === undefined) this.values[key] = value;
       }
@@ -84,6 +88,7 @@ export class SecretResolver {
 
   /** Resolves a map while retaining secret-reference values for downstream diagnostic redaction. */
   async resolveMapWithSecretValues(values: Record<string, string>): Promise<ResolvedSecretMap> {
+    this.throwIfCancelled();
     const secretValues = new Set<string>();
     const resolvedValues: Record<string, string> = {};
     for (const [key, value] of Object.entries(values)) {
@@ -100,6 +105,7 @@ export class SecretResolver {
 
   /** Resolves one value while retaining sourced secrets for downstream redaction. */
   async resolveValueWithSecretValues(value: string): Promise<ResolvedSecretValue> {
+    this.throwIfCancelled();
     const secretValues = new Set<string>();
     const environmentReference = this.providers.environment.parse(value);
     if (environmentReference) {
@@ -144,6 +150,7 @@ export class SecretResolver {
     let resolvedValue = "";
     let offset = 0;
     for (const match of value.matchAll(embeddedEnvironmentReferencePattern)) {
+      this.throwIfCancelled();
       const placeholder = match[0];
       const index = match.index;
       if (placeholder === undefined || index === undefined) continue;
@@ -163,6 +170,7 @@ export class SecretResolver {
     reference: Reference,
     secretValues: Set<string>
   ): Promise<string> {
+    this.throwIfCancelled();
     // Plaintext references deliberately share a redacted canonical diagnostic value, so caching them would alias secrets.
     const cacheKey = reference.provider === "plain" ? undefined : `${reference.provider}:${reference.canonicalReference}`;
     let resolution = cacheKey === undefined ? undefined : this.resolutionCache.get(cacheKey);
@@ -171,6 +179,7 @@ export class SecretResolver {
         .resolve(reference, {
           values: this.values,
           allowPlaintextSecrets: this.options.allowPlaintextSecrets === true,
+          signal: this.options.signal,
           registerSecret: (value) => this.redactor.add(value)
         })
         .then((result) => {
@@ -185,6 +194,7 @@ export class SecretResolver {
       }
     }
     const resolved = await resolution;
+    this.throwIfCancelled();
     const registerResolvedSecret: SecretRedactionRegistrar = (result) => {
       this.redactor.add(result.value);
       secretValues.add(result.value);
@@ -197,11 +207,12 @@ export class SecretResolver {
     reference: PluginSecretReference,
     secretValues: Set<string>
   ): Promise<string> {
+    this.throwIfCancelled();
     const cacheKey = `plugin:${reference.canonicalReference}`;
     let resolution = this.resolutionCache.get(cacheKey);
     if (resolution === undefined) {
       resolution = this.plugins!
-        .resolveSecret(reference)
+        .resolveSecret(reference, this.options.signal)
         .then((value) => {
           if (value === undefined) {
             throw new MiftahError("SECRET_PROVIDER_FAILED", "SECRET_PROVIDER_FAILED: configured plugin secret provider is unavailable");
@@ -215,9 +226,16 @@ export class SecretResolver {
       });
     }
     const resolved = await resolution;
+    this.throwIfCancelled();
     this.redactor.add(resolved);
     secretValues.add(resolved);
     return resolved;
+  }
+
+  private throwIfCancelled(): void {
+    if (this.options.signal?.aborted) {
+      throw new MiftahError("SECRET_PROVIDER_CANCELLED", "SECRET_PROVIDER_CANCELLED: secret resolution was cancelled");
+    }
   }
 }
 

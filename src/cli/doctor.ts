@@ -19,6 +19,8 @@ import {
   type SecretProviderAvailability
 } from "../secrets/secret-provider-availability.js";
 import type { UpstreamSession } from "../upstream/upstream-session.js";
+import { resolveProcessEnvironment } from "../upstream/upstream-process-manager.js";
+import { resolveWindowsStdioCommand } from "../upstream/windows-stdio-command.js";
 import { MiftahError } from "../utils/errors.js";
 import { SecretRedactor } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
@@ -126,13 +128,13 @@ function configuredTargets(config: MiftahConfig): DoctorTarget[] {
   return targets;
 }
 
-function pathForTarget(config: MiftahConfig, target: DoctorTarget): string | undefined {
+function environmentForTarget(config: MiftahConfig, target: DoctorTarget): Record<string, string> {
   const profile: ProfileConfig | undefined = config.profiles[target.profile];
-  const profileEnvironment = {
-    ...(profile?.env ?? {}),
-    ...(target.upstreamName ? profile?.upstreams?.[target.upstreamName]?.env ?? {} : {})
-  };
-  return profileEnvironment.PATH ?? target.upstream.env?.PATH ?? process.env.PATH;
+  const override = target.upstreamName ? profile?.upstreams?.[target.upstreamName] : undefined;
+  const profileEnvironment = override === undefined
+    ? profile?.env
+    : { ...(profile?.env ?? {}), ...override.env };
+  return resolveProcessEnvironment(target.upstream.env, profileEnvironment).environment;
 }
 
 function effectiveTargetOptions(
@@ -149,22 +151,28 @@ function effectiveTargetOptions(
 
 async function isExecutableAvailable(
   command: string | undefined,
-  pathValue: string | undefined,
+  environment: Record<string, string>,
   cwd: string | undefined
 ): Promise<boolean> {
   if (!command) return false;
+
+  if (process.platform === "win32") {
+    try {
+      await resolveWindowsStdioCommand(command, [], { environment });
+      return true;
+    } catch {
+      // Doctor deliberately reports the same bounded unavailable result as the
+      // runtime boundary without exposing the command or resolver diagnostics.
+      return false;
+    }
+  }
+
   const candidates = isAbsolute(command) || command.includes("/") || command.includes("\\")
     ? [isAbsolute(command) ? command : resolve(cwd ?? process.cwd(), command)]
-    : (pathValue ?? "")
+    : (environment.PATH ?? "")
         .split(delimiter)
         .filter((entry) => entry.length > 0)
-        .flatMap((entry) =>
-          process.platform === "win32"
-            ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")].map((extension) =>
-                join(entry, `${command}${extension}`)
-              )
-            : [join(entry, command)]
-        );
+        .map((entry) => join(entry, command));
   for (const candidate of candidates) {
     try {
       await access(candidate, constants.X_OK);
@@ -495,15 +503,66 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
         "Review the configured expected fingerprint and identity probe before relying on risky operations."
       );
     };
+    const recordTargetResolutionFailure = (target: DoctorTarget, targetText: string, error: unknown): void => {
+      incompleteProfiles.add(target.profile);
+      const secretResolutionFailure = isSecretResolutionFailure(error);
+      checks.push(
+        check(
+          secretResolutionFailure ? DOCTOR_CODES.SECRET_REFERENCES : DOCTOR_CODES.CONFIGURATION,
+          "error",
+          targetText,
+          secretResolutionFailure
+            ? "Target secret references could not be resolved safely."
+            : "Target configuration could not be resolved safely.",
+          secretResolutionFailure
+            ? "Correct target secret provider configuration and retry doctor."
+            : "Correct target configuration and retry doctor."
+        ),
+        check(
+          DOCTOR_CODES.STARTUP,
+          "skipped",
+          targetText,
+          secretResolutionFailure
+            ? "Upstream startup was skipped because target secret resolution did not complete."
+            : "Upstream startup was skipped because target configuration could not be resolved.",
+          secretResolutionFailure
+            ? "Correct target secret provider configuration before retrying doctor."
+            : "Correct target configuration before retrying doctor."
+        ),
+        skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
+        unavailableIdentityCheck(target, targetText, "startup"),
+        skippedDiscoveryCheck(DOCTOR_CODES.RESOURCES_DISCOVERY, targetText, "Resource"),
+        skippedDiscoveryCheck(DOCTOR_CODES.PROMPTS_DISCOVERY, targetText, "Prompt")
+      );
+    };
     const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
       let runtime: Awaited<ReturnType<typeof createRuntime>>;
+      try {
+        runtime = await createRuntime(canonicalConfigPath, {
+          profile: target.profile,
+          upstreamName: target.upstreamName
+        });
+        const profileRuntimes = runtimes.get(target.profile) ?? [];
+        profileRuntimes.push(runtime);
+        runtimes.set(target.profile, profileRuntimes);
+      } catch (error) {
+        recordTargetResolutionFailure(target, targetText, error);
+        return;
+      }
+
       if (target.upstream.transport === "stdio") {
-        const available = await isExecutableAvailable(
-          target.upstream.command,
-          pathForTarget(config, target),
-          effectiveTargetOptions(config, target).cwd
-        );
+        let available: boolean;
+        try {
+          available = await isExecutableAvailable(
+            target.upstream.command,
+            environmentForTarget(runtime.config, target),
+            effectiveTargetOptions(runtime.config, target).cwd
+          );
+        } catch (error) {
+          recordTargetResolutionFailure(target, targetText, error);
+          return;
+        }
         checks.push(
           check(
             DOCTOR_CODES.EXECUTABLE,
@@ -525,48 +584,6 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             "Startup will verify remote connectivity."
           )
         );
-      }
-
-      try {
-        runtime = await createRuntime(canonicalConfigPath, {
-          profile: target.profile,
-          upstreamName: target.upstreamName
-        });
-        const profileRuntimes = runtimes.get(target.profile) ?? [];
-        profileRuntimes.push(runtime);
-        runtimes.set(target.profile, profileRuntimes);
-      } catch (error) {
-        incompleteProfiles.add(target.profile);
-        const secretResolutionFailure = isSecretResolutionFailure(error);
-        checks.push(
-          check(
-            secretResolutionFailure ? DOCTOR_CODES.SECRET_REFERENCES : DOCTOR_CODES.CONFIGURATION,
-            "error",
-            targetText,
-            secretResolutionFailure
-              ? "Target secret references could not be resolved safely."
-              : "Target configuration could not be resolved safely.",
-            secretResolutionFailure
-              ? "Correct target secret provider configuration and retry doctor."
-              : "Correct target configuration and retry doctor."
-          ),
-          check(
-            DOCTOR_CODES.STARTUP,
-            "skipped",
-            targetText,
-            secretResolutionFailure
-              ? "Upstream startup was skipped because target secret resolution did not complete."
-              : "Upstream startup was skipped because target configuration could not be resolved.",
-            secretResolutionFailure
-              ? "Correct target secret provider configuration before retrying doctor."
-              : "Correct target configuration before retrying doctor."
-          ),
-          skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
-          unavailableIdentityCheck(target, targetText, "startup"),
-          skippedDiscoveryCheck(DOCTOR_CODES.RESOURCES_DISCOVERY, targetText, "Resource"),
-          skippedDiscoveryCheck(DOCTOR_CODES.PROMPTS_DISCOVERY, targetText, "Prompt")
-        );
-        return;
       }
 
       let session: UpstreamSession;

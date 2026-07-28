@@ -4,6 +4,7 @@ export type PolicyAction = "allow" | "deny" | "confirm";
 export type RiskClassificationSource =
   | "local-override"
   | "trusted-upstream-annotation"
+  | "trusted-provider-adapter"
   | "trusted-command-adapter"
   | "annotation-conflict"
   | "name-heuristic"

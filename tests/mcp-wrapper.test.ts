@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import { randomUUID } from "node:crypto";
+import { watch } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CallToolResultSchema,
@@ -40,6 +41,72 @@ import { IdentityManager } from "../src/identity/identity-manager.js";
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
 const managementToolNames = managementToolDescriptors({ delegatedAgentApproval: false }).map((descriptor) => descriptor.name);
+
+async function fixtureLifecycleState(initializedPath: string, toolListStartedPath: string) {
+  const [initialized, toolListStarted] = await Promise.all([
+    access(initializedPath).then(() => true, () => false),
+    access(toolListStartedPath).then(() => true, () => false)
+  ]);
+  return { initialized, toolListStarted };
+}
+
+interface PathArrivalWatch {
+  readonly wait: Promise<void>;
+  close(): void;
+}
+
+/** Arms a filesystem event before a child-process request, avoiding a polling race with child startup. */
+function watchForPathArrival(path: string): PathArrivalWatch {
+  let watcher: ReturnType<typeof watch> | undefined;
+  let fallbackPoll: NodeJS.Timeout | undefined;
+  let settled = false;
+  let resolveWait!: () => void;
+  let rejectWait!: (error: unknown) => void;
+  const wait = new Promise<void>((resolve, reject) => {
+    resolveWait = resolve;
+    rejectWait = reject;
+  });
+  const settle = (error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    watcher?.close();
+    if (fallbackPoll !== undefined) clearInterval(fallbackPoll);
+    if (error === undefined) resolveWait();
+    else rejectWait(error);
+  };
+  const verify = () => {
+    void access(path).then(
+      () => settle(),
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") settle(error);
+      }
+    );
+  };
+  try {
+    watcher = watch(dirname(path), { persistent: false }, verify);
+    watcher.on("error", settle);
+  } catch (error) {
+    settle(error);
+  }
+  if (!settled) {
+    // fs.watch can drop directory events under load, so keep verifying the exact
+    // path without imposing a shorter deadline than the test itself.
+    fallbackPoll = setInterval(verify, 50);
+    fallbackPoll.unref();
+    verify();
+  }
+  return {
+    wait,
+    close: () => {
+      watcher?.close();
+      if (fallbackPoll !== undefined) clearInterval(fallbackPoll);
+      if (!settled) {
+        settled = true;
+        resolveWait();
+      }
+    }
+  };
+}
 
 function registeredTool(originalName: string): RegisteredTool {
   return {
@@ -1981,6 +2048,7 @@ describe("Miftah MCP wrapper", () => {
 
   it("propagates cancellation through initial tool discovery", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-cancelled-tool-discovery-"));
+    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -1992,6 +2060,7 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
@@ -2009,7 +2078,10 @@ describe("Miftah MCP wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       const pending = client.listTools(undefined, { signal: controller.signal });
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
+        initialized: true,
+        toolListStarted: true
+      });
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
@@ -2040,6 +2112,7 @@ describe("Miftah MCP wrapper", () => {
           env: {
             TEST_ACCOUNT_NAME: "work",
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
+            TEST_LIST_TOOLS_START_DELAY_MS: "1100",
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
           }
@@ -2051,21 +2124,34 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "management-discovery-cancellation-test-client", version: "1.0.0" });
     const controller = new AbortController();
+    let toolListStarted: PathArrivalWatch | undefined;
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
+      toolListStarted = watchForPathArrival(startedPath);
       const pending = client.callTool(
         { name: "miftah_list_upstream_tools", arguments: {} },
         undefined,
         { signal: controller.signal }
       );
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await Promise.race([
+        toolListStarted.wait,
+        pending.then(
+          () => {
+            throw new Error("Tool discovery completed before its started marker");
+          },
+          (error) => {
+            throw error;
+          }
+        )
+      ]);
       controller.abort("test cancellation");
 
       await expect(pending).rejects.toThrow();
       await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
     } finally {
+      toolListStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
@@ -2074,6 +2160,7 @@ describe("Miftah MCP wrapper", () => {
 
   it("keeps shared tool discovery alive when one downstream caller cancels", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-shared-tool-discovery-cancellation-"));
+    const initializedPath = join(directory, "mcp-initialized");
     const startedPath = join(directory, "tools-started");
     const cancelledPath = join(directory, "cancelled");
     const config = validateConfig({
@@ -2085,6 +2172,7 @@ describe("Miftah MCP wrapper", () => {
         work: {
           env: {
             TEST_ACCOUNT_NAME: "work",
+            TEST_INITIALIZED_PATH: initializedPath,
             TEST_LIST_TOOLS_STARTED_PATH: startedPath,
             TEST_LIST_TOOLS_DELAY_MS: "500",
             TEST_CANCELLED_PATH: cancelledPath
@@ -2102,7 +2190,10 @@ describe("Miftah MCP wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       const cancelled = client.listTools(undefined, { signal: controller.signal });
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(() => fixtureLifecycleState(initializedPath, startedPath)).toEqual({
+        initialized: true,
+        toolListStarted: true
+      });
       const completed = client.listTools();
       // Allow the second downstream request to join the in-flight shared snapshot
       // before cancelling the first caller.
@@ -2832,14 +2923,16 @@ describe("Miftah MCP wrapper", () => {
     const client = new Client({ name: "cancelled-resource-subscription-retry-test-client", version: "1.0.0" });
     const controller = new AbortController();
     const updates: string[] = [];
+    let subscribeStarted: PathArrivalWatch | undefined;
     client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
       updates.push(notification.params.uri);
     });
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+      subscribeStarted = watchForPathArrival(subscribeStartedPath);
       const cancelled = client.subscribeResource({ uri: "account://current" }, { signal: controller.signal });
-      await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
+      await subscribeStarted.wait;
       controller.abort("test cancellation");
 
       await expect(cancelled).rejects.toThrow();
@@ -2851,6 +2944,7 @@ describe("Miftah MCP wrapper", () => {
       await expectExactlyOneNotification(() => updates.length);
       expect(updates).toEqual(["account://current"]);
     } finally {
+      subscribeStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
@@ -3108,6 +3202,9 @@ describe("Miftah MCP wrapper", () => {
             TEST_ACCOUNT_NAME: "work",
             TEST_RESOURCE_SUBSCRIPTIONS: "true",
             TEST_SUBSCRIBE_STARTED_PATH: subscribeStartedPath,
+            // Reproduce aggregate child-process startup beyond Vitest's default
+            // expect.poll deadline without changing the test's own timeout.
+            TEST_SUBSCRIBE_START_DELAY_MS: "1100",
             TEST_SUBSCRIBE_DELAY_MS: "100"
           }
         },
@@ -3122,26 +3219,30 @@ describe("Miftah MCP wrapper", () => {
     const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-handshake-race-test", version: "1.0.0" });
+    let subscribeStarted: PathArrivalWatch | undefined;
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
+      subscribeStarted = watchForPathArrival(subscribeStartedPath);
       const subscribe = client.subscribeResource({ uri: "account://current" });
-      await expect
-        .poll(async () => {
-          try {
-            await access(subscribeStartedPath);
-            return true;
-          } catch {
-            return false;
+      await Promise.race([
+        subscribeStarted.wait,
+        subscribe.then(
+          () => {
+            throw new Error("Resource subscription completed before its started marker");
+          },
+          (error) => {
+            throw error;
           }
-        })
-        .toBe(true);
+        )
+      ]);
       await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
 
       await expect(subscribe).rejects.toThrow("RESOURCE_SUBSCRIPTION_NOT_FOUND");
       await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
     } finally {
+      subscribeStarted?.close();
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
