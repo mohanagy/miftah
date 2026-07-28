@@ -171,12 +171,12 @@ describe("continuous integration workflow contract", () => {
     expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });
   });
 
-  it("keeps serial process-backed tests in one isolated fork", () => {
+  it("keeps process-backed files serial while replacing their isolated fork", () => {
     const config = readRepositoryFile("vitest.config.ts");
 
     expect(config).toContain("fileParallelism: false");
     expect(config).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*singleFork:\s*true,\s*isolate:\s*true\s*\}\s*\}/u
+      /poolOptions:\s*\{\s*forks:\s*\{\s*singleFork:\s*false,\s*isolate:\s*true\s*\}\s*\}/u
     );
   });
 });

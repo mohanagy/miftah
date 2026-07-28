@@ -876,27 +876,28 @@ describe("packed artifact contract", () => {
   });
 
   it("does not pass test-only V8 coverage collection to npm subprocesses", async () => {
-    const coverageDirectory = await mkdtemp(join(tmpdir(), "miftah-npm-coverage-"));
     const previousCoverageDirectory = process.env.NODE_V8_COVERAGE;
-    process.env.NODE_V8_COVERAGE = coverageDirectory;
+    process.env.NODE_V8_COVERAGE = join(tmpdir(), "miftah-parent-coverage");
+    const child = new TermIgnoringNpmProcess();
+    let childCoverageDirectory: string | undefined;
+    const spawnInspectingChild: NpmSpawner = (_command, _args, options) => {
+      childCoverageDirectory = options.env.NODE_V8_COVERAGE;
+      setImmediate(() => child.emit("close", 0, null));
+      return child;
+    };
 
     try {
-      const child = await runNpm([
-        "exec",
-        "--",
-        process.execPath,
-        "--eval",
-        "process.stdout.write(process.env.NODE_V8_COVERAGE ?? '')"
-      ]);
+      await expect(
+        runNpm(["diagnostic"], repositoryRoot, npmCommandTimeoutMs, spawnInspectingChild)
+      ).resolves.toMatchObject({ status: 0 });
 
-      expect(child.stdout).toBe("");
+      expect(childCoverageDirectory).toBe("");
     } finally {
       if (previousCoverageDirectory === undefined) {
         delete process.env.NODE_V8_COVERAGE;
       } else {
         process.env.NODE_V8_COVERAGE = previousCoverageDirectory;
       }
-      await rm(coverageDirectory, { recursive: true, force: true });
     }
   });
 
