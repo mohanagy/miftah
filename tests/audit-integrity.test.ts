@@ -411,9 +411,30 @@ describe("audit journal integrity", () => {
       }
     }
 
+    class ProbeServer extends EventEmitter {
+      listen(_options: { host: string; port: number; exclusive: boolean }, callback?: () => void): this {
+        queueMicrotask(() => {
+          listenerStartCount += 1;
+          this.emit("listening");
+          callback?.();
+        });
+        return this;
+      }
+
+      close(callback?: (error?: Error) => void): this {
+        queueMicrotask(() => {
+          listenerCloseCount += 1;
+          callback?.();
+        });
+        return this;
+      }
+    }
+
     const originalSetTimeout = global.setTimeout;
     let probeRequested = false;
     let probeTimedOut = false;
+    let listenerStartCount = 0;
+    let listenerCloseCount = 0;
     vi.resetModules();
     vi.doMock("node:net", async () => {
       const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -422,7 +443,8 @@ describe("audit journal integrity", () => {
         connect: () => {
           probeRequested = true;
           return new ProbeSocket() as unknown as Socket;
-        }
+        },
+        createServer: () => new ProbeServer() as unknown as Server
       };
     });
     const { AuditLogger: IsolatedAuditLogger } = await import("../src/audit/audit-logger.js");
@@ -452,6 +474,8 @@ describe("audit journal integrity", () => {
       })).resolves.toBeUndefined();
       expect(probeRequested).toBe(false);
       expect(probeTimedOut).toBe(false);
+      expect(listenerStartCount).toBe(1);
+      expect(listenerCloseCount).toBe(1);
     } finally {
       setTimeoutSpy.mockRestore();
       nowSpy.mockRestore();
