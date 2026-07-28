@@ -111,6 +111,18 @@ function assertPatchedFastUriLockEntries(lock: PackageLock): void {
   }
 }
 
+function assertPatchedHonoNodeServerLockEntries(lock: PackageLock): void {
+  const suffix = "node_modules/@hono/node-server";
+  const entries = Object.entries(lock.packages ?? {}).filter(
+    ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
+  );
+
+  expect(entries, "@hono/node-server must exist in the package lock").not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of entries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("2.0.10");
+  }
+}
+
 async function prepareLockedConsumer(directory: string, tarballPath: string): Promise<void> {
   const manifest = readPackageManifest();
   if (!manifest.name) throw new Error("Package manifest is missing a name.");
@@ -731,6 +743,15 @@ describe("package metadata contract", () => {
     assertPatchedFastUriLockEntries(lock);
   });
 
+  it("locks the patched MCP SDK and Hono Node server releases for GHSA-frvp-7c67-39w9", () => {
+    const manifest = readPackageManifest();
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+
+    expect(manifest.dependencies?.["@modelcontextprotocol/sdk"]).toBe("^1.30.0");
+    expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
+    assertPatchedHonoNodeServerLockEntries(lock);
+  });
+
   it("rejects stale nested esbuild lock entries", () => {
     const lock: PackageLock = {
       packages: {
@@ -751,6 +772,19 @@ describe("package metadata contract", () => {
     };
 
     expect(() => assertPatchedFastUriLockEntries(lock)).toThrow(/node_modules\/ajv\/node_modules\/fast-uri/);
+  });
+
+  it("rejects stale nested Hono Node server lock entries", () => {
+    const lock: PackageLock = {
+      packages: {
+        "node_modules/@hono/node-server": { version: "2.0.10" },
+        "node_modules/@modelcontextprotocol/sdk/node_modules/@hono/node-server": { version: "1.19.9" }
+      }
+    };
+
+    expect(() => assertPatchedHonoNodeServerLockEntries(lock)).toThrow(
+      /node_modules\/@modelcontextprotocol\/sdk\/node_modules\/@hono\/node-server/
+    );
   });
 });
 
