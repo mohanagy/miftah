@@ -156,6 +156,7 @@ describe("product README", () => {
     expect(cliDocs).toContain("## Troubleshooting");
     expect(cliDocs).toContain("### `DEFAULT_PROFILE_NOT_FOUND`");
     expect(cliDocs).toContain("### `SECRET_ENV_MISSING` after exporting a variable");
+    expect(cliDocs).toContain("miftah validate --config ~/.config/miftah/github.json");
     expect(cliDocs).toContain("miftah doctor --config ~/.config/miftah/github.json");
     expect(cliDocs).toContain("Miftah does not replace an already-running MCP session");
     expect(cliDocs).toContain("`OAUTH_INTERACTIVE_REQUIRED`");

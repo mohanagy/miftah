@@ -196,7 +196,7 @@ miftah audit-verify --config "$HOME/Miftah configs/work wrapper.json" --json
 
 ### `DEFAULT_PROFILE_NOT_FOUND`
 
-Run `miftah validate --config` with the exact configuration file passed to the client. Confirm that `defaultProfile` names an existing profile. Regenerate a reviewed preset instead of guessing at nested JSON when the configuration shape is unclear.
+For the README GitHub path, run `miftah validate --config ~/.config/miftah/github.json` with the exact configuration file passed to the client. Confirm that `defaultProfile` names an existing profile. Regenerate a reviewed preset instead of guessing at nested JSON when the configuration shape is unclear.
 
 ### `SECRET_ENV_MISSING` after exporting a variable
 
