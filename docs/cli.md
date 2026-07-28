@@ -191,3 +191,27 @@ miftah audit-verify --config "$HOME/Miftah configs/work wrapper.json" --json
 `audit-export` is deliberately explicit: it creates a new output and refuses an existing destination. It runs redaction again and strips stored `arguments` by default, even if the journal was configured to record them. `--include-arguments` opts in to the stored values after redaction; it cannot reconstruct arguments that were never recorded. The command is local-only and does not upload telemetry or start an upstream.
 
 `audit-verify` reports a safe first broken segment/record/reason and never writes a raw record, hash, or absolute path. Hash chaining provides local tamper evidence, not a signature or a remote immutable audit trail; keep required evidence in an independently protected destination.
+
+## Troubleshooting
+
+### `DEFAULT_PROFILE_NOT_FOUND`
+
+For the README GitHub path, run `miftah validate --config ~/.config/miftah/github.json` with the exact configuration file passed to the client. Confirm that `defaultProfile` names an existing profile. Regenerate a reviewed preset instead of guessing at nested JSON when the configuration shape is unclear.
+
+### `SECRET_ENV_MISSING` after exporting a variable
+
+A GUI MCP client usually does not inherit terminal startup files such as `~/.zshrc`. Make the variable available to the process that launches the client, or use a configured dotenv, keychain, 1Password, or reviewed local secret-provider reference. Do not put the raw value in Miftah or client JSON.
+
+For the README GitHub path, confirm the exact generated file with:
+
+```sh
+miftah doctor --config ~/.config/miftah/github.json
+```
+
+### The dashboard changed configuration but the client still uses old state
+
+Miftah does not replace an already-running MCP session after a configuration, OAuth, or durable-profile change. Save the reviewed change, then restart or reconnect the MCP client.
+
+### Browser authorization opened in the wrong environment
+
+Run `miftah dashboard`, `miftah auth connect`, or `miftah auth reauth` on the machine and user session that owns the local browser and OS vault. In headless automation, use the command's non-interactive mode so a required browser flow fails with `OAUTH_INTERACTIVE_REQUIRED` instead of opening unexpectedly.

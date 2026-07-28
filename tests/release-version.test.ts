@@ -81,7 +81,7 @@ describe("v0.5.0 release artifacts", () => {
     expect(notes).toMatch(/patched development toolchain dependencies/iu);
     expect(notes).toMatch(/batched Windows Console catalog ACL verification/iu);
     const readme = readRepositoryFile("README.md");
-    expect(readme).toContain("One MCP connector. Deliberate account selection.");
+    expect(readme).toContain("Use the right account with the MCP servers you already trust");
     expect(readme).toContain("experimental and pre-1.0");
   });
 });

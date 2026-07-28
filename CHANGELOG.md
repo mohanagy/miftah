@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#290](https://github.com/mohanagy/miftah/issues/290) Redesigned the README as a concise product front door: first-screen fit guidance, one connector with named profiles, one safe GitHub first-success path, distinct secret/native-OAuth/upstream-owned-OAuth routes, visible client/wizard/Console choices, and progressively disclosed security, architecture, reference, and troubleshooting links. External evaluator acceptance remains open and is not claimed by this documentation change.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added
