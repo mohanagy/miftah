@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- [#40](https://github.com/mohanagy/miftah/issues/40) Added an owner-readable Miftah 0.5 feature and usage guide that distinguishes the 0.5 onboarding/profile-management delta from capabilities first shipped in 0.4, maps each outcome to production-bound CLI or Console entry points, and retains the package's OAuth, active-session, provider-ownership, pre-1.0, and incomplete external-validation boundaries.
+
 ### Changed
 
 - [#290](https://github.com/mohanagy/miftah/issues/290) Redesigned the README as a concise product front door: first-screen fit guidance, one connector with named profiles, one safe GitHub first-success path, distinct secret/native-OAuth/upstream-owned-OAuth routes, visible client/wizard/Console choices, and progressively disclosed security, architecture, reference, and troubleshooting links. External evaluator acceptance remains open and is not claimed by this documentation change.

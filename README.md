@@ -21,6 +21,8 @@ Miftah itself has no cloud service or telemetry. It adds local profile selection
 
 > **Status:** Miftah is experimental and pre-1.0. Interfaces and security behavior may change between minor versions. External multi-account and returning-user validation in [#25](https://github.com/mohanagy/miftah/issues/25) and [#88](https://github.com/mohanagy/miftah/issues/88) remains open.
 
+Already using Miftah? See [What is in 0.5 and how to use it](docs/whats-new-in-0.5.md) for the release's guided setup, profile-management, Console, OAuth, and upgrade paths.
+
 ## Is Miftah for you?
 
 Use Miftah when:
