@@ -16,7 +16,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   AUDIT_READ_CHUNK_BYTES,
   MALFORMED_AUDIT_RECORD,
@@ -29,12 +29,17 @@ import { runLogsCommand } from "../src/cli/logs.js";
 import { createRuntime } from "../src/runtime/create-runtime.js";
 import { resolveRuntimeConfig } from "../src/runtime/resolve-runtime-config.js";
 import { SecretRedactor } from "../src/secrets/redact.js";
+import { stubFileSyncForLogicalTest } from "./helpers/logical-file-sync.js";
 
 const testRoot = join(process.cwd(), ".miftah-audit-log-reader-tests");
 const pollIntervalMs = 10;
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true });
+});
+
+beforeEach(async () => {
+  await stubFileSyncForLogicalTest();
 });
 
 async function inSandbox<T>(run: (directory: string) => Promise<T>): Promise<T> {

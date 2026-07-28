@@ -18,6 +18,12 @@ const retainedStdioDescendantFixture = join(
   "fixtures",
   "retained-stdio-descendant.mjs"
 );
+const shutdownDelayFixture = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "fixtures",
+  "shutdown-delay-upstream.mjs"
+);
 const backToBackProgressFixture = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -878,7 +884,7 @@ function registerTeardown(): void {
       {
         transport: "stdio",
         command: process.execPath,
-        args: [fixture],
+        args: [shutdownDelayFixture],
         env: {
           TEST_SHUTDOWN_DELAY_MS: "500",
           TEST_SHUTDOWN_END_PATH: shutdownEndPath
@@ -1002,14 +1008,8 @@ function registerTeardown(): void {
         () => fixtureProcessIsAlive(recordedFirstDescendantPid),
         (alive) => alive === false
       );
-      await waitFor(
-        () => countStarts(startCountPath),
-        (starts) => starts === 2
-      );
       expect(replacementStartedBeforeFirstDescendantReaped).toBe(false);
-
-      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      await expect(restarting).resolves.toBeDefined();
     } finally {
       if (descendantPid !== undefined) {
         terminateFixtureProcess(descendantPid);

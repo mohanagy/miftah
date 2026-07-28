@@ -6,9 +6,10 @@ import { createServer, Socket } from "node:net";
 import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuditLogger } from "../src/audit/audit-logger.js";
 import { verifyAuditJournal } from "../src/audit/audit-journal.js";
+import { stubFileSyncForLogicalTest } from "./helpers/logical-file-sync.js";
 
 type BufferWrite = (
   this: FileHandle,
@@ -40,6 +41,10 @@ interface DelayedLocalRefusalDiagnosticState {
   readonly refusalDelivered: boolean;
   readonly bindOutcome: DelayedLocalRefusalBindOutcome;
 }
+
+beforeEach(async () => {
+  await stubFileSyncForLogicalTest();
+});
 
 // Vitest's current default test timeout is 5 seconds; emit evidence before the runner cuts it off.
 const HARD_LINK_FIXTURE_DIAGNOSTIC_DELAY_MS = 4_500;
