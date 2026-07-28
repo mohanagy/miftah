@@ -18,6 +18,7 @@ export function watchForPathArrival(path: string): PathArrivalWatch {
     resolveWait = resolve;
     rejectWait = reject;
   });
+  /** Completes the watch exactly once and releases every observation resource. */
   const settle = (error?: unknown) => {
     if (settled) return;
     settled = true;
@@ -26,6 +27,7 @@ export function watchForPathArrival(path: string): PathArrivalWatch {
     if (error === undefined) resolveWait();
     else rejectWait(error);
   };
+  /** Checks the exact path after a directory event or fallback polling tick. */
   const verify = () => {
     void access(path).then(
       () => settle(),
