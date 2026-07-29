@@ -594,7 +594,7 @@ const script = `(() => {
     return error instanceof Error ? error.message : "The Console request failed.";
   }
 
-  function restoreUnlock() {
+  function restoreUnlock(recoveryMessage) {
     csrfToken = "";
     setupCompletion = undefined;
     activeSetupDraft = undefined;
@@ -608,6 +608,47 @@ const script = `(() => {
     if (workspaceView) workspaceView.hidden = true;
     if (unlockView) unlockView.hidden = false;
     if (bootstrapInput instanceof HTMLInputElement) bootstrapInput.focus();
+    if (typeof recoveryMessage === "string" && recoveryMessage.length > 0) message(recoveryMessage);
+  }
+
+  function sessionRecoveryMessage(code) {
+    if (code === "session_missing") return "Enter the one-time code printed by the running Console process.";
+    if (code === "session_expired") {
+      return "This Console session expired before your next action. Run \`miftah dashboard\` in the terminal for a new one-time code.";
+    }
+    return "This page belongs to an earlier or different Console process. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
+  }
+
+  function bootstrapRecoveryMessage(code) {
+    if (code === "bootstrap_expired") {
+      return "That one-time code expired. Run \`miftah dashboard\` in the terminal for a new code.";
+    }
+    if (code === "bootstrap_used") {
+      return "That code already opened a browser session. Reload the original Console tab, or run \`miftah dashboard\` in the terminal for a new code.";
+    }
+    if (code === "bootstrap_superseded") {
+      return "A newer one-time code was issued. Enter the latest code shown by the running Console process.";
+    }
+    if (code === "bootstrap_wrong_process") {
+      return "That code belongs to another or stopped Console process. Run \`miftah dashboard\` in the terminal and use its new URL and code.";
+    }
+    return "Enter the complete one-time code exactly as printed by the running Console process.";
+  }
+
+  function bootstrapResponseError(response, payload) {
+    const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
+    if (response.status === 401) return new Error(bootstrapRecoveryMessage(code));
+    if (response.status === 429 && code === "rate_limit_exceeded") {
+      const retryAfter = response.headers.get("retry-after");
+      if (typeof retryAfter === "string" && /^[1-9][0-9]{0,2}$/.test(retryAfter)) {
+        return new Error("Too many unlock attempts. Wait " + retryAfter + " seconds before trying again; keep this Console process running.");
+      }
+      return new Error("Too many unlock attempts. Wait briefly before trying again; keep this Console process running.");
+    }
+    const publicMessage = payload && payload.error && typeof payload.error.message === "string"
+      ? payload.error.message
+      : "The Console unlock request failed.";
+    return new Error(publicMessage);
   }
 
   async function api(path, options) {
@@ -615,17 +656,26 @@ const script = `(() => {
     const headers = { "Accept": "application/json" };
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
     if (request.method && request.method !== "GET" && request.method !== "HEAD") headers["X-Miftah-CSRF"] = csrfToken;
-    const response = await fetch(path, {
-      method: request.method || "GET",
-      headers,
-      body: request.body === undefined ? undefined : JSON.stringify(request.body)
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        method: request.method || "GET",
+        headers,
+        body: request.body === undefined ? undefined : JSON.stringify(request.body)
+      });
+    } catch {
+      const recovery = "This Console process is no longer reachable. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
+      restoreUnlock(recovery);
+      throw new Error(recovery);
+    }
     let payload;
     try { payload = await response.json(); } catch { payload = undefined; }
     if (!response.ok) {
       if (response.status === 401) {
-        restoreUnlock();
-        throw new Error("The Console session expired. Restart miftah dashboard to get a new one-time code.");
+        const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
+        const recovery = sessionRecoveryMessage(code);
+        restoreUnlock(recovery);
+        throw new Error(recovery);
       }
       const publicMessage = payload && payload.error && typeof payload.error.message === "string"
         ? payload.error.message
@@ -633,6 +683,20 @@ const script = `(() => {
       throw new Error(publicMessage);
     }
     return payload ? payload.data : undefined;
+  }
+
+  async function resumeSession() {
+    message("Checking this browser session…");
+    try {
+      const resumed = record(await api("/api/v1/session"));
+      if (typeof resumed.csrfToken !== "string" || resumed.csrfToken.length < 32) {
+        throw new Error("Miftah did not return a valid session proof.");
+      }
+      csrfToken = resumed.csrfToken;
+      await refresh();
+    } catch (error) {
+      message(errorMessage(error));
+    }
   }
 
   function registration(form) {
@@ -1579,8 +1643,9 @@ const script = `(() => {
         });
         bootstrapInput.value = "";
         const payload = await response.json();
-        if (!response.ok || !payload || !payload.data || typeof payload.data.csrfToken !== "string") {
-          throw new Error("The one-time code was rejected or expired.");
+        if (!response.ok) throw bootstrapResponseError(response, payload);
+        if (!payload || !payload.data || typeof payload.data.csrfToken !== "string") {
+          throw new Error("Miftah did not return a valid session proof.");
         }
         csrfToken = payload.data.csrfToken;
         await refresh();
@@ -2171,6 +2236,12 @@ const script = `(() => {
   const refreshButton = byId("refresh-dashboard");
   if (refreshButton instanceof HTMLButtonElement) {
     refreshButton.addEventListener("click", () => void refresh().catch((error) => message(errorMessage(error))));
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) void resumeSession();
+    });
+    void resumeSession();
   }
 })();
 `;

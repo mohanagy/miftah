@@ -327,9 +327,12 @@ async function reviewThenCreatePresetForm(
   const status = new FakeElement();
   const requests: Array<{ readonly path: string; readonly body?: string }> = [];
   type FakeResponse = {
-    readonly ok: true;
-    readonly status: 200;
-    readonly json: () => Promise<{ readonly data: Record<string, unknown> }>;
+    readonly ok: boolean;
+    readonly status: number;
+    readonly json: () => Promise<{
+      readonly data?: Record<string, unknown>;
+      readonly error?: { readonly code: string; readonly message: string };
+    }>;
   };
   const hasProfileCountValue = Object.prototype.hasOwnProperty.call(reviewOptions, "profileCountValue");
   const previewConfiguration: Record<string, unknown> = {
@@ -396,7 +399,16 @@ async function reviewThenCreatePresetForm(
       }
       if (requestPath === "/api/v1/onboarding/preset" && reviewOptions.failFirstCreate === true && !firstCreateFailed) {
         firstCreateFailed = true;
-        throw new Error("Configuration already exists.");
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: {
+              code: "config_exists",
+              message: "Configuration already exists."
+            }
+          })
+        };
       }
       return requestPath === "/api/v1/onboarding/preset/preview"
         ? response(previewData)
@@ -706,6 +718,64 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   releaseRequest();
   await Promise.all([first, second]);
   return { requests, disabledWhilePending, enabledAfterCompletion: button.disabled === false };
+}
+
+function exerciseSessionResumeLifecycle(javascript: string): {
+  readonly callsAfterStartup: number;
+  readonly callsAfterNormalPageShow: number;
+  readonly callsAfterPersistedPageShow: number;
+} {
+  const start = javascript.lastIndexOf('if (typeof window !== "undefined")');
+  const end = javascript.indexOf("\n})();", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console session-resume startup block.");
+
+  let resumeCalls = 0;
+  let pageShow: ((event: { readonly persisted: boolean }) => void) | undefined;
+  runInNewContext(javascript.slice(start, end), {
+    window: {
+      addEventListener(name: string, listener: (event: { readonly persisted: boolean }) => void): void {
+        if (name === "pageshow") pageShow = listener;
+      }
+    },
+    resumeSession(): void {
+      resumeCalls += 1;
+    }
+  });
+  const callsAfterStartup = resumeCalls;
+  pageShow?.({ persisted: false });
+  const callsAfterNormalPageShow = resumeCalls;
+  pageShow?.({ persisted: true });
+  return {
+    callsAfterStartup,
+    callsAfterNormalPageShow,
+    callsAfterPersistedPageShow: resumeCalls
+  };
+}
+
+function bootstrapResponseErrorMessage(
+  javascript: string,
+  status: number,
+  code: string,
+  publicMessage: string,
+  retryAfter?: string
+): string {
+  const start = javascript.indexOf("function bootstrapRecoveryMessage");
+  const end = javascript.indexOf("\n\n  async function api", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console bootstrap recovery classifier.");
+  const classify = runInNewContext(
+    `${javascript.slice(start, end)}\nbootstrapResponseError`,
+    {}
+  ) as (
+    response: { readonly status: number; readonly headers: { get(name: string): string | null } },
+    payload: { readonly error: { readonly code: string; readonly message: string } }
+  ) => Error;
+  return classify(
+    {
+      status,
+      headers: { get: (name) => name === "retry-after" ? retryAfter ?? null : null }
+    },
+    { error: { code, message: publicMessage } }
+  ).message;
 }
 
 async function resumeSetupDraftWithoutConnectionValues(javascript: string): Promise<{
@@ -1505,6 +1575,28 @@ describe("local Console control server", () => {
       expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
       const javascript = await script.text();
       expect(javascript).toContain("/api/v1/sessions");
+      expect(javascript).toContain("/api/v1/session");
+      expect(javascript).toContain("async function resumeSession()");
+      expect(javascript).toContain("void resumeSession();");
+      expect(javascript).toContain("Run `miftah dashboard` in the terminal");
+      expect(exerciseSessionResumeLifecycle(javascript)).toEqual({
+        callsAfterStartup: 1,
+        callsAfterNormalPageShow: 1,
+        callsAfterPersistedPageShow: 2
+      });
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        429,
+        "rate_limit_exceeded",
+        "The local Console request limit was reached.",
+        "42"
+      )).toBe("Too many unlock attempts. Wait 42 seconds before trying again; keep this Console process running.");
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        503,
+        "service_unavailable",
+        "The Console is shutting down."
+      )).toBe("The Console is shutting down.");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
@@ -2847,6 +2939,12 @@ describe("local Console control server", () => {
         headers: { origin: server.url.origin }
       });
       expect(unauthenticated.status).toBe(401);
+      expect(await unauthenticated.json()).toEqual({
+        error: {
+          code: "session_missing",
+          message: "Enter the one-time Console code from this process."
+        }
+      });
 
       const missingOrigin = await fetch(new URL("/api/v1/health", server.url));
       expect(missingOrigin.status).toBe(401);
@@ -2885,6 +2983,12 @@ describe("local Console control server", () => {
         body: "{}"
       });
       expect(mcpBearer.status).toBe(401);
+      expect(await mcpBearer.json()).toEqual({
+        error: {
+          code: "bootstrap_malformed",
+          message: "Enter the complete one-time Console code from this process."
+        }
+      });
 
       const bootstrap = await fetch(bootstrapUrl, {
         method: "POST",
@@ -2903,6 +3007,33 @@ describe("local Console control server", () => {
       expect(bootstrapBody.data.csrfToken).toMatch(/^[A-Za-z0-9_-]{32,}$/u);
       expect(JSON.stringify(bootstrapBody)).not.toContain("test-only-bootstrap-credential");
       expect(bootstrap.headers.get("x-frame-options")).toBe("DENY");
+
+      const resumedSession = await fetch(new URL("/api/v1/session", server.url), {
+        headers: { cookie: cookie!.split(";", 1)[0]! }
+      });
+      expect(resumedSession.status).toBe(200);
+      const resumedSessionBody = await resumedSession.json() as {
+        readonly data: { readonly csrfToken: string; readonly expiresInMs: number };
+      };
+      expect(resumedSessionBody.data.csrfToken).toBe(bootstrapBody.data.csrfToken);
+      expect(resumedSessionBody.data.expiresInMs).toBeGreaterThan(0);
+      expect(resumedSessionBody.data.expiresInMs).toBeLessThanOrEqual(60 * 60_000);
+
+      const secondTabSession = await fetch(new URL("/api/v1/session", server.url), {
+        headers: { cookie: cookie!.split(";", 1)[0]! }
+      });
+      expect(secondTabSession.status).toBe(200);
+      expect(await secondTabSession.json()).toMatchObject({
+        data: { csrfToken: bootstrapBody.data.csrfToken }
+      });
+
+      const hostileResume = await fetch(new URL("/api/v1/session", server.url), {
+        headers: {
+          origin: "https://attacker.example.test",
+          cookie: cookie!.split(";", 1)[0]!
+        }
+      });
+      expect(hostileResume.status).toBe(403);
 
       const health = await fetch(new URL("/api/v1/health", server.url), {
         headers: { cookie: cookie!.split(";", 1)[0]! }
@@ -4116,6 +4247,12 @@ describe("local Console control server", () => {
       body: "{}"
     });
     expect(staleBootstrap.status).toBe(401);
+    expect(await staleBootstrap.json()).toEqual({
+      error: {
+        code: "bootstrap_expired",
+        message: "This one-time Console code expired."
+      }
+    });
 
     const activeBootstrap = server.rotateCredential();
     const activeBootstrapResponse = await fetch(firstUrl, {
@@ -4142,15 +4279,69 @@ describe("local Console control server", () => {
       body: "{}"
     });
     expect(replay.status).toBe(401);
+    expect(await replay.json()).toEqual({
+      error: {
+        code: "bootstrap_used",
+        message: "This one-time Console code was already used."
+      }
+    });
 
     now += 101;
     const expired = await fetch(new URL("/api/v1/health", server.url), {
       headers: { origin: server.url.origin, cookie: session.cookie }
     });
     expect(expired.status).toBe(401);
+    expect(await expired.json()).toEqual({
+      error: {
+        code: "session_expired",
+        message: "This Console session expired."
+      }
+    });
 
     const replacement = server.rotateCredential();
     expect(replacement).not.toBe(activeBootstrap);
+    const invalidatedSession = await fetch(new URL("/api/v1/session", server.url), {
+      headers: { cookie: session.cookie }
+    });
+    expect(invalidatedSession.status).toBe(401);
+    expect(await invalidatedSession.json()).toEqual({
+      error: {
+        code: "session_unavailable",
+        message: "This Console session belongs to an earlier or different process."
+      }
+    });
+    const superseded = await fetch(firstUrl, {
+      method: "POST",
+      headers: {
+        origin: server.url.origin,
+        authorization: `Bootstrap ${activeBootstrap}`,
+        "content-type": "application/json"
+      },
+      body: "{}"
+    });
+    expect(superseded.status).toBe(401);
+    expect(await superseded.json()).toEqual({
+      error: {
+        code: "bootstrap_superseded",
+        message: "This one-time Console code was replaced by a newer code."
+      }
+    });
+    const wrongProcess = await fetch(firstUrl, {
+      method: "POST",
+      headers: {
+        origin: server.url.origin,
+        authorization: "Bootstrap wrong-process-bootstrap-credential",
+        "content-type": "application/json"
+      },
+      body: "{}"
+    });
+    expect(wrongProcess.status).toBe(401);
+    expect(await wrongProcess.json()).toEqual({
+      error: {
+        code: "bootstrap_wrong_process",
+        message: "This code does not belong to the running Console process."
+      }
+    });
     const replacementSession = await fetch(firstUrl, {
       method: "POST",
       headers: {
