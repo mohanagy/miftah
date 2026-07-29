@@ -116,7 +116,7 @@ describe("setup completion", () => {
   });
 
   it("does not call an environment-file-backed reference missing until configured files are resolved", () => {
-    expect(inspectConfigEnvironment({
+    const readiness = inspectConfigEnvironment({
       version: "3",
       name: "sentry",
       defaultProfile: "default",
@@ -130,12 +130,21 @@ describe("setup completion", () => {
         }
       },
       secrets: { envFiles: ["/Users/example/.config/miftah/sentry.env"] }
-    }, { ACCOUNT_ID: "account-id" })).toEqual({
+    }, { ACCOUNT_ID: "account-id" });
+    expect(readiness).toEqual({
       state: "not-checked",
       reason: "configured-env-files",
       requiredVariables: ["ACCOUNT_ID", "SENTRY_ACCESS_TOKEN"],
       missingVariables: []
     });
+    expect(createSetupCompletion({
+      surface: "cli",
+      verification: "not-declared",
+      clientHandoff: "shown",
+      environment: readiness
+    }).environment?.message).toBe(
+      "Availability was not fully checked; configured env files were not opened: ACCOUNT_ID, SENTRY_ACCESS_TOKEN."
+    );
   });
 
   it("treats an empty credential environment value as missing", () => {

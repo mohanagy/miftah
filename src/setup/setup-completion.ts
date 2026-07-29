@@ -322,7 +322,7 @@ function environmentCompletion(
         requiredVariables: requiredNames,
         missingVariables: [],
         message: configuredFiles
-          ? `Not found in this setup process; configured env files were not checked: ${required}.`
+          ? `Availability was not fully checked; configured env files were not opened: ${required}.`
           : `Not checked in this setup process: ${required}.`,
         nextAction: configuredFiles
           ? `Before restarting your MCP client, make sure the Miftah process it launches can resolve ${required} from its inherited environment or configured secrets.envFiles. The generated client JSON does not set or contain the secret.`

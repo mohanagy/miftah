@@ -1640,6 +1640,20 @@ describe("local Console control server", () => {
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("completion.environment");
       expect(javascript).toContain("setupCompletionEnvironment");
+      expect(javascript).toContain("function clearSetupCompletion()");
+      const refreshBody = javascript.slice(
+        javascript.indexOf("async function refresh()"),
+        javascript.indexOf("if (unlockForm instanceof HTMLFormElement")
+      );
+      expect(refreshBody.indexOf("clearSetupCompletion();")).toBeLessThan(
+        refreshBody.indexOf('api("/api/v1/config")')
+      );
+      const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
+      expect(completionAssignments).toHaveLength(3);
+      for (const assignment of completionAssignments) {
+        const assignmentIndex = assignment.index;
+        expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
+      }
       expect(javascript).toContain("configuration files found");
       expect(javascript).toContain("need attention");
       expect(javascript).toContain('"file-permissions": "private file permission"');

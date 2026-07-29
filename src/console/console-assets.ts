@@ -865,6 +865,11 @@ const script = `(() => {
     if (setupCompletionView) setupCompletionView.hidden = false;
   }
 
+  function clearSetupCompletion() {
+    setupCompletion = undefined;
+    renderSetupCompletion(undefined);
+  }
+
   function catalogConfigurations(metadata) {
     const catalog = record(metadata.catalog);
     const configurations = Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : [];
@@ -1562,6 +1567,7 @@ const script = `(() => {
   }
 
   async function refresh() {
+    clearSetupCompletion();
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
@@ -1701,10 +1707,11 @@ const script = `(() => {
             resource: String(data.get("resource") || "").trim()
           }
         }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         onboardingForm.reset();
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
     });
   }
@@ -1834,8 +1841,7 @@ const script = `(() => {
       setPresetReviewActionsDisabled(true);
       try {
         const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         clearPresetReview();
         activeSetupDraft = undefined;
         renderSetupDraftControls();
@@ -1844,6 +1850,8 @@ const script = `(() => {
           updatePresetFields();
         }
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         presetCreateInFlight = false;
@@ -1881,10 +1889,11 @@ const script = `(() => {
             document: String(data.get("document") || "")
           }
         }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         clientEntryOnboardingForm.reset();
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
