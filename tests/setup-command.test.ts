@@ -459,7 +459,9 @@ describe("setup command", () => {
     expect(transcript).toContain(
       "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
     );
-    expect(transcript.indexOf("Missing from this setup process")).toBeLessThan(transcript.indexOf("Next: review the client JSON above"));
+    expect(transcript.indexOf("Missing from this setup process")).toBeLessThan(
+      transcript.indexOf("Claude Desktop settings config (claude-desktop)")
+    );
     expect(transcript).not.toContain("provider-secret-value");
   });
 

@@ -41,7 +41,7 @@ import type { SetupConfigurationPreview } from "../setup/setup-configuration.js"
 import {
   createSetupCompletion,
   environmentReferencesFromConfig,
-  inspectSetupEnvironment,
+  inspectConfigEnvironment,
   type SetupCompletion
 } from "../setup/setup-completion.js";
 import {
@@ -462,14 +462,14 @@ function safeAuditRecord(value: unknown): ConsoleAuditRecord | undefined {
 function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
   const metadata = consoleInitializedConfigMetadata(config);
   const hasDeclaredSafeCheck = (metadata.authentication?.readinessTargets?.length ?? 0) > 0;
-  const requiredEnvironmentVariables = environmentReferencesFromConfig(config);
+  const environment = inspectConfigEnvironment(config);
   return createSetupCompletion({
     surface: "console",
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
     clientHandoff: "available",
-    ...(requiredEnvironmentVariables.length === 0
+    ...(environment.state === "not-required"
       ? {}
-      : { environment: inspectSetupEnvironment(requiredEnvironmentVariables) })
+      : { environment })
   });
 }
 
@@ -939,7 +939,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       serverName: config.name,
       configPath: resolvePath(this.configPath),
       launcher: this.launcher,
-      requiredEnvironmentVariables: environmentReferencesFromConfig(config)
+      requiredEnvironmentVariables: environmentReferencesFromConfig(config),
+      environmentFilesConfigured: (config.secrets?.envFiles?.length ?? 0) > 0
     });
   }
 

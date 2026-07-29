@@ -17,6 +17,8 @@ export interface ClientSnippetInput {
   launcher: ClientLauncher;
   /** Validated names only; client JSON never receives environment values. */
   requiredEnvironmentVariables?: readonly string[];
+  /** True when Miftah may resolve those names from configured environment files at runtime. */
+  environmentFilesConfigured?: boolean;
 }
 
 export interface ClientSnippet {
@@ -136,15 +138,24 @@ function validateInput(input: ClientSnippetInput): void {
   ) {
     inputError("Every required environment variable must use a valid environment variable name.");
   }
+  if (
+    input.environmentFilesConfigured !== undefined &&
+    typeof input.environmentFilesConfigured !== "boolean"
+  ) {
+    inputError("Environment-file configuration must be a boolean.");
+  }
 }
 
 function guidance(client: ClientName, input: ClientSnippetInput): string {
   const required = [...new Set(input.requiredEnvironmentVariables ?? [])].sort();
   if (required.length === 0) return clientProfileGuidance;
   const names = required.join(", ");
+  const readinessInstruction = input.environmentFilesConfigured === true
+    ? `make sure the Miftah process it launches can resolve ${names} from its inherited environment or configured secrets.envFiles.`
+    : `make sure it passes ${names} to the Miftah process it launches.`;
   return (
     `${clientProfileGuidance} ` +
-    `Before restarting ${clientDisplayNames[client]}, make sure it passes ${names} to the Miftah process it launches. ` +
+    `Before restarting ${clientDisplayNames[client]}, ${readinessInstruction} ` +
     "The generated JSON does not set or contain that secret."
   );
 }

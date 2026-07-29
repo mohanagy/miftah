@@ -15,12 +15,36 @@ export type SetupCompletionVerification =
 
 export type SetupCompletionClientHandoff = "shown" | "not-generated" | "available";
 export type SetupEnvironmentState = "not-required" | "not-checked" | "missing" | "available";
+type NonEmptyEnvironmentVariables = readonly [string, ...string[]];
+type NoEnvironmentVariables = readonly [];
 
-export interface SetupEnvironmentReadiness {
-  readonly state: SetupEnvironmentState;
-  readonly requiredVariables: readonly string[];
-  readonly missingVariables: readonly string[];
-}
+export type SetupEnvironmentReadiness =
+  | {
+      readonly state: "not-required";
+      readonly requiredVariables: NoEnvironmentVariables;
+      readonly missingVariables: NoEnvironmentVariables;
+    }
+  | {
+      readonly state: "not-checked";
+      readonly reason: "environment-unavailable" | "configured-env-files";
+      readonly requiredVariables: NonEmptyEnvironmentVariables;
+      readonly missingVariables: NoEnvironmentVariables;
+    }
+  | {
+      readonly state: "missing";
+      readonly requiredVariables: NonEmptyEnvironmentVariables;
+      readonly missingVariables: NonEmptyEnvironmentVariables;
+    }
+  | {
+      readonly state: "available";
+      readonly requiredVariables: NonEmptyEnvironmentVariables;
+      readonly missingVariables: NoEnvironmentVariables;
+    };
+
+export type SetupEnvironmentCompletion = SetupEnvironmentReadiness & {
+  readonly message: string;
+  readonly nextAction?: string;
+};
 
 export interface SetupCompletionInput {
   readonly surface: "cli" | "console";
@@ -44,25 +68,33 @@ export interface SetupCompletion {
     readonly state: SetupCompletionClientHandoff;
     readonly message: string;
   };
-  readonly environment?: {
-    readonly state: SetupEnvironmentState;
-    readonly requiredVariables: readonly string[];
-    readonly missingVariables: readonly string[];
-    readonly message: string;
-    readonly nextAction?: string;
-  };
+  readonly environment?: SetupEnvironmentCompletion;
 }
 
 const environmentReference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu;
+const canonicalEnvironmentReference = /^secretref:(?:env|dotenv):\/\/([A-Za-z_][A-Za-z0-9_]*)$/u;
 const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 function normalizedEnvironmentVariables(values: readonly string[]): string[] {
-  return [...new Set(values)].filter((value) => environmentVariableName.test(value)).sort();
+  if (values.some((value) => typeof value !== "string" || !environmentVariableName.test(value))) {
+    throw new TypeError("Environment readiness contains an invalid environment variable name.");
+  }
+  return [...new Set(values)].sort();
+}
+
+function nonEmptyEnvironmentVariables(
+  values: readonly string[],
+  message: string
+): NonEmptyEnvironmentVariables {
+  if (values.length === 0) throw new TypeError(message);
+  return values as NonEmptyEnvironmentVariables;
 }
 
 function collectEnvironmentReferences(target: Set<string>, values: Record<string, string> | undefined): void {
   if (values === undefined) return;
   for (const value of Object.values(values)) {
+    const canonical = value.match(canonicalEnvironmentReference)?.[1];
+    if (canonical !== undefined) target.add(canonical);
     for (const match of value.matchAll(environmentReference)) {
       const name = match[1];
       if (name !== undefined) target.add(name);
@@ -112,14 +144,46 @@ export function inspectSetupEnvironment(
     return { state: "not-required", requiredVariables: [], missingVariables: [] };
   }
   if (environment === null) {
-    return { state: "not-checked", requiredVariables: required, missingVariables: [] };
+    return {
+      state: "not-checked",
+      reason: "environment-unavailable",
+      requiredVariables: nonEmptyEnvironmentVariables(required, "not-checked state requires environment variables"),
+      missingVariables: []
+    };
   }
   const missing = required.filter((name) => environment[name] === undefined);
-  return {
-    state: missing.length === 0 ? "available" : "missing",
-    requiredVariables: required,
-    missingVariables: missing
-  };
+  const requiredNames = nonEmptyEnvironmentVariables(required, "environment readiness requires environment variables");
+  if (missing.length > 0) {
+    return {
+      state: "missing",
+      requiredVariables: requiredNames,
+      missingVariables: nonEmptyEnvironmentVariables(
+        missing,
+        "missing state requires at least one missing environment variable"
+      )
+    };
+  }
+  return { state: "available", requiredVariables: requiredNames, missingVariables: [] };
+}
+
+/** Checks process availability without opening configured environment files or reading their values. */
+export function inspectConfigEnvironment(
+  config: MiftahConfig,
+  environment: Readonly<Record<string, string | undefined>> | null = process.env
+): SetupEnvironmentReadiness {
+  const readiness = inspectSetupEnvironment(environmentReferencesFromConfig(config), environment);
+  if (
+    readiness.state === "missing" &&
+    (config.secrets?.envFiles?.length ?? 0) > 0
+  ) {
+    return {
+      state: "not-checked",
+      reason: "configured-env-files",
+      requiredVariables: readiness.missingVariables,
+      missingVariables: []
+    };
+  }
+  return readiness;
 }
 
 function quoteForPosixShell(value: string): string {
@@ -226,47 +290,84 @@ function handoffCompletion(input: SetupCompletionInput): SetupCompletion["client
 
 function environmentCompletion(
   readiness: SetupEnvironmentReadiness
-): NonNullable<SetupCompletion["environment"]> {
+): SetupEnvironmentCompletion {
   const requiredVariables = normalizedEnvironmentVariables(readiness.requiredVariables);
   const missingVariables = normalizedEnvironmentVariables(readiness.missingVariables)
     .filter((name) => requiredVariables.includes(name));
   const required = requiredVariables.join(", ");
   const missing = missingVariables.join(", ");
   switch (readiness.state) {
-    case "not-required":
+    case "not-required": {
+      if (requiredVariables.length > 0 || missingVariables.length > 0) {
+        throw new TypeError("not-required state cannot include environment variables");
+      }
       return {
         state: "not-required",
         requiredVariables: [],
         missingVariables: [],
         message: "This configuration does not require an environment-backed secret."
       };
-    case "not-checked":
+    }
+    case "not-checked": {
+      const requiredNames = nonEmptyEnvironmentVariables(
+        requiredVariables,
+        "not-checked state requires at least one environment variable"
+      );
+      if (missingVariables.length > 0) {
+        throw new TypeError("not-checked state cannot include missing environment variables");
+      }
+      const configuredFiles = readiness.reason === "configured-env-files";
       return {
         state: "not-checked",
-        requiredVariables,
+        reason: readiness.reason,
+        requiredVariables: requiredNames,
         missingVariables: [],
-        message: `Not checked in this setup process: ${required}.`,
-        nextAction:
-          `Before restarting your MCP client, make sure it passes ${required} to the Miftah process it launches. The generated client JSON does not set or contain the secret.`
+        message: configuredFiles
+          ? `Not found in this setup process; configured env files were not checked: ${required}.`
+          : `Not checked in this setup process: ${required}.`,
+        nextAction: configuredFiles
+          ? `Before restarting your MCP client, make sure the Miftah process it launches can resolve ${required} from its inherited environment or configured secrets.envFiles. The generated client JSON does not set or contain the secret.`
+          : `Before restarting your MCP client, make sure it passes ${required} to the Miftah process it launches. The generated client JSON does not set or contain the secret.`
       };
-    case "missing":
+    }
+    case "missing": {
+      const requiredNames = nonEmptyEnvironmentVariables(
+        requiredVariables,
+        "missing state requires environment variables"
+      );
+      const missingNames = nonEmptyEnvironmentVariables(
+        missingVariables,
+        "missing state requires at least one missing environment variable"
+      );
+      if (missingNames.some((name) => !requiredNames.includes(name))) {
+        throw new TypeError("missing environment variables must be required environment variables");
+      }
       return {
         state: "missing",
-        requiredVariables,
-        missingVariables,
+        requiredVariables: requiredNames,
+        missingVariables: missingNames,
         message: `Missing from this setup process: ${missing}.`,
         nextAction:
           `Set ${missing} in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret.`
       };
-    case "available":
+    }
+    case "available": {
+      const requiredNames = nonEmptyEnvironmentVariables(
+        requiredVariables,
+        "available state requires at least one environment variable"
+      );
+      if (missingVariables.length > 0) {
+        throw new TypeError("available state cannot include missing environment variables");
+      }
       return {
         state: "available",
-        requiredVariables,
+        requiredVariables: requiredNames,
         missingVariables: [],
         message: `Available to this setup process: ${required}.`,
         nextAction:
           `Make sure your MCP client passes ${required} to the Miftah process it launches. This does not verify the credential or provider.`
       };
+    }
   }
 }
 

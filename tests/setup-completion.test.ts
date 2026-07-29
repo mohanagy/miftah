@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSetupCompletion,
   environmentReferencesFromConfig,
+  inspectConfigEnvironment,
   inspectSetupEnvironment
 } from "../src/setup/setup-completion.js";
 
@@ -64,6 +65,7 @@ describe("setup completion", () => {
   it("represents not checked and not required environment readiness separately", () => {
     expect(inspectSetupEnvironment(["SENTRY_ACCESS_TOKEN"], null)).toEqual({
       state: "not-checked",
+      reason: "environment-unavailable",
       requiredVariables: ["SENTRY_ACCESS_TOKEN"],
       missingVariables: []
     });
@@ -83,7 +85,10 @@ describe("setup completion", () => {
       upstream: {
         transport: "streamable-http",
         url: "https://mcp.example.test",
-        headers: { Authorization: "Bearer ${UPSTREAM_TOKEN}" }
+        headers: {
+          Authorization: "Bearer ${UPSTREAM_TOKEN}",
+          "X-Canonical": "secretref:env://CANONICAL_TOKEN"
+        }
       },
       profiles: {
         work: {
@@ -91,13 +96,65 @@ describe("setup completion", () => {
           headers: { "X-Account": "${ACCOUNT_TOKEN}" },
           upstreams: {
             default: {
-              env: { EXTRA_TOKEN: "prefix-${EXTRA_TOKEN}" },
+              env: {
+                EXTRA_TOKEN: "prefix-${EXTRA_TOKEN}",
+                ENV_FILE_TOKEN: "secretref:dotenv://ENV_FILE_TOKEN"
+              },
               headers: { "X-Literal": "literal" }
             }
           }
         }
       }
-    })).toEqual(["ACCOUNT_TOKEN", "EXTRA_TOKEN", "SENTRY_ACCESS_TOKEN", "UPSTREAM_TOKEN"]);
+    })).toEqual([
+      "ACCOUNT_TOKEN",
+      "CANONICAL_TOKEN",
+      "ENV_FILE_TOKEN",
+      "EXTRA_TOKEN",
+      "SENTRY_ACCESS_TOKEN",
+      "UPSTREAM_TOKEN"
+    ]);
+  });
+
+  it("does not call an environment-file-backed reference missing until configured files are resolved", () => {
+    expect(inspectConfigEnvironment({
+      version: "3",
+      name: "sentry",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node" },
+      profiles: {
+        default: { env: { SENTRY_ACCESS_TOKEN: "secretref:env://SENTRY_ACCESS_TOKEN" } }
+      },
+      secrets: { envFiles: ["/Users/example/.config/miftah/sentry.env"] }
+    }, {})).toEqual({
+      state: "not-checked",
+      reason: "configured-env-files",
+      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      missingVariables: []
+    });
+  });
+
+  it("rejects contradictory environment readiness objects at the completion boundary", () => {
+    const base = {
+      surface: "cli" as const,
+      verification: "not-declared" as const,
+      clientHandoff: "shown" as const
+    };
+    expect(() => createSetupCompletion({
+      ...base,
+      environment: {
+        state: "missing",
+        requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+        missingVariables: []
+      } as never
+    })).toThrow("missing state requires at least one missing environment variable");
+    expect(() => createSetupCompletion({
+      ...base,
+      environment: {
+        state: "available",
+        requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+        missingVariables: ["SENTRY_ACCESS_TOKEN"]
+      } as never
+    })).toThrow("available state cannot include missing environment variables");
   });
 
   it("gives an unreviewed generic setup a truthful manual handoff without inventing a probe", () => {

@@ -55,6 +55,20 @@ describe("client snippets", () => {
     expect(JSON.parse(snippet.json).mcpServers["miftah server"].env).toBeUndefined();
   });
 
+  it("keeps client guidance truthful when configured env files may supply a reference", () => {
+    const snippet = renderClientSnippet("claude-desktop", {
+      ...posixInput,
+      requiredEnvironmentVariables: ["SENTRY_ACCESS_TOKEN"],
+      environmentFilesConfigured: true
+    });
+
+    expect(snippet.guidance).toContain(
+      "make sure the Miftah process it launches can resolve SENTRY_ACCESS_TOKEN from its inherited environment or configured secrets.envFiles."
+    );
+    expect(snippet.guidance).not.toContain("make sure it passes SENTRY_ACCESS_TOKEN");
+    expect(snippet.json).not.toContain("SENTRY_ACCESS_TOKEN");
+  });
+
   it("uses the same one-connector guidance in every CLI client handoff", () => {
     const snippet = renderClientSnippet("claude-desktop", posixInput);
 

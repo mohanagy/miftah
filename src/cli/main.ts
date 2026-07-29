@@ -299,7 +299,8 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
           serverName: config.name,
           configPath: resolvePath(args.config),
           launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] },
-          requiredEnvironmentVariables: environmentReferencesFromConfig(config)
+          requiredEnvironmentVariables: environmentReferencesFromConfig(config),
+          environmentFilesConfigured: (config.secrets?.envFiles?.length ?? 0) > 0
         });
     process.stdout.write(`${JSON.stringify({ connections, ...(snippets === undefined ? {} : { snippets }) }, null, 2)}\n`);
     return;

@@ -2298,6 +2298,15 @@ describe("local Console control server", () => {
 
     it("shows Sentry environment readiness in Console and client handoff without exposing the secret", async () => {
       vi.stubEnv("SENTRY_ACCESS_TOKEN", "provider-secret-value");
+      const request = process.platform === "win32"
+        ? {
+            name: "sentry",
+            preset: "generic-docker",
+            dockerImage:
+              "ghcr.io/acme/sentry-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            credentialEnv: "SENTRY_ACCESS_TOKEN"
+          }
+        : { name: "sentry", preset: "sentry" };
       const server = await startConsoleServer(configPath, {
         bootstrapCredential: "test-only-bootstrap-credential",
         allowMissingConfig: true,
@@ -2314,7 +2323,7 @@ describe("local Console control server", () => {
             "x-miftah-csrf": session.csrfToken,
             "content-type": "application/json"
           },
-          body: JSON.stringify({ name: "sentry", preset: "sentry" })
+          body: JSON.stringify(request)
         });
         expect(created.status).toBe(201);
         const createdBody = await created.json();
