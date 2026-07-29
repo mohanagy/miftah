@@ -752,6 +752,32 @@ function exerciseSessionResumeLifecycle(javascript: string): {
   };
 }
 
+function bootstrapResponseErrorMessage(
+  javascript: string,
+  status: number,
+  code: string,
+  publicMessage: string,
+  retryAfter?: string
+): string {
+  const start = javascript.indexOf("function bootstrapRecoveryMessage");
+  const end = javascript.indexOf("\n\n  async function api", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console bootstrap recovery classifier.");
+  const classify = runInNewContext(
+    `${javascript.slice(start, end)}\nbootstrapResponseError`,
+    {}
+  ) as (
+    response: { readonly status: number; readonly headers: { get(name: string): string | null } },
+    payload: { readonly error: { readonly code: string; readonly message: string } }
+  ) => Error;
+  return classify(
+    {
+      status,
+      headers: { get: (name) => name === "retry-after" ? retryAfter ?? null : null }
+    },
+    { error: { code, message: publicMessage } }
+  ).message;
+}
+
 async function resumeSetupDraftWithoutConnectionValues(javascript: string): Promise<{
   readonly name: string;
   readonly preset: string;
@@ -1558,6 +1584,19 @@ describe("local Console control server", () => {
         callsAfterNormalPageShow: 1,
         callsAfterPersistedPageShow: 2
       });
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        429,
+        "rate_limit_exceeded",
+        "The local Console request limit was reached.",
+        "42"
+      )).toBe("Too many unlock attempts. Wait 42 seconds before trying again; keep this Console process running.");
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        503,
+        "service_unavailable",
+        "The Console is shutting down."
+      )).toBe("The Console is shutting down.");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");

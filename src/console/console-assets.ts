@@ -635,6 +635,22 @@ const script = `(() => {
     return "Enter the complete one-time code exactly as printed by the running Console process.";
   }
 
+  function bootstrapResponseError(response, payload) {
+    const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
+    if (response.status === 401) return new Error(bootstrapRecoveryMessage(code));
+    if (response.status === 429 && code === "rate_limit_exceeded") {
+      const retryAfter = response.headers.get("retry-after");
+      if (typeof retryAfter === "string" && /^[1-9][0-9]{0,2}$/.test(retryAfter)) {
+        return new Error("Too many unlock attempts. Wait " + retryAfter + " seconds before trying again; keep this Console process running.");
+      }
+      return new Error("Too many unlock attempts. Wait briefly before trying again; keep this Console process running.");
+    }
+    const publicMessage = payload && payload.error && typeof payload.error.message === "string"
+      ? payload.error.message
+      : "The Console unlock request failed.";
+    return new Error(publicMessage);
+  }
+
   async function api(path, options) {
     const request = options || {};
     const headers = { "Accept": "application/json" };
@@ -1627,9 +1643,9 @@ const script = `(() => {
         });
         bootstrapInput.value = "";
         const payload = await response.json();
-        if (!response.ok || !payload || !payload.data || typeof payload.data.csrfToken !== "string") {
-          const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
-          throw new Error(bootstrapRecoveryMessage(code));
+        if (!response.ok) throw bootstrapResponseError(response, payload);
+        if (!payload || !payload.data || typeof payload.data.csrfToken !== "string") {
+          throw new Error("Miftah did not return a valid session proof.");
         }
         csrfToken = payload.data.csrfToken;
         await refresh();
