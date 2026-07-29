@@ -57,6 +57,9 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(consoleApi).toContain("Every request must use the exact listener `Host`");
     expect(consoleApi).toContain("Browser mutations, including bootstrap, must also use the exact listener `Origin`");
     expect(consoleApi).toContain("every mutation still requires exact Origin plus CSRF");
+    expect(consoleApi).toContain("A normal page reload resumes a still-valid session");
+    expect(consoleApi).toContain("run `miftah dashboard` in the terminal");
+    expect(consoleApi).toContain("does not use `localStorage`, `sessionStorage`, a URL, a log, configuration, or an audit argument");
     expect(delta).toContain("requires the exact listener Origin, including scheme, host, and port");
     expect(security).toContain(
       "State-changing browser requests require the exact listener Origin, including scheme, host, and port"

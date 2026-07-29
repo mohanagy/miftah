@@ -31,6 +31,8 @@ Startup prints the loopback URL and one CSPRNG-backed bootstrap code to the laun
 
 The Console page asks the operator to type this terminal code. A successful same-origin exchange returns an in-memory CSRF proof and sets an opaque `HttpOnly; SameSite=Strict` session cookie scoped to `/api/v1`. The cookie is a session handle, not the bootstrap credential. The CSRF proof remains in page memory and accompanies every later mutation as `X-Miftah-CSRF`; the UI does not persist it in localStorage or sessionStorage. A bootstrap cannot be replayed.
 
+A normal page reload resumes a still-valid session through `GET /api/v1/session`: the HttpOnly cookie authenticates the read and the response restores the CSRF proof only to page memory. Expired, reused, malformed, superseded, and wrong-process codes receive distinct redacted states. A missing, expired, or earlier-process session gives one contextual recovery action; when a new foreground process is required, run `miftah dashboard` in the terminal and use its new URL and code. Recovery does not use `localStorage`, `sessionStorage`, a URL, a log, configuration, or an audit argument for the bootstrap code, session handle, or CSRF proof.
+
 Browser sessions have a 15-minute idle limit and a one-hour absolute limit. Restarting, stopping, or rotating the control host invalidates them. Loopback HTTP cannot provide a meaningful `Secure` cookie flag, so exact Host and Origin validation, SameSite, HttpOnly, one-use bootstrap, CSRF, and short lifetime are all mandatory controls. A hostile process running as the same OS user remains outside this boundary.
 
 ## Version 1 endpoints
@@ -46,6 +48,7 @@ The unconfigured first-run dashboard exposes **Save connector choice**, **Contin
 | Method and path | Purpose |
 | --- | --- |
 | `POST /api/v1/sessions` | Exchange the one-use bootstrap code for one browser session. |
+| `GET /api/v1/session` | Resume a still-valid cookie-authenticated browser session and return its CSRF proof to page memory. |
 | `GET /api/v1/setup-draft` | Return the current first-run safe connector checkpoint, or `null`. Requires a Console session and returns no connection details. |
 | `PUT /api/v1/setup-draft` | Save one strict non-secret connector name/preset/stage checkpoint. Requires CSRF and optional exact expected revision. |
 | `DELETE /api/v1/setup-draft` | Discard one exact-revision first-run checkpoint. Requires CSRF and never creates or changes a configuration. |

@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { z } from "zod";
@@ -31,6 +31,7 @@ const headersTimeoutMs = 10_000;
 const connectionsCheckingIntervalMs = 5_000;
 const maximumHeaderBytes = 16 * 1024;
 const sessionCookieName = "miftah_console_session";
+const maximumSupersededBootstrapDigests = 8;
 const bootstrapSchema = z.object({}).strict();
 const httpsUrlSchema = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:");
 const connectionAddSchema = z.object({
@@ -230,6 +231,10 @@ class ConsoleHttpError extends Error {
 
 function randomCredential(): string {
   return randomBytes(32).toString("base64url");
+}
+
+function credentialDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
 function rawHeaderValues(request: IncomingMessage, name: string): string[] {
@@ -521,6 +526,7 @@ class LocalConsoleServer implements ConsoleServer {
   private bootstrap: string;
   private bootstrapIssuedAt: number;
   private bootstrapUsed = false;
+  private readonly supersededBootstrapDigests: string[] = [];
   private rateWindowStartedAt: number;
   private requestCount = 0;
   private bootstrapAttemptCount = 0;
@@ -580,6 +586,20 @@ class LocalConsoleServer implements ConsoleServer {
     }
 
     const session = this.requireSession(request);
+    if (request.url === "/api/v1/session") {
+      if (request.method !== "GET") {
+        throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET" });
+      }
+      const now = this.options.now();
+      session.lastUsedAt = now;
+      writeJson(response, 200, {
+        data: {
+          csrfToken: session.csrfToken,
+          expiresInMs: Math.max(0, this.options.absoluteSessionMs - (now - session.createdAt))
+        }
+      });
+      return;
+    }
     if (request.url === "/api/v1/health") {
       if (request.method !== "GET") {
         throw new ConsoleHttpError(405, "method_not_allowed", "Method not allowed.", { allow: "GET" });
@@ -1147,15 +1167,40 @@ class LocalConsoleServer implements ConsoleServer {
 
   private async bootstrapSession(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const authorization = singleHeader(request, "authorization");
-    if (
-      this.bootstrapUsed ||
-      this.options.now() - this.bootstrapIssuedAt >= this.options.bootstrapTtlMs ||
-      authorization === undefined ||
-      authorization === null ||
-      !authorization.startsWith("Bootstrap ") ||
-      !safeEqual(authorization.slice("Bootstrap ".length), this.bootstrap)
-    ) {
-      throw new ConsoleHttpError(401, "unauthorized", "Console authentication failed.");
+    if (authorization === undefined || authorization === null || !authorization.startsWith("Bootstrap ")) {
+      throw new ConsoleHttpError(
+        401,
+        "bootstrap_malformed",
+        "Enter the complete one-time Console code from this process."
+      );
+    }
+    const receivedBootstrap = authorization.slice("Bootstrap ".length);
+    if (receivedBootstrap.length < 16 || receivedBootstrap.length > 4_096) {
+      throw new ConsoleHttpError(
+        401,
+        "bootstrap_malformed",
+        "Enter the complete one-time Console code from this process."
+      );
+    }
+    if (!safeEqual(receivedBootstrap, this.bootstrap)) {
+      if (this.supersededBootstrapDigests.includes(credentialDigest(receivedBootstrap))) {
+        throw new ConsoleHttpError(
+          401,
+          "bootstrap_superseded",
+          "This one-time Console code was replaced by a newer code."
+        );
+      }
+      throw new ConsoleHttpError(
+        401,
+        "bootstrap_wrong_process",
+        "This code does not belong to the running Console process."
+      );
+    }
+    if (this.bootstrapUsed) {
+      throw new ConsoleHttpError(401, "bootstrap_used", "This one-time Console code was already used.");
+    }
+    if (this.options.now() - this.bootstrapIssuedAt >= this.options.bootstrapTtlMs) {
+      throw new ConsoleHttpError(401, "bootstrap_expired", "This one-time Console code expired.");
     }
     const parsed = bootstrapSchema.safeParse(await readJsonBody(request, this.options.maximumRequestBytes));
     if (!parsed.success) throw new ConsoleHttpError(422, "validation_error", "The request body is invalid.");
@@ -1185,11 +1230,25 @@ class LocalConsoleServer implements ConsoleServer {
   }
 
   private requireSession(request: IncomingMessage): BrowserSession {
-    this.pruneExpiredSessions();
     const id = cookieValue(request, sessionCookieName);
-    const session = id === undefined ? undefined : this.sessions.get(id);
+    if (id === undefined) {
+      throw new ConsoleHttpError(401, "session_missing", "Enter the one-time Console code from this process.");
+    }
+    const session = this.sessions.get(id);
     if (session === undefined) {
-      throw new ConsoleHttpError(401, "unauthorized", "A valid Console session is required.");
+      throw new ConsoleHttpError(
+        401,
+        "session_unavailable",
+        "This Console session belongs to an earlier or different process."
+      );
+    }
+    const now = this.options.now();
+    if (
+      now - session.lastUsedAt >= this.options.idleSessionMs ||
+      now - session.createdAt >= this.options.absoluteSessionMs
+    ) {
+      this.sessions.delete(id);
+      throw new ConsoleHttpError(401, "session_expired", "This Console session expired.");
     }
     return session;
   }
@@ -1228,6 +1287,10 @@ class LocalConsoleServer implements ConsoleServer {
 
   rotateCredential(): string {
     this.sessions.clear();
+    if (this.bootstrap.length > 0) {
+      this.supersededBootstrapDigests.unshift(credentialDigest(this.bootstrap));
+      this.supersededBootstrapDigests.splice(maximumSupersededBootstrapDigests);
+    }
     this.bootstrap = randomCredential();
     this.bootstrapIssuedAt = this.options.now();
     this.bootstrapUsed = false;
