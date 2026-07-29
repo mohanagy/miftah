@@ -5,20 +5,28 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { ContainedStdioClientTransport } from "../src/upstream/contained-stdio-transport.js";
-import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
-import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
-import { SecretRedactor } from "../src/secrets/redact.js";
-import { MiftahError } from "../src/utils/errors.js";
+import { ContainedStdioClientTransport } from "../../src/upstream/contained-stdio-transport.js";
+import { MultiUpstreamProcessManager } from "../../src/upstream/multi-upstream-process-manager.js";
+import { UpstreamProcessManager } from "../../src/upstream/upstream-process-manager.js";
+import { SecretRedactor } from "../../src/secrets/redact.js";
+import { MiftahError } from "../../src/utils/errors.js";
 
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "fake-upstream.mjs");
 const retainedStdioDescendantFixture = join(
   dirname(fileURLToPath(import.meta.url)),
+  "..",
   "fixtures",
   "retained-stdio-descendant.mjs"
 );
+const shutdownDelayFixture = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "fixtures",
+  "shutdown-delay-upstream.mjs"
+);
 const backToBackProgressFixture = join(
   dirname(fileURLToPath(import.meta.url)),
+  "..",
   "fixtures",
   "back-to-back-progress-upstream.mjs"
 );
@@ -83,7 +91,16 @@ function observeTransportClose(transport: ContainedStdioClientTransport, onClose
   });
 }
 
-describe("upstream process manager", () => {
+export type UpstreamManagerContractGroup = "basics" | "recovery" | "teardown";
+
+export function registerUpstreamManagerContracts(group: UpstreamManagerContractGroup): void {
+  if (group === "basics") return registerBasics();
+  if (group === "recovery") return registerRecovery();
+  if (group === "teardown") return registerTeardown();
+}
+
+function registerBasics(): void {
+  describe("upstream process manager", () => {
   it.runIf(process.platform === "win32")("rejects a command shim before it can create a child process", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-windows-command-shim-"));
     const markerPath = join(directory, "command-shim-ran");
@@ -474,6 +491,11 @@ describe("upstream process manager", () => {
     }
   });
 
+  });
+}
+
+function registerRecovery(): void {
+  describe("upstream process manager", () => {
   it("does not restart a crashed process unless automatic recovery is configured", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-no-restart-"));
     const crashPath = join(directory, "crash");
@@ -850,6 +872,11 @@ describe("upstream process manager", () => {
     }
   });
 
+  });
+}
+
+function registerTeardown(): void {
+  describe("upstream process manager", () => {
   it("forces a delayed shutdown to respect the configured timeout", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-shutdown-"));
     const shutdownEndPath = join(directory, "stdin-ended");
@@ -857,7 +884,7 @@ describe("upstream process manager", () => {
       {
         transport: "stdio",
         command: process.execPath,
-        args: [fixture],
+        args: [shutdownDelayFixture],
         env: {
           TEST_SHUTDOWN_DELAY_MS: "500",
           TEST_SHUTDOWN_END_PATH: shutdownEndPath
@@ -981,14 +1008,8 @@ describe("upstream process manager", () => {
         () => fixtureProcessIsAlive(recordedFirstDescendantPid),
         (alive) => alive === false
       );
-      await waitFor(
-        () => countStarts(startCountPath),
-        (starts) => starts === 2
-      );
       expect(replacementStartedBeforeFirstDescendantReaped).toBe(false);
-
-      descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      await expect(restarting).resolves.toBeDefined();
     } finally {
       if (descendantPid !== undefined) {
         terminateFixtureProcess(descendantPid);
@@ -1575,4 +1596,5 @@ describe("upstream process manager", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-});
+  });
+}

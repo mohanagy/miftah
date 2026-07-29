@@ -163,7 +163,7 @@ export const CLI_COMMANDS = {
     ]
   },
   setup: {
-    description: "Start the guided MCP setup flow.",
+    description: "Start the guided terminal MCP setup wizard.",
     arguments: "[name]",
     options: [
       "name",

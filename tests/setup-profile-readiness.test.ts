@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditTrail } from "../src/audit/audit-trail.js";
 import { runProfileReadiness } from "../src/setup/profile-readiness.js";
+import { watchForPathArrival } from "./helpers/path-arrival.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -385,13 +386,19 @@ export default {
     await writeFile(fixture.configPath, JSON.stringify(config));
 
     const controller = new AbortController();
+    const pluginStarted = watchForPathArrival(startedPath);
     const pending = fixture.run({ profile: "google-work", signal: controller.signal });
     const settlement = pending.then(
       () => ({ kind: "fulfilled" as const }),
       (error: unknown) => ({ kind: "rejected" as const, error })
     );
     try {
-      await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
+      await Promise.race([
+        pluginStarted.wait,
+        settlement.then((outcome) => {
+          throw new Error(`Secret-plugin readiness settled before its started marker: ${outcome.kind}`);
+        })
+      ]);
       controller.abort("test caller disconnect during secret resolution");
       const outcome = await Promise.race([
         settlement,
@@ -403,6 +410,7 @@ export default {
         expect(outcome.error).toMatchObject({ code: "UPSTREAM_CALL_FAILED" });
       }
     } finally {
+      pluginStarted.close();
       await settlement;
     }
   });
