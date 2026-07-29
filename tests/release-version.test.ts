@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.5.1";
+const releaseVersion = "0.5.2";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,10 +21,10 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.5.1 release artifacts", () => {
+describe("v0.5.2 release artifacts", () => {
   it.each([
-    "## [0.5.1] - 2026-7-29\n\n### Added\n",
-    "Release candidate: ## [0.5.1] - 2026-07-29\n\n### Added\n"
+    "## [0.5.2] - 2026-7-29\n\n### Fixed\n",
+    "Release candidate: ## [0.5.2] - 2026-07-29\n\n### Fixed\n"
   ])("requires a dated release heading at the start of a line", (changelog) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
       `Unable to find the ${releaseVersion} changelog entry.`
@@ -65,22 +65,26 @@ describe("v0.5.1 release artifacts", () => {
     }
   });
 
-  it("documents the first-use corrections while retaining the experimental package status", () => {
+  it("documents the evaluator-driven recovery fixes while retaining the experimental package status", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(changelog).toContain("Miftah is experimental and pre-1.0");
-    expect(notes).toContain("### Added");
-    expect(notes).toContain("### Changed");
     expect(notes).toContain("### Fixed");
-    expect(notes).toMatch(/owner-readable Miftah 0\.5 feature and usage guide/iu);
-    expect(notes).toMatch(/first-use product front door/iu);
-    expect(notes).toMatch(/numbered source choices/iu);
-    expect(notes).toMatch(/safe back\/cancel handling/iu);
-    expect(notes).toMatch(/external evaluator acceptance remains open/iu);
-    expect(notes).toMatch(/host-dependent file-flush latency/iu);
+    expect(notes).toMatch(/found, ready, and need-attention/iu);
+    expect(notes).toMatch(/still-valid Console sessions across refresh/iu);
+    expect(notes).toMatch(/names-only environment-secret readiness/iu);
+    expect(notes).toMatch(/external validation remains incomplete/iu);
+
     const readme = readRepositoryFile("README.md");
+    const featureGuide = readRepositoryFile("docs/whats-new-in-0.5.md");
+    const compatibilityGuide = readRepositoryFile("docs/presets-and-clients.md");
+
     expect(readme).toContain("Use the right account with the MCP servers you already trust");
     expect(readme).toContain("experimental and pre-1.0");
+    expect(readme).toContain(`npm install -g @lubab/miftah@${releaseVersion}`);
+    expect(featureGuide).toContain(`Install \`@lubab/miftah@${releaseVersion}\``);
+    expect(featureGuide).toContain(`npm install -g @lubab/miftah@${releaseVersion}`);
+    expect(compatibilityGuide).toContain(`Miftah package version: \`${releaseVersion}\``);
   });
 });
