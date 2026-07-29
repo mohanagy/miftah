@@ -33,6 +33,7 @@ import { startConsoleServer } from "../console/console-server.js";
 import { openSystemBrowser } from "../console/open-browser.js";
 import { ConsoleDashboardApplicationService } from "../console/console-dashboard-application-service.js";
 import { FileSetupDraftStore } from "../setup/setup-draft.js";
+import { environmentReferencesFromConfig } from "../setup/setup-completion.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -297,7 +298,8 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       : renderClientSnippets(clientSelection(args.client), {
           serverName: config.name,
           configPath: resolvePath(args.config),
-          launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] }
+          launcher: { command: process.execPath, args: [fileURLToPath(import.meta.url), "serve"] },
+          requiredEnvironmentVariables: environmentReferencesFromConfig(config)
         });
     process.stdout.write(`${JSON.stringify({ connections, ...(snippets === undefined ? {} : { snippets }) }, null, 2)}\n`);
     return;

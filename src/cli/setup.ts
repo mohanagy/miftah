@@ -28,7 +28,10 @@ import { runProviderAccountSetup } from "./setup-provider-account.js";
 import { runEnvironmentProfileSetup } from "./setup-environment-profile.js";
 import {
   createSetupCompletion,
+  environmentReferencesFromConfig,
+  inspectSetupEnvironment,
   type SetupCompletionClientHandoff,
+  type SetupEnvironmentReadiness,
   type SetupCompletionVerification
 } from "../setup/setup-completion.js";
 import type { SetupDraft, SetupDraftStore } from "../setup/setup-draft.js";
@@ -341,6 +344,7 @@ function writeCliSetupCompletion(
     readonly profile?: string;
     readonly configPath?: string;
     readonly includeClientHandoff?: boolean;
+    readonly environment?: SetupEnvironmentReadiness;
   }
 ): void {
   const completion = createSetupCompletion({
@@ -348,11 +352,18 @@ function writeCliSetupCompletion(
     verification: input.verification,
     clientHandoff: input.clientHandoff,
     ...(input.profile === undefined ? {} : { profile: input.profile }),
-    ...(input.configPath === undefined ? {} : { configPath: input.configPath })
+    ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+    ...(input.environment === undefined ? {} : { environment: input.environment })
   });
   context.output.write(`${completion.verification.message}\n`);
   if (completion.verification.nextAction !== undefined) {
     context.output.write(`${completion.verification.nextAction}\n`);
+  }
+  if (completion.environment !== undefined) {
+    context.output.write(`${completion.environment.message}\n`);
+    if (completion.environment.nextAction !== undefined) {
+      context.output.write(`${completion.environment.nextAction}\n`);
+    }
   }
   if (input.includeClientHandoff !== false) {
     context.output.write(`${completion.clientHandoff.message}\n`);
@@ -364,6 +375,10 @@ async function finishCreatedSetup(
   context: InitCommandContext,
   created: InitCommandResult
 ): Promise<SetupCommandResult> {
+  const requiredEnvironmentVariables = environmentReferencesFromConfig(created.config);
+  const environment = requiredEnvironmentVariables.length === 0
+    ? undefined
+    : inspectSetupEnvironment(requiredEnvironmentVariables);
   if (
     created.config.version === "3" &&
     created.config.upstream?.transport === "streamable-http" &&
@@ -377,7 +392,8 @@ async function finishCreatedSetup(
     writeCliSetupCompletion(context, {
       verification: "not-declared",
       clientHandoff: created.clientHandoff ?? "not-generated",
-      configPath: created.output
+      configPath: created.output,
+      ...(environment === undefined ? {} : { environment })
     });
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
@@ -388,7 +404,8 @@ async function finishCreatedSetup(
       verification: "skipped",
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
-      configPath: created.output
+      configPath: created.output,
+      ...(environment === undefined ? {} : { environment })
     });
     return { verification: "skipped", exitCode: 0, reports: [] };
   }
@@ -398,7 +415,8 @@ async function finishCreatedSetup(
       verification: "incomplete",
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
-      configPath: created.output
+      configPath: created.output,
+      ...(environment === undefined ? {} : { environment })
     });
     return { verification: "incomplete", exitCode: 1, reports: [] };
   }
@@ -421,7 +439,8 @@ async function finishCreatedSetup(
     verification: incomplete ? "incomplete" : "complete",
     clientHandoff: created.clientHandoff ?? "not-generated",
     ...(incomplete ? { profile: created.config.defaultProfile } : {}),
-    configPath: created.output
+    configPath: created.output,
+    ...(environment === undefined ? {} : { environment })
   });
   return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
 }

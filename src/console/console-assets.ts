@@ -95,6 +95,7 @@ const page = `<!doctype html>
         <div class="setup-completion-copy" role="status" aria-live="polite" aria-atomic="true">
           <p id="setup-completion-verification"></p>
           <p id="setup-completion-next-action"></p>
+          <p id="setup-completion-environment"></p>
           <p id="setup-completion-handoff"></p>
         </div>
       </section>
@@ -548,6 +549,7 @@ const script = `(() => {
   const setupCompletionView = byId("setup-completion-view");
   const setupCompletionVerification = byId("setup-completion-verification");
   const setupCompletionNextAction = byId("setup-completion-next-action");
+  const setupCompletionEnvironment = byId("setup-completion-environment");
   const setupCompletionHandoff = byId("setup-completion-handoff");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
@@ -838,11 +840,14 @@ const script = `(() => {
   function renderSetupCompletion(value) {
     const completion = record(value);
     const verification = record(completion.verification);
+    const environment = record(completion.environment);
     const handoff = record(completion.clientHandoff);
     const verificationMessage = typeof verification.message === "string" ? verification.message : "";
     const nextAction = typeof verification.nextAction === "string" ? verification.nextAction : "";
+    const environmentMessage = typeof environment.message === "string" ? environment.message : "";
+    const environmentNextAction = typeof environment.nextAction === "string" ? environment.nextAction : "";
     const handoffMessage = typeof handoff.message === "string" ? handoff.message : "";
-    if (!verificationMessage && !handoffMessage) {
+    if (!verificationMessage && !environmentMessage && !handoffMessage) {
       if (setupCompletionView) setupCompletionView.hidden = true;
       return;
     }
@@ -850,6 +855,10 @@ const script = `(() => {
     if (setupCompletionNextAction) {
       setupCompletionNextAction.textContent = nextAction;
       setupCompletionNextAction.hidden = !nextAction;
+    }
+    if (setupCompletionEnvironment) {
+      setupCompletionEnvironment.textContent = [environmentMessage, environmentNextAction].filter(Boolean).join(" ");
+      setupCompletionEnvironment.hidden = !environmentMessage && !environmentNextAction;
     }
     if (setupCompletionHandoff) setupCompletionHandoff.textContent = handoffMessage;
     if (setupCompletionView) setupCompletionView.hidden = false;

@@ -1,3 +1,5 @@
+import type { MiftahConfig } from "../config/types.js";
+
 /**
  * A non-secret statement of what setup actually completed. It deliberately
  * describes only declared checks and manual client handoff; callers must not
@@ -12,6 +14,13 @@ export type SetupCompletionVerification =
   | "authorization-pending";
 
 export type SetupCompletionClientHandoff = "shown" | "not-generated" | "available";
+export type SetupEnvironmentState = "not-required" | "not-checked" | "missing" | "available";
+
+export interface SetupEnvironmentReadiness {
+  readonly state: SetupEnvironmentState;
+  readonly requiredVariables: readonly string[];
+  readonly missingVariables: readonly string[];
+}
 
 export interface SetupCompletionInput {
   readonly surface: "cli" | "console";
@@ -21,6 +30,8 @@ export interface SetupCompletionInput {
   readonly profile?: string;
   /** A published non-secret config path, rendered for a copyable CLI handoff. */
   readonly configPath?: string;
+  /** Names-only environment readiness; secret values never enter the completion model. */
+  readonly environment?: SetupEnvironmentReadiness;
 }
 
 export interface SetupCompletion {
@@ -32,6 +43,82 @@ export interface SetupCompletion {
   readonly clientHandoff: {
     readonly state: SetupCompletionClientHandoff;
     readonly message: string;
+  };
+  readonly environment?: {
+    readonly state: SetupEnvironmentState;
+    readonly requiredVariables: readonly string[];
+    readonly missingVariables: readonly string[];
+    readonly message: string;
+    readonly nextAction?: string;
+  };
+}
+
+const environmentReference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu;
+const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+function normalizedEnvironmentVariables(values: readonly string[]): string[] {
+  return [...new Set(values)].filter((value) => environmentVariableName.test(value)).sort();
+}
+
+function collectEnvironmentReferences(target: Set<string>, values: Record<string, string> | undefined): void {
+  if (values === undefined) return;
+  for (const value of Object.values(values)) {
+    for (const match of value.matchAll(environmentReference)) {
+      const name = match[1];
+      if (name !== undefined) target.add(name);
+    }
+  }
+}
+
+/**
+ * Returns only validated names referenced from credential-bearing configuration
+ * fields. Descriptions, paths, arguments, and other arbitrary strings are
+ * deliberately excluded.
+ */
+export function environmentReferencesFromConfig(config: MiftahConfig): readonly string[] {
+  const references = new Set<string>();
+  const collectUpstream = (upstream: {
+    readonly env?: Record<string, string>;
+    readonly headers?: Record<string, string>;
+  } | undefined): void => {
+    collectEnvironmentReferences(references, upstream?.env);
+    collectEnvironmentReferences(references, upstream?.headers);
+  };
+
+  collectUpstream(config.upstream);
+  for (const upstream of Object.values(config.upstreams ?? {})) collectUpstream(upstream);
+  for (const profile of Object.values(config.profiles)) {
+    collectEnvironmentReferences(references, profile.env);
+    collectEnvironmentReferences(references, profile.headers);
+    for (const upstream of Object.values(profile.upstreams ?? {})) collectUpstream(upstream);
+  }
+  if (config.server?.http?.authToken !== undefined) {
+    collectEnvironmentReferences(references, { authToken: config.server.http.authToken });
+  }
+  return normalizedEnvironmentVariables([...references]);
+}
+
+/**
+ * Checks names only. Values are neither copied nor returned; `undefined` is the
+ * same missing boundary used by environment expansion, while an empty value is
+ * present and may still fail a separate provider-declared check.
+ */
+export function inspectSetupEnvironment(
+  requiredVariables: readonly string[],
+  environment: Readonly<Record<string, string | undefined>> | null = process.env
+): SetupEnvironmentReadiness {
+  const required = normalizedEnvironmentVariables(requiredVariables);
+  if (required.length === 0) {
+    return { state: "not-required", requiredVariables: [], missingVariables: [] };
+  }
+  if (environment === null) {
+    return { state: "not-checked", requiredVariables: required, missingVariables: [] };
+  }
+  const missing = required.filter((name) => environment[name] === undefined);
+  return {
+    state: missing.length === 0 ? "available" : "missing",
+    requiredVariables: required,
+    missingVariables: missing
   };
 }
 
@@ -137,10 +224,57 @@ function handoffCompletion(input: SetupCompletionInput): SetupCompletion["client
   }
 }
 
+function environmentCompletion(
+  readiness: SetupEnvironmentReadiness
+): NonNullable<SetupCompletion["environment"]> {
+  const requiredVariables = normalizedEnvironmentVariables(readiness.requiredVariables);
+  const missingVariables = normalizedEnvironmentVariables(readiness.missingVariables)
+    .filter((name) => requiredVariables.includes(name));
+  const required = requiredVariables.join(", ");
+  const missing = missingVariables.join(", ");
+  switch (readiness.state) {
+    case "not-required":
+      return {
+        state: "not-required",
+        requiredVariables: [],
+        missingVariables: [],
+        message: "This configuration does not require an environment-backed secret."
+      };
+    case "not-checked":
+      return {
+        state: "not-checked",
+        requiredVariables,
+        missingVariables: [],
+        message: `Not checked in this setup process: ${required}.`,
+        nextAction:
+          `Before restarting your MCP client, make sure it passes ${required} to the Miftah process it launches. The generated client JSON does not set or contain the secret.`
+      };
+    case "missing":
+      return {
+        state: "missing",
+        requiredVariables,
+        missingVariables,
+        message: `Missing from this setup process: ${missing}.`,
+        nextAction:
+          `Set ${missing} in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret.`
+      };
+    case "available":
+      return {
+        state: "available",
+        requiredVariables,
+        missingVariables: [],
+        message: `Available to this setup process: ${required}.`,
+        nextAction:
+          `Make sure your MCP client passes ${required} to the Miftah process it launches. This does not verify the credential or provider.`
+      };
+  }
+}
+
 /** Creates shared, serializable completion copy without config bytes, paths, or credential material. */
 export function createSetupCompletion(input: SetupCompletionInput): SetupCompletion {
   return {
     verification: verificationCompletion(input),
-    clientHandoff: handoffCompletion(input)
+    clientHandoff: handoffCompletion(input),
+    ...(input.environment === undefined ? {} : { environment: environmentCompletion(input.environment) })
   };
 }

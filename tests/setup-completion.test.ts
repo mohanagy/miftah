@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSetupCompletion } from "../src/setup/setup-completion.js";
+import {
+  createSetupCompletion,
+  environmentReferencesFromConfig,
+  inspectSetupEnvironment
+} from "../src/setup/setup-completion.js";
 
 function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -13,6 +17,89 @@ function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
 }
 
 describe("setup completion", () => {
+  it("reports a missing generated environment reference before client handoff without exposing a value", () => {
+    const environment = inspectSetupEnvironment(["SENTRY_ACCESS_TOKEN"], {});
+    const completion = createSetupCompletion({
+      surface: "cli",
+      verification: "not-declared",
+      clientHandoff: "shown",
+      environment
+    });
+
+    expect(completion.environment).toEqual({
+      state: "missing",
+      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      missingVariables: ["SENTRY_ACCESS_TOKEN"],
+      message: "Missing from this setup process: SENTRY_ACCESS_TOKEN.",
+      nextAction:
+        "Set SENTRY_ACCESS_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
+    });
+    expect(JSON.stringify(completion)).not.toContain("provider-secret-value");
+  });
+
+  it("keeps environment availability distinct from provider verification and client inheritance", () => {
+    const environment = inspectSetupEnvironment(
+      ["SENTRY_ACCESS_TOKEN"],
+      { SENTRY_ACCESS_TOKEN: "provider-secret-value" }
+    );
+    const completion = createSetupCompletion({
+      surface: "console",
+      verification: "not-declared",
+      clientHandoff: "available",
+      environment
+    });
+
+    expect(completion.environment).toEqual({
+      state: "available",
+      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      missingVariables: [],
+      message: "Available to this setup process: SENTRY_ACCESS_TOKEN.",
+      nextAction:
+        "Make sure your MCP client passes SENTRY_ACCESS_TOKEN to the Miftah process it launches. This does not verify the credential or provider."
+    });
+    expect(JSON.stringify(completion)).not.toContain("provider-secret-value");
+    expect(completion.verification.state).toBe("not-declared");
+  });
+
+  it("represents not checked and not required environment readiness separately", () => {
+    expect(inspectSetupEnvironment(["SENTRY_ACCESS_TOKEN"], null)).toEqual({
+      state: "not-checked",
+      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      missingVariables: []
+    });
+    expect(inspectSetupEnvironment([], {})).toEqual({
+      state: "not-required",
+      requiredVariables: [],
+      missingVariables: []
+    });
+  });
+
+  it("extracts only validated environment references from credential-bearing config fields", () => {
+    expect(environmentReferencesFromConfig({
+      version: "3",
+      name: "sentry",
+      description: "Do not treat ${DESCRIPTION_ONLY} as a credential reference.",
+      defaultProfile: "work",
+      upstream: {
+        transport: "streamable-http",
+        url: "https://mcp.example.test",
+        headers: { Authorization: "Bearer ${UPSTREAM_TOKEN}" }
+      },
+      profiles: {
+        work: {
+          env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
+          headers: { "X-Account": "${ACCOUNT_TOKEN}" },
+          upstreams: {
+            default: {
+              env: { EXTRA_TOKEN: "prefix-${EXTRA_TOKEN}" },
+              headers: { "X-Literal": "literal" }
+            }
+          }
+        }
+      }
+    })).toEqual(["ACCOUNT_TOKEN", "EXTRA_TOKEN", "SENTRY_ACCESS_TOKEN", "UPSTREAM_TOKEN"]);
+  });
+
   it("gives an unreviewed generic setup a truthful manual handoff without inventing a probe", () => {
     expect(createSetupCompletion({
       surface: "cli",

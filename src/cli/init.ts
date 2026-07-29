@@ -16,7 +16,10 @@ import {
   type SetupConfigurationPlan,
   type SetupConfigurationPreview
 } from "../setup/setup-configuration.js";
-import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
+import {
+  environmentReferencesFromConfig,
+  type SetupCompletionClientHandoff
+} from "../setup/setup-completion.js";
 import type { SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
 import {
   CLIENT_NAMES,
@@ -530,7 +533,8 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       snippets = renderClientSnippets(values.client, {
         serverName: config.name,
         configPath: output,
-        launcher: context.launcher
+        launcher: context.launcher,
+        requiredEnvironmentVariables: environmentReferencesFromConfig(config)
       });
     } catch (error) {
       if (error instanceof ClientSnippetError) throw new CliUsageError(error.message);

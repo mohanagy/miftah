@@ -41,6 +41,20 @@ describe("client snippets", () => {
     );
   });
 
+  it("names required environment variables outside the client JSON and explains process inheritance", () => {
+    const snippet = renderClientSnippet("claude-desktop", {
+      ...posixInput,
+      requiredEnvironmentVariables: ["SENTRY_ACCESS_TOKEN", "SENTRY_ACCESS_TOKEN"]
+    });
+
+    expect(snippet.guidance).toContain(
+      "Before restarting Claude Desktop, make sure it passes SENTRY_ACCESS_TOKEN to the Miftah process it launches."
+    );
+    expect(snippet.guidance).toContain("The generated JSON does not set or contain that secret.");
+    expect(snippet.json).not.toContain("SENTRY_ACCESS_TOKEN");
+    expect(JSON.parse(snippet.json).mcpServers["miftah server"].env).toBeUndefined();
+  });
+
   it("uses the same one-connector guidance in every CLI client handoff", () => {
     const snippet = renderClientSnippet("claude-desktop", posixInput);
 
@@ -207,7 +221,8 @@ describe("client snippets", () => {
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [posixInput.launcher.args[0]!, "--config", "/other/config.json"] } }, "--config"],
     [{ ...posixInput, launcher: { ...posixInput.launcher, args: [posixInput.launcher.args[0]!, "--config=/other/config.json"] } }, "--config"],
     [{ ...posixInput, configPath: "relative/config.json" }, "absolute"],
-    [{ ...posixInput, configPath: "/safe\u0000path/config.json" }, "NUL"]
+    [{ ...posixInput, configPath: "/safe\u0000path/config.json" }, "NUL"],
+    [{ ...posixInput, requiredEnvironmentVariables: ["SAFE", "unsafe-name"] }, "environment variable"]
   ])("rejects invalid input %#", (input, message) => {
     expect(() => renderClientSnippet("cursor", input)).toThrow(ClientSnippetError);
     expect(() => renderClientSnippet("cursor", input)).toThrow(message);

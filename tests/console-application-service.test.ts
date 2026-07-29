@@ -480,7 +480,17 @@ describe("Console application service", () => {
       defaultProfile: "default",
       profileCount: 1,
       actions: [`Created Miftah configuration 'support-tools' from preset '${preset}'.`],
-      completion: manualFirstRunCompletion
+      completion: {
+        ...manualFirstRunCompletion,
+        environment: {
+          state: "missing",
+          requiredVariables: ["SUPPORT_TOKEN"],
+          missingVariables: ["SUPPORT_TOKEN"],
+          message: "Missing from this setup process: SUPPORT_TOKEN.",
+          nextAction:
+            "Set SUPPORT_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
+        }
+      }
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(
       buildPresetConfig("support-tools", preset, options)
@@ -577,7 +587,17 @@ describe("Console application service", () => {
       defaultProfile: "default",
       profileCount: 1,
       actions: ["Created Miftah configuration 'local-tools' from preset 'local-stdio'."],
-      completion: manualFirstRunCompletion
+      completion: {
+        ...manualFirstRunCompletion,
+        environment: {
+          state: "missing",
+          requiredVariables: ["LOCAL_MCP_TOKEN"],
+          missingVariables: ["LOCAL_MCP_TOKEN"],
+          message: "Missing from this setup process: LOCAL_MCP_TOKEN.",
+          nextAction:
+            "Set LOCAL_MCP_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
+        }
+      }
     });
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
