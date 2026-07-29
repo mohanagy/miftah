@@ -378,8 +378,7 @@ async function finishCreatedSetup(
   context: InitCommandContext,
   created: InitCommandResult
 ): Promise<SetupCommandResult> {
-  const inspectedEnvironment = inspectConfigEnvironment(created.config);
-  const environment = inspectedEnvironment.state === "not-required" ? undefined : inspectedEnvironment;
+  const environment = inspectConfigEnvironment(created.config);
   if (
     created.config.version === "3" &&
     created.config.upstream?.transport === "streamable-http" &&
@@ -394,7 +393,7 @@ async function finishCreatedSetup(
       verification: "not-declared",
       clientHandoff: created.clientHandoff ?? "not-generated",
       configPath: created.output,
-      ...(environment === undefined ? {} : { environment }),
+      environment,
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -409,7 +408,7 @@ async function finishCreatedSetup(
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
       configPath: created.output,
-      ...(environment === undefined ? {} : { environment }),
+      environment,
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -423,7 +422,7 @@ async function finishCreatedSetup(
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
       configPath: created.output,
-      ...(environment === undefined ? {} : { environment }),
+      environment,
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -450,7 +449,7 @@ async function finishCreatedSetup(
     clientHandoff: created.clientHandoff ?? "not-generated",
     ...(incomplete ? { profile: created.config.defaultProfile } : {}),
     configPath: created.output,
-    ...(environment === undefined ? {} : { environment }),
+    environment,
     ...(created.deferredClientHandoff === undefined
       ? {}
       : { deferredClientHandoff: created.deferredClientHandoff })

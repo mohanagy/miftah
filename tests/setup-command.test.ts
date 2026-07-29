@@ -237,6 +237,9 @@ describe("setup command", () => {
       await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
       await expect(draftStore.load()).resolves.toBeUndefined();
       await expect(readFile(resolve(outputRoot, "resumed.json"), "utf8")).resolves.toContain("ghcr.io/acme/server@sha256");
+      expect(streams.transcript.contents).toContain(
+        "This configuration does not require an environment-backed secret."
+      );
       expect(draft.revision).toBe(1);
     } finally {
       streams.input.end();

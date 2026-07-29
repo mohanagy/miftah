@@ -467,9 +467,7 @@ function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
     surface: "console",
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
     clientHandoff: "available",
-    ...(environment.state === "not-required"
-      ? {}
-      : { environment })
+    environment
   });
 }
 

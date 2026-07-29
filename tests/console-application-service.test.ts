@@ -66,6 +66,12 @@ const manualFirstRunCompletion = {
     state: "not-declared",
     message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
   },
+  environment: {
+    state: "not-required",
+    requiredVariables: [],
+    missingVariables: [],
+    message: "This configuration does not require an environment-backed secret."
+  },
   clientHandoff: {
     state: "available",
     message:
@@ -78,6 +84,7 @@ const reviewedFirstRunCompletion = {
     state: "available",
     message: "A provider-declared read-only check is available, but it has not run yet."
   },
+  environment: manualFirstRunCompletion.environment,
   clientHandoff: manualFirstRunCompletion.clientHandoff
 } as const;
 

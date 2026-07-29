@@ -1471,6 +1471,7 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah Console");
       expect(html).toContain('src="/app.js"');
       expect(html).toContain('href="/app.css"');
+      expect(html).toContain('id="snippet-guidance"');
       expect(html).toContain("Remote native OAuth");
       expect(html).toContain("Provider adapter");
       expect(html).toContain("Upstream-owned auth");
@@ -1813,6 +1814,8 @@ describe("local Console control server", () => {
         }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
+      expect(javascript).toContain('byId("snippet-guidance")');
+      expect(javascript).toContain('guidance.textContent = typeof first.guidance === "string" ? first.guidance : ""');
       expect(javascript).toContain("/api/v1/configurations/");
       expect(javascript).toContain("/api/v1/profile-readiness");
       expect(javascript).toContain("/api/v1/profiles/default");
@@ -2628,6 +2631,12 @@ describe("local Console control server", () => {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
               },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
+              },
               clientHandoff: {
                 state: "available",
                 message:
@@ -2687,6 +2696,12 @@ describe("local Console control server", () => {
               verification: {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
               },
               clientHandoff: {
                 state: "available",

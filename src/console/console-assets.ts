@@ -385,6 +385,7 @@ const page = `<!doctype html>
           <div>
             <label for="snippet-output">Generated JSON</label>
             <textarea id="snippet-output" readonly rows="12" spellcheck="false"></textarea>
+            <p id="snippet-guidance" class="field-note" aria-live="polite"></p>
             <button id="copy-snippet" type="button">Copy JSON</button>
           </div>
         </section>
@@ -2216,11 +2217,17 @@ const script = `(() => {
     generateSnippet.addEventListener("click", async () => {
       const select = byId("client-select");
       const output = byId("snippet-output");
-      if (!(select instanceof HTMLSelectElement) || !(output instanceof HTMLTextAreaElement)) return;
+      const guidance = byId("snippet-guidance");
+      if (
+        !(select instanceof HTMLSelectElement) ||
+        !(output instanceof HTMLTextAreaElement) ||
+        !(guidance instanceof HTMLElement)
+      ) return;
       try {
         const snippets = await api("/api/v1/client-snippets?client=" + encodeURIComponent(select.value));
         const first = Array.isArray(snippets) ? record(snippets[0]) : {};
         output.value = typeof first.json === "string" ? first.json : "";
+        guidance.textContent = typeof first.guidance === "string" ? first.guidance : "";
         message("Generated copy-only client configuration. Review it before merging.");
       } catch (error) { message(errorMessage(error)); }
     });
