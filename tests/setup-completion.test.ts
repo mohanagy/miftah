@@ -122,14 +122,30 @@ describe("setup completion", () => {
       defaultProfile: "default",
       upstream: { transport: "stdio", command: "node" },
       profiles: {
-        default: { env: { SENTRY_ACCESS_TOKEN: "secretref:env://SENTRY_ACCESS_TOKEN" } }
+        default: {
+          env: {
+            ACCOUNT_ID: "secretref:env://ACCOUNT_ID",
+            SENTRY_ACCESS_TOKEN: "secretref:env://SENTRY_ACCESS_TOKEN"
+          }
+        }
       },
       secrets: { envFiles: ["/Users/example/.config/miftah/sentry.env"] }
-    }, {})).toEqual({
+    }, { ACCOUNT_ID: "account-id" })).toEqual({
       state: "not-checked",
       reason: "configured-env-files",
-      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      requiredVariables: ["ACCOUNT_ID", "SENTRY_ACCESS_TOKEN"],
       missingVariables: []
+    });
+  });
+
+  it("treats an empty credential environment value as missing", () => {
+    expect(inspectSetupEnvironment(
+      ["SENTRY_ACCESS_TOKEN"],
+      { SENTRY_ACCESS_TOKEN: "" }
+    )).toEqual({
+      state: "missing",
+      requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+      missingVariables: ["SENTRY_ACCESS_TOKEN"]
     });
   });
 
@@ -155,6 +171,14 @@ describe("setup completion", () => {
         missingVariables: ["SENTRY_ACCESS_TOKEN"]
       } as never
     })).toThrow("available state cannot include missing environment variables");
+    expect(() => createSetupCompletion({
+      ...base,
+      environment: {
+        state: "missing",
+        requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+        missingVariables: ["UNRELATED_TOKEN"]
+      } as never
+    })).toThrow("missing environment variables must be required environment variables");
   });
 
   it("gives an unreviewed generic setup a truthful manual handoff without inventing a probe", () => {

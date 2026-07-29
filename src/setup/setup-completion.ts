@@ -151,7 +151,7 @@ export function inspectSetupEnvironment(
       missingVariables: []
     };
   }
-  const missing = required.filter((name) => environment[name] === undefined);
+  const missing = required.filter((name) => environment[name] === undefined || environment[name] === "");
   const requiredNames = nonEmptyEnvironmentVariables(required, "environment readiness requires environment variables");
   if (missing.length > 0) {
     return {
@@ -179,7 +179,7 @@ export function inspectConfigEnvironment(
     return {
       state: "not-checked",
       reason: "configured-env-files",
-      requiredVariables: readiness.missingVariables,
+      requiredVariables: readiness.requiredVariables,
       missingVariables: []
     };
   }
@@ -292,8 +292,7 @@ function environmentCompletion(
   readiness: SetupEnvironmentReadiness
 ): SetupEnvironmentCompletion {
   const requiredVariables = normalizedEnvironmentVariables(readiness.requiredVariables);
-  const missingVariables = normalizedEnvironmentVariables(readiness.missingVariables)
-    .filter((name) => requiredVariables.includes(name));
+  const missingVariables = normalizedEnvironmentVariables(readiness.missingVariables);
   const required = requiredVariables.join(", ");
   const missing = missingVariables.join(", ");
   switch (readiness.state) {
