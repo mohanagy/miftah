@@ -69,8 +69,11 @@ describe("v0.5.2 release artifacts", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
-    expect(changelog).toContain("Miftah is experimental and pre-1.0");
+    expect(notes).toContain("Miftah remains experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
+    for (const issue of [203, 300, 301, 305]) {
+      expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
+    }
     expect(notes).toMatch(/found, ready, and need-attention/iu);
     expect(notes).toMatch(/still-valid Console sessions across refresh/iu);
     expect(notes).toMatch(/names-only environment-secret readiness/iu);
