@@ -71,8 +71,11 @@ describe("v0.5.2 release artifacts", () => {
 
     expect(notes).toContain("Miftah remains experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
+    const fixedStart = notes.indexOf("### Fixed");
+    const fixedEnd = notes.indexOf("\n### ", fixedStart + "### Fixed".length);
+    const fixedNotes = notes.slice(fixedStart, fixedEnd < 0 ? undefined : fixedEnd);
     for (const issue of [203, 300, 301, 305]) {
-      expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
+      expect(fixedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
     expect(notes).toMatch(/found, ready, and need-attention/iu);
     expect(notes).toMatch(/still-valid Console sessions across refresh/iu);
