@@ -1480,6 +1480,8 @@ describe("local Console control server", () => {
       expect(html).toContain('id="profile-inventory-list"');
       expect(html).toContain("Configured accounts");
       expect(html).toContain('id="configuration-catalog-view"');
+      expect(html).toContain('id="configuration-catalog-summary"');
+      expect(html).toContain('id="configuration-catalog-attention"');
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
       expect(html).toContain('id="profile-readiness-profile"');
@@ -1541,6 +1543,12 @@ describe("local Console control server", () => {
       expect(javascript).toContain("discardSetupDraft.disabled = true;");
       expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
       expect(javascript).toContain("renderSetupCompletion");
+      expect(javascript).toContain("configuration files found");
+      expect(javascript).toContain("need attention");
+      expect(javascript).toContain('"file-permissions": "private file permission"');
+      expect(javascript).not.toContain('"file-permissions": "private file permissions"');
+      expect(javascript).toContain("invalid configuration");
+      expect(javascript).toContain("unsafe path or file replacement");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");
       expect(javascript).toContain('querySelectorAll("input[data-setup-source]")');

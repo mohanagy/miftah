@@ -12,6 +12,8 @@ import { loadConfigFromText } from "../config/load-config.js";
 import {
   consoleInitializedConfigMetadata,
   type ConsoleConfigCatalog,
+  type ConsoleConfigCatalogAttention,
+  type ConsoleConfigCatalogAttentionReason,
   type ConsoleDiscoveredConfiguration
 } from "./console-config-metadata.js";
 import type { ConsoleTrustedConfiguration } from "./console-trusted-configuration.js";
@@ -115,6 +117,21 @@ export interface ConsoleConfigCatalogDiscovery {
   readonly configurations: readonly DiscoveredConsoleConfiguration[];
 }
 
+type TrustedConfigurationCandidate =
+  | {
+      readonly status: "accepted";
+      readonly path: string;
+      /** Exact-width identity used for security comparisons and catalog dedupe. */
+      readonly identity: string;
+      /** Test-only Number projection retained to diagnose platform precision loss. */
+      readonly numberIdentity?: string;
+      readonly trustedConfiguration: ConsoleTrustedConfiguration;
+    }
+  | {
+      readonly status: "attention";
+      readonly reason: ConsoleConfigCatalogAttentionReason;
+    };
+
 /** Sensitive verified bytes/configuration stay off the serializable catalog entry. */
 const trustedConfigurations = new WeakMap<DiscoveredConsoleConfiguration, ConsoleTrustedConfiguration>();
 
@@ -169,6 +186,14 @@ function isTrustedDirectory(entry: Stats | BigIntStats, ownerUid: number | undef
 
 function isTrustedFile(entry: Stats | BigIntStats, ownerUid: number | undefined, platform: NodeJS.Platform): boolean {
   return entry.isFile() && !entry.isSymbolicLink() && hasExpectedOwner(entry, ownerUid) && hasSafeFileMode(entry, platform);
+}
+
+function hasTrustedFilePermissions(
+  entry: Pick<Stats | BigIntStats, "uid" | "mode">,
+  ownerUid: number | undefined,
+  platform: NodeJS.Platform
+): boolean {
+  return hasExpectedOwner(entry, ownerUid) && hasSafeFileMode(entry, platform);
 }
 
 function configurationId(path: string): string {
@@ -258,20 +283,23 @@ async function readTrustedConfiguration(
   candidateIndex: number,
   candidateStageObserver: ConsoleConfigCatalogCandidateStageObserver | undefined,
   candidateIdentityObserver: ConsoleConfigCatalogCandidateIdentityDiagnosticObserver | undefined
-): Promise<{
-  readonly path: string;
-  /** Exact-width identity used for security comparisons and catalog dedupe. */
-  readonly identity: string;
-  /** Test-only Number projection retained to diagnose platform precision loss. */
-  readonly numberIdentity?: string;
-  readonly trustedConfiguration: ConsoleTrustedConfiguration;
-} | undefined> {
+): Promise<TrustedConfigurationCandidate> {
   const observed = await lstat(path, { bigint: true });
-  if (!isTrustedFile(observed, ownerUid, platform)) return undefined;
+  if (!observed.isFile() || observed.isSymbolicLink()) {
+    return { status: "attention", reason: "unsafe-path" };
+  }
+  if (!hasTrustedFilePermissions(observed, ownerUid, platform)) {
+    return { status: "attention", reason: "file-permissions" };
+  }
   const canonical = await realpath(path);
-  if (!isWithin(directory, canonical)) return undefined;
+  if (!isWithin(directory, canonical)) return { status: "attention", reason: "unsafe-path" };
   const resolved = await stat(canonical, { bigint: true });
-  if (!isTrustedFile(resolved, ownerUid, platform) || !sameBigIntFileIdentity(observed, resolved)) return undefined;
+  if (!resolved.isFile() || resolved.isSymbolicLink() || !sameBigIntFileIdentity(observed, resolved)) {
+    return { status: "attention", reason: "unsafe-path" };
+  }
+  if (!hasTrustedFilePermissions(resolved, ownerUid, platform)) {
+    return { status: "attention", reason: "file-permissions" };
+  }
   const aclPaths: readonly WindowsPrivatePath[] = useBatchedWindowsAclVerifier
     ? [{ path: directory, kind: "directory" }, { path: canonical, kind: "file" }]
     : [{ path: canonical, kind: "file" }];
@@ -283,7 +311,7 @@ async function readTrustedConfiguration(
     useBatchedWindowsAclVerifier
   ))) {
     observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "rejected");
-    return undefined;
+    return { status: "attention", reason: "file-permissions" };
   }
   if (useBatchedWindowsAclVerifier) windowsAclBoundary.verified = true;
   observeCandidateStage(candidateStageObserver, candidateIndex, "acl", "success");
@@ -311,7 +339,12 @@ async function readTrustedConfiguration(
       opened.size > maximumConfigurationBytes
     ) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "rejected");
-      return undefined;
+      return {
+        status: "attention",
+        reason: hasTrustedFilePermissions(openedIdentity, ownerUid, platform)
+          ? "unsafe-path"
+          : "file-permissions"
+      };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "opened-validation", "success");
     const identity = bigintFileIdentity(openedIdentity);
@@ -339,34 +372,40 @@ async function readTrustedConfiguration(
       content.byteLength > maximumConfigurationBytes
     ) {
       observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "rejected");
-      return undefined;
+      return {
+        status: "attention",
+        reason: hasTrustedFilePermissions(afterReadIdentity, ownerUid, platform)
+          ? "unsafe-path"
+          : "file-permissions"
+      };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "after-read-validation", "success");
     let text: string;
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(content);
-    } catch (error) {
+    } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "decode", "error");
-      throw error;
+      return { status: "attention", reason: "invalid-configuration" };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "decode", "success");
     let config: ReturnType<typeof loadConfigFromText>;
     try {
       config = loadConfigFromText(text, canonical);
-    } catch (error) {
+    } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "parse", "error");
-      throw error;
+      return { status: "attention", reason: "invalid-configuration" };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "parse", "success");
     let migrationSource: ReturnType<typeof createConfigMigrationSource>;
     try {
       migrationSource = createConfigMigrationSource(content, afterRead);
-    } catch (error) {
+    } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "error");
-      throw error;
+      return { status: "attention", reason: "invalid-configuration" };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "success");
     return {
+      status: "accepted",
       path: canonical,
       identity,
       ...(numberIdentity === undefined ? {} : { numberIdentity }),
@@ -379,6 +418,40 @@ async function readTrustedConfiguration(
   } finally {
     await closeTrustedConfigurationHandle(handle, candidateIndex, candidateStageObserver);
   }
+}
+
+function catalogAttention(
+  attentionCounts: ReadonlyMap<ConsoleConfigCatalogAttentionReason, number>
+): readonly ConsoleConfigCatalogAttention[] {
+  const exhaustiveOrder = {
+    "file-permissions": true,
+    "invalid-configuration": true,
+    "unsafe-path": true,
+    "duplicate": true,
+    "unreadable": true
+  } satisfies Record<ConsoleConfigCatalogAttentionReason, true>;
+  const order = Object.keys(exhaustiveOrder) as ConsoleConfigCatalogAttentionReason[];
+  return order.flatMap((reason) => {
+    const count = attentionCounts.get(reason) ?? 0;
+    return count === 0 ? [] : [{ reason, count }];
+  });
+}
+
+function readyCatalog(
+  discoveredCount: number,
+  configurations: readonly DiscoveredConsoleConfiguration[],
+  attentionCounts: ReadonlyMap<ConsoleConfigCatalogAttentionReason, number>
+): ConsoleConfigCatalog {
+  const attentionReasons = catalogAttention(attentionCounts);
+  return {
+    source: "standard-config-directory",
+    discoveryState: "ready",
+    discoveredCount,
+    readyCount: configurations.length,
+    attentionCount: attentionReasons.reduce((total, item) => total + item.count, 0),
+    attentionReasons,
+    configurations: configurations.map((configuration) => configuration.metadata)
+  };
 }
 
 /**
@@ -415,7 +488,15 @@ export async function discoverConsoleConfigCatalog(
   }
   if (directory === undefined) {
     return {
-      catalog: { source: "standard-config-directory", discoveryState: "ready", configurations: [] },
+      catalog: {
+        source: "standard-config-directory",
+        discoveryState: "ready",
+        discoveredCount: 0,
+        readyCount: 0,
+        attentionCount: 0,
+        attentionReasons: [],
+        configurations: []
+      },
       configurations: []
     };
   }
@@ -437,8 +518,13 @@ export async function discoverConsoleConfigCatalog(
   const identities = new Set<string>();
   const numberIdentities = candidateIdentityObserver === undefined ? undefined : new Set<string>();
   const configurations: DiscoveredConsoleConfiguration[] = [];
+  const attentionCounts = new Map<ConsoleConfigCatalogAttentionReason, number>();
+  const recordAttention = (reason: ConsoleConfigCatalogAttentionReason): void => {
+    attentionCounts.set(reason, (attentionCounts.get(reason) ?? 0) + 1);
+  };
   const windowsAclBoundary: WindowsCatalogAclBoundary = { verified: !useBatchedWindowsAclVerifier };
   for (const [candidateIndex, name] of names.entries()) {
+    let failureReason: ConsoleConfigCatalogAttentionReason = "unreadable";
     try {
       const discovered = await readTrustedConfiguration(
         join(directory, name),
@@ -453,12 +539,17 @@ export async function discoverConsoleConfigCatalog(
         candidateStageObserver,
         candidateIdentityObserver
       );
-      if (discovered === undefined) continue;
+      if (discovered.status === "attention") {
+        recordAttention(discovered.reason);
+        continue;
+      }
+      failureReason = "invalid-configuration";
       const bigintDuplicate = identities.has(discovered.identity);
       const numberDuplicate = discovered.numberIdentity !== undefined && numberIdentities?.has(discovered.numberIdentity) === true;
       candidateIdentityObserver?.({ candidateIndex, numberDuplicate, bigintDuplicate });
       if (bigintDuplicate) {
         observeCandidateStage(candidateStageObserver, candidateIndex, "dedupe", "duplicate");
+        recordAttention("duplicate");
         continue;
       }
       identities.add(discovered.identity);
@@ -495,6 +586,7 @@ export async function discoverConsoleConfigCatalog(
       observeCandidateStage(candidateStageObserver, candidateIndex, "accepted", "success");
     } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "candidate", "error");
+      recordAttention(failureReason);
       // A malformed, raced, or untrusted candidate is never a Console entry.
     }
   }
@@ -514,11 +606,7 @@ export async function discoverConsoleConfigCatalog(
     left.metadata.name.localeCompare(right.metadata.name) || left.metadata.id.localeCompare(right.metadata.id)
   );
   return {
-    catalog: {
-      source: "standard-config-directory",
-      discoveryState: "ready",
-      configurations: configurations.map((configuration) => configuration.metadata)
-    },
+    catalog: readyCatalog(names.length, configurations, attentionCounts),
     configurations
   };
 }

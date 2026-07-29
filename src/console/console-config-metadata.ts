@@ -50,9 +50,29 @@ export interface ConsoleDiscoveredConfiguration {
   readonly source: "standard-config-directory";
 }
 
+export type ConsoleConfigCatalogAttentionReason =
+  | "file-permissions"
+  | "invalid-configuration"
+  | "unsafe-path"
+  | "duplicate"
+  | "unreadable";
+
+export interface ConsoleConfigCatalogAttention {
+  readonly reason: ConsoleConfigCatalogAttentionReason;
+  readonly count: number;
+}
+
 export interface ConsoleConfigCatalog {
   readonly source: "standard-config-directory";
   readonly discoveryState: "ready" | "unavailable";
+  /** Direct JSON candidates found without exposing their names or paths. */
+  readonly discoveredCount?: number;
+  /** Candidates that passed every trust and configuration check. */
+  readonly readyCount?: number;
+  /** Candidates omitted from the selector because one or more checks failed. */
+  readonly attentionCount?: number;
+  /** Aggregate safe categories only; never paths, values, or parser details. */
+  readonly attentionReasons?: readonly ConsoleConfigCatalogAttention[];
   readonly configurations: readonly ConsoleDiscoveredConfiguration[];
   readonly selectedConfigurationId?: string;
 }
