@@ -76,6 +76,11 @@ const page = `<!doctype html>
           </div>
           <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
         </div>
+        <div class="configuration-catalog-status" role="status" aria-live="polite" aria-atomic="true">
+          <p id="configuration-catalog-summary"></p>
+          <ul id="configuration-catalog-attention"></ul>
+          <p class="field-note">Miftah keeps rejected names and paths hidden. For files you expect to see, check private access, validate the configuration, replace symlinks with regular files, then refresh.</p>
+        </div>
         <div id="configuration-catalog" class="configuration-catalog"></div>
       </section>
 
@@ -489,6 +494,10 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
 .configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.configuration-catalog-status { margin: 0 0 1rem; padding: .85rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
+.configuration-catalog-status p { margin: 0; }
+.configuration-catalog-status ul { margin: .55rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.configuration-catalog-status ul:empty { display: none; }
 .configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
 .configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
@@ -534,6 +543,8 @@ const script = `(() => {
   const workspaceView = byId("workspace-view");
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
+  const configurationCatalogSummary = byId("configuration-catalog-summary");
+  const configurationCatalogAttention = byId("configuration-catalog-attention");
   const setupCompletionView = byId("setup-completion-view");
   const setupCompletionVerification = byId("setup-completion-verification");
   const setupCompletionNextAction = byId("setup-completion-next-action");
@@ -782,16 +793,60 @@ const script = `(() => {
 
   function catalogConfigurations(metadata) {
     const catalog = record(metadata.catalog);
+    const configurations = Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : [];
+    const safeCount = (value, fallback) => Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+    const attentionReasons = Array.isArray(catalog.attentionReasons)
+      ? catalog.attentionReasons.map(record).flatMap((item) => {
+          const reason = typeof item.reason === "string" ? item.reason : "";
+          const count = safeCount(item.count, 0);
+          return count > 0 ? [{ reason, count }] : [];
+        })
+      : [];
+    const attentionCount = safeCount(
+      catalog.attentionCount,
+      attentionReasons.reduce((total, item) => total + item.count, 0)
+    );
+    const readyCount = safeCount(catalog.readyCount, configurations.length);
     return {
       discoveryState: typeof catalog.discoveryState === "string" ? catalog.discoveryState : "",
       selectedConfigurationId: typeof catalog.selectedConfigurationId === "string" ? catalog.selectedConfigurationId : "",
-      configurations: Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : []
+      discoveredCount: safeCount(catalog.discoveredCount, readyCount + attentionCount),
+      readyCount,
+      attentionCount,
+      attentionReasons,
+      configurations
     };
   }
 
   function renderConfigurationCatalog(metadata) {
     const catalog = catalogConfigurations(metadata);
-    if (configurationCatalogView) configurationCatalogView.hidden = catalog.configurations.length === 0;
+    const hasCatalogState = catalog.discoveredCount > 0 || catalog.readyCount > 0 || catalog.attentionCount > 0;
+    if (configurationCatalogView) configurationCatalogView.hidden = !hasCatalogState;
+    if (configurationCatalogSummary) {
+      const files = catalog.discoveredCount === 1 ? "configuration file found" : "configuration files found";
+      const attention = catalog.attentionCount === 1 ? "needs attention" : "need attention";
+      configurationCatalogSummary.textContent =
+        catalog.discoveredCount + " " + files + " · " +
+        catalog.readyCount + " ready · " +
+        catalog.attentionCount + " " + attention;
+    }
+    if (configurationCatalogAttention) {
+      configurationCatalogAttention.replaceChildren();
+      const labels = {
+        "file-permissions": "private file permissions",
+        "invalid-configuration": "invalid configuration",
+        "unsafe-path": "unsafe path or file replacement",
+        "duplicate": "duplicate file",
+        "unreadable": "unreadable or changing file"
+      };
+      catalog.attentionReasons.forEach((item) => {
+        const label = labels[item.reason];
+        if (typeof label !== "string") return;
+        const entry = document.createElement("li");
+        entry.textContent = item.count + " " + label + (item.count === 1 ? "" : "s");
+        configurationCatalogAttention.append(entry);
+      });
+    }
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
     catalog.configurations.forEach((configuration) => {
@@ -1446,6 +1501,14 @@ const script = `(() => {
         if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
+        return;
+      }
+      if (catalog.attentionCount > 0) {
+        if (onboardingView) onboardingView.hidden = true;
+        if (presetOnboardingView) presetOnboardingView.hidden = true;
+        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        if (workspaceView) workspaceView.hidden = true;
+        message("Miftah found configuration files, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
