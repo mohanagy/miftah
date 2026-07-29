@@ -49,6 +49,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -327,9 +328,12 @@ async function reviewThenCreatePresetForm(
   const status = new FakeElement();
   const requests: Array<{ readonly path: string; readonly body?: string }> = [];
   type FakeResponse = {
-    readonly ok: true;
-    readonly status: 200;
-    readonly json: () => Promise<{ readonly data: Record<string, unknown> }>;
+    readonly ok: boolean;
+    readonly status: number;
+    readonly json: () => Promise<{
+      readonly data?: Record<string, unknown>;
+      readonly error?: { readonly code: string; readonly message: string };
+    }>;
   };
   const hasProfileCountValue = Object.prototype.hasOwnProperty.call(reviewOptions, "profileCountValue");
   const previewConfiguration: Record<string, unknown> = {
@@ -396,7 +400,16 @@ async function reviewThenCreatePresetForm(
       }
       if (requestPath === "/api/v1/onboarding/preset" && reviewOptions.failFirstCreate === true && !firstCreateFailed) {
         firstCreateFailed = true;
-        throw new Error("Configuration already exists.");
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: {
+              code: "config_exists",
+              message: "Configuration already exists."
+            }
+          })
+        };
       }
       return requestPath === "/api/v1/onboarding/preset/preview"
         ? response(previewData)
@@ -706,6 +719,64 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   releaseRequest();
   await Promise.all([first, second]);
   return { requests, disabledWhilePending, enabledAfterCompletion: button.disabled === false };
+}
+
+function exerciseSessionResumeLifecycle(javascript: string): {
+  readonly callsAfterStartup: number;
+  readonly callsAfterNormalPageShow: number;
+  readonly callsAfterPersistedPageShow: number;
+} {
+  const start = javascript.lastIndexOf('if (typeof window !== "undefined")');
+  const end = javascript.indexOf("\n})();", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console session-resume startup block.");
+
+  let resumeCalls = 0;
+  let pageShow: ((event: { readonly persisted: boolean }) => void) | undefined;
+  runInNewContext(javascript.slice(start, end), {
+    window: {
+      addEventListener(name: string, listener: (event: { readonly persisted: boolean }) => void): void {
+        if (name === "pageshow") pageShow = listener;
+      }
+    },
+    resumeSession(): void {
+      resumeCalls += 1;
+    }
+  });
+  const callsAfterStartup = resumeCalls;
+  pageShow?.({ persisted: false });
+  const callsAfterNormalPageShow = resumeCalls;
+  pageShow?.({ persisted: true });
+  return {
+    callsAfterStartup,
+    callsAfterNormalPageShow,
+    callsAfterPersistedPageShow: resumeCalls
+  };
+}
+
+function bootstrapResponseErrorMessage(
+  javascript: string,
+  status: number,
+  code: string,
+  publicMessage: string,
+  retryAfter?: string
+): string {
+  const start = javascript.indexOf("function bootstrapRecoveryMessage");
+  const end = javascript.indexOf("\n\n  async function api", start);
+  if (start < 0 || end < 0) throw new Error("Expected the Console bootstrap recovery classifier.");
+  const classify = runInNewContext(
+    `${javascript.slice(start, end)}\nbootstrapResponseError`,
+    {}
+  ) as (
+    response: { readonly status: number; readonly headers: { get(name: string): string | null } },
+    payload: { readonly error: { readonly code: string; readonly message: string } }
+  ) => Error;
+  return classify(
+    {
+      status,
+      headers: { get: (name) => name === "retry-after" ? retryAfter ?? null : null }
+    },
+    { error: { code, message: publicMessage } }
+  ).message;
 }
 
 async function resumeSetupDraftWithoutConnectionValues(javascript: string): Promise<{
@@ -1400,6 +1471,7 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah Console");
       expect(html).toContain('src="/app.js"');
       expect(html).toContain('href="/app.css"');
+      expect(html).toContain('id="snippet-guidance"');
       expect(html).toContain("Remote native OAuth");
       expect(html).toContain("Provider adapter");
       expect(html).toContain("Upstream-owned auth");
@@ -1410,6 +1482,7 @@ describe("local Console control server", () => {
       expect(html).toContain("not provider-side token scopes or retention");
       expect(html).toContain("One generated entry serves every named account profile in this configuration.");
       expect(html).toContain("A generated entry does not prove that a credential works or belongs to the intended account.");
+      expect(html).toContain('id="setup-completion-environment"');
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="setup-source-choice"');
       expect(html).toContain('type="radio" name="setup-source"');
@@ -1480,6 +1553,8 @@ describe("local Console control server", () => {
       expect(html).toContain('id="profile-inventory-list"');
       expect(html).toContain("Configured accounts");
       expect(html).toContain('id="configuration-catalog-view"');
+      expect(html).toContain('id="configuration-catalog-summary"');
+      expect(html).toContain('id="configuration-catalog-attention"');
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
       expect(html).toContain('id="profile-readiness-profile"');
@@ -1503,6 +1578,28 @@ describe("local Console control server", () => {
       expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
       const javascript = await script.text();
       expect(javascript).toContain("/api/v1/sessions");
+      expect(javascript).toContain("/api/v1/session");
+      expect(javascript).toContain("async function resumeSession()");
+      expect(javascript).toContain("void resumeSession();");
+      expect(javascript).toContain("Run `miftah dashboard` in the terminal");
+      expect(exerciseSessionResumeLifecycle(javascript)).toEqual({
+        callsAfterStartup: 1,
+        callsAfterNormalPageShow: 1,
+        callsAfterPersistedPageShow: 2
+      });
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        429,
+        "rate_limit_exceeded",
+        "The local Console request limit was reached.",
+        "42"
+      )).toBe("Too many unlock attempts. Wait 42 seconds before trying again; keep this Console process running.");
+      expect(bootstrapResponseErrorMessage(
+        javascript,
+        503,
+        "service_unavailable",
+        "The Console is shutting down."
+      )).toBe("The Console is shutting down.");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
@@ -1541,6 +1638,28 @@ describe("local Console control server", () => {
       expect(javascript).toContain("discardSetupDraft.disabled = true;");
       expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
       expect(javascript).toContain("renderSetupCompletion");
+      expect(javascript).toContain("completion.environment");
+      expect(javascript).toContain("setupCompletionEnvironment");
+      expect(javascript).toContain("function clearSetupCompletion()");
+      const refreshBody = javascript.slice(
+        javascript.indexOf("async function refresh()"),
+        javascript.indexOf("if (unlockForm instanceof HTMLFormElement")
+      );
+      expect(refreshBody.indexOf("clearSetupCompletion();")).toBeLessThan(
+        refreshBody.indexOf('api("/api/v1/config")')
+      );
+      const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
+      expect(completionAssignments).toHaveLength(3);
+      for (const assignment of completionAssignments) {
+        const assignmentIndex = assignment.index;
+        expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
+      }
+      expect(javascript).toContain("configuration files found");
+      expect(javascript).toContain("need attention");
+      expect(javascript).toContain('"file-permissions": "private file permission"');
+      expect(javascript).not.toContain('"file-permissions": "private file permissions"');
+      expect(javascript).toContain("invalid configuration");
+      expect(javascript).toContain("unsafe path or file replacement");
       expect(javascript).toContain("function selectSetupSource(source)");
       expect(javascript).toContain("setup-source-choice");
       expect(javascript).toContain('querySelectorAll("input[data-setup-source]")');
@@ -1709,6 +1828,8 @@ describe("local Console control server", () => {
         }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
+      expect(javascript).toContain('byId("snippet-guidance")');
+      expect(javascript).toContain('guidance.textContent = typeof first.guidance === "string" ? first.guidance : ""');
       expect(javascript).toContain("/api/v1/configurations/");
       expect(javascript).toContain("/api/v1/profile-readiness");
       expect(javascript).toContain("/api/v1/profiles/default");
@@ -2167,6 +2288,14 @@ describe("local Console control server", () => {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
               },
+              environment: {
+                state: "missing",
+                requiredVariables: ["SUPPORT_TOKEN"],
+                missingVariables: ["SUPPORT_TOKEN"],
+                message: "Missing from this setup process: SUPPORT_TOKEN.",
+                nextAction:
+                  "Set SUPPORT_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
+              },
               clientHandoff: {
                 state: "available",
                 message:
@@ -2178,6 +2307,74 @@ describe("local Console control server", () => {
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
           name: "support-tools",
           profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("shows Sentry environment readiness in Console and client handoff without exposing the secret", async () => {
+      vi.stubEnv("SENTRY_ACCESS_TOKEN", "provider-secret-value");
+      const request = process.platform === "win32"
+        ? {
+            name: "sentry",
+            preset: "generic-docker",
+            dockerImage:
+              "ghcr.io/acme/sentry-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            credentialEnv: "SENTRY_ACCESS_TOKEN"
+          }
+        : { name: "sentry", preset: "sentry" };
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true,
+        launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const created = await fetch(new URL("/api/v1/onboarding/preset", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(created.status).toBe(201);
+        const createdBody = await created.json();
+        expect(createdBody).toMatchObject({
+          data: {
+            completion: {
+              verification: { state: "not-declared" },
+              environment: {
+                state: "available",
+                requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+                missingVariables: [],
+                message: "Available to this setup process: SENTRY_ACCESS_TOKEN.",
+                nextAction:
+                  "Make sure your MCP client passes SENTRY_ACCESS_TOKEN to the Miftah process it launches. This does not verify the credential or provider."
+              }
+            }
+          }
+        });
+        expect(JSON.stringify(createdBody)).not.toContain("provider-secret-value");
+
+        const snippets = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
+          headers: { origin: server.url.origin, cookie: session.cookie }
+        });
+        expect(snippets.status).toBe(200);
+        const snippetBody = await snippets.json() as {
+          data: Array<{ guidance: string; json: string }>;
+        };
+        expect(snippetBody.data[0]?.guidance).toContain(
+          "Before restarting Claude Desktop, make sure it passes SENTRY_ACCESS_TOKEN to the Miftah process it launches."
+        );
+        expect(snippetBody.data[0]?.json).not.toContain("SENTRY_ACCESS_TOKEN");
+        expect(JSON.stringify(snippetBody)).not.toContain("provider-secret-value");
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          profiles: { default: { env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" } } }
         });
       } finally {
         await server.close();
@@ -2240,6 +2437,14 @@ describe("local Console control server", () => {
               verification: {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              environment: {
+                state: "missing",
+                requiredVariables: ["LOCAL_MCP_TOKEN"],
+                missingVariables: ["LOCAL_MCP_TOKEN"],
+                message: "Missing from this setup process: LOCAL_MCP_TOKEN.",
+                nextAction:
+                  "Set LOCAL_MCP_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
               },
               clientHandoff: {
                 state: "available",
@@ -2440,6 +2645,12 @@ describe("local Console control server", () => {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
               },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
+              },
               clientHandoff: {
                 state: "available",
                 message:
@@ -2499,6 +2710,12 @@ describe("local Console control server", () => {
               verification: {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
               },
               clientHandoff: {
                 state: "available",
@@ -2839,6 +3056,12 @@ describe("local Console control server", () => {
         headers: { origin: server.url.origin }
       });
       expect(unauthenticated.status).toBe(401);
+      expect(await unauthenticated.json()).toEqual({
+        error: {
+          code: "session_missing",
+          message: "Enter the one-time Console code from this process."
+        }
+      });
 
       const missingOrigin = await fetch(new URL("/api/v1/health", server.url));
       expect(missingOrigin.status).toBe(401);
@@ -2877,6 +3100,12 @@ describe("local Console control server", () => {
         body: "{}"
       });
       expect(mcpBearer.status).toBe(401);
+      expect(await mcpBearer.json()).toEqual({
+        error: {
+          code: "bootstrap_malformed",
+          message: "Enter the complete one-time Console code from this process."
+        }
+      });
 
       const bootstrap = await fetch(bootstrapUrl, {
         method: "POST",
@@ -2895,6 +3124,33 @@ describe("local Console control server", () => {
       expect(bootstrapBody.data.csrfToken).toMatch(/^[A-Za-z0-9_-]{32,}$/u);
       expect(JSON.stringify(bootstrapBody)).not.toContain("test-only-bootstrap-credential");
       expect(bootstrap.headers.get("x-frame-options")).toBe("DENY");
+
+      const resumedSession = await fetch(new URL("/api/v1/session", server.url), {
+        headers: { cookie: cookie!.split(";", 1)[0]! }
+      });
+      expect(resumedSession.status).toBe(200);
+      const resumedSessionBody = await resumedSession.json() as {
+        readonly data: { readonly csrfToken: string; readonly expiresInMs: number };
+      };
+      expect(resumedSessionBody.data.csrfToken).toBe(bootstrapBody.data.csrfToken);
+      expect(resumedSessionBody.data.expiresInMs).toBeGreaterThan(0);
+      expect(resumedSessionBody.data.expiresInMs).toBeLessThanOrEqual(60 * 60_000);
+
+      const secondTabSession = await fetch(new URL("/api/v1/session", server.url), {
+        headers: { cookie: cookie!.split(";", 1)[0]! }
+      });
+      expect(secondTabSession.status).toBe(200);
+      expect(await secondTabSession.json()).toMatchObject({
+        data: { csrfToken: bootstrapBody.data.csrfToken }
+      });
+
+      const hostileResume = await fetch(new URL("/api/v1/session", server.url), {
+        headers: {
+          origin: "https://attacker.example.test",
+          cookie: cookie!.split(";", 1)[0]!
+        }
+      });
+      expect(hostileResume.status).toBe(403);
 
       const health = await fetch(new URL("/api/v1/health", server.url), {
         headers: { cookie: cookie!.split(";", 1)[0]! }
@@ -4108,6 +4364,12 @@ describe("local Console control server", () => {
       body: "{}"
     });
     expect(staleBootstrap.status).toBe(401);
+    expect(await staleBootstrap.json()).toEqual({
+      error: {
+        code: "bootstrap_expired",
+        message: "This one-time Console code expired."
+      }
+    });
 
     const activeBootstrap = server.rotateCredential();
     const activeBootstrapResponse = await fetch(firstUrl, {
@@ -4134,15 +4396,69 @@ describe("local Console control server", () => {
       body: "{}"
     });
     expect(replay.status).toBe(401);
+    expect(await replay.json()).toEqual({
+      error: {
+        code: "bootstrap_used",
+        message: "This one-time Console code was already used."
+      }
+    });
 
     now += 101;
     const expired = await fetch(new URL("/api/v1/health", server.url), {
       headers: { origin: server.url.origin, cookie: session.cookie }
     });
     expect(expired.status).toBe(401);
+    expect(await expired.json()).toEqual({
+      error: {
+        code: "session_expired",
+        message: "This Console session expired."
+      }
+    });
 
     const replacement = server.rotateCredential();
     expect(replacement).not.toBe(activeBootstrap);
+    const invalidatedSession = await fetch(new URL("/api/v1/session", server.url), {
+      headers: { cookie: session.cookie }
+    });
+    expect(invalidatedSession.status).toBe(401);
+    expect(await invalidatedSession.json()).toEqual({
+      error: {
+        code: "session_unavailable",
+        message: "This Console session belongs to an earlier or different process."
+      }
+    });
+    const superseded = await fetch(firstUrl, {
+      method: "POST",
+      headers: {
+        origin: server.url.origin,
+        authorization: `Bootstrap ${activeBootstrap}`,
+        "content-type": "application/json"
+      },
+      body: "{}"
+    });
+    expect(superseded.status).toBe(401);
+    expect(await superseded.json()).toEqual({
+      error: {
+        code: "bootstrap_superseded",
+        message: "This one-time Console code was replaced by a newer code."
+      }
+    });
+    const wrongProcess = await fetch(firstUrl, {
+      method: "POST",
+      headers: {
+        origin: server.url.origin,
+        authorization: "Bootstrap wrong-process-bootstrap-credential",
+        "content-type": "application/json"
+      },
+      body: "{}"
+    });
+    expect(wrongProcess.status).toBe(401);
+    expect(await wrongProcess.json()).toEqual({
+      error: {
+        code: "bootstrap_wrong_process",
+        message: "This code does not belong to the running Console process."
+      }
+    });
     const replacementSession = await fetch(firstUrl, {
       method: "POST",
       headers: {

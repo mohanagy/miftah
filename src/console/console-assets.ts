@@ -76,6 +76,11 @@ const page = `<!doctype html>
           </div>
           <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
         </div>
+        <div class="configuration-catalog-status" role="status" aria-live="polite" aria-atomic="true">
+          <p id="configuration-catalog-summary"></p>
+          <ul id="configuration-catalog-attention"></ul>
+          <p class="field-note">Miftah keeps rejected names and paths hidden. For files you expect to see, check private access, validate the configuration, replace symlinks with regular files, then refresh.</p>
+        </div>
         <div id="configuration-catalog" class="configuration-catalog"></div>
       </section>
 
@@ -90,6 +95,7 @@ const page = `<!doctype html>
         <div class="setup-completion-copy" role="status" aria-live="polite" aria-atomic="true">
           <p id="setup-completion-verification"></p>
           <p id="setup-completion-next-action"></p>
+          <p id="setup-completion-environment"></p>
           <p id="setup-completion-handoff"></p>
         </div>
       </section>
@@ -379,6 +385,7 @@ const page = `<!doctype html>
           <div>
             <label for="snippet-output">Generated JSON</label>
             <textarea id="snippet-output" readonly rows="12" spellcheck="false"></textarea>
+            <p id="snippet-guidance" class="field-note" aria-live="polite"></p>
             <button id="copy-snippet" type="button">Copy JSON</button>
           </div>
         </section>
@@ -489,6 +496,10 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
 .configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.configuration-catalog-status { margin: 0 0 1rem; padding: .85rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
+.configuration-catalog-status p { margin: 0; }
+.configuration-catalog-status ul { margin: .55rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.configuration-catalog-status ul:empty { display: none; }
 .configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
 .configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
@@ -534,9 +545,12 @@ const script = `(() => {
   const workspaceView = byId("workspace-view");
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
+  const configurationCatalogSummary = byId("configuration-catalog-summary");
+  const configurationCatalogAttention = byId("configuration-catalog-attention");
   const setupCompletionView = byId("setup-completion-view");
   const setupCompletionVerification = byId("setup-completion-verification");
   const setupCompletionNextAction = byId("setup-completion-next-action");
+  const setupCompletionEnvironment = byId("setup-completion-environment");
   const setupCompletionHandoff = byId("setup-completion-handoff");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
@@ -583,7 +597,7 @@ const script = `(() => {
     return error instanceof Error ? error.message : "The Console request failed.";
   }
 
-  function restoreUnlock() {
+  function restoreUnlock(recoveryMessage) {
     csrfToken = "";
     setupCompletion = undefined;
     activeSetupDraft = undefined;
@@ -597,6 +611,47 @@ const script = `(() => {
     if (workspaceView) workspaceView.hidden = true;
     if (unlockView) unlockView.hidden = false;
     if (bootstrapInput instanceof HTMLInputElement) bootstrapInput.focus();
+    if (typeof recoveryMessage === "string" && recoveryMessage.length > 0) message(recoveryMessage);
+  }
+
+  function sessionRecoveryMessage(code) {
+    if (code === "session_missing") return "Enter the one-time code printed by the running Console process.";
+    if (code === "session_expired") {
+      return "This Console session expired before your next action. Run \`miftah dashboard\` in the terminal for a new one-time code.";
+    }
+    return "This page belongs to an earlier or different Console process. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
+  }
+
+  function bootstrapRecoveryMessage(code) {
+    if (code === "bootstrap_expired") {
+      return "That one-time code expired. Run \`miftah dashboard\` in the terminal for a new code.";
+    }
+    if (code === "bootstrap_used") {
+      return "That code already opened a browser session. Reload the original Console tab, or run \`miftah dashboard\` in the terminal for a new code.";
+    }
+    if (code === "bootstrap_superseded") {
+      return "A newer one-time code was issued. Enter the latest code shown by the running Console process.";
+    }
+    if (code === "bootstrap_wrong_process") {
+      return "That code belongs to another or stopped Console process. Run \`miftah dashboard\` in the terminal and use its new URL and code.";
+    }
+    return "Enter the complete one-time code exactly as printed by the running Console process.";
+  }
+
+  function bootstrapResponseError(response, payload) {
+    const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
+    if (response.status === 401) return new Error(bootstrapRecoveryMessage(code));
+    if (response.status === 429 && code === "rate_limit_exceeded") {
+      const retryAfter = response.headers.get("retry-after");
+      if (typeof retryAfter === "string" && /^[1-9][0-9]{0,2}$/.test(retryAfter)) {
+        return new Error("Too many unlock attempts. Wait " + retryAfter + " seconds before trying again; keep this Console process running.");
+      }
+      return new Error("Too many unlock attempts. Wait briefly before trying again; keep this Console process running.");
+    }
+    const publicMessage = payload && payload.error && typeof payload.error.message === "string"
+      ? payload.error.message
+      : "The Console unlock request failed.";
+    return new Error(publicMessage);
   }
 
   async function api(path, options) {
@@ -604,17 +659,26 @@ const script = `(() => {
     const headers = { "Accept": "application/json" };
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
     if (request.method && request.method !== "GET" && request.method !== "HEAD") headers["X-Miftah-CSRF"] = csrfToken;
-    const response = await fetch(path, {
-      method: request.method || "GET",
-      headers,
-      body: request.body === undefined ? undefined : JSON.stringify(request.body)
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        method: request.method || "GET",
+        headers,
+        body: request.body === undefined ? undefined : JSON.stringify(request.body)
+      });
+    } catch {
+      const recovery = "This Console process is no longer reachable. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
+      restoreUnlock(recovery);
+      throw new Error(recovery);
+    }
     let payload;
     try { payload = await response.json(); } catch { payload = undefined; }
     if (!response.ok) {
       if (response.status === 401) {
-        restoreUnlock();
-        throw new Error("The Console session expired. Restart miftah dashboard to get a new one-time code.");
+        const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
+        const recovery = sessionRecoveryMessage(code);
+        restoreUnlock(recovery);
+        throw new Error(recovery);
       }
       const publicMessage = payload && payload.error && typeof payload.error.message === "string"
         ? payload.error.message
@@ -622,6 +686,20 @@ const script = `(() => {
       throw new Error(publicMessage);
     }
     return payload ? payload.data : undefined;
+  }
+
+  async function resumeSession() {
+    message("Checking this browser session…");
+    try {
+      const resumed = record(await api("/api/v1/session"));
+      if (typeof resumed.csrfToken !== "string" || resumed.csrfToken.length < 32) {
+        throw new Error("Miftah did not return a valid session proof.");
+      }
+      csrfToken = resumed.csrfToken;
+      await refresh();
+    } catch (error) {
+      message(errorMessage(error));
+    }
   }
 
   function registration(form) {
@@ -763,11 +841,14 @@ const script = `(() => {
   function renderSetupCompletion(value) {
     const completion = record(value);
     const verification = record(completion.verification);
+    const environment = record(completion.environment);
     const handoff = record(completion.clientHandoff);
     const verificationMessage = typeof verification.message === "string" ? verification.message : "";
     const nextAction = typeof verification.nextAction === "string" ? verification.nextAction : "";
+    const environmentMessage = typeof environment.message === "string" ? environment.message : "";
+    const environmentNextAction = typeof environment.nextAction === "string" ? environment.nextAction : "";
     const handoffMessage = typeof handoff.message === "string" ? handoff.message : "";
-    if (!verificationMessage && !handoffMessage) {
+    if (!verificationMessage && !environmentMessage && !handoffMessage) {
       if (setupCompletionView) setupCompletionView.hidden = true;
       return;
     }
@@ -776,22 +857,75 @@ const script = `(() => {
       setupCompletionNextAction.textContent = nextAction;
       setupCompletionNextAction.hidden = !nextAction;
     }
+    if (setupCompletionEnvironment) {
+      setupCompletionEnvironment.textContent = [environmentMessage, environmentNextAction].filter(Boolean).join(" ");
+      setupCompletionEnvironment.hidden = !environmentMessage && !environmentNextAction;
+    }
     if (setupCompletionHandoff) setupCompletionHandoff.textContent = handoffMessage;
     if (setupCompletionView) setupCompletionView.hidden = false;
   }
 
+  function clearSetupCompletion() {
+    setupCompletion = undefined;
+    renderSetupCompletion(undefined);
+  }
+
   function catalogConfigurations(metadata) {
     const catalog = record(metadata.catalog);
+    const configurations = Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : [];
+    const safeCount = (value, fallback) => Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+    const attentionReasons = Array.isArray(catalog.attentionReasons)
+      ? catalog.attentionReasons.map(record).flatMap((item) => {
+          const reason = typeof item.reason === "string" ? item.reason : "";
+          const count = safeCount(item.count, 0);
+          return count > 0 ? [{ reason, count }] : [];
+        })
+      : [];
+    const attentionCount = safeCount(
+      catalog.attentionCount,
+      attentionReasons.reduce((total, item) => total + item.count, 0)
+    );
+    const readyCount = safeCount(catalog.readyCount, configurations.length);
     return {
       discoveryState: typeof catalog.discoveryState === "string" ? catalog.discoveryState : "",
       selectedConfigurationId: typeof catalog.selectedConfigurationId === "string" ? catalog.selectedConfigurationId : "",
-      configurations: Array.isArray(catalog.configurations) ? catalog.configurations.map(record) : []
+      discoveredCount: safeCount(catalog.discoveredCount, readyCount + attentionCount),
+      readyCount,
+      attentionCount,
+      attentionReasons,
+      configurations
     };
   }
 
   function renderConfigurationCatalog(metadata) {
     const catalog = catalogConfigurations(metadata);
-    if (configurationCatalogView) configurationCatalogView.hidden = catalog.configurations.length === 0;
+    const hasCatalogState = catalog.discoveredCount > 0 || catalog.readyCount > 0 || catalog.attentionCount > 0;
+    if (configurationCatalogView) configurationCatalogView.hidden = !hasCatalogState;
+    if (configurationCatalogSummary) {
+      const files = catalog.discoveredCount === 1 ? "configuration file found" : "configuration files found";
+      const attention = catalog.attentionCount === 1 ? "needs attention" : "need attention";
+      configurationCatalogSummary.textContent =
+        catalog.discoveredCount + " " + files + " · " +
+        catalog.readyCount + " ready · " +
+        catalog.attentionCount + " " + attention;
+    }
+    if (configurationCatalogAttention) {
+      configurationCatalogAttention.replaceChildren();
+      const labels = {
+        "file-permissions": "private file permission",
+        "invalid-configuration": "invalid configuration",
+        "unsafe-path": "unsafe path or file replacement",
+        "duplicate": "duplicate file",
+        "unreadable": "unreadable or changing file"
+      };
+      catalog.attentionReasons.forEach((item) => {
+        const label = labels[item.reason];
+        if (typeof label !== "string") return;
+        const entry = document.createElement("li");
+        entry.textContent = item.count + " " + label + (item.count === 1 ? "" : "s");
+        configurationCatalogAttention.append(entry);
+      });
+    }
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
     catalog.configurations.forEach((configuration) => {
@@ -1433,6 +1567,7 @@ const script = `(() => {
   }
 
   async function refresh() {
+    clearSetupCompletion();
     const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
@@ -1446,6 +1581,14 @@ const script = `(() => {
         if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
+        return;
+      }
+      if (catalog.attentionCount > 0) {
+        if (onboardingView) onboardingView.hidden = true;
+        if (presetOnboardingView) presetOnboardingView.hidden = true;
+        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        if (workspaceView) workspaceView.hidden = true;
+        message("Miftah found configuration files, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
@@ -1516,8 +1659,9 @@ const script = `(() => {
         });
         bootstrapInput.value = "";
         const payload = await response.json();
-        if (!response.ok || !payload || !payload.data || typeof payload.data.csrfToken !== "string") {
-          throw new Error("The one-time code was rejected or expired.");
+        if (!response.ok) throw bootstrapResponseError(response, payload);
+        if (!payload || !payload.data || typeof payload.data.csrfToken !== "string") {
+          throw new Error("Miftah did not return a valid session proof.");
         }
         csrfToken = payload.data.csrfToken;
         await refresh();
@@ -1563,10 +1707,11 @@ const script = `(() => {
             resource: String(data.get("resource") || "").trim()
           }
         }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         onboardingForm.reset();
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
     });
   }
@@ -1696,8 +1841,7 @@ const script = `(() => {
       setPresetReviewActionsDisabled(true);
       try {
         const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         clearPresetReview();
         activeSetupDraft = undefined;
         renderSetupDraftControls();
@@ -1706,6 +1850,8 @@ const script = `(() => {
           updatePresetFields();
         }
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         presetCreateInFlight = false;
@@ -1743,10 +1889,11 @@ const script = `(() => {
             document: String(data.get("document") || "")
           }
         }));
-        setupCompletion = record(result.completion);
-        renderSetupCompletion(setupCompletion);
+        const completion = record(result.completion);
         clientEntryOnboardingForm.reset();
         await refresh();
+        setupCompletion = completion;
+        renderSetupCompletion(setupCompletion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
@@ -2079,11 +2226,17 @@ const script = `(() => {
     generateSnippet.addEventListener("click", async () => {
       const select = byId("client-select");
       const output = byId("snippet-output");
-      if (!(select instanceof HTMLSelectElement) || !(output instanceof HTMLTextAreaElement)) return;
+      const guidance = byId("snippet-guidance");
+      if (
+        !(select instanceof HTMLSelectElement) ||
+        !(output instanceof HTMLTextAreaElement) ||
+        !(guidance instanceof HTMLElement)
+      ) return;
       try {
         const snippets = await api("/api/v1/client-snippets?client=" + encodeURIComponent(select.value));
         const first = Array.isArray(snippets) ? record(snippets[0]) : {};
         output.value = typeof first.json === "string" ? first.json : "";
+        guidance.textContent = typeof first.guidance === "string" ? first.guidance : "";
         message("Generated copy-only client configuration. Review it before merging.");
       } catch (error) { message(errorMessage(error)); }
     });
@@ -2108,6 +2261,12 @@ const script = `(() => {
   const refreshButton = byId("refresh-dashboard");
   if (refreshButton instanceof HTMLButtonElement) {
     refreshButton.addEventListener("click", () => void refresh().catch((error) => message(errorMessage(error))));
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) void resumeSession();
+    });
+    void resumeSession();
   }
 })();
 `;

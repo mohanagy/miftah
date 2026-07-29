@@ -1006,6 +1006,14 @@ describe("Console dashboard application service", () => {
     });
     expect(catalog.catalog).toMatchObject({
       discoveryState: "ready",
+      discoveredCount: 5,
+      readyCount: 2,
+      attentionCount: 3,
+      attentionReasons: [
+        { reason: "invalid-configuration", count: 1 },
+        { reason: "unsafe-path", count: 1 },
+        { reason: "duplicate", count: 1 }
+      ],
       configurations: [{ name: "gsc" }, { name: "sentry" }]
     });
     expect(catalog.configurations).toHaveLength(2);
@@ -1014,7 +1022,7 @@ describe("Console dashboard application service", () => {
     expect(JSON.stringify(catalog.configurations)).not.toContain("client-secrets.json");
   });
 
-  it.skipIf(process.platform === "win32")("omits symbolic and group-readable candidates without disclosing their paths", async () => {
+  it.skipIf(process.platform === "win32")("reports hidden candidate reasons without disclosing their paths", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-safe-"));
     temporaryDirectories.push(directory);
     await chmod(directory, 0o700);
@@ -1044,11 +1052,49 @@ describe("Console dashboard application service", () => {
     const metadata = await service.configMetadata();
     expect(metadata.catalog).toMatchObject({
       discoveryState: "ready",
+      discoveredCount: 3,
+      readyCount: 1,
+      attentionCount: 2,
+      attentionReasons: [
+        { reason: "file-permissions", count: 1 },
+        { reason: "unsafe-path", count: 1 }
+      ],
       configurations: [{ name: "safe" }]
     });
     expect(metadata.catalog?.configurations).toHaveLength(1);
     expect(JSON.stringify(metadata.catalog)).not.toContain(groupReadablePath);
     expect(JSON.stringify(metadata.catalog)).not.toContain(safePath);
+  });
+
+  it("classifies a failure after trusted parsing as an invalid configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-post-read-failure-"));
+    temporaryDirectories.push(directory);
+    await writeCatalogFixture(join(directory, "candidate.json"), {
+      version: "3",
+      name: "candidate",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+    let injectedFailure = false;
+
+    const result = await discoverConsoleConfigCatalog({
+      configDirectory: directory,
+      windowsAclVerifier: async () => true,
+      candidateStageObserver(event) {
+        if (!injectedFailure && event.stage === "metadata" && event.outcome === "success") {
+          injectedFailure = true;
+          throw new Error("simulated post-read metadata failure");
+        }
+      }
+    });
+
+    expect(result.catalog).toMatchObject({
+      discoveredCount: 1,
+      readyCount: 0,
+      attentionCount: 1,
+      attentionReasons: [{ reason: "invalid-configuration", count: 1 }]
+    });
   });
 
   it.skipIf(process.platform === "win32")("accepts a non-writable standard config directory when each discovered config is private", async () => {
@@ -1125,6 +1171,38 @@ describe("Console dashboard application service", () => {
       { path: canonicalDirectory, kind: "directory" },
       { path: canonicalConfigPath, kind: "file" }
     ]]);
+  });
+
+  it("reports a Windows file ACL rejection without exposing the candidate path", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-windows-file-acl-"));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, "gsc.json");
+    await writeConfig(configPath, {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+
+    const result = await discoverConsoleConfigCatalog({
+      configDirectory: directory,
+      platform: "win32",
+      windowsAclVerifier: async (_path, kind) => kind === "directory"
+    });
+
+    expect(result).toMatchObject({
+      catalog: {
+        discoveryState: "ready",
+        discoveredCount: 1,
+        readyCount: 0,
+        attentionCount: 1,
+        attentionReasons: [{ reason: "file-permissions", count: 1 }],
+        configurations: []
+      },
+      configurations: []
+    });
+    expect(JSON.stringify(result)).not.toContain(configPath);
   });
 
   it.skipIf(process.platform === "win32")("revalidates a selected configuration before any later Console operation", async () => {

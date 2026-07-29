@@ -16,7 +16,10 @@ import {
   type SetupConfigurationPlan,
   type SetupConfigurationPreview
 } from "../setup/setup-configuration.js";
-import type { SetupCompletionClientHandoff } from "../setup/setup-completion.js";
+import {
+  environmentReferencesFromConfig,
+  type SetupCompletionClientHandoff
+} from "../setup/setup-completion.js";
 import type { SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
 import {
   CLIENT_NAMES,
@@ -60,6 +63,8 @@ export interface InitCommandContext {
   readonly output: Writable & { readonly isTTY?: boolean };
   readonly cwd: string;
   readonly launcher: ClientLauncher;
+  /** Guided setup defers generated client JSON until readiness boundaries are shown. */
+  readonly deferClientHandoff?: boolean;
   /** Internal test/runtime seam for endpoint-first OAuth metadata discovery. */
   readonly nativeOAuthFetch?: FetchLike;
   /** Shared private checkpoint store used only by the guided `setup` command. */
@@ -92,8 +97,10 @@ export interface InitCommandResult {
   readonly output: string;
   readonly config: MiftahConfig;
   readonly providerAdapter?: ProviderAdapterDefinition;
-  /** Whether this invocation displayed copy-only client JSON. */
+  /** Whether copy-only client JSON was generated for display or guided deferral. */
   readonly clientHandoff?: SetupCompletionClientHandoff;
+  /** Names/path-only client handoff deferred by guided setup; it never contains credential values. */
+  readonly deferredClientHandoff?: string;
 }
 
 /**
@@ -530,7 +537,9 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       snippets = renderClientSnippets(values.client, {
         serverName: config.name,
         configPath: output,
-        launcher: context.launcher
+        launcher: context.launcher,
+        requiredEnvironmentVariables: environmentReferencesFromConfig(config),
+        environmentFilesConfigured: (config.secrets?.envFiles?.length ?? 0) > 0
       });
     } catch (error) {
       if (error instanceof ClientSnippetError) throw new CliUsageError(error.message);
@@ -591,24 +600,22 @@ function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapter
   );
 }
 
-/** Writes copy-paste client configuration and optional Claude Code review guidance without modifying client settings. */
-function writeSnippets(
-  output: Writable,
+/** Formats copy-paste client configuration and optional Claude Code review guidance without modifying client settings. */
+function formatSnippets(
   snippets: readonly ClientSnippet[],
   claudeCodePermissionGuidance: ClaudeCodePermissionGuidance | undefined
-): void {
+): string {
+  let output = "";
   for (const snippet of snippets) {
-    output.write(formatClientSnippetHandoff(snippet));
+    output += formatClientSnippetHandoff(snippet);
   }
-  if (claudeCodePermissionGuidance === undefined) return;
+  if (claudeCodePermissionGuidance === undefined) return output;
   if (claudeCodePermissionGuidance.kind === "manual") {
-    output.write(`${claudeCodePermissionGuidance.target.label}:\n${claudeCodePermissionGuidance.message}\n`);
-    return;
+    return output + `${claudeCodePermissionGuidance.target.label}:\n${claudeCodePermissionGuidance.message}\n`;
   }
-  output.write(
+  return output +
     `${claudeCodePermissionGuidance.target.label}:\n${claudeCodePermissionGuidance.json}\n` +
-      "Manually merge this fragment into .claude/settings.local.json, .claude/settings.json, or ~/.claude/settings.json. It is client-side defense in depth; Miftah enforces authorization.\n"
-  );
+    "Manually merge this fragment into .claude/settings.local.json, .claude/settings.json, or ~/.claude/settings.json. It is client-side defense in depth; Miftah enforces authorization.\n";
 }
 
 /** Creates a strict catalog config and optionally prints copy-paste client snippets. */
@@ -629,11 +636,17 @@ export async function runInitCommand(options: InitCommandOptions, context: InitC
   }
   context.output.write(`Created ${plan.output}\n`);
   writeProviderAdapterGuidance(context.output, plan.providerAdapter);
-  writeSnippets(context.output, plan.snippets, plan.claudeCodePermissionGuidance);
+  const clientHandoffOutput = formatSnippets(plan.snippets, plan.claudeCodePermissionGuidance);
+  if (context.deferClientHandoff !== true && clientHandoffOutput !== "") {
+    context.output.write(clientHandoffOutput);
+  }
   return {
     output: plan.output,
     config: plan.config,
     providerAdapter: plan.providerAdapter,
-    clientHandoff: plan.snippets.length === 0 ? "not-generated" : "shown"
+    clientHandoff: plan.snippets.length === 0 ? "not-generated" : "shown",
+    ...(context.deferClientHandoff === true && clientHandoffOutput !== ""
+      ? { deferredClientHandoff: clientHandoffOutput }
+      : {})
   };
 }

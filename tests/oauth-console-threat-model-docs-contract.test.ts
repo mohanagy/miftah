@@ -50,10 +50,16 @@ describe("OAuth and Console threat-model documentation contract", () => {
     expect(consoleApi).toContain("`DELETE /api/v1/connections/:ref/credential`");
     expect(consoleApi).toContain("must send `Content-Type: application/json` with the JSON body `{}`");
     expect(consoleApi).toContain("It cannot inspect or take over another Miftah process");
+    expect(consoleApi).toContain("found, ready, and need-attention counts");
+    expect(consoleApi).toContain("file permissions, invalid configuration, unsafe path or replacement, duplicate, or unreadable/changing file");
+    expect(consoleApi).toContain("The Console never returns a rejected candidate's name, path, configuration value, or parser error.");
     expect(consoleApi).toContain("authenticated `GET` and `HEAD` requests may omit `Origin`");
     expect(consoleApi).toContain("Every request must use the exact listener `Host`");
     expect(consoleApi).toContain("Browser mutations, including bootstrap, must also use the exact listener `Origin`");
     expect(consoleApi).toContain("every mutation still requires exact Origin plus CSRF");
+    expect(consoleApi).toContain("A normal page reload resumes a still-valid session");
+    expect(consoleApi).toContain("run `miftah dashboard` in the terminal");
+    expect(consoleApi).toContain("does not use `localStorage`, `sessionStorage`, a URL, a log, configuration, or an audit argument");
     expect(delta).toContain("requires the exact listener Origin, including scheme, host, and port");
     expect(security).toContain(
       "State-changing browser requests require the exact listener Origin, including scheme, host, and port"

@@ -6,7 +6,11 @@ Miftah includes an optional, local-only browser Console over its control API. It
 miftah dashboard
 ```
 
-Without `--config`, the dashboard discovers direct, validated Miftah JSON files in `~/.config/miftah` and asks the operator to select one. It does not scan Claude, Cursor, VS Code, process arguments, or arbitrary home directories. Candidate paths must be canonical regular files in that bounded directory; unsafe, malformed, duplicate, and symbolic candidates are omitted without exposing their paths or parser errors. Windows discovery additionally verifies the current-user owner and restrictive DACL; if that proof is unavailable, automatic discovery fails closed. A selection is bound to the verified file content: if the file changes, select it again rather than applying controls to a replacement. If no safe configuration exists, first-run onboarding creates `~/.config/miftah/miftah.json` only after explicit submission.
+Without `--config`, the dashboard discovers direct, validated Miftah JSON files in `~/.config/miftah` and asks the operator to select one. It does not scan Claude, Cursor, VS Code, process arguments, or arbitrary home directories. Candidate paths must be canonical regular files in that bounded directory. The catalog shows aggregate found, ready, and need-attention counts. Rejected candidates are grouped only as file permissions, invalid configuration, unsafe path or replacement, duplicate, or unreadable/changing file. The Console never returns a rejected candidate's name, path, configuration value, or parser error.
+
+On macOS and Linux, expected configuration files must be owned by the current user, must not be symlinks, and must not grant group or other read/write access; `0600` is the normal generated mode. The standard directory must not be group- or other-writable; `0700` is the normal generated mode. On Windows, discovery instead verifies current-user ownership and a restrictive DACL. If the directory boundary cannot be proved, automatic discovery fails closed. Correct the expected file or directory access outside the browser, run `miftah validate --config /absolute/path/to/config.json`, and refresh. Do not relax permissions merely to make a candidate appear.
+
+A selection is bound to the verified file content: if the file changes, select it again rather than applying controls to a replacement. If no safe configuration exists and no candidates need attention, first-run onboarding creates `~/.config/miftah/miftah.json` only after explicit submission.
 
 `miftah dashboard --config <file>` is different: it opens exactly that one configuration and does not show or scan a catalog. Use `--port <number>` for a fixed loopback port, or `--no-open` to print the URL without launching a browser. The API-only compatibility command remains:
 
@@ -27,6 +31,8 @@ Startup prints the loopback URL and one CSPRNG-backed bootstrap code to the laun
 
 The Console page asks the operator to type this terminal code. A successful same-origin exchange returns an in-memory CSRF proof and sets an opaque `HttpOnly; SameSite=Strict` session cookie scoped to `/api/v1`. The cookie is a session handle, not the bootstrap credential. The CSRF proof remains in page memory and accompanies every later mutation as `X-Miftah-CSRF`; the UI does not persist it in localStorage or sessionStorage. A bootstrap cannot be replayed.
 
+A normal page reload resumes a still-valid session through `GET /api/v1/session`: the HttpOnly cookie authenticates the read and the response restores the CSRF proof only to page memory. Expired, reused, malformed, superseded, and wrong-process codes receive distinct redacted states. A missing, expired, or earlier-process session gives one contextual recovery action; when a new foreground process is required, run `miftah dashboard` in the terminal and use its new URL and code. Recovery does not use `localStorage`, `sessionStorage`, a URL, a log, configuration, or an audit argument for the bootstrap code, session handle, or CSRF proof.
+
 Browser sessions have a 15-minute idle limit and a one-hour absolute limit. Restarting, stopping, or rotating the control host invalidates them. Loopback HTTP cannot provide a meaningful `Secure` cookie flag, so exact Host and Origin validation, SameSite, HttpOnly, one-use bootstrap, CSRF, and short lifetime are all mandatory controls. A hostile process running as the same OS user remains outside this boundary.
 
 ## Version 1 endpoints
@@ -42,6 +48,7 @@ The unconfigured first-run dashboard exposes **Save connector choice**, **Contin
 | Method and path | Purpose |
 | --- | --- |
 | `POST /api/v1/sessions` | Exchange the one-use bootstrap code for one browser session. |
+| `GET /api/v1/session` | Resume a still-valid cookie-authenticated browser session and return its CSRF proof to page memory. |
 | `GET /api/v1/setup-draft` | Return the current first-run safe connector checkpoint, or `null`. Requires a Console session and returns no connection details. |
 | `PUT /api/v1/setup-draft` | Save one strict non-secret connector name/preset/stage checkpoint. Requires CSRF and optional exact expected revision. |
 | `DELETE /api/v1/setup-draft` | Discard one exact-revision first-run checkpoint. Requires CSRF and never creates or changes a configuration. |

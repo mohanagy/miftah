@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-29
+
+### Fixed
+
+- [#203](https://github.com/mohanagy/miftah/issues/203) Made bounded Console configuration discovery explain what happened instead of silently omitting unsafe candidates. The Console now reports aggregate found, ready, and need-attention counts with fixed repair categories while continuing to hide rejected names, paths, values, parser details, and filesystem identities. POSIX ownership/mode checks, Windows DACL verification, symlink/race/deduplication protections, and exact selected-file binding remain fail closed.
+- [#300](https://github.com/mohanagy/miftah/issues/300) Preserved still-valid Console sessions across refresh, back/forward navigation, and additional tabs through the existing authenticated loopback session boundary. Expired, reused, superseded, malformed, and wrong-process bootstrap codes now receive specific recovery guidance without exposing credential material. One-use terminal bootstrap codes, HttpOnly `SameSite=Strict` cookies, in-memory-only CSRF proofs, Host/Origin checks, credential rotation, and no-store responses are unchanged.
+- [#301](https://github.com/mohanagy/miftah/issues/301) Added names-only environment-secret readiness before CLI and Console client handoff. Setup now distinguishes not required, available, missing, and not fully checked states, keeps configured environment files unopened, treats empty inherited values as missing, and leaves generated client JSON credential-free. Console completion guidance is cleared when the active configuration changes so stale readiness cannot be attributed to another configuration.
+- [#305](https://github.com/mohanagy/miftah/issues/305) Prepared the compatible v0.5.2 corrective release for the first external evaluator blockers. Miftah remains experimental and pre-1.0; external validation remains incomplete under #25, #36, #37, #39, #78, #88, #202, #204, and #290.
+
 ## [0.5.1] - 2026-07-29
 
 ### Added

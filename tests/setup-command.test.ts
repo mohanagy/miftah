@@ -87,6 +87,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   profileReadinessMocks.run.mockReset();
+  vi.unstubAllEnvs();
   await rm(outputRoot, { recursive: true, force: true });
 });
 
@@ -236,6 +237,9 @@ describe("setup command", () => {
       await expect(command).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
       await expect(draftStore.load()).resolves.toBeUndefined();
       await expect(readFile(resolve(outputRoot, "resumed.json"), "utf8")).resolves.toContain("ghcr.io/acme/server@sha256");
+      expect(streams.transcript.contents).toContain(
+        "This configuration does not require an environment-backed secret."
+      );
       expect(draft.revision).toBe(1);
     } finally {
       streams.input.end();
@@ -426,6 +430,42 @@ describe("setup command", () => {
     expect(transcript).not.toContain("MCP_TOKEN");
     await expect(readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(stat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports a missing Sentry environment secret before the terminal client handoff", async () => {
+    const outputPath = resolve(outputRoot, "sentry.json");
+    const streams = createStreams();
+    vi.stubEnv("SENTRY_ACCESS_TOKEN", "");
+    delete process.env.SENTRY_ACCESS_TOKEN;
+
+    await expect(runSetupCommand({
+      name: "sentry",
+      preset: "sentry",
+      output: "sentry.json",
+      client: "claude-desktop"
+    }, {
+      input: streams.input,
+      output: streams.output,
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).resolves.toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
+    streams.input.end();
+
+    expect(validateConfig(JSON.parse(await readFile(outputPath, "utf8")))).toMatchObject({
+      profiles: { default: { env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" } } }
+    });
+    const transcript = streams.transcript.contents;
+    expect(transcript).toContain("Missing from this setup process: SENTRY_ACCESS_TOKEN.");
+    expect(transcript).toContain(
+      "Set SENTRY_ACCESS_TOKEN in the environment inherited by the Miftah process your MCP client launches."
+    );
+    expect(transcript).toContain(
+      "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+    );
+    expect(transcript.indexOf("Missing from this setup process")).toBeLessThan(
+      transcript.indexOf("Claude Desktop settings config (claude-desktop)")
+    );
+    expect(transcript).not.toContain("provider-secret-value");
   });
 
   it("redacts Google OAuth client-secrets paths while printing a setup plan", async () => {
