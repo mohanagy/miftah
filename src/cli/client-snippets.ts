@@ -15,6 +15,10 @@ export interface ClientSnippetInput {
   serverName: string;
   configPath: string;
   launcher: ClientLauncher;
+  /** Validated names only; client JSON never receives environment values. */
+  requiredEnvironmentVariables?: readonly string[];
+  /** True when Miftah may resolve those names from configured environment files at runtime. */
+  environmentFilesConfigured?: boolean;
 }
 
 export interface ClientSnippet {
@@ -57,9 +61,16 @@ const targetLabels: Record<ClientName, string> = {
   cursor: "Cursor .cursor/mcp.json",
   vscode: "VS Code .vscode/mcp.json"
 };
+const clientDisplayNames: Record<ClientName, string> = {
+  "claude-desktop": "Claude Desktop",
+  "claude-code": "Claude Code",
+  cursor: "Cursor",
+  vscode: "VS Code"
+};
 
 const claudeCodePermissionTarget = { label: "Claude Code settings permissions" };
 const literalClaudeCodeServerName = /^[A-Za-z0-9-]+$/u;
+const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const clientProfileGuidance =
   "One Miftah connector serves every named profile in this configuration. Merge this one entry, then select accounts through Miftah instead of adding duplicate client entries. The generated JSON contains launcher and configuration-path metadata, never credential values. A generated entry does not prove that a credential works or belongs to the intended account.";
 
@@ -118,6 +129,35 @@ function validateInput(input: ClientSnippetInput): void {
   if (launcherArguments.some((argument) => argument === "--config" || argument.startsWith("--config="))) {
     inputError("Launcher arguments must not include '--config'; the snippet supplies it.");
   }
+  if (
+    input.requiredEnvironmentVariables !== undefined &&
+    (
+      !Array.isArray(input.requiredEnvironmentVariables) ||
+      input.requiredEnvironmentVariables.some((name) => typeof name !== "string" || !environmentVariableName.test(name))
+    )
+  ) {
+    inputError("Every required environment variable must use a valid environment variable name.");
+  }
+  if (
+    input.environmentFilesConfigured !== undefined &&
+    typeof input.environmentFilesConfigured !== "boolean"
+  ) {
+    inputError("Environment-file configuration must be a boolean.");
+  }
+}
+
+function guidance(client: ClientName, input: ClientSnippetInput): string {
+  const required = [...new Set(input.requiredEnvironmentVariables ?? [])].sort();
+  if (required.length === 0) return clientProfileGuidance;
+  const names = required.join(", ");
+  const readinessInstruction = input.environmentFilesConfigured === true
+    ? `make sure the Miftah process it launches can resolve ${names} from its inherited environment or configured secrets.envFiles.`
+    : `make sure it passes ${names} to the Miftah process it launches.`;
+  return (
+    `${clientProfileGuidance} ` +
+    `Before restarting ${clientDisplayNames[client]}, ${readinessInstruction} ` +
+    "The generated JSON does not set or contain that secret."
+  );
 }
 
 function renderedServer(input: ClientSnippetInput): { command: string; args: string[] } {
@@ -157,7 +197,7 @@ export function renderClientSnippet(client: ClientName, input: ClientSnippetInpu
   return {
     client,
     target: { label: targetLabels[client] },
-    guidance: clientProfileGuidance,
+    guidance: guidance(client, input),
     json: JSON.stringify(renderConfiguration(client, input), undefined, 2)
   };
 }

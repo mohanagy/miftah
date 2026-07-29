@@ -49,6 +49,7 @@ function importableClientEntry(): { readonly command: string; readonly args: rea
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -1470,6 +1471,7 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah Console");
       expect(html).toContain('src="/app.js"');
       expect(html).toContain('href="/app.css"');
+      expect(html).toContain('id="snippet-guidance"');
       expect(html).toContain("Remote native OAuth");
       expect(html).toContain("Provider adapter");
       expect(html).toContain("Upstream-owned auth");
@@ -1480,6 +1482,7 @@ describe("local Console control server", () => {
       expect(html).toContain("not provider-side token scopes or retention");
       expect(html).toContain("One generated entry serves every named account profile in this configuration.");
       expect(html).toContain("A generated entry does not prove that a credential works or belongs to the intended account.");
+      expect(html).toContain('id="setup-completion-environment"');
       expect(html).toContain("Set up an MCP");
       expect(html).toContain('id="setup-source-choice"');
       expect(html).toContain('type="radio" name="setup-source"');
@@ -1635,6 +1638,22 @@ describe("local Console control server", () => {
       expect(javascript).toContain("discardSetupDraft.disabled = true;");
       expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
       expect(javascript).toContain("renderSetupCompletion");
+      expect(javascript).toContain("completion.environment");
+      expect(javascript).toContain("setupCompletionEnvironment");
+      expect(javascript).toContain("function clearSetupCompletion()");
+      const refreshBody = javascript.slice(
+        javascript.indexOf("async function refresh()"),
+        javascript.indexOf("if (unlockForm instanceof HTMLFormElement")
+      );
+      expect(refreshBody.indexOf("clearSetupCompletion();")).toBeLessThan(
+        refreshBody.indexOf('api("/api/v1/config")')
+      );
+      const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
+      expect(completionAssignments).toHaveLength(3);
+      for (const assignment of completionAssignments) {
+        const assignmentIndex = assignment.index;
+        expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
+      }
       expect(javascript).toContain("configuration files found");
       expect(javascript).toContain("need attention");
       expect(javascript).toContain('"file-permissions": "private file permission"');
@@ -1809,6 +1828,8 @@ describe("local Console control server", () => {
         }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
+      expect(javascript).toContain('byId("snippet-guidance")');
+      expect(javascript).toContain('guidance.textContent = typeof first.guidance === "string" ? first.guidance : ""');
       expect(javascript).toContain("/api/v1/configurations/");
       expect(javascript).toContain("/api/v1/profile-readiness");
       expect(javascript).toContain("/api/v1/profiles/default");
@@ -2267,6 +2288,14 @@ describe("local Console control server", () => {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
               },
+              environment: {
+                state: "missing",
+                requiredVariables: ["SUPPORT_TOKEN"],
+                missingVariables: ["SUPPORT_TOKEN"],
+                message: "Missing from this setup process: SUPPORT_TOKEN.",
+                nextAction:
+                  "Set SUPPORT_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
+              },
               clientHandoff: {
                 state: "available",
                 message:
@@ -2278,6 +2307,74 @@ describe("local Console control server", () => {
         expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
           name: "support-tools",
           profiles: { default: { env: { SUPPORT_TOKEN: "${SUPPORT_TOKEN}" } } }
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("shows Sentry environment readiness in Console and client handoff without exposing the secret", async () => {
+      vi.stubEnv("SENTRY_ACCESS_TOKEN", "provider-secret-value");
+      const request = process.platform === "win32"
+        ? {
+            name: "sentry",
+            preset: "generic-docker",
+            dockerImage:
+              "ghcr.io/acme/sentry-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            credentialEnv: "SENTRY_ACCESS_TOKEN"
+          }
+        : { name: "sentry", preset: "sentry" };
+      const server = await startConsoleServer(configPath, {
+        bootstrapCredential: "test-only-bootstrap-credential",
+        allowMissingConfig: true,
+        launcher: { command: process.execPath, args: [join(process.cwd(), "dist", "cli", "main.js"), "serve"] }
+      });
+
+      try {
+        const session = await bootstrapSession(server);
+        const created = await fetch(new URL("/api/v1/onboarding/preset", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(created.status).toBe(201);
+        const createdBody = await created.json();
+        expect(createdBody).toMatchObject({
+          data: {
+            completion: {
+              verification: { state: "not-declared" },
+              environment: {
+                state: "available",
+                requiredVariables: ["SENTRY_ACCESS_TOKEN"],
+                missingVariables: [],
+                message: "Available to this setup process: SENTRY_ACCESS_TOKEN.",
+                nextAction:
+                  "Make sure your MCP client passes SENTRY_ACCESS_TOKEN to the Miftah process it launches. This does not verify the credential or provider."
+              }
+            }
+          }
+        });
+        expect(JSON.stringify(createdBody)).not.toContain("provider-secret-value");
+
+        const snippets = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
+          headers: { origin: server.url.origin, cookie: session.cookie }
+        });
+        expect(snippets.status).toBe(200);
+        const snippetBody = await snippets.json() as {
+          data: Array<{ guidance: string; json: string }>;
+        };
+        expect(snippetBody.data[0]?.guidance).toContain(
+          "Before restarting Claude Desktop, make sure it passes SENTRY_ACCESS_TOKEN to the Miftah process it launches."
+        );
+        expect(snippetBody.data[0]?.json).not.toContain("SENTRY_ACCESS_TOKEN");
+        expect(JSON.stringify(snippetBody)).not.toContain("provider-secret-value");
+        expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+          profiles: { default: { env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" } } }
         });
       } finally {
         await server.close();
@@ -2340,6 +2437,14 @@ describe("local Console control server", () => {
               verification: {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              environment: {
+                state: "missing",
+                requiredVariables: ["LOCAL_MCP_TOKEN"],
+                missingVariables: ["LOCAL_MCP_TOKEN"],
+                message: "Missing from this setup process: LOCAL_MCP_TOKEN.",
+                nextAction:
+                  "Set LOCAL_MCP_TOKEN in the environment inherited by the Miftah process your MCP client launches. The generated client JSON does not set or contain the secret."
               },
               clientHandoff: {
                 state: "available",
@@ -2540,6 +2645,12 @@ describe("local Console control server", () => {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
               },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
+              },
               clientHandoff: {
                 state: "available",
                 message:
@@ -2599,6 +2710,12 @@ describe("local Console control server", () => {
               verification: {
                 state: "not-declared",
                 message: "No provider-declared safe check is available for this configuration, so Miftah did not run or invent one."
+              },
+              environment: {
+                state: "not-required",
+                requiredVariables: [],
+                missingVariables: [],
+                message: "This configuration does not require an environment-backed secret."
               },
               clientHandoff: {
                 state: "available",

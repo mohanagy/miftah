@@ -38,7 +38,12 @@ import {
   publishFirstRunSetupConfigurationPlan
 } from "../setup/setup-configuration.js";
 import type { SetupConfigurationPreview } from "../setup/setup-configuration.js";
-import { createSetupCompletion, type SetupCompletion } from "../setup/setup-completion.js";
+import {
+  createSetupCompletion,
+  environmentReferencesFromConfig,
+  inspectConfigEnvironment,
+  type SetupCompletion
+} from "../setup/setup-completion.js";
 import {
   planNativeOAuthFirstRunConfiguration,
   runNativeOAuthAccountAddition,
@@ -457,10 +462,12 @@ function safeAuditRecord(value: unknown): ConsoleAuditRecord | undefined {
 function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
   const metadata = consoleInitializedConfigMetadata(config);
   const hasDeclaredSafeCheck = (metadata.authentication?.readinessTargets?.length ?? 0) > 0;
+  const environment = inspectConfigEnvironment(config);
   return createSetupCompletion({
     surface: "console",
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
-    clientHandoff: "available"
+    clientHandoff: "available",
+    environment
   });
 }
 
@@ -929,7 +936,9 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     return renderClientSnippets(selection, {
       serverName: config.name,
       configPath: resolvePath(this.configPath),
-      launcher: this.launcher
+      launcher: this.launcher,
+      requiredEnvironmentVariables: environmentReferencesFromConfig(config),
+      environmentFilesConfigured: (config.secrets?.envFiles?.length ?? 0) > 0
     });
   }
 

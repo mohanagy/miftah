@@ -28,7 +28,9 @@ import { runProviderAccountSetup } from "./setup-provider-account.js";
 import { runEnvironmentProfileSetup } from "./setup-environment-profile.js";
 import {
   createSetupCompletion,
+  inspectConfigEnvironment,
   type SetupCompletionClientHandoff,
+  type SetupEnvironmentReadiness,
   type SetupCompletionVerification
 } from "../setup/setup-completion.js";
 import type { SetupDraft, SetupDraftStore } from "../setup/setup-draft.js";
@@ -341,6 +343,8 @@ function writeCliSetupCompletion(
     readonly profile?: string;
     readonly configPath?: string;
     readonly includeClientHandoff?: boolean;
+    readonly environment?: SetupEnvironmentReadiness;
+    readonly deferredClientHandoff?: string;
   }
 ): void {
   const completion = createSetupCompletion({
@@ -348,11 +352,21 @@ function writeCliSetupCompletion(
     verification: input.verification,
     clientHandoff: input.clientHandoff,
     ...(input.profile === undefined ? {} : { profile: input.profile }),
-    ...(input.configPath === undefined ? {} : { configPath: input.configPath })
+    ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+    ...(input.environment === undefined ? {} : { environment: input.environment })
   });
   context.output.write(`${completion.verification.message}\n`);
   if (completion.verification.nextAction !== undefined) {
     context.output.write(`${completion.verification.nextAction}\n`);
+  }
+  if (completion.environment !== undefined) {
+    context.output.write(`${completion.environment.message}\n`);
+    if (completion.environment.nextAction !== undefined) {
+      context.output.write(`${completion.environment.nextAction}\n`);
+    }
+  }
+  if (input.deferredClientHandoff !== undefined) {
+    context.output.write(input.deferredClientHandoff);
   }
   if (input.includeClientHandoff !== false) {
     context.output.write(`${completion.clientHandoff.message}\n`);
@@ -364,6 +378,7 @@ async function finishCreatedSetup(
   context: InitCommandContext,
   created: InitCommandResult
 ): Promise<SetupCommandResult> {
+  const environment = inspectConfigEnvironment(created.config);
   if (
     created.config.version === "3" &&
     created.config.upstream?.transport === "streamable-http" &&
@@ -377,7 +392,11 @@ async function finishCreatedSetup(
     writeCliSetupCompletion(context, {
       verification: "not-declared",
       clientHandoff: created.clientHandoff ?? "not-generated",
-      configPath: created.output
+      configPath: created.output,
+      environment,
+      ...(created.deferredClientHandoff === undefined
+        ? {}
+        : { deferredClientHandoff: created.deferredClientHandoff })
     });
     return { verification: "not-applicable", exitCode: 0, reports: [] };
   }
@@ -388,7 +407,11 @@ async function finishCreatedSetup(
       verification: "skipped",
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
-      configPath: created.output
+      configPath: created.output,
+      environment,
+      ...(created.deferredClientHandoff === undefined
+        ? {}
+        : { deferredClientHandoff: created.deferredClientHandoff })
     });
     return { verification: "skipped", exitCode: 0, reports: [] };
   }
@@ -398,7 +421,11 @@ async function finishCreatedSetup(
       verification: "incomplete",
       clientHandoff: created.clientHandoff ?? "not-generated",
       profile: created.config.defaultProfile,
-      configPath: created.output
+      configPath: created.output,
+      environment,
+      ...(created.deferredClientHandoff === undefined
+        ? {}
+        : { deferredClientHandoff: created.deferredClientHandoff })
     });
     return { verification: "incomplete", exitCode: 1, reports: [] };
   }
@@ -421,7 +448,11 @@ async function finishCreatedSetup(
     verification: incomplete ? "incomplete" : "complete",
     clientHandoff: created.clientHandoff ?? "not-generated",
     ...(incomplete ? { profile: created.config.defaultProfile } : {}),
-    configPath: created.output
+    configPath: created.output,
+    environment,
+    ...(created.deferredClientHandoff === undefined
+      ? {}
+      : { deferredClientHandoff: created.deferredClientHandoff })
   });
   return { verification: incomplete ? "incomplete" : "complete", exitCode: incomplete ? 1 : 0, reports };
 }
@@ -519,7 +550,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       interactive: true,
       name: draft.name,
       preset: draft.preset
-    }, context);
+    }, { ...context, deferClientHandoff: true });
     await discardPublishedSetupDraft(store, draft.revision, context);
     return finishCreatedSetup(options, context, created);
   }
@@ -711,7 +742,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
         output: imported.output,
         interactive: true,
         ...(imported.client === undefined ? {} : { client: imported.client })
-      }, context);
+      }, { ...context, deferClientHandoff: true });
     }
     if (recoveredManualConfiguration === undefined && startingPoint === "remote-sign-in") {
       await runNativeOAuthSetup(options, context, {
@@ -747,7 +778,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     ...options,
     interactive: true,
     ...(guidedPreset === undefined ? {} : { preset: guidedPreset })
-  }, initContext);
+  }, { ...initContext, deferClientHandoff: true });
   if (checkpointedDraft !== undefined && checkpointStore !== undefined) {
     await discardPublishedSetupDraft(checkpointStore, checkpointedDraft.revision, context);
   }
