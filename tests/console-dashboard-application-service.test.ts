@@ -1066,6 +1066,37 @@ describe("Console dashboard application service", () => {
     expect(JSON.stringify(metadata.catalog)).not.toContain(safePath);
   });
 
+  it("classifies a failure after trusted parsing as an invalid configuration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-post-read-failure-"));
+    temporaryDirectories.push(directory);
+    await writeCatalogFixture(join(directory, "candidate.json"), {
+      version: "3",
+      name: "candidate",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: [] },
+      profiles: { default: {} }
+    });
+    let injectedFailure = false;
+
+    const result = await discoverConsoleConfigCatalog({
+      configDirectory: directory,
+      windowsAclVerifier: async () => true,
+      candidateStageObserver(event) {
+        if (!injectedFailure && event.stage === "metadata" && event.outcome === "success") {
+          injectedFailure = true;
+          throw new Error("simulated post-read metadata failure");
+        }
+      }
+    });
+
+    expect(result.catalog).toMatchObject({
+      discoveredCount: 1,
+      readyCount: 0,
+      attentionCount: 1,
+      attentionReasons: [{ reason: "invalid-configuration", count: 1 }]
+    });
+  });
+
   it.skipIf(process.platform === "win32")("accepts a non-writable standard config directory when each discovered config is private", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-readable-directory-"));
     temporaryDirectories.push(directory);

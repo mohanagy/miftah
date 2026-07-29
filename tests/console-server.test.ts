@@ -1545,7 +1545,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("configuration files found");
       expect(javascript).toContain("need attention");
-      expect(javascript).toContain("private file permissions");
+      expect(javascript).toContain('"file-permissions": "private file permission"');
+      expect(javascript).not.toContain('"file-permissions": "private file permissions"');
       expect(javascript).toContain("invalid configuration");
       expect(javascript).toContain("unsafe path or file replacement");
       expect(javascript).toContain("function selectSetupSource(source)");

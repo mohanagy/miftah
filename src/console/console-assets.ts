@@ -833,7 +833,7 @@ const script = `(() => {
     if (configurationCatalogAttention) {
       configurationCatalogAttention.replaceChildren();
       const labels = {
-        "file-permissions": "private file permissions",
+        "file-permissions": "private file permission",
         "invalid-configuration": "invalid configuration",
         "unsafe-path": "unsafe path or file replacement",
         "duplicate": "duplicate file",

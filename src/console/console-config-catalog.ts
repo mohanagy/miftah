@@ -399,9 +399,9 @@ async function readTrustedConfiguration(
     let migrationSource: ReturnType<typeof createConfigMigrationSource>;
     try {
       migrationSource = createConfigMigrationSource(content, afterRead);
-    } catch (error) {
+    } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "error");
-      throw error;
+      return { status: "attention", reason: "invalid-configuration" };
     }
     observeCandidateStage(candidateStageObserver, candidateIndex, "migration-source", "success");
     return {
@@ -423,13 +423,14 @@ async function readTrustedConfiguration(
 function catalogAttention(
   attentionCounts: ReadonlyMap<ConsoleConfigCatalogAttentionReason, number>
 ): readonly ConsoleConfigCatalogAttention[] {
-  const order: readonly ConsoleConfigCatalogAttentionReason[] = [
-    "file-permissions",
-    "invalid-configuration",
-    "unsafe-path",
-    "duplicate",
-    "unreadable"
-  ];
+  const exhaustiveOrder = {
+    "file-permissions": true,
+    "invalid-configuration": true,
+    "unsafe-path": true,
+    "duplicate": true,
+    "unreadable": true
+  } satisfies Record<ConsoleConfigCatalogAttentionReason, true>;
+  const order = Object.keys(exhaustiveOrder) as ConsoleConfigCatalogAttentionReason[];
   return order.flatMap((reason) => {
     const count = attentionCounts.get(reason) ?? 0;
     return count === 0 ? [] : [{ reason, count }];
@@ -523,6 +524,7 @@ export async function discoverConsoleConfigCatalog(
   };
   const windowsAclBoundary: WindowsCatalogAclBoundary = { verified: !useBatchedWindowsAclVerifier };
   for (const [candidateIndex, name] of names.entries()) {
+    let failureReason: ConsoleConfigCatalogAttentionReason = "unreadable";
     try {
       const discovered = await readTrustedConfiguration(
         join(directory, name),
@@ -541,6 +543,7 @@ export async function discoverConsoleConfigCatalog(
         recordAttention(discovered.reason);
         continue;
       }
+      failureReason = "invalid-configuration";
       const bigintDuplicate = identities.has(discovered.identity);
       const numberDuplicate = discovered.numberIdentity !== undefined && numberIdentities?.has(discovered.numberIdentity) === true;
       candidateIdentityObserver?.({ candidateIndex, numberDuplicate, bigintDuplicate });
@@ -583,7 +586,7 @@ export async function discoverConsoleConfigCatalog(
       observeCandidateStage(candidateStageObserver, candidateIndex, "accepted", "success");
     } catch {
       observeCandidateStage(candidateStageObserver, candidateIndex, "candidate", "error");
-      recordAttention("unreadable");
+      recordAttention(failureReason);
       // A malformed, raced, or untrusted candidate is never a Console entry.
     }
   }
