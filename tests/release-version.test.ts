@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.5.3";
+const releaseVersion = "0.5.4";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.5.3 release artifacts", () => {
+describe("v0.5.4 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [0.5.3] - 2026-7-30\n\n### Changed\n"
+      changelog: "## [0.5.4] - 2026-7-30\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [0.5.3] - 2026-07-30\n\n### Changed\n"
+      changelog: "Release candidate: ## [0.5.4] - 2026-07-30\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -80,11 +80,11 @@ describe("v0.5.3 release artifacts", () => {
     const changedStart = notes.indexOf("### Changed");
     const changedEnd = notes.indexOf("\n### ", changedStart + "### Changed".length);
     const changedNotes = notes.slice(changedStart, changedEnd < 0 ? undefined : changedEnd);
-    for (const issue of [204, 309]) {
+    for (const issue of [204, 314]) {
       expect(changedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toMatch(/Set up another MCP/iu);
-    expect(notes).toMatch(/owner waiver/iu);
+    expect(notes).toMatch(/one setup path at a time/iu);
+    expect(notes).toMatch(/Back and Cancel/iu);
     expect(notes).toMatch(/external validation remains incomplete/iu);
 
     const readme = readRepositoryFile("README.md");

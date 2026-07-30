@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-07-30
+
+### Changed
+
+- [#204](https://github.com/mohanagy/miftah/issues/204) Corrected returning-user Console setup so it presents one setup path at a time instead of rendering connector, client-entry import, and browser-sign-in forms together. Users now choose their starting point before seeing details; the shared step label names the selected path; Back and Cancel provide no-write recovery, with Back returning to the chooser and Cancel clearing the draft without creating or changing a configuration. The existing local STDIO and returning provider-owned account paths continue to reuse the typed planners and writers; non-overwrite publication, redaction, audit, direct argument arrays with `shell: false`, credential isolation, and Windows/POSIX containment remain unchanged.
+- [#314](https://github.com/mohanagy/miftah/issues/314) Prepared the compatible v0.5.4 patch release for the guided Console correction. Miftah remains experimental and pre-1.0. Technical delivery and owner dogfooding do not satisfy the external acceptance counts; external validation remains incomplete under #25 and #88.
+
 ## [0.5.3] - 2026-07-30
 
 ### Changed
