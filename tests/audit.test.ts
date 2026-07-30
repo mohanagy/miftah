@@ -105,8 +105,9 @@ describe("audit logger", () => {
         operation: "tools/call",
         name: "whoami",
         status: "success",
-        durationMs: 4
-      });
+        durationMs: 4,
+        timestamp: "1900-01-01T00:00:00.000Z"
+      } as unknown as AuditEvent);
       vi.setSystemTime(new Date("2026-07-11T07:00:00.000Z"));
 
       await write;

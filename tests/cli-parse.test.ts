@@ -568,6 +568,9 @@ describe("CLI parser", () => {
       expect(renderCommandHelp(command)).toContain(`miftah ${command}`);
     }
     expect(renderCommandHelp("doctor")).toContain("--config <file>");
+    expect(renderCommandHelp("dashboard")).toContain(
+      "Select a configuration file; setup-capable commands create it without overwriting."
+    );
     expect(renderCommandHelp("doctor")).toContain("--json");
     expect(renderCommandHelp("logs")).toContain("Continue reading audit logs as they are appended or rotated.");
     expect(renderCommandHelp("audit-export")).toContain("--include-arguments");
