@@ -84,7 +84,8 @@ describe("v0.5.4 release artifacts", () => {
       expect(changedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
     expect(notes).toMatch(/one setup path at a time/iu);
-    expect(notes).toMatch(/Back and Cancel/iu);
+    expect(notes).toMatch(/Back and Cancel provide no-write recovery/iu);
+    expect(notes).toMatch(/without creating or changing a configuration/iu);
     expect(notes).toMatch(/external validation remains incomplete/iu);
 
     const readme = readRepositoryFile("README.md");
