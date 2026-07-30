@@ -174,7 +174,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     request: ConsoleNativeOAuthOnboardingRequest
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     const target = await this.setupTarget(request.name);
-    const result = await target.application.onboardNativeOAuth(request);
+    const result = await target.application.onboardNativeOAuth({ ...request, name: target.name });
     await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
@@ -184,7 +184,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     request: ConsoleDiscoveredNativeOAuthOnboardingRequest
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
     const target = await this.setupTarget(request.name);
-    const result = await target.application.onboardDiscoveredNativeOAuth(request);
+    const result = await target.application.onboardDiscoveredNativeOAuth({ ...request, name: target.name });
     await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
@@ -192,19 +192,20 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
 
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     const target = await this.setupTarget(request.name);
-    const result = await target.application.onboardPreset(request);
+    const result = await target.application.onboardPreset({ ...request, name: target.name });
     await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
   }
 
   async previewPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview> {
-    return (await this.setupTarget(request.name)).application.previewPreset(request);
+    const target = await this.setupTarget(request.name);
+    return target.application.previewPreset({ ...request, name: target.name });
   }
 
   async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
     const target = await this.setupTarget(request.name);
-    const result = await target.application.onboardClientEntry(request);
+    const result = await target.application.onboardClientEntry({ ...request, name: target.name });
     await this.clearSetupDraftAfterFirstRunPublication();
     await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
@@ -421,7 +422,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
 
   private async setupTarget(
     name: string
-  ): Promise<{ readonly application: ConsoleApplicationService; readonly path: string }> {
+  ): Promise<{ readonly application: ConsoleApplicationService; readonly name: string; readonly path: string }> {
     const discovered = await this.discover();
     if (discovered.catalog.discoveryState !== "ready") {
       throw new MiftahError(
@@ -430,7 +431,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
       );
     }
     if (discovered.configurations.length === 0) {
-      return { application: this.firstRunApplication, path: this.options.defaultConfigPath };
+      return { application: this.firstRunApplication, name, path: this.options.defaultConfigPath };
     }
     if (!returningConfigurationName.test(name)) {
       throw new MiftahError(
@@ -438,15 +439,17 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
         "CONSOLE_CONFIGURATION_TARGET_INVALID: choose a short lowercase configuration name"
       );
     }
-    if (discovered.configurations.some((configuration) => configuration.metadata.name === name)) {
+    const normalizedName = name.endsWith(".json") ? name.slice(0, -".json".length) : name;
+    if (discovered.configurations.some((configuration) => configuration.metadata.name === normalizedName)) {
       throw new MiftahError(
         "CONFIG_ALREADY_EXISTS",
         "CONFIG_ALREADY_EXISTS: refusing to create a duplicate named configuration"
       );
     }
-    const path = join(resolvePath(this.options.configDirectory), name.endsWith(".json") ? name : `${name}.json`);
+    const path = join(resolvePath(this.options.configDirectory), `${normalizedName}.json`);
     return {
       application: this.applicationFor(path, undefined, resolvePath(this.options.configDirectory)),
+      name: normalizedName,
       path
     };
   }

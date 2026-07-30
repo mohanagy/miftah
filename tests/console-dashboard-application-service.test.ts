@@ -403,7 +403,7 @@ describe("Console dashboard application service", () => {
     const { preset, ...presetOptions } = supportedKnownConnectorOptions();
 
     await expect(service.previewPreset({
-      name: "support-tools",
+      name: "support-tools.json",
       preset,
       ...presetOptions
     })).resolves.toMatchObject({
@@ -415,7 +415,7 @@ describe("Console dashboard application service", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
 
     await expect(service.onboardPreset({
-      name: "support-tools",
+      name: "support-tools.json",
       preset,
       ...presetOptions
     })).resolves.toMatchObject({ name: "support-tools", defaultProfile: "default" });
