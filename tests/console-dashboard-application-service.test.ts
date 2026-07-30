@@ -506,8 +506,8 @@ describe("Console dashboard application service", () => {
     await expect(readFile(occupiedPath, "utf8")).resolves.toBe(occupied);
   });
 
-  it("uses distinct safe returning-user targets for native OAuth and selected client entry setup", async () => {
-    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-sources-"));
+  it("uses a distinct safe returning-user target for native OAuth setup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-oauth-"));
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
     const directory = await createPrivateConsoleDirectory(privateParent);
@@ -534,6 +534,27 @@ describe("Console dashboard application service", () => {
     })).resolves.toMatchObject({ profile: "work", write: true });
     await expect(readFile(join(directory, "analytics-oauth.json"), "utf8"))
       .resolves.toContain('"name": "analytics-oauth"');
+    await expect(readFile(join(directory, "miftah.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses a distinct safe returning-user target for selected client entry setup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-client-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
 
     await expect(service.onboardClientEntry({
       name: "posthog-work",
