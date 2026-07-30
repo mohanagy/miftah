@@ -470,7 +470,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   }
 
   private async confirmCreatedFirstRunConfiguration(configPath = this.options.defaultConfigPath): Promise<void> {
-    const refreshed = await this.discover();
+    const refreshed = await this.discover({ fresh: true });
     const configuredPath = resolvePath(configPath);
     const createdPath = await realpath(configuredPath).catch((error: unknown) => {
       if (fileErrorCode(error) === "ENOENT") return configuredPath;
@@ -504,8 +504,8 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     return { configuration, trustedConfiguration };
   }
 
-  private async discover(): Promise<ConsoleConfigCatalogDiscovery> {
-    if (this.discoveryInFlight !== undefined) return this.discoveryInFlight;
+  private async discover(options: { readonly fresh?: boolean } = {}): Promise<ConsoleConfigCatalogDiscovery> {
+    if (options.fresh !== true && this.discoveryInFlight !== undefined) return this.discoveryInFlight;
     const discovery = discoverConsoleConfigCatalog({ configDirectory: this.options.configDirectory }).then((discovered) => {
       if (
         this.active !== undefined &&

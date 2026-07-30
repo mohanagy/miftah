@@ -415,8 +415,10 @@ describe("Console dashboard application service", () => {
       profiles: { default: {} }
     });
     const target = join(directory, "support-tools.json");
+    let replacementHookRan = false;
     catalogDiscoveryDiagnostic.afterDiscover = async (invocation) => {
       if (invocation !== 2) return;
+      replacementHookRan = true;
       await rm(target);
       await symlink("support-tools.json", target);
     };
@@ -431,6 +433,7 @@ describe("Console dashboard application service", () => {
       preset,
       ...presetOptions
     })).rejects.toMatchObject({ code: "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE" });
+    expect(replacementHookRan).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("does not publish through a configuration directory replaced after discovery", async () => {
@@ -446,8 +449,10 @@ describe("Console dashboard application service", () => {
       upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
       profiles: { default: {} }
     });
+    let replacementHookRan = false;
     catalogDiscoveryDiagnostic.afterDiscover = async (invocation) => {
       if (invocation !== 1) return;
+      replacementHookRan = true;
       await rename(directory, movedDirectory);
       await symlink(replacement, directory);
     };
@@ -465,6 +470,89 @@ describe("Console dashboard application service", () => {
     await expect(readFile(join(replacement, "support-tools.json"), "utf8"))
       .rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(replacement, ".miftah", "audit", "console.jsonl"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect(replacementHookRan).toBe(true);
+  });
+
+  it("forces fresh catalog discovery when confirming a published configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-fresh-confirmation-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    let releaseStaleDiscovery: (() => void) | undefined;
+    const staleDiscoveryHeld = new Promise<void>((resolve) => {
+      releaseStaleDiscovery = resolve;
+    });
+    let reportStaleDiscovery: (() => void) | undefined;
+    const staleDiscoveryReported = new Promise<void>((resolve) => {
+      reportStaleDiscovery = resolve;
+    });
+    catalogDiscoveryDiagnostic.afterDiscover = async (invocation) => {
+      if (invocation !== 1) return;
+      reportStaleDiscovery?.();
+      await staleDiscoveryHeld;
+    };
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const staleMetadata = service.configMetadata();
+    await staleDiscoveryReported;
+    const createdPath = join(directory, "support-tools.json");
+    await writeConfig(createdPath, {
+      version: "3",
+      name: "support-tools",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "node", args: ["server.mjs"] },
+      profiles: { default: {} }
+    });
+
+    const confirmation = (
+      service as unknown as {
+        confirmCreatedFirstRunConfiguration(path: string): Promise<void>;
+      }
+    ).confirmCreatedFirstRunConfiguration(createdPath);
+    releaseStaleDiscovery?.();
+
+    await expect(staleMetadata).resolves.toBeDefined();
+    await expect(confirmation).resolves.toBeUndefined();
+    expect(catalogDiscoveryDiagnostic.invocations).toBe(2);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a returning setup audit directory readable by the group", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-audit-directory-mode-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const auditDirectory = join(directory, ".miftah");
+    await mkdir(auditDirectory, { mode: 0o740 });
+    await chmod(auditDirectory, 0o740);
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+
+    await expect(service.onboardPreset({
+      name: "support-tools",
+      preset,
+      ...presetOptions
+    })).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
+    await expect(readFile(join(directory, "support-tools.json"), "utf8"))
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 

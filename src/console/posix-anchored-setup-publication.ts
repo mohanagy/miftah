@@ -22,6 +22,7 @@ interface PublisherResponse {
 
 const maximumResponseBytes = 8 * 1024;
 const maximumRequestBytes = 2 * 1024 * 1024;
+const publisherTimeoutMs = 10_000;
 
 /*
  * A separate process gives POSIX setup an inode-anchored working directory:
@@ -55,7 +56,7 @@ async function ensurePrivateDirectory(path) {
     !entry.isDirectory() ||
     entry.isSymbolicLink() ||
     (ownerUid !== undefined && entry.uid !== ownerUid) ||
-    (Number(entry.mode) & 0o022) !== 0
+    (Number(entry.mode) & 0o077) !== 0
   ) {
     throw Object.assign(new Error("unsafe private directory"), { code: "EPERM" });
   }
@@ -155,6 +156,7 @@ async function run() {
     throw Object.assign(error instanceof Error ? error : new Error("audit preparation failed"), { stage: "audit" });
   }
   await audit.close();
+  audit = undefined;
 
   try {
     await publishConfig(request.configName, request.configContent);
@@ -167,6 +169,7 @@ async function run() {
     await audit.writeFile(request.auditLine, "utf8");
     await audit.sync();
     await audit.close();
+    audit = undefined;
   } catch (error) {
     let closeError;
     try {
@@ -234,12 +237,13 @@ function runPublisher(cwd: string, request: string): Promise<PublisherResponse> 
     let settled = false;
     let stdinError: Error | undefined;
 
-    const reject = (error: Error): void => {
+    function reject(error: Error): void {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       child.kill();
       rejectResponse(error);
-    };
+    }
     const collect = (destination: Buffer[], chunk: Buffer): void => {
       outputBytes += chunk.byteLength;
       if (outputBytes > maximumResponseBytes) {
@@ -249,6 +253,9 @@ function runPublisher(cwd: string, request: string): Promise<PublisherResponse> 
       destination.push(chunk);
     };
 
+    const timeout = setTimeout(() => {
+      reject(new Error(`Anchored setup publisher timed out after ${String(publisherTimeoutMs)}ms.`));
+    }, publisherTimeoutMs);
     child.once("error", reject);
     child.stdin.once("error", (error) => {
       stdinError = error;
@@ -258,6 +265,7 @@ function runPublisher(cwd: string, request: string): Promise<PublisherResponse> 
     child.once("close", (exitCode) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       if (stdinError !== undefined && stdout.length === 0) {
         rejectResponse(stdinError);
         return;
