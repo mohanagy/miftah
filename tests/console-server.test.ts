@@ -525,12 +525,14 @@ function selectConsoleRemoteSetupSource(javascript: string): {
   readonly focused: boolean;
   readonly status: string;
 } {
-  const start = javascript.indexOf("function selectSetupSource(source)");
+  const start = javascript.indexOf("function hideSetupWizardPaths()");
   const end = javascript.indexOf("\n\n  async function refresh", start);
   if (start < 0 || end < 0) throw new Error("Expected the Console setup-source selector.");
 
   class FakeElement {
     focused = false;
+    hidden = false;
+    textContent = "";
 
     focus(): void {
       this.focused = true;
@@ -551,6 +553,7 @@ function selectConsoleRemoteSetupSource(javascript: string): {
   const form = new FakeForm();
   const selection = new FakeSelect();
   const remoteUrl = new FakeInput();
+  const presetOnboardingView = new FakeElement();
   let updateCalls = 0;
   let status = "";
   const selectSetupSource = runInNewContext(`${javascript.slice(start, end)}\nselectSetupSource`, {
@@ -563,6 +566,16 @@ function selectConsoleRemoteSetupSource(javascript: string): {
     updatePresetFields(): void {
       updateCalls += 1;
     },
+    onboardingView: new FakeElement(),
+    presetOnboardingView,
+    clientEntryOnboardingView: new FakeElement(),
+    setupWizardView: new FakeElement(),
+    setupSourceChoice: new FakeElement(),
+    setupWizardBack: new FakeElement(),
+    setupWizardContinue: new FakeElement(),
+    setupWizardStep: new FakeElement(),
+    setupWizardCopy: new FakeElement(),
+    setupWizardSource: "connector",
     message(value: string): void {
       status = value;
     },
@@ -575,6 +588,169 @@ function selectConsoleRemoteSetupSource(javascript: string): {
 
   selectSetupSource("remote");
   return { preset: selection.value, updateCalls, focused: remoteUrl.focused, status };
+}
+
+function exerciseGuidedSetupWizard(javascript: string): {
+  readonly chooser: readonly boolean[];
+  readonly importPath: readonly boolean[];
+  readonly importStep: string;
+  readonly back: readonly boolean[];
+  readonly cancelled: readonly boolean[];
+  readonly resetCounts: readonly number[];
+  readonly status: string;
+} {
+  const start = javascript.indexOf("function hideSetupWizardPaths()");
+  const end = javascript.indexOf("\n\n  /** Clears untrusted import text", start);
+  if (start < 0 || end < 0) throw new Error("Expected the guided Console setup functions.");
+
+  class FakeElement {
+    hidden = false;
+    textContent = "";
+    focused = false;
+
+    focus(): void {
+      this.focused = true;
+    }
+
+    scrollIntoView(): void {}
+
+    querySelectorAll(): readonly unknown[] {
+      return [];
+    }
+
+    replaceChildren(): void {}
+  }
+  class FakeInput extends FakeElement {}
+  class FakeSelect extends FakeElement {
+    value = "generic";
+  }
+  class FakeForm extends FakeElement {
+    readonly name = new FakeInput();
+    resetCount = 0;
+
+    reset(): void {
+      this.resetCount += 1;
+    }
+
+    querySelector(selector: string): unknown {
+      return selector === "input[name='name']" ? this.name : undefined;
+    }
+  }
+
+  const onboardingView = new FakeElement();
+  const presetOnboardingView = new FakeElement();
+  const clientEntryOnboardingView = new FakeElement();
+  const setupWizardView = new FakeElement();
+  const setupSourceChoice = new FakeElement();
+  const setupWizardBack = new FakeElement();
+  const setupWizardContinue = new FakeElement();
+  const setupWizardStep = new FakeElement();
+  const setupWizardTitle = new FakeElement();
+  const setupWizardCopy = new FakeElement();
+  const setupDraftActions = new FakeElement();
+  const workspaceView = new FakeElement();
+  const setUpAnotherMcp = new FakeElement();
+  const presetForm = new FakeForm();
+  const importForm = new FakeForm();
+  const oauthForm = new FakeForm();
+  const presetSelection = new FakeSelect();
+  const accounts = new FakeElement();
+  let status = "";
+
+  const functions = runInNewContext(
+    `${javascript.slice(start, end)}\n({ showReturningSetup, selectSetupSource, showSetupWizardChooser, cancelSetupWizard })`,
+    {
+      onboardingView,
+      presetOnboardingView,
+      clientEntryOnboardingView,
+      setupWizardView,
+      setupSourceChoice,
+      setupWizardBack,
+      setupWizardContinue,
+      setupWizardStep,
+      setupWizardTitle,
+      setupWizardCopy,
+      setupDraftActions,
+      workspaceView,
+      setUpAnotherMcp,
+      presetOnboardingForm: presetForm,
+      clientEntryOnboardingForm: importForm,
+      onboardingForm: oauthForm,
+      setupWizardSource: "connector",
+      returningSetupVisible: false,
+      byId(id: string): unknown {
+        if (id === "preset-onboarding-form") return presetForm;
+        if (id === "client-entry-onboarding-form") return importForm;
+        if (id === "onboarding-form") return oauthForm;
+        if (id === "preset-selection") return presetSelection;
+        if (id === "gsc-account-list") return accounts;
+        return undefined;
+      },
+      updateSetupSourceChoice(): void {},
+      updatePresetFields(): void {},
+      clearPresetReview(): void {},
+      message(value: string): void {
+        status = value;
+      },
+      HTMLElement: FakeElement,
+      HTMLFormElement: FakeForm,
+      HTMLSelectElement: FakeSelect,
+      HTMLInputElement: FakeInput,
+      HTMLTextAreaElement: FakeInput,
+      HTMLButtonElement: FakeElement
+    }
+  ) as {
+    readonly showReturningSetup: () => void;
+    readonly selectSetupSource: (source: string) => void;
+    readonly showSetupWizardChooser: (returning: boolean) => void;
+    readonly cancelSetupWizard: () => void;
+  };
+
+  functions.showReturningSetup();
+  const chooser = [
+    setupWizardView.hidden,
+    setupSourceChoice.hidden,
+    onboardingView.hidden,
+    presetOnboardingView.hidden,
+    clientEntryOnboardingView.hidden,
+    setupWizardBack.hidden,
+    setupWizardContinue.hidden
+  ];
+  functions.selectSetupSource("import");
+  const importPath = [
+    setupSourceChoice.hidden,
+    onboardingView.hidden,
+    presetOnboardingView.hidden,
+    clientEntryOnboardingView.hidden,
+    setupWizardBack.hidden,
+    setupWizardContinue.hidden
+  ];
+  const importStep = setupWizardStep.textContent;
+  functions.showSetupWizardChooser(true);
+  const back = [
+    setupSourceChoice.hidden,
+    onboardingView.hidden,
+    presetOnboardingView.hidden,
+    clientEntryOnboardingView.hidden
+  ];
+  functions.cancelSetupWizard();
+  const cancelled = [
+    setupWizardView.hidden,
+    onboardingView.hidden,
+    presetOnboardingView.hidden,
+    clientEntryOnboardingView.hidden,
+    setUpAnotherMcp.focused
+  ];
+
+  return {
+    chooser,
+    importPath,
+    importStep,
+    back,
+    cancelled,
+    resetCounts: [presetForm.resetCount, importForm.resetCount, oauthForm.resetCount],
+    status
+  };
 }
 
 function triggerClientEntryManualRecoveryAction(
@@ -1559,6 +1735,11 @@ describe("local Console control server", () => {
       expect(html).toContain('id="configuration-catalog-attention"');
       expect(html).toContain('id="set-up-another-mcp"');
       expect(html).toContain("Set up another MCP");
+      expect(html).toContain('id="setup-wizard-view"');
+      expect(html).toContain('id="setup-wizard-step"');
+      expect(html).toContain('id="setup-wizard-back"');
+      expect(html).toContain('id="setup-wizard-cancel"');
+      expect(html).toContain('id="setup-wizard-continue"');
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
       expect(html).toContain('id="profile-readiness-profile"');
@@ -1606,6 +1787,38 @@ describe("local Console control server", () => {
       )).toBe("The Console is shutting down.");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
       expect(javascript).toContain("showReturningSetup");
+      expect(javascript).toContain("showSetupWizardChooser");
+      expect(javascript).toContain("hideSetupWizardPaths");
+      expect(javascript).toContain("cancelSetupWizard");
+      const returningSetupBody = javascript.slice(
+        javascript.indexOf("function showReturningSetup()"),
+        javascript.indexOf("\n\n  /** Clears untrusted import text", javascript.indexOf("function showReturningSetup()"))
+      );
+      expect(returningSetupBody).toContain("showSetupWizardChooser");
+      expect(returningSetupBody).not.toContain("onboardingView.hidden = false");
+      expect(returningSetupBody).not.toContain("presetOnboardingView.hidden = false");
+      expect(returningSetupBody).not.toContain("clientEntryOnboardingView.hidden = false");
+      expect(exerciseGuidedSetupWizard(javascript)).toEqual({
+        chooser: [false, false, true, true, true, true, false],
+        importPath: [true, true, true, false, false, true],
+        importStep: "Step 2 of 3 · Existing client entry",
+        back: [false, true, true, true],
+        cancelled: [true, true, true, true, true],
+        resetCounts: [1, 1, 1],
+        status: "Setup cancelled. No configuration was created or changed."
+      });
+      const attentionBranch = javascript.slice(
+        javascript.indexOf("if (catalog.attentionCount > 0)"),
+        javascript.indexOf('if (catalog.discoveryState === "unavailable")')
+      );
+      expect(attentionBranch).toContain("hideSetupWizardPaths()");
+      expect(attentionBranch).toContain("returningSetupVisible = false");
+      const discoveryUnavailableBranch = javascript.slice(
+        javascript.indexOf('if (catalog.discoveryState === "unavailable")'),
+        javascript.indexOf('setupWizardSource = "connector"', javascript.indexOf('if (catalog.discoveryState === "unavailable")'))
+      );
+      expect(discoveryUnavailableBranch).toContain("hideSetupWizardPaths()");
+      expect(discoveryUnavailableBranch).toContain("returningSetupVisible = false");
       expect(javascript).toContain("Choose a short lowercase name");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");

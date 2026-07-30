@@ -103,26 +103,40 @@ const page = `<!doctype html>
         </div>
       </section>
 
+      <section id="setup-wizard-view" class="work-section setup-wizard" hidden aria-labelledby="setup-wizard-title">
+        <div class="section-heading">
+          <div>
+            <p id="setup-wizard-step" class="step">Step 1 of 3 · Choose a path</p>
+            <h2 id="setup-wizard-title">Set up another MCP</h2>
+          </div>
+          <p id="setup-wizard-copy">Start with what you already have. Miftah will show one setup path at a time and will not write anything until that path reaches its create action.</p>
+        </div>
+        <fieldset id="setup-source-choice" class="setup-source-choice" tabindex="-1">
+          <legend>What do you already have?</legend>
+          <p class="field-note">Choose one path. Nothing is saved, launched, discovered, or sent to an MCP while you are on this step.</p>
+          <div class="setup-source-grid">
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Known connector or pinned package</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
+          </div>
+        </fieldset>
+        <div class="setup-wizard-actions">
+          <button id="setup-wizard-back" type="button" class="secondary" hidden>Back</button>
+          <button id="setup-wizard-cancel" type="button" class="secondary">Cancel setup</button>
+          <button id="setup-wizard-continue" type="button">Continue</button>
+        </div>
+      </section>
+
       <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">02 / First connection</p>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
           <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
-          <fieldset id="setup-source-choice" class="wide setup-source-choice">
-            <legend>What do you already have?</legend>
-            <p class="field-note">Choose a starting point first. Nothing is saved, launched, discovered, or sent to an MCP until you review and submit the matching setup form.</p>
-            <div class="setup-source-grid">
-              <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Known connector or pinned package</span></label>
-              <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
-              <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
-              <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
-              <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
-            </div>
-          </fieldset>
           <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="support-tools"></label>
           <label>Known connector
             <select name="preset" id="preset-selection">
@@ -172,7 +186,6 @@ const page = `<!doctype html>
       <section id="client-entry-onboarding-view" class="work-section" hidden aria-labelledby="client-entry-onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">03 / Existing client entry</p>
             <h2 id="client-entry-onboarding-title">Import one MCP client entry</h2>
           </div>
           <p>Paste one existing Claude, Cursor, or VS Code JSON entry when you want to reuse a supported local executable or explicitly typed HTTPS remote endpoint. Miftah never scans or changes client settings.</p>
@@ -193,7 +206,6 @@ const page = `<!doctype html>
       <section id="onboarding-view" class="work-section" hidden aria-labelledby="onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">02 / First connection</p>
             <h2 id="onboarding-title">Set up remote MCP with browser sign-in</h2>
           </div>
           <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It uses standards-based OAuth with dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
@@ -469,6 +481,9 @@ fieldset { min-inline-size: 0; margin: 0; }
 .setup-source-option span { display: flex; align-items: center; min-height: 3.3rem; padding: .78rem .85rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); }
 .setup-source-option input:checked + span { color: #19150d; background: var(--key); border-color: var(--key); }
 .setup-source-option input:focus-visible + span { outline: 2px solid var(--key); outline-offset: 2px; }
+.setup-wizard { scroll-margin-top: 1rem; }
+.setup-wizard-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .65rem; margin-top: 1rem; }
+#setup-wizard-back { margin-right: auto; }
 .gsc-accounts { border: 1px solid var(--line); padding: 1rem; }
 .gsc-accounts legend { padding: 0 .35rem; color: var(--ink); font-weight: 700; }
 .gsc-account-list { display: grid; gap: 1rem; margin: 1rem 0; }
@@ -477,6 +492,7 @@ fieldset { min-inline-size: 0; margin: 0; }
 label { display: block; color: var(--muted); font-size: .82rem; }
 input, select, textarea, button { border-radius: .28rem; font: inherit; }
 input, select, textarea { width: 100%; margin-top: .55rem; border: 1px solid var(--line); padding: .78rem .85rem; color: var(--ink); background: var(--ground); }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .58; font-style: italic; }
 textarea { resize: vertical; font: .78rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 input:focus, select:focus, textarea:focus, button:focus-visible, summary:focus-visible { outline: 2px solid var(--key); outline-offset: 2px; }
 .input-row { display: flex; align-items: flex-end; gap: .65rem; }
@@ -553,6 +569,14 @@ const script = `(() => {
   const configurationCatalogSummary = byId("configuration-catalog-summary");
   const configurationCatalogAttention = byId("configuration-catalog-attention");
   const setUpAnotherMcp = byId("set-up-another-mcp");
+  const setupWizardView = byId("setup-wizard-view");
+  const setupWizardStep = byId("setup-wizard-step");
+  const setupWizardTitle = byId("setup-wizard-title");
+  const setupWizardCopy = byId("setup-wizard-copy");
+  const setupSourceChoice = byId("setup-source-choice");
+  const setupWizardBack = byId("setup-wizard-back");
+  const setupWizardCancel = byId("setup-wizard-cancel");
+  const setupWizardContinue = byId("setup-wizard-continue");
   const setupDraftActions = byId("setup-draft-actions");
   const setupCompletionView = byId("setup-completion-view");
   const setupCompletionVerification = byId("setup-completion-verification");
@@ -596,6 +620,7 @@ const script = `(() => {
   let presetCreateInFlight = false;
   let activeSetupDraft = undefined;
   let returningSetupVisible = false;
+  let setupWizardSource = "connector";
 
   function message(text) {
     if (status) status.textContent = text;
@@ -614,6 +639,7 @@ const script = `(() => {
     clearPresetReview();
     if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
+    if (setupWizardView) setupWizardView.hidden = true;
     if (onboardingView) onboardingView.hidden = true;
     if (presetOnboardingView) presetOnboardingView.hidden = true;
     if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
@@ -1515,17 +1541,62 @@ const script = `(() => {
   }
 
   function updateSetupSourceChoice(source) {
-    const choice = byId("setup-source-choice");
-    if (!(choice instanceof HTMLElement)) return;
-    choice.querySelectorAll("input[data-setup-source]").forEach((input) => {
+    if (!(setupSourceChoice instanceof HTMLElement)) return;
+    setupSourceChoice.querySelectorAll("input[data-setup-source]").forEach((input) => {
       if (!(input instanceof HTMLInputElement)) return;
       input.checked = input.dataset.setupSource === source;
     });
   }
 
+  function hideSetupWizardPaths() {
+    if (onboardingView) onboardingView.hidden = true;
+    if (presetOnboardingView) presetOnboardingView.hidden = true;
+    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+  }
+
+  function showSetupWizardChooser(returning = returningSetupVisible) {
+    returningSetupVisible = returning;
+    hideSetupWizardPaths();
+    if (setupWizardView) setupWizardView.hidden = false;
+    if (setupSourceChoice) setupSourceChoice.hidden = false;
+    if (setupWizardBack) setupWizardBack.hidden = true;
+    if (setupWizardContinue) setupWizardContinue.hidden = false;
+    if (workspaceView) workspaceView.hidden = true;
+    if (setupDraftActions) setupDraftActions.hidden = returning;
+    if (setupWizardStep) setupWizardStep.textContent = "Step 1 of 3 · Choose a path";
+    if (setupWizardTitle) setupWizardTitle.textContent = returning ? "Set up another MCP" : "Set up your first MCP";
+    if (setupWizardCopy) {
+      setupWizardCopy.textContent = returning
+        ? "Choose what you already have. Choose a short lowercase name on the next step. Miftah will create a separate named configuration and will not replace an existing file."
+        : "Choose what you already have. Miftah will show one setup path at a time and will not write anything until its create action.";
+    }
+    updateSetupSourceChoice(setupWizardSource);
+    if (setupSourceChoice instanceof HTMLElement) setupSourceChoice.focus();
+  }
+
   function selectSetupSource(source) {
+    setupWizardSource = source;
     updateSetupSourceChoice(source);
+    hideSetupWizardPaths();
+    if (setupWizardView) setupWizardView.hidden = false;
+    if (setupSourceChoice) setupSourceChoice.hidden = true;
+    if (setupWizardBack) setupWizardBack.hidden = false;
+    if (setupWizardContinue) setupWizardContinue.hidden = true;
+    if (setupWizardStep) {
+      const detail = source === "browser-sign-in"
+        ? "Browser sign-in details"
+        : source === "import"
+          ? "Existing client entry"
+          : source === "remote"
+            ? "Remote endpoint details"
+            : source === "local"
+              ? "Local executable details"
+              : "Connector details";
+      setupWizardStep.textContent = "Step 2 of 3 · " + detail;
+    }
+    if (setupWizardCopy) setupWizardCopy.textContent = "Only the selected setup path is shown. Use Back to choose a different path or Cancel setup to leave without creating a configuration.";
     if (source === "browser-sign-in") {
+      if (onboardingView) onboardingView.hidden = false;
       if (onboardingView instanceof HTMLElement) onboardingView.scrollIntoView({ block: "start" });
       const name = onboardingForm instanceof HTMLFormElement
         ? onboardingForm.querySelector("input[name='name']")
@@ -1535,6 +1606,7 @@ const script = `(() => {
       return;
     }
     if (source === "import") {
+      if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
       if (clientEntryOnboardingView instanceof HTMLElement) clientEntryOnboardingView.scrollIntoView({ block: "start" });
       const name = clientEntryOnboardingForm instanceof HTMLFormElement
         ? clientEntryOnboardingForm.querySelector("input[name='name']")
@@ -1546,6 +1618,7 @@ const script = `(() => {
     const form = byId("preset-onboarding-form");
     const selection = byId("preset-selection");
     if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement)) return;
+    if (presetOnboardingView) presetOnboardingView.hidden = false;
     const preset = source === "remote" ? "streamable-http" : source === "local" ? "local-stdio" : "generic";
     selection.value = preset;
     updatePresetFields();
@@ -1565,22 +1638,38 @@ const script = `(() => {
     }
   }
 
-  function showReturningSetup() {
-    returningSetupVisible = true;
-    if (onboardingView) onboardingView.hidden = false;
-    if (presetOnboardingView) presetOnboardingView.hidden = false;
-    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
-    if (workspaceView) workspaceView.hidden = true;
-    if (setupDraftActions) setupDraftActions.hidden = true;
+  function clearSetupWizardForms() {
+    [byId("preset-onboarding-form"), byId("client-entry-onboarding-form"), byId("onboarding-form")].forEach((form) => {
+      if (form instanceof HTMLFormElement) form.reset();
+    });
+    const accounts = byId("gsc-account-list");
+    if (accounts instanceof HTMLElement) accounts.replaceChildren();
+    clearPresetReview();
     updatePresetFields();
-    const name = presetOnboardingForm instanceof HTMLFormElement
-      ? presetOnboardingForm.querySelector("input[name='name']")
-      : undefined;
-    if (name instanceof HTMLInputElement) {
-      name.focus();
-      name.scrollIntoView({ block: "center" });
+  }
+
+  function cancelSetupWizard() {
+    const returning = returningSetupVisible;
+    clearSetupWizardForms();
+    setupWizardSource = "connector";
+    updateSetupSourceChoice(setupWizardSource);
+    hideSetupWizardPaths();
+    returningSetupVisible = false;
+    if (returning) {
+      if (setupWizardView) setupWizardView.hidden = true;
+      message("Setup cancelled. No configuration was created or changed.");
+      if (setUpAnotherMcp instanceof HTMLButtonElement) setUpAnotherMcp.focus();
+      return;
     }
-    message("Choose a short lowercase name such as support-tools. Miftah creates a separate support-tools.json configuration and never replaces an existing file.");
+    showSetupWizardChooser(false);
+    message("Setup cleared. Choose a path when you are ready; nothing has been written.");
+  }
+
+  function showReturningSetup() {
+    setupWizardSource = "connector";
+    showSetupWizardChooser(true);
+    if (setupWizardView instanceof HTMLElement) setupWizardView.scrollIntoView({ block: "start" });
+    message("Choose one setup path. Miftah creates a separate named configuration and never replaces an existing file.");
   }
 
   /** Clears untrusted import text before routing only to an existing manual transport form. */
@@ -1606,46 +1695,42 @@ const script = `(() => {
       renderProviderAuthentication(undefined);
       renderProfileReadiness(undefined, "");
       if (catalog.configurations.length > 0) {
-        if (onboardingView) onboardingView.hidden = !returningSetupVisible;
-        if (presetOnboardingView) presetOnboardingView.hidden = !returningSetupVisible;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = !returningSetupVisible;
+        if (!returningSetupVisible) {
+          hideSetupWizardPaths();
+          if (setupWizardView) setupWizardView.hidden = true;
+        }
         if (workspaceView) workspaceView.hidden = true;
         if (setupDraftActions) setupDraftActions.hidden = returningSetupVisible;
         if (returningSetupVisible) {
-          message("Choose a short lowercase name such as support-tools. Miftah creates a separate support-tools.json configuration and never replaces an existing file.");
+          message("Complete the selected setup path, use Back to choose another path, or cancel without creating a configuration.");
         } else {
           message("Choose a configuration to open it, or set up another MCP. Miftah does not inspect or change MCP client settings.");
         }
         return;
       }
       if (catalog.attentionCount > 0) {
-        if (onboardingView) onboardingView.hidden = true;
-        if (presetOnboardingView) presetOnboardingView.hidden = true;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        hideSetupWizardPaths();
+        returningSetupVisible = false;
+        if (setupWizardView) setupWizardView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah found configuration files, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
-        if (onboardingView) onboardingView.hidden = true;
-        if (presetOnboardingView) presetOnboardingView.hidden = true;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        hideSetupWizardPaths();
+        returningSetupVisible = false;
+        if (setupWizardView) setupWizardView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah could not safely inspect its standard configuration directory. Correct its local access or start the Console with --config.");
         return;
       }
-      if (onboardingView) onboardingView.hidden = false;
-      if (presetOnboardingView) presetOnboardingView.hidden = false;
-      if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
-      if (workspaceView) workspaceView.hidden = true;
-      if (setupDraftActions) setupDraftActions.hidden = false;
-      updatePresetFields();
+      setupWizardSource = "connector";
+      showSetupWizardChooser(false);
       message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
       return;
     }
-    if (onboardingView) onboardingView.hidden = true;
-    if (presetOnboardingView) presetOnboardingView.hidden = true;
-    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+    hideSetupWizardPaths();
+    if (setupWizardView) setupWizardView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
     if (setupDraftActions) setupDraftActions.hidden = false;
     renderProviderAuthentication(metadata.authentication);
@@ -1733,6 +1818,21 @@ const script = `(() => {
     setUpAnotherMcp.addEventListener("click", showReturningSetup);
   }
 
+  if (setupWizardContinue instanceof HTMLButtonElement) {
+    setupWizardContinue.addEventListener("click", () => selectSetupSource(setupWizardSource));
+  }
+
+  if (setupWizardBack instanceof HTMLButtonElement) {
+    setupWizardBack.addEventListener("click", () => {
+      showSetupWizardChooser(returningSetupVisible);
+      message("Choose a different setup path. Nothing has been written.");
+    });
+  }
+
+  if (setupWizardCancel instanceof HTMLButtonElement) {
+    setupWizardCancel.addEventListener("click", cancelSetupWizard);
+  }
+
   const onboardingForm = byId("onboarding-form");
   if (onboardingForm instanceof HTMLFormElement) {
     onboardingForm.addEventListener("submit", async (event) => {
@@ -1764,14 +1864,15 @@ const script = `(() => {
     nativeOAuthSetupLink.addEventListener("click", () => selectSetupSource("browser-sign-in"));
   }
 
-  const setupSourceChoice = byId("setup-source-choice");
   if (setupSourceChoice instanceof HTMLElement) {
     setupSourceChoice.addEventListener("change", (event) => {
       const input = event.target;
       if (!(input instanceof HTMLInputElement) || input.type !== "radio") return;
       const source = input.dataset.setupSource;
       if (source === "connector" || source === "remote" || source === "local" || source === "browser-sign-in" || source === "import") {
-        selectSetupSource(source);
+        setupWizardSource = source;
+        updateSetupSourceChoice(source);
+        message("Continue to show only the selected setup path.");
       }
     });
   }
