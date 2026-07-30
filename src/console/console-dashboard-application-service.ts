@@ -341,12 +341,14 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
 
   private applicationFor(
     configPath: string,
-    trustedConfiguration?: ConsoleTrustedConfiguration
+    trustedConfiguration?: ConsoleTrustedConfiguration,
+    trustedCreationDirectory?: string
   ): ConsoleApplicationService {
     return new ConsoleApplicationService(configPath, {
       ...(this.options.launcher === undefined ? {} : { launcher: this.options.launcher }),
       ...(this.options.nativeOAuthFetch === undefined ? {} : { nativeOAuthFetch: this.options.nativeOAuthFetch }),
-      ...(trustedConfiguration === undefined ? {} : { trustedConfiguration })
+      ...(trustedConfiguration === undefined ? {} : { trustedConfiguration }),
+      ...(trustedCreationDirectory === undefined ? {} : { trustedCreationDirectory })
     });
   }
 
@@ -443,7 +445,10 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
       );
     }
     const path = join(resolvePath(this.options.configDirectory), name.endsWith(".json") ? name : `${name}.json`);
-    return { application: this.applicationFor(path), path };
+    return {
+      application: this.applicationFor(path, undefined, resolvePath(this.options.configDirectory)),
+      path
+    };
   }
 
   private async confirmCreatedFirstRunConfiguration(configPath = this.options.defaultConfigPath): Promise<void> {

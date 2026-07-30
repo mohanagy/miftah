@@ -386,6 +386,12 @@ export interface ConsoleApplicationDependencies {
   readonly oauthProfileRename?: OAuthProfileRenameDependencies;
   /** A selected dashboard entry that was read through the catalog's verified file handle. */
   readonly trustedConfiguration?: ConsoleTrustedConfiguration;
+  /**
+   * Existing catalog directory already verified by dashboard discovery.
+   * Windows re-verifies this exact directory before the private writer holds
+   * the complete path through exclusive publication.
+   */
+  readonly trustedCreationDirectory?: string;
 }
 
 function fileErrorCode(error: unknown): string | undefined {
@@ -419,11 +425,24 @@ export function consoleAuditPath(configPath: string): string {
   return join(dirname(resolvePath(configPath)), ".miftah", "audit", "console.jsonl");
 }
 
-async function ensureFirstRunConfigDirectory(configPath: string): Promise<void> {
+async function ensureFirstRunConfigDirectory(
+  configPath: string,
+  trustedCreationDirectory?: string
+): Promise<void> {
   const directory = dirname(resolvePath(configPath));
   try {
     if (process.platform !== "win32") {
       await mkdir(directory, { recursive: true, mode: 0o700 });
+      return;
+    }
+    if (trustedCreationDirectory !== undefined) {
+      const trustedDirectory = resolvePath(trustedCreationDirectory);
+      if (
+        directory !== trustedDirectory ||
+        !(await verifyWindowsConfigPathsSecurity([{ path: directory, kind: "directory" }]))
+      ) {
+        throw new Error("unsafe trusted configuration directory");
+      }
       return;
     }
     const parent = dirname(directory);
@@ -717,6 +736,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly nativeOAuthFetch: FetchLike | undefined;
   private readonly oauthProfileRename: OAuthProfileRenameDependencies | undefined;
   private readonly trustedConfiguration: ConsoleTrustedConfiguration | undefined;
+  private readonly trustedCreationDirectory: string | undefined;
 
   constructor(
     private readonly configPath: string,
@@ -733,6 +753,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     this.launcher = dependencies.launcher;
     this.nativeOAuthFetch = dependencies.nativeOAuthFetch;
     this.oauthProfileRename = dependencies.oauthProfileRename;
+    this.trustedCreationDirectory = dependencies.trustedCreationDirectory;
   }
 
   async health(): Promise<ConsoleHealth> {
@@ -1235,7 +1256,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     audit: Pick<AuditLifecycleInput, "operation" | "name" | "profile" | "upstream" | "status">
   ): Promise<void> {
     const setup = createSetupConfigurationPlan({ configPath: this.configPath, config });
-    await ensureFirstRunConfigDirectory(setup.path);
+    await ensureFirstRunConfigDirectory(setup.path, this.trustedCreationDirectory);
     await this.audit.ensureWritable();
     try {
       await publishFirstRunSetupConfigurationPlan(setup);
