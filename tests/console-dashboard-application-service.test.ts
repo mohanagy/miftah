@@ -31,7 +31,10 @@ const catalogStageDiagnostic = vi.hoisted(() => ({
 const catalogIdentityDiagnostic = vi.hoisted(() => ({
   observer: undefined as undefined | ((event: ConsoleConfigCatalogCandidateIdentityDiagnosticEvent) => void)
 }));
-const catalogDiscoveryDiagnostic = vi.hoisted(() => ({ invocations: 0 }));
+const catalogDiscoveryDiagnostic = vi.hoisted(() => ({
+  invocations: 0,
+  afterDiscover: undefined as undefined | ((invocation: number) => Promise<void>)
+}));
 
 vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/console/console-config-catalog.js")>();
@@ -48,7 +51,9 @@ vi.mock("../src/console/console-config-catalog.js", async (importOriginal) => {
         ...(identityObserver === undefined ? {} : { candidateIdentityObserver: identityObserver })
       };
       catalogDiscoveryDiagnostic.invocations += 1;
-      return actual.discoverConsoleConfigCatalog(instrumentedOptions);
+      const result = await actual.discoverConsoleConfigCatalog(instrumentedOptions);
+      await catalogDiscoveryDiagnostic.afterDiscover?.(catalogDiscoveryDiagnostic.invocations);
+      return result;
     }
   };
 });
@@ -80,6 +85,7 @@ afterEach(async () => {
   catalogStageDiagnostic.observer = undefined;
   catalogIdentityDiagnostic.observer = undefined;
   catalogDiscoveryDiagnostic.invocations = 0;
+  catalogDiscoveryDiagnostic.afterDiscover = undefined;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -370,16 +376,48 @@ describe("Console dashboard application service", () => {
       launcher: { command: process.execPath, args: ["serve"] }
     });
 
-    await expect(service.onboardNativeOAuth({
-      name: "../must-not-escape",
-      profile: "default",
-      resource: "https://mcp.example.test/mcp",
-      issuer: "https://auth.example.test",
-      clientRegistration: "dynamic",
-      scopes: []
-    })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_TARGET_INVALID" });
+    for (const name of ["../must-not-escape", "alpha\n", "alpha\u2028", "alpha\u2029"]) {
+      await expect(service.onboardNativeOAuth({
+        name,
+        profile: "default",
+        resource: "https://mcp.example.test/mcp",
+        issuer: "https://auth.example.test",
+        clientRegistration: "dynamic",
+        scopes: []
+      })).rejects.toMatchObject({ code: "CONSOLE_CONFIGURATION_TARGET_INVALID" });
+    }
     await expect(readFile(join(root, "must-not-escape.json"), "utf8"))
       .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.skipIf(process.platform === "win32")("fails closed when the created configuration cannot be canonicalized", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-created-realpath-"));
+    temporaryDirectories.push(root);
+    const directory = await realpath(await createPrivateConsoleDirectory(root));
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const target = join(directory, "support-tools.json");
+    catalogDiscoveryDiagnostic.afterDiscover = async (invocation) => {
+      if (invocation !== 2) return;
+      await rm(target);
+      await symlink("support-tools.json", target);
+    };
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory
+    });
+    const { preset, ...presetOptions } = supportedKnownConnectorOptions();
+
+    await expect(service.onboardPreset({
+      name: "support-tools",
+      preset,
+      ...presetOptions
+    })).rejects.toMatchObject({ code: "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE" });
   });
 
   it("creates another named configuration from the returning-user dashboard", async () => {

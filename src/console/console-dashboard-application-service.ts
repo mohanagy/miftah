@@ -47,6 +47,12 @@ import type { SetupDraft, SetupDraftInput, SetupDraftStore } from "../setup/setu
 
 const returningConfigurationName = /^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u;
 
+function fileErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
 export interface ConsoleDashboardApplicationServiceOptions {
   /** Destination used only for a genuine first native OAuth configuration. */
   readonly defaultConfigPath: string;
@@ -457,7 +463,14 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   private async confirmCreatedFirstRunConfiguration(configPath = this.options.defaultConfigPath): Promise<void> {
     const refreshed = await this.discover();
     const configuredPath = resolvePath(configPath);
-    const createdPath = await realpath(configuredPath).catch(() => configuredPath);
+    const createdPath = await realpath(configuredPath).catch((error: unknown) => {
+      if (fileErrorCode(error) === "ENOENT") return configuredPath;
+      throw new MiftahError(
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the created configuration could not be canonicalized safely",
+        { cause: error }
+      );
+    });
     const created = refreshed.configurations.find((configuration) => configuration.path === createdPath);
     if (refreshed.catalog.discoveryState !== "ready" || created === undefined || trustedConfigurationFor(created) === undefined) {
       throw new MiftahError(
