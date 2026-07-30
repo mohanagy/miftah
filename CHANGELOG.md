@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-07-30
+
+### Changed
+
+- [#204](https://github.com/mohanagy/miftah/issues/204) Kept guided Console setup reachable after configurations already exist through a visible **Set up another MCP** action. Returning users can create a separate named configuration through the reviewed local STDIO secret/API-key, native OAuth, returning provider-owned account, provider-adapter OAuth, or manual upstream-auth paths; successful publication refreshes discovery immediately. Existing files are never overwritten, unsafe catalog candidates remain unavailable with bounded diagnostics, audit fields remain redacted, and private-directory, inode-anchored POSIX publication, bounded no-shell subprocess, and Windows containment contracts remain fail closed.
+- [#309](https://github.com/mohanagy/miftah/issues/309) Prepared the compatible v0.5.3 patch release for returning-user Console setup. Miftah remains experimental and pre-1.0. Closing #204 was an owner waiver of its three-evaluator acceptance criterion, not evidence that those evaluations occurred; external validation remains incomplete under #25, #88, #202, and #290.
+
 ## [0.5.2] - 2026-07-29
 
 ### Fixed

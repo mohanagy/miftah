@@ -53,7 +53,7 @@ Install Miftah, then choose the terminal wizard or the browser Console. Both use
 ### 1. Install the current release
 
 ```bash
-npm install -g @lubab/miftah@0.5.2
+npm install -g @lubab/miftah@0.5.3
 miftah version
 ```
 
