@@ -600,6 +600,41 @@ describe("Console dashboard application service", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.skipIf(process.platform === "win32")("redacts credential-shaped returning-user setup audit fields", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-audit-redaction-"));
+    temporaryDirectories.push(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
+    await writeConfig(join(directory, "gsc.json"), {
+      version: "3",
+      name: "gsc",
+      defaultProfile: "default",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { default: {} }
+    });
+    const service = new ConsoleDashboardApplicationService({
+      defaultConfigPath: join(directory, "miftah.json"),
+      configDirectory: directory,
+      launcher: { command: process.execPath, args: ["serve"] }
+    });
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz";
+    const profile = `https://user:password@example.test/${secret}`;
+
+    await expect(service.onboardNativeOAuth({
+      name: "analytics-oauth",
+      profile,
+      resource: "https://mcp.example.test/mcp",
+      issuer: "https://auth.example.test",
+      clientRegistration: "dynamic",
+      scopes: []
+    })).resolves.toMatchObject({ profile, write: true });
+
+    const audit = await readFile(join(directory, ".miftah", "audit", "console.jsonl"), "utf8");
+    expect(audit).not.toContain("user:password");
+    expect(audit).not.toContain(secret);
+    expect(audit).toContain("[REDACTED]");
+  });
+
   it("uses a distinct safe returning-user target for selected client entry setup", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-client-"));
     temporaryDirectories.push(root);

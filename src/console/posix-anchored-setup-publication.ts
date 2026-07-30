@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, dirname, resolve } from "node:path";
-import { AUDIT_RECORD_SCHEMA_VERSION, type AuditEvent } from "../audit/audit-types.js";
+import type { AuditEvent } from "../audit/audit-types.js";
+import { serializeAuditEvents } from "../audit/audit-logger.js";
 import { MiftahError } from "../utils/errors.js";
 
 export interface PosixAnchoredSetupPublication {
@@ -293,11 +294,7 @@ export async function publishPosixAnchoredSetupConfiguration(
       "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the trusted configuration directory changed before publication"
     );
   }
-  const auditLine = `${JSON.stringify({
-    timestamp: new Date().toISOString(),
-    ...input.auditEvent,
-    schemaVersion: AUDIT_RECORD_SCHEMA_VERSION
-  })}\n`;
+  const auditLine = `${serializeAuditEvents([input.auditEvent])}\n`;
   const request = JSON.stringify({
     expectedDirectoryIdentity: input.trustedDirectory.identity,
     configName: basename(configPath),

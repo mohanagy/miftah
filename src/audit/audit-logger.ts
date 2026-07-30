@@ -21,6 +21,31 @@ export interface AuditLoggerOptions {
   integrity?: AuditIntegrityOptions;
 }
 
+/** Encodes audit events through the shared redaction and schema boundary. */
+export function serializeAuditEvents(
+  events: readonly AuditEvent[],
+  options: {
+    readonly redactor?: SecretRedactor;
+    readonly includeArguments?: boolean;
+  } = {}
+): string {
+  const redactor = options.redactor ?? new SecretRedactor();
+  const includeArguments = options.includeArguments ?? false;
+  return events
+    .map((event) =>
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        ...redactor.redactForAudit(
+          includeArguments
+            ? event
+            : { ...event, arguments: undefined }
+        ),
+        schemaVersion: AUDIT_RECORD_SCHEMA_VERSION
+      })
+    )
+    .join("\n");
+}
+
 export class AuditLogger {
   private static readonly writesByPath = new Map<string, Promise<void>>();
   private readonly options: {
@@ -59,15 +84,10 @@ export class AuditLogger {
 
   private async logWithMode(events: readonly AuditEvent[], required: boolean): Promise<void> {
     if (events.length === 0) return;
-    const lines = events
-      .map((event) =>
-        JSON.stringify({
-          timestamp: new Date().toISOString(),
-          ...this.safeEvent(event),
-          schemaVersion: AUDIT_RECORD_SCHEMA_VERSION
-        })
-      )
-      .join("\n");
+    const lines = serializeAuditEvents(events, {
+      redactor: this.redactor,
+      includeArguments: this.options.includeArguments
+    });
     try {
       await this.enqueue(() => this.writeLine(`${lines}\n`));
       this.lastFailure = undefined;
@@ -75,14 +95,6 @@ export class AuditLogger {
       const failure = this.recordFailure(error);
       if (required || this.options.failureMode === "fail-closed") throw failure;
     }
-  }
-
-  private safeEvent(event: AuditEvent): AuditEvent {
-    return this.redactor.redactForAudit(
-      !this.options.includeArguments
-        ? { ...event, arguments: undefined }
-        : event
-    );
   }
 
   /** Verifies that a fail-closed sink is writable before an operation can make a side effect. */
