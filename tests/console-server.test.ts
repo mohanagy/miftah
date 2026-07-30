@@ -2991,7 +2991,8 @@ describe("local Console control server", () => {
   it("creates another safe configuration through the returning-user dashboard API", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-returning-setup-"));
     temporaryDirectories.push(root);
-    const directory = await createPrivateConsoleDirectory(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
     await writePrivateConsoleFile(join(directory, "gsc.json"), `${JSON.stringify({
       version: "3",
       name: "gsc",

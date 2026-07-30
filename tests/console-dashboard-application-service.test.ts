@@ -385,7 +385,8 @@ describe("Console dashboard application service", () => {
   it("creates another named configuration from the returning-user dashboard", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-"));
     temporaryDirectories.push(root);
-    const directory = await createPrivateConsoleDirectory(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
     const existingPath = join(directory, "gsc.json");
     const existing = {
       version: "3" as const,
@@ -430,7 +431,8 @@ describe("Console dashboard application service", () => {
   it("never overwrites a returning-user target or duplicates a discovered configuration name", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-collision-"));
     temporaryDirectories.push(root);
-    const directory = await createPrivateConsoleDirectory(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
     await writeConfig(join(directory, "gsc.json"), {
       version: "3",
       name: "gsc",
@@ -469,7 +471,8 @@ describe("Console dashboard application service", () => {
   it("uses distinct safe returning-user targets for native OAuth and selected client entry setup", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-sources-"));
     temporaryDirectories.push(root);
-    const directory = await createPrivateConsoleDirectory(root);
+    const privateParent = await createPrivateConsoleDirectory(root, "private-parent");
+    const directory = await createPrivateConsoleDirectory(privateParent);
     await writeConfig(join(directory, "gsc.json"), {
       version: "3",
       name: "gsc",
