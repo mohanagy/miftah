@@ -688,7 +688,7 @@ describe("Console dashboard application service", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.skipIf(process.platform === "win32")("redacts credential-shaped returning-user setup audit fields", async () => {
+  it("redacts credential-shaped returning-user setup audit fields", async () => {
     const root = await mkdtemp(join(tmpdir(), "miftah-console-dashboard-returning-audit-redaction-"));
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root, "private-parent");

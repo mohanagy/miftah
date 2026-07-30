@@ -32,17 +32,18 @@ export function serializeAuditEvents(
   const redactor = options.redactor ?? new SecretRedactor();
   const includeArguments = options.includeArguments ?? false;
   return events
-    .map((event) =>
-      JSON.stringify({
-        timestamp: new Date().toISOString(),
+    .map((event) => {
+      const timestamp = new Date().toISOString();
+      return JSON.stringify({
         ...redactor.redactForAudit(
           includeArguments
             ? event
             : { ...event, arguments: undefined }
         ),
+        timestamp,
         schemaVersion: AUDIT_RECORD_SCHEMA_VERSION
-      })
-    )
+      });
+    })
     .join("\n");
 }
 
