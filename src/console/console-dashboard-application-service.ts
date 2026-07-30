@@ -1,5 +1,6 @@
 import type { ClientLauncher, ClientSelection, ClientSnippet } from "../cli/client-snippets.js";
 import { realpath } from "node:fs/promises";
+import { join } from "node:path";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { resolvePath } from "../config/path-resolve.js";
 import { MiftahError } from "../utils/errors.js";
@@ -43,6 +44,8 @@ import {
 import type { ConsoleConfigCatalog, ConsoleConfigMetadata } from "./console-config-metadata.js";
 import type { ConsoleTrustedConfiguration } from "./console-trusted-configuration.js";
 import type { SetupDraft, SetupDraftInput, SetupDraftStore } from "../setup/setup-draft.js";
+
+const returningConfigurationName = /^[a-z0-9](?:[a-z0-9._-]{0,63})?$/u;
 
 export interface ConsoleDashboardApplicationServiceOptions {
   /** Destination used only for a genuine first native OAuth configuration. */
@@ -170,41 +173,40 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   async onboardNativeOAuth(
     request: ConsoleNativeOAuthOnboardingRequest
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
-    await this.assertFirstRunAvailable();
-    const result = await this.firstRunApplication.onboardNativeOAuth(request);
+    const target = await this.setupTarget(request.name);
+    const result = await target.application.onboardNativeOAuth(request);
     await this.clearSetupDraftAfterFirstRunPublication();
-    await this.confirmCreatedFirstRunConfiguration();
+    await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
   }
 
   async onboardDiscoveredNativeOAuth(
     request: ConsoleDiscoveredNativeOAuthOnboardingRequest
   ): Promise<ConsoleFirstRunNativeOAuthOnboardingReport> {
-    await this.assertFirstRunAvailable();
-    const result = await this.firstRunApplication.onboardDiscoveredNativeOAuth(request);
+    const target = await this.setupTarget(request.name);
+    const result = await target.application.onboardDiscoveredNativeOAuth(request);
     await this.clearSetupDraftAfterFirstRunPublication();
-    await this.confirmCreatedFirstRunConfiguration();
+    await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
   }
 
   async onboardPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
-    await this.assertFirstRunAvailable();
-    const result = await this.firstRunApplication.onboardPreset(request);
+    const target = await this.setupTarget(request.name);
+    const result = await target.application.onboardPreset(request);
     await this.clearSetupDraftAfterFirstRunPublication();
-    await this.confirmCreatedFirstRunConfiguration();
+    await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
   }
 
   async previewPreset(request: ConsolePresetOnboardingRequest): Promise<ConsolePresetOnboardingPreview> {
-    await this.assertFirstRunAvailable();
-    return this.firstRunApplication.previewPreset(request);
+    return (await this.setupTarget(request.name)).application.previewPreset(request);
   }
 
   async onboardClientEntry(request: ConsoleClientEntryOnboardingRequest): Promise<ConsolePresetOnboardingReport> {
-    await this.assertFirstRunAvailable();
-    const result = await this.firstRunApplication.onboardClientEntry(request);
+    const target = await this.setupTarget(request.name);
+    const result = await target.application.onboardClientEntry(request);
     await this.clearSetupDraftAfterFirstRunPublication();
-    await this.confirmCreatedFirstRunConfiguration();
+    await this.confirmCreatedFirstRunConfiguration(target.path);
     return result;
   }
 
@@ -415,9 +417,38 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
     }
   }
 
-  private async confirmCreatedFirstRunConfiguration(): Promise<void> {
+  private async setupTarget(
+    name: string
+  ): Promise<{ readonly application: ConsoleApplicationService; readonly path: string }> {
+    const discovered = await this.discover();
+    if (discovered.catalog.discoveryState !== "ready") {
+      throw new MiftahError(
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the standard configuration directory could not be inspected safely"
+      );
+    }
+    if (discovered.configurations.length === 0) {
+      return { application: this.firstRunApplication, path: this.options.defaultConfigPath };
+    }
+    if (!returningConfigurationName.test(name)) {
+      throw new MiftahError(
+        "CONSOLE_CONFIGURATION_TARGET_INVALID",
+        "CONSOLE_CONFIGURATION_TARGET_INVALID: choose a short lowercase configuration name"
+      );
+    }
+    if (discovered.configurations.some((configuration) => configuration.metadata.name === name)) {
+      throw new MiftahError(
+        "CONFIG_ALREADY_EXISTS",
+        "CONFIG_ALREADY_EXISTS: refusing to create a duplicate named configuration"
+      );
+    }
+    const path = join(resolvePath(this.options.configDirectory), name.endsWith(".json") ? name : `${name}.json`);
+    return { application: this.applicationFor(path), path };
+  }
+
+  private async confirmCreatedFirstRunConfiguration(configPath = this.options.defaultConfigPath): Promise<void> {
     const refreshed = await this.discover();
-    const configuredPath = resolvePath(this.options.defaultConfigPath);
+    const configuredPath = resolvePath(configPath);
     const createdPath = await realpath(configuredPath).catch(() => configuredPath);
     const created = refreshed.configurations.find((configuration) => configuration.path === createdPath);
     if (refreshed.catalog.discoveryState !== "ready" || created === undefined || trustedConfigurationFor(created) === undefined) {

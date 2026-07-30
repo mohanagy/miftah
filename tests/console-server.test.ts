@@ -1469,6 +1469,8 @@ describe("local Console control server", () => {
       );
       const html = await page.text();
       expect(html).toContain("Miftah Console");
+      expect(html).toContain("Local MCP setup");
+      expect(html).not.toContain("Local control plane");
       expect(html).toContain('src="/app.js"');
       expect(html).toContain('href="/app.css"');
       expect(html).toContain('id="snippet-guidance"');
@@ -1555,6 +1557,8 @@ describe("local Console control server", () => {
       expect(html).toContain('id="configuration-catalog-view"');
       expect(html).toContain('id="configuration-catalog-summary"');
       expect(html).toContain('id="configuration-catalog-attention"');
+      expect(html).toContain('id="set-up-another-mcp"');
+      expect(html).toContain("Set up another MCP");
       expect(html).toContain('id="provider-authentication-view"');
       expect(html).toContain('id="profile-readiness-view"');
       expect(html).toContain('id="profile-readiness-profile"');
@@ -1601,6 +1605,8 @@ describe("local Console control server", () => {
         "The Console is shutting down."
       )).toBe("The Console is shutting down.");
       expect(javascript).toContain("/api/v1/onboarding/native-oauth/discover");
+      expect(javascript).toContain("showReturningSetup");
+      expect(javascript).toContain("Choose a short lowercase name");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
@@ -2977,6 +2983,69 @@ describe("local Console control server", () => {
       } finally {
         await explicit.close();
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates another safe configuration through the returning-user dashboard API", async () => {
+    const root = await mkdtemp(join(tmpdir(), "miftah-console-returning-setup-"));
+    temporaryDirectories.push(root);
+    const directory = await createPrivateConsoleDirectory(root);
+    await writePrivateConsoleFile(join(directory, "gsc.json"), `${JSON.stringify({
+      version: "3",
+      name: "gsc",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
+      profiles: { work: {} }
+    })}\n`);
+    const server = await startConsoleServer(join(directory, "miftah.json"), {
+      bootstrapCredential: "test-only-bootstrap-credential",
+      allowMissingConfig: true,
+      deferConfigValidation: true,
+      application: new ConsoleDashboardApplicationService({
+        defaultConfigPath: join(directory, "miftah.json"),
+        configDirectory: directory
+      })
+    });
+
+    try {
+      const session = await bootstrapSession(server);
+      const endpoint = new URL("/api/v1/onboarding/preset", server.url);
+      const headers = {
+        origin: server.url.origin,
+        cookie: session.cookie,
+        "x-miftah-csrf": session.csrfToken,
+        "content-type": "application/json"
+      };
+      const unsafe = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "../escape", ...supportedKnownConnectorOptions() })
+      });
+      expect(unsafe.status).toBe(422);
+      expect(await unsafe.json()).toEqual({
+        error: {
+          code: "configuration_target_invalid",
+          message: "Choose a short lowercase configuration name using letters, numbers, dots, underscores, or hyphens."
+        }
+      });
+      await expect(readFile(join(root, "escape.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
+      const created = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "support-tools", ...supportedKnownConnectorOptions() })
+      });
+      expect(created.status).toBe(201);
+      expect(await created.json()).toMatchObject({
+        data: { name: "support-tools", write: true }
+      });
+      await expect(readFile(join(directory, "support-tools.json"), "utf8"))
+        .resolves.toContain('"name": "support-tools"');
+      await expect(readFile(join(directory, "miftah.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await server.close();
     }

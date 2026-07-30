@@ -319,6 +319,13 @@ function publicApplicationError(error: unknown): ConsoleHttpError {
   if (error.code === "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE") {
     return new ConsoleHttpError(503, "configuration_discovery_unavailable", "The standard configuration directory is unavailable.");
   }
+  if (error.code === "CONSOLE_CONFIGURATION_TARGET_INVALID") {
+    return new ConsoleHttpError(
+      422,
+      "configuration_target_invalid",
+      "Choose a short lowercase configuration name using letters, numbers, dots, underscores, or hyphens."
+    );
+  }
   if (error.code === "CONFIG_ALREADY_EXISTS") {
     return new ConsoleHttpError(409, "config_already_exists", "A configuration already exists at this location.");
   }

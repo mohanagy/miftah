@@ -306,7 +306,7 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     name: "config",
     takesValue: true,
     usage: "--config <file>",
-    description: "Configuration file."
+    description: "Select a configuration file; setup-capable commands create it without overwriting."
   },
   profile: {
     name: "profile",

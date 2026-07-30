@@ -17,7 +17,7 @@ const page = `<!doctype html>
   <main id="main" class="shell">
     <header class="masthead">
       <div>
-        <p class="eyebrow">Local control plane</p>
+        <p class="eyebrow">Local MCP setup</p>
         <h1>Miftah <span>Console</span></h1>
       </div>
       <p class="local-mark"><span aria-hidden="true"></span>127.0.0.1 only</p>
@@ -74,7 +74,10 @@ const page = `<!doctype html>
             <p class="step">02 / Existing connections</p>
             <h2 id="configuration-catalog-title">Choose a Miftah configuration</h2>
           </div>
-          <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
+          <div class="catalog-actions">
+            <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
+            <button id="set-up-another-mcp" type="button">Set up another MCP</button>
+          </div>
         </div>
         <div class="configuration-catalog-status" role="status" aria-live="polite" aria-atomic="true">
           <p id="configuration-catalog-summary"></p>
@@ -120,7 +123,7 @@ const page = `<!doctype html>
               <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
             </div>
           </fieldset>
-          <label>Configuration name<input name="name" required maxlength="256" placeholder="support-tools"></label>
+          <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="support-tools"></label>
           <label>Known connector
             <select name="preset" id="preset-selection">
               <option value="generic">Generic reference MCP</option>
@@ -133,7 +136,7 @@ const page = `<!doctype html>
               <option value="streamable-http">Remote HTTPS MCP endpoint</option>
             </select>
           </label>
-          <div class="wide setup-draft-actions">
+          <div id="setup-draft-actions" class="wide setup-draft-actions">
             <p class="field-note">Save your configuration name and connector choice to continue later. Miftah does not save a URL, executable, arguments, path, client entry, environment variable, secret, OAuth state, or browser sign-in details. You will enter those again when you continue.</p>
             <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save connector choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved connector choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
           </div>
@@ -175,7 +178,7 @@ const page = `<!doctype html>
           <p>Paste one existing Claude, Cursor, or VS Code JSON entry when you want to reuse a supported local executable or explicitly typed HTTPS remote endpoint. Miftah never scans or changes client settings.</p>
         </div>
         <form id="client-entry-onboarding-form" class="form-grid">
-          <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
+          <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="posthog-work"></label>
           <label>Selected MCP entry name<input name="entry" required maxlength="256" placeholder="posthog"></label>
           <label class="wide">Existing client JSON<textarea name="document" required maxlength="65536" rows="12" spellcheck="false" autocomplete="off" placeholder='{"mcpServers":{"posthog":{"command":"npx","args":["--yes","@posthog/mcp@1.2.3"]}}}'></textarea></label>
           <p class="field-note wide">The pasted text is parsed only for this request and cleared from the page afterwards. This flow accepts one selected local <code>stdio</code> entry only when it fits Miftah's static launch grammar: a direct executable, a pinned package runner, or a script path with non-sensitive flags. It also accepts one credential-free HTTPS remote entry explicitly marked <code>type: "http"</code> or <code>"streamable-http"</code>. Remote import does not discover OAuth or call the endpoint. For custom arguments, headers, credentials, or authentication, use advanced manual setup and configure authentication separately.</p>
@@ -196,7 +199,7 @@ const page = `<!doctype html>
           <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It uses standards-based OAuth with dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
         </div>
         <form id="onboarding-form" class="form-grid">
-          <label>Configuration name<input name="name" required maxlength="256" placeholder="posthog-work"></label>
+          <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="posthog-work"></label>
           <label>Profile name<input name="profile" required maxlength="256" placeholder="production"></label>
           <label class="wide">Profile description<input name="description" maxlength="1024" placeholder="Production analytics account"></label>
           <label class="wide">Remote MCP resource URL<input name="resource" type="url" required maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
@@ -500,6 +503,8 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-catalog-status p { margin: 0; }
 .configuration-catalog-status ul { margin: .55rem 0 0; padding-left: 1.2rem; color: var(--muted); }
 .configuration-catalog-status ul:empty { display: none; }
+.catalog-actions { display: grid; gap: .8rem; justify-items: start; }
+.catalog-actions p { margin: 0; }
 .configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
 .configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
@@ -547,6 +552,8 @@ const script = `(() => {
   const configurationCatalog = byId("configuration-catalog");
   const configurationCatalogSummary = byId("configuration-catalog-summary");
   const configurationCatalogAttention = byId("configuration-catalog-attention");
+  const setUpAnotherMcp = byId("set-up-another-mcp");
+  const setupDraftActions = byId("setup-draft-actions");
   const setupCompletionView = byId("setup-completion-view");
   const setupCompletionVerification = byId("setup-completion-verification");
   const setupCompletionNextAction = byId("setup-completion-next-action");
@@ -588,6 +595,7 @@ const script = `(() => {
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
   let activeSetupDraft = undefined;
+  let returningSetupVisible = false;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -599,6 +607,7 @@ const script = `(() => {
 
   function restoreUnlock(recoveryMessage) {
     csrfToken = "";
+    returningSetupVisible = false;
     setupCompletion = undefined;
     activeSetupDraft = undefined;
     renderSetupDraftControls();
@@ -901,6 +910,9 @@ const script = `(() => {
     const catalog = catalogConfigurations(metadata);
     const hasCatalogState = catalog.discoveredCount > 0 || catalog.readyCount > 0 || catalog.attentionCount > 0;
     if (configurationCatalogView) configurationCatalogView.hidden = !hasCatalogState;
+    if (setUpAnotherMcp) {
+      setUpAnotherMcp.hidden = catalog.discoveryState !== "ready" || catalog.configurations.length === 0;
+    }
     if (configurationCatalogSummary) {
       const files = catalog.discoveredCount === 1 ? "configuration file found" : "configuration files found";
       const attention = catalog.attentionCount === 1 ? "needs attention" : "need attention";
@@ -1553,6 +1565,24 @@ const script = `(() => {
     }
   }
 
+  function showReturningSetup() {
+    returningSetupVisible = true;
+    if (onboardingView) onboardingView.hidden = false;
+    if (presetOnboardingView) presetOnboardingView.hidden = false;
+    if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
+    if (workspaceView) workspaceView.hidden = true;
+    if (setupDraftActions) setupDraftActions.hidden = true;
+    updatePresetFields();
+    const name = presetOnboardingForm instanceof HTMLFormElement
+      ? presetOnboardingForm.querySelector("input[name='name']")
+      : undefined;
+    if (name instanceof HTMLInputElement) {
+      name.focus();
+      name.scrollIntoView({ block: "center" });
+    }
+    message("Choose a short lowercase name such as support-tools. Miftah creates a separate support-tools.json configuration and never replaces an existing file.");
+  }
+
   /** Clears untrusted import text before routing only to an existing manual transport form. */
   function bindClientEntryManualRecoveryAction(id, source, clientEntryOnboardingForm) {
     const action = byId(id);
@@ -1576,11 +1606,16 @@ const script = `(() => {
       renderProviderAuthentication(undefined);
       renderProfileReadiness(undefined, "");
       if (catalog.configurations.length > 0) {
-        if (onboardingView) onboardingView.hidden = true;
-        if (presetOnboardingView) presetOnboardingView.hidden = true;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        if (onboardingView) onboardingView.hidden = !returningSetupVisible;
+        if (presetOnboardingView) presetOnboardingView.hidden = !returningSetupVisible;
+        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = !returningSetupVisible;
         if (workspaceView) workspaceView.hidden = true;
-        message("Choose a configuration to open it. Miftah does not inspect or change MCP client settings.");
+        if (setupDraftActions) setupDraftActions.hidden = returningSetupVisible;
+        if (returningSetupVisible) {
+          message("Choose a short lowercase name such as support-tools. Miftah creates a separate support-tools.json configuration and never replaces an existing file.");
+        } else {
+          message("Choose a configuration to open it, or set up another MCP. Miftah does not inspect or change MCP client settings.");
+        }
         return;
       }
       if (catalog.attentionCount > 0) {
@@ -1603,6 +1638,7 @@ const script = `(() => {
       if (presetOnboardingView) presetOnboardingView.hidden = false;
       if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = false;
       if (workspaceView) workspaceView.hidden = true;
+      if (setupDraftActions) setupDraftActions.hidden = false;
       updatePresetFields();
       message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
       return;
@@ -1611,6 +1647,7 @@ const script = `(() => {
     if (presetOnboardingView) presetOnboardingView.hidden = true;
     if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
+    if (setupDraftActions) setupDraftActions.hidden = false;
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
     const configVersion = byId("config-version");
@@ -1681,6 +1718,7 @@ const script = `(() => {
       button.disabled = true;
       message("Opening the selected Miftah configuration…");
       try {
+        returningSetupVisible = false;
         await api("/api/v1/configurations/" + encodeURIComponent(configurationId) + "/select", {
           method: "POST",
           body: {}
@@ -1689,6 +1727,10 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally { button.disabled = false; }
     });
+  }
+
+  if (setUpAnotherMcp instanceof HTMLButtonElement) {
+    setUpAnotherMcp.addEventListener("click", showReturningSetup);
   }
 
   const onboardingForm = byId("onboarding-form");
@@ -1709,6 +1751,7 @@ const script = `(() => {
         }));
         const completion = record(result.completion);
         onboardingForm.reset();
+        returningSetupVisible = false;
         await refresh();
         setupCompletion = completion;
         renderSetupCompletion(setupCompletion);
@@ -1849,6 +1892,7 @@ const script = `(() => {
           presetOnboardingForm.reset();
           updatePresetFields();
         }
+        returningSetupVisible = false;
         await refresh();
         setupCompletion = completion;
         renderSetupCompletion(setupCompletion);
@@ -1891,6 +1935,7 @@ const script = `(() => {
         }));
         const completion = record(result.completion);
         clientEntryOnboardingForm.reset();
+        returningSetupVisible = false;
         await refresh();
         setupCompletion = completion;
         renderSetupCompletion(setupCompletion);
