@@ -132,7 +132,6 @@ const page = `<!doctype html>
       <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">Step 2 of 3 · Connector details</p>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
           <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
@@ -187,7 +186,6 @@ const page = `<!doctype html>
       <section id="client-entry-onboarding-view" class="work-section" hidden aria-labelledby="client-entry-onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">Step 2 of 3 · Existing client entry</p>
             <h2 id="client-entry-onboarding-title">Import one MCP client entry</h2>
           </div>
           <p>Paste one existing Claude, Cursor, or VS Code JSON entry when you want to reuse a supported local executable or explicitly typed HTTPS remote endpoint. Miftah never scans or changes client settings.</p>
@@ -208,7 +206,6 @@ const page = `<!doctype html>
       <section id="onboarding-view" class="work-section" hidden aria-labelledby="onboarding-title">
         <div class="section-heading">
           <div>
-            <p class="step">Step 2 of 3 · Browser sign-in details</p>
             <h2 id="onboarding-title">Set up remote MCP with browser sign-in</h2>
           </div>
           <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It uses standards-based OAuth with dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
@@ -1585,7 +1582,18 @@ const script = `(() => {
     if (setupSourceChoice) setupSourceChoice.hidden = true;
     if (setupWizardBack) setupWizardBack.hidden = false;
     if (setupWizardContinue) setupWizardContinue.hidden = true;
-    if (setupWizardStep) setupWizardStep.textContent = "Step 2 of 3 · Connection details";
+    if (setupWizardStep) {
+      const detail = source === "browser-sign-in"
+        ? "Browser sign-in details"
+        : source === "import"
+          ? "Existing client entry"
+          : source === "remote"
+            ? "Remote endpoint details"
+            : source === "local"
+              ? "Local executable details"
+              : "Connector details";
+      setupWizardStep.textContent = "Step 2 of 3 · " + detail;
+    }
     if (setupWizardCopy) setupWizardCopy.textContent = "Only the selected setup path is shown. Use Back to choose a different path or Cancel setup to leave without creating a configuration.";
     if (source === "browser-sign-in") {
       if (onboardingView) onboardingView.hidden = false;
@@ -1701,18 +1709,16 @@ const script = `(() => {
         return;
       }
       if (catalog.attentionCount > 0) {
-        if (onboardingView) onboardingView.hidden = true;
-        if (presetOnboardingView) presetOnboardingView.hidden = true;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        hideSetupWizardPaths();
+        returningSetupVisible = false;
         if (setupWizardView) setupWizardView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah found configuration files, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
-        if (onboardingView) onboardingView.hidden = true;
-        if (presetOnboardingView) presetOnboardingView.hidden = true;
-        if (clientEntryOnboardingView) clientEntryOnboardingView.hidden = true;
+        hideSetupWizardPaths();
+        returningSetupVisible = false;
         if (setupWizardView) setupWizardView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
         message("Miftah could not safely inspect its standard configuration directory. Correct its local access or start the Console with --config.");

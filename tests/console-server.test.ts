@@ -593,6 +593,7 @@ function selectConsoleRemoteSetupSource(javascript: string): {
 function exerciseGuidedSetupWizard(javascript: string): {
   readonly chooser: readonly boolean[];
   readonly importPath: readonly boolean[];
+  readonly importStep: string;
   readonly back: readonly boolean[];
   readonly cancelled: readonly boolean[];
   readonly resetCounts: readonly number[];
@@ -724,6 +725,7 @@ function exerciseGuidedSetupWizard(javascript: string): {
     setupWizardBack.hidden,
     setupWizardContinue.hidden
   ];
+  const importStep = setupWizardStep.textContent;
   functions.showSetupWizardChooser(true);
   const back = [
     setupSourceChoice.hidden,
@@ -743,6 +745,7 @@ function exerciseGuidedSetupWizard(javascript: string): {
   return {
     chooser,
     importPath,
+    importStep,
     back,
     cancelled,
     resetCounts: [presetForm.resetCount, importForm.resetCount, oauthForm.resetCount],
@@ -1798,11 +1801,24 @@ describe("local Console control server", () => {
       expect(exerciseGuidedSetupWizard(javascript)).toEqual({
         chooser: [false, false, true, true, true, true, false],
         importPath: [true, true, true, false, false, true],
+        importStep: "Step 2 of 3 · Existing client entry",
         back: [false, true, true, true],
         cancelled: [true, true, true, true, true],
         resetCounts: [1, 1, 1],
         status: "Setup cancelled. No configuration was created or changed."
       });
+      const attentionBranch = javascript.slice(
+        javascript.indexOf("if (catalog.attentionCount > 0)"),
+        javascript.indexOf('if (catalog.discoveryState === "unavailable")')
+      );
+      expect(attentionBranch).toContain("hideSetupWizardPaths()");
+      expect(attentionBranch).toContain("returningSetupVisible = false");
+      const discoveryUnavailableBranch = javascript.slice(
+        javascript.indexOf('if (catalog.discoveryState === "unavailable")'),
+        javascript.indexOf('setupWizardSource = "connector"', javascript.indexOf('if (catalog.discoveryState === "unavailable")'))
+      );
+      expect(discoveryUnavailableBranch).toContain("hideSetupWizardPaths()");
+      expect(discoveryUnavailableBranch).toContain("returningSetupVisible = false");
       expect(javascript).toContain("Choose a short lowercase name");
       expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
