@@ -23,9 +23,15 @@ function releaseNotes(changelog: string, version: string): string {
 
 describe("v0.5.3 release artifacts", () => {
   it.each([
-    "## [0.5.3] - 2026-7-30\n\n### Changed\n",
-    "Release candidate: ## [0.5.3] - 2026-07-30\n\n### Changed\n"
-  ])("requires a dated release heading at the start of a line", (changelog) => {
+    {
+      name: "a non-zero-padded date",
+      changelog: "## [0.5.3] - 2026-7-30\n\n### Changed\n"
+    },
+    {
+      name: "a heading that does not start its line",
+      changelog: "Release candidate: ## [0.5.3] - 2026-07-30\n\n### Changed\n"
+    }
+  ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
       `Unable to find the ${releaseVersion} changelog entry.`
     );
