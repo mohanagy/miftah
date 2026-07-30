@@ -15,7 +15,11 @@ import type { PresetBuildOptions } from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 import { AuditLogger } from "../audit/audit-logger.js";
-import { AuditTrail, type AuditLifecycleInput } from "../audit/audit-trail.js";
+import {
+  AuditTrail,
+  createAuditLifecycleEvent,
+  type AuditLifecycleInput
+} from "../audit/audit-trail.js";
 import type {
   ConnectionAddCommandReport,
   ConnectionApplicationAuditEvent,
@@ -105,6 +109,7 @@ import {
   type ConsoleConfigMetadata
 } from "./console-config-metadata.js";
 import type { ConsoleTrustedConfiguration } from "./console-trusted-configuration.js";
+import { publishPosixAnchoredSetupConfiguration } from "./posix-anchored-setup-publication.js";
 
 export type {
   ConsoleAuthenticationMetadata,
@@ -389,9 +394,13 @@ export interface ConsoleApplicationDependencies {
   /**
    * Existing catalog directory already verified by dashboard discovery.
    * Windows re-verifies this exact directory before the private writer holds
-   * the complete path through exclusive publication.
+   * the complete path. POSIX publication checks the captured exact-width
+   * identity inside an inode-anchored child working directory.
    */
-  readonly trustedCreationDirectory?: string;
+  readonly trustedCreationDirectory?: {
+    readonly path: string;
+    readonly identity: string;
+  };
 }
 
 function fileErrorCode(error: unknown): string | undefined {
@@ -736,7 +745,7 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
   private readonly nativeOAuthFetch: FetchLike | undefined;
   private readonly oauthProfileRename: OAuthProfileRenameDependencies | undefined;
   private readonly trustedConfiguration: ConsoleTrustedConfiguration | undefined;
-  private readonly trustedCreationDirectory: string | undefined;
+  private readonly trustedCreationDirectory: ConsoleApplicationDependencies["trustedCreationDirectory"];
 
   constructor(
     private readonly configPath: string,
@@ -1256,11 +1265,35 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
     audit: Pick<AuditLifecycleInput, "operation" | "name" | "profile" | "upstream" | "status">
   ): Promise<void> {
     const setup = createSetupConfigurationPlan({ configPath: this.configPath, config });
-    await ensureFirstRunConfigDirectory(setup.path, this.trustedCreationDirectory);
+    if (process.platform !== "win32" && this.trustedCreationDirectory !== undefined) {
+      try {
+        await publishPosixAnchoredSetupConfiguration({
+          trustedDirectory: this.trustedCreationDirectory,
+          configPath: setup.path,
+          configContent: setup.content,
+          auditEvent: createAuditLifecycleEvent("miftah-console", this.audit.sessionId, audit)
+        });
+      } catch (error) {
+        if (error instanceof MiftahError) throw error;
+        if (fileErrorCode(error) === "EEXIST") {
+          throw new MiftahError(
+            "CONFIG_ALREADY_EXISTS",
+            "CONFIG_ALREADY_EXISTS: refusing to replace an existing configuration"
+          );
+        }
+        throw new MiftahError(
+          "CONFIG_CREATE_FAILED",
+          "CONFIG_CREATE_FAILED: unable to create the initial configuration"
+        );
+      }
+      return;
+    }
+    await ensureFirstRunConfigDirectory(setup.path, this.trustedCreationDirectory?.path);
     await this.audit.ensureWritable();
     try {
       await publishFirstRunSetupConfigurationPlan(setup);
     } catch (error) {
+      if (error instanceof MiftahError) throw error;
       if (fileErrorCode(error) === "EEXIST") {
         throw new MiftahError(
           "CONFIG_ALREADY_EXISTS",

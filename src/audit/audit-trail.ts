@@ -84,6 +84,30 @@ export interface AuditProfileInput {
   status?: AuditStatus;
 }
 
+export function createAuditLifecycleEvent(
+  wrapperName: string,
+  sessionId: string,
+  input: AuditLifecycleInput
+): AuditEvent {
+  return {
+    wrapper: wrapperName,
+    kind: "lifecycle",
+    eventId: randomUUID(),
+    sessionId,
+    sourceProfile: input.profile,
+    profile: input.profile,
+    operation: input.operation,
+    name: input.name,
+    status: input.status,
+    durationMs: 0,
+    ...(input.upstream === undefined ? {} : { upstream: input.upstream }),
+    ...(input.lockToProfile === undefined ? {} : { lockToProfile: input.lockToProfile }),
+    ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+    ...(input.oauthConnectionState === undefined ? {} : { oauthConnectionState: input.oauthConnectionState }),
+    ...(input.oauthIdentityState === undefined ? {} : { oauthIdentityState: input.oauthIdentityState })
+  };
+}
+
 /** Creates one final audit record per MCP request when audit logging is configured. */
 export class AuditTrail {
   readonly sessionId = randomUUID();
@@ -130,23 +154,7 @@ export class AuditTrail {
   }
 
   private lifecycleEvent(input: AuditLifecycleInput): AuditEvent {
-    return {
-      wrapper: this.wrapperName,
-      kind: "lifecycle",
-      eventId: randomUUID(),
-      sessionId: this.sessionId,
-      sourceProfile: input.profile,
-      profile: input.profile,
-      operation: input.operation,
-      name: input.name,
-      status: input.status,
-      durationMs: 0,
-      ...(input.upstream === undefined ? {} : { upstream: input.upstream }),
-      ...(input.lockToProfile === undefined ? {} : { lockToProfile: input.lockToProfile }),
-      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
-      ...(input.oauthConnectionState === undefined ? {} : { oauthConnectionState: input.oauthConnectionState }),
-      ...(input.oauthIdentityState === undefined ? {} : { oauthIdentityState: input.oauthIdentityState })
-    };
+    return createAuditLifecycleEvent(this.wrapperName, this.sessionId, input);
   }
 
   /** Records a safe state transition for a one-time approval without serializing its bearer or arguments. */

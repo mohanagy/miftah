@@ -38,7 +38,9 @@ import type { ProfileReadinessReport } from "../setup/profile-readiness.js";
 import {
   discoverConsoleConfigCatalog,
   trustedConfigurationFor,
+  trustedDirectoryFor,
   type ConsoleConfigCatalogDiscovery,
+  type ConsoleTrustedCatalogDirectory,
   type DiscoveredConsoleConfiguration
 } from "./console-config-catalog.js";
 import type { ConsoleConfigCatalog, ConsoleConfigMetadata } from "./console-config-metadata.js";
@@ -349,7 +351,7 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
   private applicationFor(
     configPath: string,
     trustedConfiguration?: ConsoleTrustedConfiguration,
-    trustedCreationDirectory?: string
+    trustedCreationDirectory?: ConsoleTrustedCatalogDirectory
   ): ConsoleApplicationService {
     return new ConsoleApplicationService(configPath, {
       ...(this.options.launcher === undefined ? {} : { launcher: this.options.launcher }),
@@ -452,9 +454,16 @@ export class ConsoleDashboardApplicationService implements ConsoleControlApplica
         "CONFIG_ALREADY_EXISTS: refusing to create a duplicate named configuration"
       );
     }
-    const path = join(resolvePath(this.options.configDirectory), `${normalizedName}.json`);
+    const trustedDirectory = trustedDirectoryFor(discovered);
+    if (trustedDirectory === undefined) {
+      throw new MiftahError(
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE",
+        "CONSOLE_CONFIG_DISCOVERY_UNAVAILABLE: the standard configuration directory identity is unavailable"
+      );
+    }
+    const path = join(trustedDirectory.path, `${normalizedName}.json`);
     return {
-      application: this.applicationFor(path, undefined, resolvePath(this.options.configDirectory)),
+      application: this.applicationFor(path, undefined, trustedDirectory),
       name: normalizedName,
       path
     };

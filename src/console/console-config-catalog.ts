@@ -117,6 +117,12 @@ export interface ConsoleConfigCatalogDiscovery {
   readonly configurations: readonly DiscoveredConsoleConfiguration[];
 }
 
+export interface ConsoleTrustedCatalogDirectory {
+  readonly path: string;
+  /** Exact-width POSIX device/inode identity captured by guarded discovery. */
+  readonly identity: string;
+}
+
 type TrustedConfigurationCandidate =
   | {
       readonly status: "accepted";
@@ -134,11 +140,19 @@ type TrustedConfigurationCandidate =
 
 /** Sensitive verified bytes/configuration stay off the serializable catalog entry. */
 const trustedConfigurations = new WeakMap<DiscoveredConsoleConfiguration, ConsoleTrustedConfiguration>();
+/** Canonical directory paths and identities stay off the serializable discovery result. */
+const trustedDirectories = new WeakMap<ConsoleConfigCatalogDiscovery, ConsoleTrustedCatalogDirectory>();
 
 export function trustedConfigurationFor(
   configuration: DiscoveredConsoleConfiguration
 ): ConsoleTrustedConfiguration | undefined {
   return trustedConfigurations.get(configuration);
+}
+
+export function trustedDirectoryFor(
+  discovery: ConsoleConfigCatalogDiscovery
+): ConsoleTrustedCatalogDirectory | undefined {
+  return trustedDirectories.get(discovery);
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -230,7 +244,7 @@ async function trustedDirectory(
   windowsAclVerifier: WindowsConfigAclVerifier,
   windowsAclPathsVerifier: WindowsConfigAclPathsVerifier,
   useBatchedWindowsAclVerifier: boolean
-): Promise<string | undefined> {
+): Promise<ConsoleTrustedCatalogDirectory | undefined> {
   let observed: BigIntStats;
   try {
     observed = await lstat(directory, { bigint: true });
@@ -253,7 +267,7 @@ async function trustedDirectory(
   ))) {
     throw new Error("unsafe configuration directory");
   }
-  return canonical;
+  return { path: canonical, identity: bigintFileIdentity(resolved) };
 }
 
 async function closeTrustedConfigurationHandle(
@@ -470,9 +484,9 @@ export async function discoverConsoleConfigCatalog(
   );
   const candidateStageObserver = options.candidateStageObserver;
   const candidateIdentityObserver = options.candidateIdentityObserver;
-  let directory: string | undefined;
+  let trustedConfigDirectory: ConsoleTrustedCatalogDirectory | undefined;
   try {
-    directory = await trustedDirectory(
+    trustedConfigDirectory = await trustedDirectory(
       resolve(options.configDirectory),
       ownerUid,
       platform,
@@ -486,7 +500,7 @@ export async function discoverConsoleConfigCatalog(
       configurations: []
     };
   }
-  if (directory === undefined) {
+  if (trustedConfigDirectory === undefined) {
     return {
       catalog: {
         source: "standard-config-directory",
@@ -500,6 +514,7 @@ export async function discoverConsoleConfigCatalog(
       configurations: []
     };
   }
+  const directory = trustedConfigDirectory.path;
 
   // The default Windows path verifies the canonical directory and each
   // candidate together below. Names are not surfaced until that bounded
@@ -605,8 +620,10 @@ export async function discoverConsoleConfigCatalog(
   configurations.sort((left, right) =>
     left.metadata.name.localeCompare(right.metadata.name) || left.metadata.id.localeCompare(right.metadata.id)
   );
-  return {
+  const discovery: ConsoleConfigCatalogDiscovery = {
     catalog: readyCatalog(names.length, configurations, attentionCounts),
     configurations
   };
+  trustedDirectories.set(discovery, trustedConfigDirectory);
+  return discovery;
 }
