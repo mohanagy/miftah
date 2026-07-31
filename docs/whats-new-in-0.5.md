@@ -1,9 +1,9 @@
 # What is in Miftah 0.5
 
-Install `@lubab/miftah@0.5.5` when you want Miftah to guide setup instead of assembling a multi-account configuration by hand:
+Install `@lubab/miftah@0.5.6` when you want Miftah to guide setup instead of assembling a multi-account configuration by hand:
 
 ```bash
-npm install -g @lubab/miftah@0.5.5
+npm install -g @lubab/miftah@0.5.6
 miftah version
 ```
 
