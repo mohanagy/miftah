@@ -48,10 +48,10 @@ describe("repository tooling contracts", () => {
     const workflow = readRepositoryFile(".github/workflows/ci.yml");
 
     expect(workflow).toMatch(
-      /- name: Test core contracts \(Windows, serialized files\)\s+if: \$\{\{ runner\.os == 'Windows' \}\}\s+run: npm run test:core -- --no-file-parallelism/u
+      /- name: Test core contracts \(Windows, serialized files\)\s+if: \$\{\{ runner\.os == 'Windows' \}\}\s+run: npm run test:core -- --no-file-parallelism[ \t]*(?:\r?\n|$)/u
     );
     expect(workflow).toMatch(
-      /- name: Test core contracts\s+if: \$\{\{ runner\.os != 'Windows' \}\}\s+run: npm run test:core/u
+      /- name: Test core contracts\s+if: \$\{\{ runner\.os != 'Windows' \}\}\s+run: npm run test:core[ \t]*(?:\r?\n|$)/u
     );
   });
 });
