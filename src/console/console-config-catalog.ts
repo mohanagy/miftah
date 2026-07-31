@@ -586,7 +586,9 @@ export async function discoverConsoleConfigCatalog(
           name: summary.name,
           version: summary.version,
           profileCount: summary.profiles.length,
+          profileNames: summary.profiles.map(({ name }) => name),
           defaultProfile: summary.defaultProfile,
+          profileSwitchingFromMcp: summary.profileSwitchingFromMcp === true,
           authentication: summary.authentication ?? {
             mode: "miftah-native-oauth",
             credentialOwner: "miftah",
