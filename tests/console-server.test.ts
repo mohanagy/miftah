@@ -566,6 +566,13 @@ async function recoverSetupCompletionAfterUnlock(
     readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
     readonly resumeSession: () => Promise<void>;
   };
+  const waitForUnlock = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (!unlock.hidden) return;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error("Expected session recovery to reveal the unlock view.");
+  };
   let setupRefreshErrorName = "";
   let setupRefreshErrorMessage = "";
   const setupRefresh = harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
@@ -578,7 +585,7 @@ async function recoverSetupCompletionAfterUnlock(
     });
   if (refreshFailure === "setup-origin-overlap") {
     await overlapRecoveryRequested;
-    while (unlock.hidden) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForUnlock();
     const lockedState = { completionHidden: completion.hidden, focus: focused };
     const afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
     activeRefreshFailure = "none";
@@ -632,7 +639,7 @@ async function recoverSetupCompletionAfterUnlock(
     const staleResume = harness.resumeSession();
     await overlapRecoveryRequested;
     releaseFirstOverlapRecovery?.();
-    while (unlock.hidden) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForUnlock();
     afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
     activeRefreshFailure = "none";
     await harness.resumeSession();
