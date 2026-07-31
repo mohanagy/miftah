@@ -270,22 +270,25 @@ const page = `<!doctype html>
       </details>
 
       <div id="workspace-view" hidden>
-        <nav id="workspace-task-navigation" aria-label="Connection tasks">
-          <a href="#connection-overview">Overview</a>
-          <a href="#connection-accounts">Accounts</a>
-          <a href="#connection-authentication">Authentication</a>
-          <a href="#connection-client-setup">Client setup</a>
-          <a href="#connection-audit">Audit</a>
+        <nav id="workspace-task-navigation" aria-label="Connection tasks" role="tablist">
+          <a id="workspace-task-overview" href="#connection-overview" role="tab" aria-controls="connection-overview" aria-selected="true" tabindex="0" data-workspace-task="connection-overview">Overview</a>
+          <a id="workspace-task-accounts" href="#connection-accounts" role="tab" aria-controls="connection-accounts" aria-selected="false" tabindex="-1" data-workspace-task="connection-accounts">Accounts</a>
+          <a id="workspace-task-authentication" href="#connection-authentication" role="tab" aria-controls="connection-authentication" aria-selected="false" tabindex="-1" data-workspace-task="connection-authentication">Authentication</a>
+          <a id="workspace-task-client-setup" href="#connection-client-setup" role="tab" aria-controls="connection-client-setup" aria-selected="false" tabindex="-1" data-workspace-task="connection-client-setup">Client setup</a>
+          <a id="workspace-task-audit" href="#connection-audit" role="tab" aria-controls="connection-audit" aria-selected="false" tabindex="-1" data-workspace-task="connection-audit">Audit</a>
         </nav>
-        <section id="connection-overview" class="summary" aria-label="Configuration summary">
-          <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
-          <article><p class="summary-label">Default account for new MCP sessions</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
-          <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
-          <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
+        <section id="connection-overview" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-overview" tabindex="0">
+          <div class="summary" aria-label="Configuration summary">
+            <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
+            <article><p class="summary-label">Default account for new MCP sessions</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
+            <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
+            <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
+          </div>
+          <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
         </section>
-        <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
 
-        <section id="connection-accounts" class="work-section" aria-labelledby="profile-inventory-title">
+        <div id="connection-accounts" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-accounts" tabindex="0" hidden>
+        <section class="work-section" aria-labelledby="profile-inventory-title">
           <div class="section-heading">
             <div><p class="step">Configured accounts</p><h2 id="profile-inventory-title">Know which accounts are available</h2></div>
             <p>These are profile names and non-secret labels only. Miftah does not read credentials, headers, launch arguments, token caches, or OAuth vault data to build this list.</p>
@@ -347,8 +350,9 @@ const page = `<!doctype html>
           <p class="field-note">Profiles with native OAuth bindings stay protected: Miftah will not split configuration deletion from OS-vault cleanup until it can do both atomically.</p>
           <p id="profile-removal-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
+        </div>
 
-        <div id="connection-authentication" class="workspace-task-group">
+        <div id="connection-authentication" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-authentication" tabindex="0" hidden>
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -439,7 +443,7 @@ const page = `<!doctype html>
         </section>
         </div>
 
-        <section id="connection-client-setup" class="work-section split" aria-labelledby="client-title">
+        <section id="connection-client-setup" class="workspace-task-panel work-section split" role="tabpanel" aria-labelledby="workspace-task-client-setup" tabindex="0" hidden>
           <div>
             <p class="step">Client handoff</p>
             <h2 id="client-title">Review and copy configuration</h2>
@@ -464,7 +468,7 @@ const page = `<!doctype html>
           </div>
         </section>
 
-        <section id="connection-audit" class="work-section" aria-labelledby="audit-title">
+        <section id="connection-audit" class="workspace-task-panel work-section" role="tabpanel" aria-labelledby="workspace-task-audit" tabindex="0" hidden>
           <div class="section-heading">
             <div><p class="step">Recent activity</p><h2 id="audit-title">Redacted Console audit</h2></div>
             <button id="refresh-dashboard" type="button" class="secondary">Refresh</button>
@@ -575,7 +579,9 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 #workspace-task-navigation { display: flex; flex-wrap: wrap; gap: .55rem; margin: 0 0 1rem; }
 #workspace-task-navigation a { display: inline-flex; min-height: 2.75rem; align-items: center; padding: .55rem .85rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); border-radius: .28rem; text-decoration: none; font-weight: 700; }
 #workspace-task-navigation a:hover { border-color: var(--key); }
+#workspace-task-navigation a[aria-selected="true"] { color: #19150d; background: var(--key); border-color: var(--key); }
 #workspace-task-navigation a:focus-visible { outline: 2px solid var(--key); outline-offset: 2px; }
+.workspace-task-panel[hidden] { display: none; }
 #connection-overview, #connection-accounts, #connection-authentication, #connection-client-setup, #connection-audit { scroll-margin-top: 1rem; }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
@@ -644,6 +650,14 @@ const script = `(() => {
   const presetOnboardingView = byId("preset-onboarding-view");
   const clientEntryOnboardingView = byId("client-entry-onboarding-view");
   const workspaceView = byId("workspace-view");
+  const workspaceTaskNavigation = byId("workspace-task-navigation");
+  const workspaceTaskPanels = [
+    byId("connection-overview"),
+    byId("connection-accounts"),
+    byId("connection-authentication"),
+    byId("connection-client-setup"),
+    byId("connection-audit")
+  ].filter((panel) => panel instanceof HTMLElement);
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
   const configurationCatalogSummary = byId("configuration-catalog-summary");
@@ -725,6 +739,56 @@ const script = `(() => {
 
   function message(text) {
     if (status && typeof text === "string") status.textContent = text;
+  }
+
+  function workspaceTaskIdFromHash(hash) {
+    const taskId = typeof hash === "string" && hash.startsWith("#") ? hash.slice(1) : "";
+    return workspaceTaskPanels.some((panel) => panel.id === taskId) ? taskId : "connection-overview";
+  }
+
+  function selectWorkspaceTask(taskId, updateHash) {
+    if (!(workspaceTaskNavigation instanceof HTMLElement)) return;
+    const selectedTaskId = workspaceTaskIdFromHash("#" + taskId);
+    const tabs = [...workspaceTaskNavigation.querySelectorAll("a[data-workspace-task]")];
+    workspaceTaskPanels.forEach((panel) => {
+      panel.hidden = panel.id !== selectedTaskId;
+    });
+    tabs.forEach((tab) => {
+      const selected = tab.getAttribute("data-workspace-task") === selectedTaskId;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.setAttribute("tabindex", selected ? "0" : "-1");
+    });
+    if (updateHash === true && typeof history !== "undefined") {
+      history.replaceState(null, "", "#" + selectedTaskId);
+    }
+  }
+
+  function initializeWorkspaceTaskNavigation() {
+    if (!(workspaceTaskNavigation instanceof HTMLElement) || typeof window === "undefined") return;
+    const tabs = [...workspaceTaskNavigation.querySelectorAll("a[data-workspace-task]")];
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        selectWorkspaceTask(String(tab.getAttribute("data-workspace-task") || ""), true);
+      });
+      tab.addEventListener("keydown", (event) => {
+        let targetIndex;
+        if (event.key === "ArrowRight") targetIndex = (index + 1) % tabs.length;
+        if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") targetIndex = 0;
+        if (event.key === "End") targetIndex = tabs.length - 1;
+        if (targetIndex === undefined) return;
+        event.preventDefault();
+        const target = tabs[targetIndex];
+        if (!(target instanceof HTMLElement)) return;
+        selectWorkspaceTask(String(target.getAttribute("data-workspace-task") || ""), true);
+        target.focus();
+      });
+    });
+    window.addEventListener("hashchange", () => {
+      selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
+    });
+    selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
   }
 
   function staleAuthenticationRequestError() {
@@ -2088,6 +2152,9 @@ const script = `(() => {
     hideSetupWizardPaths();
     if (setupWizardView) setupWizardView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
+    if (typeof window !== "undefined") {
+      selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
+    }
     if (setupDraftActions) setupDraftActions.hidden = false;
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
@@ -2888,6 +2955,7 @@ const script = `(() => {
     refreshButton.addEventListener("click", () => void refresh().catch((error) => message(errorMessage(error))));
   }
   if (typeof window !== "undefined") {
+    initializeWorkspaceTaskNavigation();
     window.addEventListener("pageshow", (event) => {
       if (event.persisted) void resumeSession();
     });

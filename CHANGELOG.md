@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- [#332](https://github.com/mohanagy/miftah/issues/332) Turned Console management navigation into five focused, keyboard-accessible sections: Overview, Accounts, Authentication, Client setup, and Audit. Only the selected task is shown; the non-secret URL fragment restores a valid selection after refresh or reauthentication, while switching tasks leaves in-page form drafts untouched and performs no writes. Destructive account removal remains confined to Accounts, and existing redaction, audit, OAuth, containment, no-shell, and public API guarantees are unchanged.
 - [#331](https://github.com/mohanagy/miftah/issues/331) Made Console account switching read like a user action: each named account now offers a client-specific `Use <account> in this chat` action, copied-request confirmation names the account and selected client, and the durable default is described as applying to new MCP sessions. Shared guidance appears once instead of on every connection card. The existing `miftah_use_profile` request, supported clients, redaction, audit, credential handling, containment, and public APIs are unchanged.
 
 ## [0.5.6] - 2026-07-31
