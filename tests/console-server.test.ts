@@ -353,7 +353,7 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
 
 async function recoverSetupCompletionAfterUnlock(
   javascript: string,
-  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" = "none"
+  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" | "control-recovery" = "none"
 ): Promise<{
   readonly locked: { readonly completionHidden: boolean; readonly focus: string };
   readonly afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
@@ -362,6 +362,7 @@ async function recoverSetupCompletionAfterUnlock(
   readonly statusPreserved: boolean;
   readonly setupRefreshErrorName?: string;
   readonly setupRefreshErrorMessage?: string;
+  readonly persistentActionsEnabled?: boolean;
 }> {
   class FakeElement {
     hidden = false;
@@ -419,6 +420,9 @@ async function recoverSetupCompletionAfterUnlock(
   const clientJson = new FakeTextArea();
   const copy = new FakeButton();
   copy.disabled = true;
+  const saveDraft = new FakeButton();
+  const resumeDraft = new FakeButton();
+  const runReadiness = new FakeButton();
   const sandbox: Record<string, unknown> = {
     document: {
       getElementById(id: string): unknown {
@@ -431,6 +435,9 @@ async function recoverSetupCompletionAfterUnlock(
         if (id === "setup-completion-generate-entry") return generate;
         if (id === "setup-completion-client-json") return clientJson;
         if (id === "setup-completion-copy-json") return copy;
+        if (id === "save-setup-draft") return saveDraft;
+        if (id === "resume-setup-draft") return resumeDraft;
+        if (id === "run-profile-readiness") return runReadiness;
         return undefined;
       },
       querySelectorAll: () => []
@@ -602,6 +609,22 @@ async function recoverSetupCompletionAfterUnlock(
     };
   }
   const lockedState = { completionHidden: completion.hidden, focus: focused };
+  if (refreshFailure === "control-recovery") {
+    saveDraft.disabled = true;
+    resumeDraft.disabled = true;
+    runReadiness.disabled = true;
+    locked = false;
+    await harness.resumeSession();
+    const state = { completionHidden: completion.hidden, focus: focused };
+    return {
+      locked: lockedState,
+      afterRefreshFailure: state,
+      afterReauthentication: state,
+      recovered: state,
+      statusPreserved: true,
+      persistentActionsEnabled: !saveDraft.disabled && !resumeDraft.disabled && !runReadiness.disabled
+    };
+  }
   locked = false;
   let afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
   let afterReauthentication: { readonly completionHidden: boolean; readonly focus: string };
@@ -1358,7 +1381,7 @@ async function resumeMissingSetupDraft(javascript: string): Promise<{
   readonly controlsUpdated: number;
   readonly message: string;
 }> {
-  const start = javascript.indexOf("if (resumeSetupDraft instanceof HTMLButtonElement)");
+  const start = javascript.indexOf("\n  if (resumeSetupDraft instanceof HTMLButtonElement)") + 1;
   const end = javascript.indexOf("\n\n  if (discardSetupDraft instanceof HTMLButtonElement)", start);
   if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft resume action.");
 
@@ -1403,7 +1426,7 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   readonly disabledWhilePending: boolean;
   readonly enabledAfterCompletion: boolean;
 }> {
-  const start = javascript.indexOf("if (saveSetupDraft instanceof HTMLButtonElement)");
+  const start = javascript.indexOf("\n  if (saveSetupDraft instanceof HTMLButtonElement)") + 1;
   const end = javascript.indexOf("\n\n  if (resumeSetupDraft instanceof HTMLButtonElement)", start);
   if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft save action.");
 
@@ -2414,6 +2437,14 @@ describe("local Console control server", () => {
         recovered: { completionHidden: false, focus: "client" },
         statusPreserved: true,
         setupRefreshErrorMessage: "Configuration refresh failed."
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "control-recovery")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true,
+        persistentActionsEnabled: true
       });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "late")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },

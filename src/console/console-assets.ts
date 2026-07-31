@@ -1107,11 +1107,20 @@ const script = `(() => {
     replaceSetupCompletion(completion);
   }
 
+  function resetAuthenticatedActionControls() {
+    if (saveSetupDraft instanceof HTMLButtonElement) saveSetupDraft.disabled = false;
+    if (resumeSetupDraft instanceof HTMLButtonElement) resumeSetupDraft.disabled = false;
+    if (runProfileReadiness instanceof HTMLButtonElement) runProfileReadiness.disabled = false;
+  }
+
   async function refreshAfterAuthentication() {
     const refreshAuthenticationEpoch = authenticationEpoch;
     const recoveryGeneration = sessionRecoveryGeneration;
     try {
       await refresh();
+      if (authenticationEpoch === refreshAuthenticationEpoch && sessionRecoveryGeneration === recoveryGeneration) {
+        resetAuthenticatedActionControls();
+      }
     } finally {
       if (authenticationEpoch === refreshAuthenticationEpoch && sessionRecoveryGeneration === recoveryGeneration) {
         restorePendingSetupCompletion();
