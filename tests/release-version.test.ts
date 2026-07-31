@@ -84,10 +84,11 @@ describe("v0.5.5 release artifacts", () => {
       expect(changedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
     expect(notes).toMatch(/task-first/iu);
-    expect(notes).toMatch(/named account profiles/iu);
-    expect(notes).toContain("miftah_use_profile");
-    expect(notes).toContain("How authentication works");
-    expect(notes).toMatch(/external validation remains incomplete/iu);
+    expect(notes).toMatch(
+      /named account profiles, durable default, and whether live in-session switching through `miftah_use_profile` is available/iu
+    );
+    expect(notes).toContain("collapsed behind **How authentication works**");
+    expect(notes).toContain("external validation remains incomplete under #25, #88, and #202");
 
     const readme = readRepositoryFile("README.md");
     const featureGuide = readRepositoryFile("docs/whats-new-in-0.5.md");
