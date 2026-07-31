@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#202](https://github.com/mohanagy/miftah/issues/202) Made the Console task-first for returning users: validated MCP connections now lead the page and show their named account profiles, durable default, and whether live in-session switching through `miftah_use_profile` is available. The setup wizard remains directly reachable, while the authentication ownership matrix and trust-boundary reference are collapsed behind **How authentication works**. The Console still exposes only non-secret metadata, never inspects client settings or running MCP processes, and preserves the existing validation, redaction, audit, file-containment, and no-shell boundaries. External evaluator acceptance remains open and is not claimed by this change.
+
 ## [0.5.4] - 2026-07-30
 
 ### Changed
