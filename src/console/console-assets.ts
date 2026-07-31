@@ -56,6 +56,7 @@ const page = `<!doctype html>
                 <option value="vscode">VS Code</option>
               </select>
             </label>
+            <p id="catalog-switch-guidance" class="field-note" hidden></p>
             <button id="set-up-another-mcp" type="button">Set up another MCP</button>
           </div>
         </div>
@@ -278,7 +279,7 @@ const page = `<!doctype html>
         </nav>
         <section id="connection-overview" class="summary" aria-label="Configuration summary">
           <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
-          <article><p class="summary-label">Default for new connections</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
+          <article><p class="summary-label">Default account for new MCP sessions</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
           <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
           <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
         </section>
@@ -649,8 +650,9 @@ const script = `(() => {
   const configurationCatalogAttention = byId("configuration-catalog-attention");
   const configurationCatalogRejectedGuidance = byId("configuration-catalog-rejected-guidance");
   const catalogClientSelect = byId("catalog-client-select");
-  let catalogSwitchCopies = [];
+  const catalogSwitchGuidance = byId("catalog-switch-guidance");
   let catalogSwitchButtons = [];
+  let catalogSwitchUnavailableCount = 0;
   const setUpAnotherMcp = byId("set-up-another-mcp");
   const setupWizardView = byId("setup-wizard-view");
   const setupWizardStep = byId("setup-wizard-step");
@@ -1023,7 +1025,7 @@ const script = `(() => {
     if (!setupCompletionSwitch) return;
     const client = selectedSetupCompletionClient();
     setupCompletionSwitch.textContent =
-      "After adding another account, return to Your MCP connections and copy its switch request for " +
+      "After adding another account, return to Your MCP connections and use the named account action for " +
       catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
   }
 
@@ -1210,13 +1212,22 @@ const script = `(() => {
   function updateCatalogSwitchCopy() {
     const client = selectedCatalogClient();
     const clientName = catalogClientDisplayName(client);
-    catalogSwitchCopies.forEach((copy) => {
-      copy.textContent = "Choose an account below, then paste the copied request into " + clientName + ". This changes this chat, not the durable default.";
-    });
+    if (catalogSwitchGuidance) {
+      const unavailableGuidance = catalogSwitchUnavailableCount > 0
+        ? " Some connections do not support account switching in an active chat. Change their default account, then start a new MCP session."
+        : "";
+      catalogSwitchGuidance.textContent = catalogSwitchButtons.length > 0
+        ? "Choose an account action below, then paste the copied request into " + clientName +
+          ". It changes that chat only; Console does not switch the running client or change the default account. " +
+          "Technical detail: the client can call miftah_use_profile." + unavailableGuidance
+        : catalogSwitchUnavailableCount > 0
+          ? "Account switching in an active chat is unavailable for these connections. Change the default account, then start a new MCP session."
+          : "";
+    }
     catalogSwitchButtons.forEach((button) => {
       if (!(button instanceof HTMLButtonElement)) return;
       const profile = button.dataset.copyProfileSwitch || "";
-      button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName);
+      button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat");
     });
   }
 
@@ -1257,8 +1268,8 @@ const script = `(() => {
     }
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
-    catalogSwitchCopies = [];
     catalogSwitchButtons = [];
+    catalogSwitchUnavailableCount = 0;
     catalog.configurations.forEach((configuration) => {
       const id = typeof configuration.id === "string" ? configuration.id : "";
       const card = document.createElement("article");
@@ -1269,7 +1280,7 @@ const script = `(() => {
       const summary = document.createElement("p");
       const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : 0;
       const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "unknown";
-      summary.textContent = "Default for new connections: " + defaultProfile;
+      summary.textContent = "Default account for new MCP sessions: " + defaultProfile;
       const configuredProfileNames = Array.isArray(configuration.profileNames)
         ? configuration.profileNames.filter((profile) => typeof profile === "string")
         : [];
@@ -1291,12 +1302,15 @@ const script = `(() => {
           copySwitchRequest.type = "button";
           copySwitchRequest.className = "secondary";
           copySwitchRequest.dataset.copyProfileSwitch = profile;
-          copySwitchRequest.textContent = "Copy switch request";
+          copySwitchRequest.textContent = "Use " + profile + " in this chat";
           copySwitchRequest.addEventListener("click", async () => {
             const client = selectedCatalogClient();
             try {
               await navigator.clipboard.writeText(profileSwitchRequest(client, profile));
-              message("Account-switch request copied for " + catalogClientDisplayName(client) + ". Paste it into the chat where Miftah is connected.");
+              message(
+                "Copied a request to use " + profile + " in " + catalogClientDisplayName(client) +
+                ". Paste it into the chat where Miftah is connected."
+              );
             } catch {
               message("Clipboard access was unavailable. Copy this request manually: " + profileSwitchRequest(client, profile));
             }
@@ -1314,19 +1328,11 @@ const script = `(() => {
         : authentication.mode === "miftah-native-oauth"
           ? "Miftah-managed native OAuth available"
           : "manual upstream authentication required";
-      const switching = document.createElement("p");
-      switching.className = "configuration-switch";
-      switching.textContent = configuration.profileSwitchingFromMcp === true
-        ? "Choose an account below, then paste the copied request into your MCP client. This changes this chat, not the durable default."
-        : "Live account switch: off. Open a new connection to use another default.";
-      if (configuration.profileSwitchingFromMcp === true) switching.dataset.catalogSwitchCopy = "true";
-      if (configuration.profileSwitchingFromMcp === true) catalogSwitchCopies.push(switching);
-      const switchingTechnical = document.createElement("p");
-      switchingTechnical.className = "configuration-switch-technical";
-      switchingTechnical.textContent = configuration.profileSwitchingFromMcp === true
-        ? "Technical detail: the client can call miftah_use_profile. Console does not switch a running client session."
-        : "Changing the durable default affects only new client connections.";
-      details.append(title, summary, profileList, switching, switchingTechnical, ownership);
+      details.append(title, summary, profileList);
+      if (configuration.profileSwitchingFromMcp !== true) {
+        catalogSwitchUnavailableCount += 1;
+      }
+      details.append(ownership);
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.configuration = id;
@@ -1337,6 +1343,9 @@ const script = `(() => {
       card.append(details, button);
       configurationCatalog.append(card);
     });
+    if (catalogSwitchGuidance) {
+      catalogSwitchGuidance.hidden = catalogSwitchButtons.length === 0 && catalogSwitchUnavailableCount === 0;
+    }
     updateCatalogSwitchCopy();
     return catalog;
   }
@@ -2096,12 +2105,12 @@ const script = `(() => {
     if (profileSwitchingCopy) {
       profileSwitchingCopy.textContent = profileSwitchingFromMcp
         ? "Return to Your MCP connections and copy the request for the named account you want in this chat."
-        : "Open a new connection after changing the durable default.";
+        : "Change the default account, then start a new MCP session.";
     }
     if (activeProfileGuidance) {
       activeProfileGuidance.textContent = profileSwitchingFromMcp
-        ? "Active vs durable: changing the default affects new connections. For this chat, use a profile's Copy switch request action above. Technical detail: the client calls miftah_use_profile; Console does not switch a running client."
-        : "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you reconnect.";
+        ? "Active vs durable: changing the default affects new MCP sessions. For this chat, return to Your MCP connections and use the account action you need. Console does not switch a running client."
+        : "Active vs durable: changing the default affects new MCP sessions. Existing sessions keep their account until you reconnect.";
     }
     const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
     const profiles = profileMetadata.map((item) => String(item.name || "")).filter(Boolean);
@@ -2136,7 +2145,7 @@ const script = `(() => {
     renderConnections(results[1], metadata.authentication);
     renderAudit(results[2]);
     message(profileSwitchingFromMcp
-      ? "Console data refreshed. Durable changes apply to new connections; use a Copy switch request action above for this chat."
+      ? "Console data refreshed. Default-account changes apply to new MCP sessions; use an account action above for this chat."
       : "Console data refreshed. Open a new MCP connection before expecting durable changes to be active.");
   }
 
@@ -2638,7 +2647,7 @@ const script = `(() => {
         if (result) result.textContent = publicResult;
         await refresh();
         message(publicResult + (profileSwitchingFromMcp
-          ? " New connections will use it; use a Copy switch request action above for this chat."
+          ? " New MCP sessions will use it; use an account action above for this chat."
           : " Open a new MCP connection to use it.") +
           " If you are using the configuration catalog, select this configuration again before another Console change.");
       } catch (error) { message(errorMessage(error)); }

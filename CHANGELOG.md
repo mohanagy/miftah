@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#331](https://github.com/mohanagy/miftah/issues/331) Made Console account switching read like a user action: each named account now offers a client-specific `Use <account> in this chat` action, copied-request confirmation names the account and selected client, and the durable default is described as applying to new MCP sessions. Shared guidance appears once instead of on every connection card. The existing `miftah_use_profile` request, supported clients, redaction, audit, credential handling, containment, and public APIs are unchanged.
+
 ## [0.5.6] - 2026-07-31
 
 ### Fixed
