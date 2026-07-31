@@ -353,12 +353,13 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
 
 async function recoverSetupCompletionAfterUnlock(
   javascript: string,
-  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" = "none"
+  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" = "none"
 ): Promise<{
   readonly locked: { readonly completionHidden: boolean; readonly focus: string };
   readonly afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
   readonly afterReauthentication: { readonly completionHidden: boolean; readonly focus: string };
   readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
+  readonly statusPreserved: boolean;
 }> {
   class FakeElement {
     hidden = false;
@@ -390,7 +391,7 @@ async function recoverSetupCompletionAfterUnlock(
   }
 
   let focused = "";
-  let locked = true;
+  let locked = refreshFailure !== "setup-origin-overlap";
   let activeRefreshFailure = refreshFailure;
   let releaseDelayedRecovery: (() => void) | undefined;
   const delayedRecovery = new Promise<void>((resolve) => {
@@ -407,6 +408,7 @@ async function recoverSetupCompletionAfterUnlock(
   const unlock = new FakeElement();
   unlock.hidden = true;
   const dashboard = new FakeElement();
+  const status = new FakeElement();
   const completion = new FakeElement();
   completion.hidden = true;
   const bootstrap = new FakeInput();
@@ -418,7 +420,7 @@ async function recoverSetupCompletionAfterUnlock(
   const sandbox: Record<string, unknown> = {
     document: {
       getElementById(id: string): unknown {
-        if (id === "status") return new FakeElement();
+        if (id === "status") return status;
         if (id === "unlock-view") return unlock;
         if (id === "dashboard-view") return dashboard;
         if (id === "bootstrap") return bootstrap;
@@ -482,6 +484,21 @@ async function recoverSetupCompletionAfterUnlock(
       if (activeRefreshFailure === "overlapping-reauth" && requestPath === "/api/v1/audit?limit=50") {
         return { ok: true, status: 200, json: async () => ({ data: [] }) };
       }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/health") {
+        markOverlapRecoveryRequested?.();
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/connections") {
+        await delayedRecovery;
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/audit?limit=50") {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
       if (activeRefreshFailure === "racing-recovery" && requestPath === "/api/v1/connections") {
         await new Promise((resolve) => setTimeout(resolve, 10));
         return {
@@ -533,8 +550,28 @@ async function recoverSetupCompletionAfterUnlock(
     readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
     readonly resumeSession: () => Promise<void>;
   };
-  await harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
+  const setupRefresh = harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
     .catch(() => undefined);
+  if (refreshFailure === "setup-origin-overlap") {
+    await overlapRecoveryRequested;
+    while (unlock.hidden) await new Promise((resolve) => setTimeout(resolve, 0));
+    const lockedState = { completionHidden: completion.hidden, focus: focused };
+    const afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
+    activeRefreshFailure = "none";
+    await harness.resumeSession();
+    const afterReauthentication = { completionHidden: completion.hidden, focus: focused };
+    const reauthenticatedStatus = status.textContent;
+    releaseDelayedRecovery?.();
+    await setupRefresh;
+    return {
+      locked: lockedState,
+      afterRefreshFailure,
+      afterReauthentication,
+      recovered: { completionHidden: completion.hidden, focus: focused },
+      statusPreserved: status.textContent === reauthenticatedStatus
+    };
+  }
+  await setupRefresh;
   const lockedState = { completionHidden: completion.hidden, focus: focused };
   locked = false;
   let afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
@@ -559,11 +596,13 @@ async function recoverSetupCompletionAfterUnlock(
     }
     afterReauthentication = { completionHidden: completion.hidden, focus: focused };
   }
+  const reauthenticatedStatus = status.textContent;
   return {
     locked: lockedState,
     afterRefreshFailure,
     afterReauthentication,
-    recovered: { completionHidden: completion.hidden, focus: focused }
+    recovered: { completionHidden: completion.hidden, focus: focused },
+    statusPreserved: status.textContent === reauthenticatedStatus
   };
 }
 
@@ -2336,31 +2375,43 @@ describe("local Console control server", () => {
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: false, focus: "client" },
         afterReauthentication: { completionHidden: false, focus: "client" },
-        recovered: { completionHidden: false, focus: "client" }
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
       });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "late")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: false, focus: "client" },
         afterReauthentication: { completionHidden: false, focus: "client" },
-        recovered: { completionHidden: false, focus: "client" }
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
       });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "config")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: false, focus: "client" },
         afterReauthentication: { completionHidden: false, focus: "client" },
-        recovered: { completionHidden: false, focus: "client" }
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
       });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "racing-recovery")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
         afterReauthentication: { completionHidden: false, focus: "client" },
-        recovered: { completionHidden: false, focus: "client" }
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
       });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "overlapping-reauth")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
         afterReauthentication: { completionHidden: false, focus: "client" },
-        recovered: { completionHidden: false, focus: "client" }
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "setup-origin-overlap")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
       });
     } finally {
       await server.close();

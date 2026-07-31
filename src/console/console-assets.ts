@@ -709,9 +709,9 @@ const script = `(() => {
   let setupCompletion = undefined;
   let pendingSetupCompletion = undefined;
   let setupCompletionGeneration = 0;
+  let setupRefreshGeneration = 0;
   let authenticationEpoch = 0;
   let sessionRecoveryGeneration = 0;
-  let latestSessionRecoveryMessage = "";
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
@@ -743,7 +743,6 @@ const script = `(() => {
   function restoreUnlock(recoveryMessage) {
     authenticationEpoch += 1;
     sessionRecoveryGeneration += 1;
-    latestSessionRecoveryMessage = typeof recoveryMessage === "string" ? recoveryMessage : "";
     csrfToken = "";
     returningSetupVisible = false;
     clearSetupCompletion();
@@ -1121,9 +1120,13 @@ const script = `(() => {
   }
 
   async function refreshAfterSetup(completion) {
+    const setupAuthenticationEpoch = authenticationEpoch;
+    const refreshGeneration = ++setupRefreshGeneration;
+    pendingSetupCompletion = completion;
     try {
       await refresh();
     } finally {
+      if (authenticationEpoch !== setupAuthenticationEpoch || refreshGeneration !== setupRefreshGeneration) return;
       if (unlockView instanceof HTMLElement && !unlockView.hidden) {
         pendingSetupCompletion = completion;
       } else {
@@ -2013,6 +2016,7 @@ const script = `(() => {
   }
 
   async function refresh() {
+    const refreshAuthenticationEpoch = authenticationEpoch;
     clearSetupCompletion();
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
@@ -2103,8 +2107,8 @@ const script = `(() => {
       api("/api/v1/connections"),
       api("/api/v1/audit?limit=50")
     ]);
-    if (sessionRecoveryGeneration !== recoveryGeneration) {
-      throw new Error(latestSessionRecoveryMessage || "This Console session must be unlocked again.");
+    if (authenticationEpoch !== refreshAuthenticationEpoch || sessionRecoveryGeneration !== recoveryGeneration) {
+      throw staleAuthenticationRequestError();
     }
     const failedResult = settledResults.find((result) => result.status === "rejected");
     if (failedResult && failedResult.status === "rejected") throw failedResult.reason;
