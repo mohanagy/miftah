@@ -1764,6 +1764,127 @@ function preserveProfileDescriptionSelectionAcrossRefresh(javascript: string): {
   return { profile: profile.value, description: input.value };
 }
 
+async function exerciseCatalogAccountSwitch(
+  javascript: string,
+  client: "claude-desktop" | "claude-code" | "cursor" | "vscode"
+): Promise<{
+  readonly action: string;
+  readonly accessibleName: string;
+  readonly copied: string;
+  readonly guidance: string;
+  readonly message: string;
+}> {
+  const start = javascript.indexOf("function selectedCatalogClient");
+  const end = javascript.indexOf("\n  function renderProviderAuthentication", start);
+  if (start < 0 || end < 0) throw new Error("Expected the configuration-catalog renderer.");
+
+  type Listener = () => void | Promise<void>;
+  class FakeElement {
+    readonly attributes = new Map<string, string>();
+    readonly children: FakeElement[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, Listener>();
+    className = "";
+    disabled = false;
+    hidden = false;
+    textContent = "";
+    type = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    append(...children: FakeElement[]): void {
+      this.children.push(...children);
+    }
+
+    replaceChildren(...children: FakeElement[]): void {
+      this.children.splice(0, this.children.length, ...children);
+    }
+
+    setAttribute(name: string, value: string): void {
+      this.attributes.set(name, value);
+    }
+  }
+  class FakeButton extends FakeElement {}
+  class FakeSelect extends FakeElement {
+    constructor(public value: string) {
+      super();
+    }
+  }
+
+  const catalog = new FakeElement();
+  const guidance = new FakeElement();
+  guidance.hidden = true;
+  const clientSelect = new FakeSelect("claude-desktop");
+  const copied: string[] = [];
+  let status = "";
+  const render = runInNewContext(
+    `${javascript.slice(start, end)}\nrenderConfigurationCatalog`,
+    {
+      catalogClientSelect: clientSelect,
+      catalogSwitchGuidance: guidance,
+      catalogSwitchButtons: [],
+      configurationCatalog: catalog,
+      configurationCatalogAttention: undefined,
+      configurationCatalogRejectedGuidance: undefined,
+      configurationCatalogSummary: undefined,
+      configurationCatalogView: undefined,
+      setUpAnotherMcp: undefined,
+      catalogConfigurations: (metadata: unknown) => metadata,
+      document: {
+        createElement(tag: string): FakeElement {
+          return tag === "button" ? new FakeButton() : new FakeElement();
+        }
+      },
+      HTMLButtonElement: FakeButton,
+      HTMLSelectElement: FakeSelect,
+      navigator: { clipboard: { writeText: async (value: string) => { copied.push(value); } } },
+      message: (value: string) => { status = value; },
+      record: (value: unknown): Record<string, unknown> =>
+        typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
+    }
+  ) as (metadata: unknown) => void;
+
+  render({
+    discoveryState: "ready",
+    selectedConfigurationId: "",
+    discoveredCount: 1,
+    readyCount: 1,
+    attentionCount: 0,
+    attentionReasons: [],
+    configurations: [{
+      id: "analytics",
+      name: "Analytics",
+      profileCount: 2,
+      defaultProfile: "craftmyletter",
+      profileNames: ["craftmyletter", "govalidate"],
+      profileSwitchingFromMcp: true,
+      authentication: { mode: "provider-adapter" }
+    }]
+  });
+  clientSelect.value = client;
+  await clientSelect.listeners.get("change")?.();
+
+  const allElements: FakeElement[] = [];
+  const visit = (element: FakeElement): void => {
+    allElements.push(element);
+    element.children.forEach(visit);
+  };
+  visit(catalog);
+  const action = allElements.find((element) => element.dataset.copyProfileSwitch === "govalidate");
+  if (action === undefined) throw new Error("Expected the govalidate account action.");
+  await action.listeners.get("click")?.();
+
+  return {
+    action: action.textContent,
+    accessibleName: action.attributes.get("aria-label") ?? "",
+    copied: copied[0] ?? "",
+    guidance: guidance.textContent,
+    message: status
+  };
+}
+
 async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascript: string): Promise<{
   readonly visibleAfterSelection: boolean;
   readonly hiddenAfterUnselection: boolean;
@@ -2325,6 +2446,44 @@ describe("local Console control server", () => {
       expect(javascript).not.toContain('copySwitchRequest.textContent = "Copy switch request"');
       expect(javascript).not.toContain("catalogSwitchCopies");
       expect(javascript.match(/miftah_use_profile/gu)).toHaveLength(1);
+      expect(javascript).not.toContain("copy its switch request");
+      expect(javascript).not.toContain("Open a new connection after changing the durable default.");
+      expect(javascript).not.toContain("changing the default affects new connections.");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("renders and copies the selected account action for every supported client", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const clients = [
+        ["claude-desktop", "Claude Desktop"],
+        ["claude-code", "Claude Code"],
+        ["cursor", "Cursor"],
+        ["vscode", "VS Code"]
+      ] as const;
+
+      for (const [client, displayName] of clients) {
+        const result = await exerciseCatalogAccountSwitch(javascript, client);
+        expect(result.action).toBe("Use govalidate in this chat");
+        expect(result.accessibleName).toBe(
+          `Copy request to use govalidate in the current ${displayName} chat`
+        );
+        expect(result.guidance).toContain(`paste the copied request into ${displayName}`);
+        expect(result.copied).toBe(
+          `In ${displayName}, send this message: Use the Miftah account named govalidate for this chat.`
+        );
+        expect(result.message).toBe(
+          `Copied a request to use govalidate in ${displayName}. Paste it into the chat where Miftah is connected.`
+        );
+      }
     } finally {
       await server.close();
     }
@@ -2422,7 +2581,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("target.label");
       expect(javascript).toContain("restart or reconnect");
       expect(javascript).toContain("Open Manage connection");
-      expect(javascript).toContain("copy its switch request");
+      expect(javascript).toContain("use the named account action");
       expect(javascript).toContain("A generated entry does not prove that a credential works");
       expect(javascript).toContain("async function refreshAfterSetup(completion)");
       expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);

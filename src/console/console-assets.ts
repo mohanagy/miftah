@@ -1024,7 +1024,7 @@ const script = `(() => {
     if (!setupCompletionSwitch) return;
     const client = selectedSetupCompletionClient();
     setupCompletionSwitch.textContent =
-      "After adding another account, return to Your MCP connections and copy its switch request for " +
+      "After adding another account, return to Your MCP connections and use the named account action for " +
       catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
   }
 
@@ -2098,12 +2098,12 @@ const script = `(() => {
     if (profileSwitchingCopy) {
       profileSwitchingCopy.textContent = profileSwitchingFromMcp
         ? "Return to Your MCP connections and copy the request for the named account you want in this chat."
-        : "Open a new connection after changing the durable default.";
+        : "Change the default account, then start a new MCP session.";
     }
     if (activeProfileGuidance) {
       activeProfileGuidance.textContent = profileSwitchingFromMcp
         ? "Active vs durable: changing the default affects new MCP sessions. For this chat, return to Your MCP connections and use the account action you need. Console does not switch a running client."
-        : "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you reconnect.";
+        : "Active vs durable: changing the default affects new MCP sessions. Existing sessions keep their account until you reconnect.";
     }
     const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
     const profiles = profileMetadata.map((item) => String(item.name || "")).filter(Boolean);
