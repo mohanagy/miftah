@@ -709,6 +709,8 @@ const script = `(() => {
   let setupCompletion = undefined;
   let pendingSetupCompletion = undefined;
   let setupCompletionGeneration = 0;
+  let sessionRecoveryGeneration = 0;
+  let latestSessionRecoveryMessage = "";
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
@@ -726,6 +728,8 @@ const script = `(() => {
   }
 
   function restoreUnlock(recoveryMessage) {
+    sessionRecoveryGeneration += 1;
+    latestSessionRecoveryMessage = typeof recoveryMessage === "string" ? recoveryMessage : "";
     csrfToken = "";
     returningSetupVisible = false;
     clearSetupCompletion();
@@ -1082,10 +1086,11 @@ const script = `(() => {
   }
 
   async function refreshAfterAuthentication() {
+    const recoveryGeneration = sessionRecoveryGeneration;
     try {
       await refresh();
     } finally {
-      if (!(unlockView instanceof HTMLElement) || unlockView.hidden) {
+      if (sessionRecoveryGeneration === recoveryGeneration) {
         restorePendingSetupCompletion();
       }
     }
@@ -1985,9 +1990,9 @@ const script = `(() => {
 
   async function refresh() {
     clearSetupCompletion();
-    const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
+    const metadata = record(await api("/api/v1/config"));
     const catalog = renderConfigurationCatalog(metadata);
     if (metadata.initialized !== true) {
       renderProviderAuthentication(undefined);
@@ -2068,11 +2073,18 @@ const script = `(() => {
     setOptions(byId("manual-connection-profile"), profiles);
     setOptions(byId("manual-connection-upstream"), upstreams);
     renderProfileReadiness(metadata.authentication, configuredDefaultProfile);
-    const results = await Promise.all([
+    const recoveryGeneration = sessionRecoveryGeneration;
+    const settledResults = await Promise.allSettled([
       api("/api/v1/health"),
       api("/api/v1/connections"),
       api("/api/v1/audit?limit=50")
     ]);
+    if (sessionRecoveryGeneration !== recoveryGeneration) {
+      throw new Error(latestSessionRecoveryMessage || "This Console session must be unlocked again.");
+    }
+    const failedResult = settledResults.find((result) => result.status === "rejected");
+    if (failedResult && failedResult.status === "rejected") throw failedResult.reason;
+    const results = settledResults.map((result) => result.status === "fulfilled" ? result.value : undefined);
     const health = record(results[0]);
     const audit = record(health.audit);
     const auditState = byId("audit-state");

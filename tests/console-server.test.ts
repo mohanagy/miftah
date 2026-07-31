@@ -351,8 +351,12 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
   return { success, failure: { json: json.value, status: status.textContent } };
 }
 
-async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefreshFailure = false): Promise<{
+async function recoverSetupCompletionAfterUnlock(
+  javascript: string,
+  refreshFailure: "none" | "config" | "late" | "racing-recovery" = "none"
+): Promise<{
   readonly locked: { readonly completionHidden: boolean; readonly focus: string };
+  readonly afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
   readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
 }> {
   class FakeElement {
@@ -386,6 +390,7 @@ async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefresh
 
   let focused = "";
   let locked = true;
+  let activeRefreshFailure = refreshFailure;
   const unlock = new FakeElement();
   unlock.hidden = true;
   const dashboard = new FakeElement();
@@ -437,7 +442,22 @@ async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefresh
           json: async () => ({ data: { csrfToken: "x".repeat(32) } })
         };
       }
-      if (lateRefreshFailure && requestPath !== "/api/v1/config") {
+      if (activeRefreshFailure === "config" && requestPath === "/api/v1/config") {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { code: "config_failed", message: "Configuration refresh failed." } })
+        };
+      }
+      if (activeRefreshFailure === "racing-recovery" && requestPath === "/api/v1/connections") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if ((activeRefreshFailure === "late" || activeRefreshFailure === "racing-recovery") && requestPath !== "/api/v1/config") {
         return requestPath === "/api/v1/health"
           ? {
               ok: false,
@@ -450,7 +470,7 @@ async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefresh
         ok: true,
         status: 200,
         json: async () => ({
-          data: lateRefreshFailure
+          data: activeRefreshFailure !== "none"
             ? {
                 initialized: true,
                 name: "analytics",
@@ -485,8 +505,14 @@ async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefresh
   const lockedState = { completionHidden: completion.hidden, focus: focused };
   locked = false;
   await harness.resumeSession();
+  const afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
+  if (refreshFailure === "racing-recovery") {
+    activeRefreshFailure = "none";
+    await harness.resumeSession();
+  }
   return {
     locked: lockedState,
+    afterRefreshFailure,
     recovered: { completionHidden: completion.hidden, focus: focused }
   };
 }
@@ -2104,10 +2130,22 @@ describe("local Console control server", () => {
       const javascript = await script.text();
       await expect(recoverSetupCompletionAfterUnlock(javascript)).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
         recovered: { completionHidden: false, focus: "client" }
       });
-      await expect(recoverSetupCompletionAfterUnlock(javascript, true)).resolves.toEqual({
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "late")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" }
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "config")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" }
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "racing-recovery")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
         recovered: { completionHidden: false, focus: "client" }
       });
     } finally {
