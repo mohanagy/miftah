@@ -194,12 +194,21 @@ vi.mock("../src/cli/windows-config-acl.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.createWindowsPrivateMigrationDirectory>
     ): Promise<boolean> => {
       if (migrationRace.timeoutDiagnosticActive) migrationRace.timeoutDiagnosticPhase = "transaction-create";
+      if (process.platform === "win32") {
+        const [directory] = args;
+        const { mkdir } = await import("node:fs/promises");
+        await mkdir(directory);
+        return true;
+      }
       return actual.createWindowsPrivateMigrationDirectory(...args);
     },
     copyWindowsConfigSecurityDescriptors: async (
       ...args: Parameters<typeof actual.copyWindowsConfigSecurityDescriptors>
     ): Promise<boolean> => {
       if (migrationRace.timeoutDiagnosticActive) migrationRace.timeoutDiagnosticPhase = "security-descriptor";
+      // The dedicated Windows migration ACL suite exercises the real trusted
+      // helper end to end. This suite owns filesystem transaction semantics.
+      if (process.platform === "win32") return true;
       return actual.copyWindowsConfigSecurityDescriptors(...args);
     }
   };

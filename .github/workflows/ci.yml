@@ -84,7 +84,12 @@ jobs:
         run: npm ci
 
       - name: Test core contracts
+        if: ${{ runner.os != 'Windows' }}
         run: npm run test:core
+
+      - name: Test core contracts (Windows, serialized files)
+        if: ${{ runner.os == 'Windows' }}
+        run: npm run test:core -- --no-file-parallelism
 
       - name: Test OAuth and Console compatibility
         run: npm run test:oauth-console
