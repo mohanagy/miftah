@@ -652,6 +652,7 @@ const script = `(() => {
   const catalogClientSelect = byId("catalog-client-select");
   const catalogSwitchGuidance = byId("catalog-switch-guidance");
   let catalogSwitchButtons = [];
+  let catalogSwitchUnavailableCount = 0;
   const setUpAnotherMcp = byId("set-up-another-mcp");
   const setupWizardView = byId("setup-wizard-view");
   const setupWizardStep = byId("setup-wizard-step");
@@ -1212,10 +1213,16 @@ const script = `(() => {
     const client = selectedCatalogClient();
     const clientName = catalogClientDisplayName(client);
     if (catalogSwitchGuidance) {
-      catalogSwitchGuidance.textContent =
-        "Choose an account action below, then paste the copied request into " + clientName +
-        ". It changes that chat only; Console does not switch the running client or change the default account. " +
-        "Technical detail: the client can call miftah_use_profile.";
+      const unavailableGuidance = catalogSwitchUnavailableCount > 0
+        ? " Some connections do not support account switching in an active chat. Change their default account, then start a new MCP session."
+        : "";
+      catalogSwitchGuidance.textContent = catalogSwitchButtons.length > 0
+        ? "Choose an account action below, then paste the copied request into " + clientName +
+          ". It changes that chat only; Console does not switch the running client or change the default account. " +
+          "Technical detail: the client can call miftah_use_profile." + unavailableGuidance
+        : catalogSwitchUnavailableCount > 0
+          ? "Account switching in an active chat is unavailable for these connections. Change the default account, then start a new MCP session."
+          : "";
     }
     catalogSwitchButtons.forEach((button) => {
       if (!(button instanceof HTMLButtonElement)) return;
@@ -1262,6 +1269,7 @@ const script = `(() => {
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
     catalogSwitchButtons = [];
+    catalogSwitchUnavailableCount = 0;
     catalog.configurations.forEach((configuration) => {
       const id = typeof configuration.id === "string" ? configuration.id : "";
       const card = document.createElement("article");
@@ -1322,10 +1330,7 @@ const script = `(() => {
           : "manual upstream authentication required";
       details.append(title, summary, profileList);
       if (configuration.profileSwitchingFromMcp !== true) {
-        const switching = document.createElement("p");
-        switching.className = "configuration-switch";
-        switching.textContent = "Account switching in an active chat is unavailable. Choose another default, then start a new MCP session.";
-        details.append(switching);
+        catalogSwitchUnavailableCount += 1;
       }
       details.append(ownership);
       const button = document.createElement("button");
@@ -1338,7 +1343,9 @@ const script = `(() => {
       card.append(details, button);
       configurationCatalog.append(card);
     });
-    if (catalogSwitchGuidance) catalogSwitchGuidance.hidden = catalogSwitchButtons.length === 0;
+    if (catalogSwitchGuidance) {
+      catalogSwitchGuidance.hidden = catalogSwitchButtons.length === 0 && catalogSwitchUnavailableCount === 0;
+    }
     updateCatalogSwitchCopy();
     return catalog;
   }

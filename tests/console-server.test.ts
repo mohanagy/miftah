@@ -1825,6 +1825,7 @@ async function exerciseCatalogAccountSwitch(
       catalogClientSelect: clientSelect,
       catalogSwitchGuidance: guidance,
       catalogSwitchButtons: [],
+      catalogSwitchUnavailableCount: 0,
       configurationCatalog: catalog,
       configurationCatalogAttention: undefined,
       configurationCatalogRejectedGuidance: undefined,
@@ -1849,8 +1850,8 @@ async function exerciseCatalogAccountSwitch(
   render({
     discoveryState: "ready",
     selectedConfigurationId: "",
-    discoveredCount: 1,
-    readyCount: 1,
+    discoveredCount: 2,
+    readyCount: 2,
     attentionCount: 0,
     attentionReasons: [],
     configurations: [{
@@ -1861,6 +1862,14 @@ async function exerciseCatalogAccountSwitch(
       profileNames: ["craftmyletter", "govalidate"],
       profileSwitchingFromMcp: true,
       authentication: { mode: "provider-adapter" }
+    }, {
+      id: "legacy",
+      name: "Legacy",
+      profileCount: 1,
+      defaultProfile: "default",
+      profileNames: ["default"],
+      profileSwitchingFromMcp: false,
+      authentication: { mode: "manual-only" }
     }]
   });
   clientSelect.value = client;
@@ -2449,6 +2458,9 @@ describe("local Console control server", () => {
       expect(javascript).not.toContain("copy its switch request");
       expect(javascript).not.toContain("Open a new connection after changing the durable default.");
       expect(javascript).not.toContain("changing the default affects new connections.");
+      expect(javascript).not.toContain(
+        "Account switching in an active chat is unavailable. Choose another default, then start a new MCP session."
+      );
     } finally {
       await server.close();
     }
@@ -2477,6 +2489,9 @@ describe("local Console control server", () => {
           `Copy request to use govalidate in the current ${displayName} chat`
         );
         expect(result.guidance).toContain(`paste the copied request into ${displayName}`);
+        expect(result.guidance).toContain(
+          "Some connections do not support account switching in an active chat."
+        );
         expect(result.copied).toBe(
           `In ${displayName}, send this message: Use the Miftah account named govalidate for this chat.`
         );
