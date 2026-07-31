@@ -45,7 +45,11 @@ export interface ConsoleDiscoveredConfiguration {
   readonly name: string;
   readonly version: string;
   readonly profileCount: number;
+  /** Non-secret profile names shown before a configuration is selected. */
+  readonly profileNames?: readonly string[];
   readonly defaultProfile: string;
+  /** Whether the MCP client may switch the active session with `miftah_use_profile`. */
+  readonly profileSwitchingFromMcp?: boolean;
   readonly authentication: ConsoleAuthenticationMetadata;
   readonly source: "standard-config-directory";
 }
@@ -85,6 +89,8 @@ export interface ConsoleInitializedConfigMetadata {
   readonly profiles: readonly ProfileInventoryEntry[];
   readonly upstreams: readonly { readonly name: string; readonly transport: string }[];
   readonly oauthConnectionCount: number;
+  /** Whether the MCP client may switch the active session with `miftah_use_profile`. */
+  readonly profileSwitchingFromMcp?: boolean;
   /** Present for live Console services; optional for embedding compatibility. */
   readonly authentication?: ConsoleAuthenticationMetadata;
   /** Present only for a no-config dashboard invocation. */
@@ -195,6 +201,7 @@ export function consoleInitializedConfigMetadata(config: MiftahConfig): ConsoleI
     profiles: inventory.profiles,
     upstreams: upstreams.map(({ name, transport }) => ({ name, transport })),
     oauthConnectionCount: config.version === "3" ? Object.keys(config.oauth?.connections ?? {}).length : 0,
+    profileSwitchingFromMcp: config.security?.allowProfileSwitchingFromMcp === true,
     authentication: consoleAuthenticationMetadata(config),
     restartRequiredForExistingClients: true
   };

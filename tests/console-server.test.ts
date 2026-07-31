@@ -1214,6 +1214,11 @@ async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascrip
     focus(): void {}
 
     select(): void {}
+
+    setAttribute(name: string, value: string): void {
+      void name;
+      void value;
+    }
   }
 
   class FakeForm extends FakeElement {
@@ -1629,6 +1634,38 @@ function observePresetFieldConstraintState(javascript: string): {
 }
 
 describe("local Console control server", () => {
+  it("puts connections and named accounts before collapsed authentication reference", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      const connectionCatalog = html.indexOf('id="configuration-catalog-view"');
+      const setupWizard = html.indexOf('id="setup-wizard-view"');
+      const authenticationReference = html.indexOf('id="authentication-guide"');
+
+      expect(connectionCatalog).toBeGreaterThan(-1);
+      expect(setupWizard).toBeGreaterThan(connectionCatalog);
+      expect(authenticationReference).toBeGreaterThan(setupWizard);
+      expect(html).toContain("<summary>How authentication works</summary>");
+      expect(html).toContain("One connection, named accounts");
+      expect(html).toContain("Default for new connections");
+      expect(html).toContain("Live account switch");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("configuration.profileNames");
+      expect(javascript).toContain("configuration.profileSwitchingFromMcp");
+      expect(javascript).toContain("miftah_use_profile");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
@@ -3123,7 +3160,8 @@ describe("local Console control server", () => {
       name: "gsc",
       defaultProfile: "work",
       upstream: { transport: "stdio", command: "uvx", args: ["mcp-search-console@0.3.2"] },
-      profiles: { work: {} }
+      profiles: { work: {}, personal: {} },
+      security: { allowProfileSwitchingFromMcp: true }
     })}\n`);
 
     const server = await startConsoleServer(join(directory, "miftah.json"), {
@@ -3144,10 +3182,25 @@ describe("local Console control server", () => {
       });
       expect(initial.status).toBe(200);
       const initialBody = await initial.json() as {
-        data: { initialized: boolean; catalog?: { configurations: Array<{ id: string; name: string }> } };
+        data: {
+          initialized: boolean;
+          catalog?: {
+            configurations: Array<{
+              id: string;
+              name: string;
+              profileNames: string[];
+              profileSwitchingFromMcp: boolean;
+            }>;
+          };
+        };
       };
       expect(initialBody.data.initialized).toBe(false);
       expect(initialBody.data.catalog?.configurations).toHaveLength(1);
+      expect(initialBody.data.catalog?.configurations[0]).toMatchObject({
+        name: "gsc",
+        profileNames: ["personal", "work"],
+        profileSwitchingFromMcp: true
+      });
       expect(JSON.stringify(initialBody)).not.toContain(directory);
       const id = initialBody.data.catalog?.configurations[0]?.id;
       if (id === undefined) throw new Error("Expected a discovered configuration id.");

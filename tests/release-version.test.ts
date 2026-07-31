@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.5.4";
+const releaseVersion = "0.5.5";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.5.4 release artifacts", () => {
+describe("v0.5.5 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [0.5.4] - 2026-7-30\n\n### Changed\n"
+      changelog: "## [0.5.5] - 2026-7-31\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [0.5.4] - 2026-07-30\n\n### Changed\n"
+      changelog: "Release candidate: ## [0.5.5] - 2026-07-31\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,7 +71,7 @@ describe("v0.5.4 release artifacts", () => {
     }
   });
 
-  it("documents returning-user setup while retaining the experimental package status", () => {
+  it("documents the task-first Console while retaining the experimental package status", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
@@ -80,13 +80,15 @@ describe("v0.5.4 release artifacts", () => {
     const changedStart = notes.indexOf("### Changed");
     const changedEnd = notes.indexOf("\n### ", changedStart + "### Changed".length);
     const changedNotes = notes.slice(changedStart, changedEnd < 0 ? undefined : changedEnd);
-    for (const issue of [204, 314]) {
+    for (const issue of [202, 319]) {
       expect(changedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toMatch(/one setup path at a time/iu);
-    expect(notes).toMatch(/Back and Cancel provide no-write recovery/iu);
-    expect(notes).toMatch(/without creating or changing a configuration/iu);
-    expect(notes).toMatch(/external validation remains incomplete/iu);
+    expect(notes).toMatch(/task-first/iu);
+    expect(notes).toMatch(
+      /named account profiles, durable default, and whether live in-session switching through `miftah_use_profile` is available/iu
+    );
+    expect(notes).toContain("collapsed behind **How authentication works**");
+    expect(notes).toContain("external validation remains incomplete under #25, #88, and #202");
 
     const readme = readRepositoryFile("README.md");
     const featureGuide = readRepositoryFile("docs/whats-new-in-0.5.md");

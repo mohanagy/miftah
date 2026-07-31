@@ -40,42 +40,14 @@ const page = `<!doctype html>
     </section>
 
     <div id="dashboard-view" hidden>
-      <section class="intro" aria-labelledby="intro-title">
-        <p class="step">Connection ownership</p>
-        <h2 id="intro-title">Know who owns authentication before you connect</h2>
-        <div class="mode-grid">
-          <article class="mode mode-native">
-            <p class="mode-tag">Managed here</p>
-            <h3>Remote native OAuth</h3>
-            <p>Miftah discovers standards-based endpoints, opens consent, and stores tokens only in the OS vault.</p>
-          </article>
-          <article class="mode">
-            <p class="mode-tag">Provider-owned login</p>
-            <h3>Provider adapter</h3>
-            <p>Miftah launches a pinned local adapter. The upstream owns browser login and its private token cache.</p>
-          </article>
-          <article class="mode">
-            <p class="mode-tag">Manual setup</p>
-            <h3>Upstream-owned auth</h3>
-            <p>Use the provider's documented API key, credential file, or login flow. Miftah passes only configured references.</p>
-          </article>
-          <article class="mode mode-unsupported">
-            <p class="mode-tag">Not imported</p>
-            <h3>Unsupported state</h3>
-            <p>Passwords, browser cookies, and arbitrary third-party token caches are never accepted or scraped.</p>
-          </article>
-        </div>
-        <p class="restart-note"><strong>Trust boundary:</strong> Profiles and a generated client entry describe local configuration; they do not prove a credential works or belongs to the intended account. A reviewed safe check may establish readiness only where declared, and a configured identity probe is separate. Miftah policy and redacted audit protect the wrapper, not provider-side token scopes or retention.</p>
-      </section>
-
       <section id="configuration-catalog-view" class="work-section" hidden aria-labelledby="configuration-catalog-title">
         <div class="section-heading">
           <div>
-            <p class="step">02 / Existing connections</p>
-            <h2 id="configuration-catalog-title">Choose a Miftah configuration</h2>
+            <p class="step">Connections and accounts</p>
+            <h2 id="configuration-catalog-title">Your MCP connections</h2>
           </div>
           <div class="catalog-actions">
-            <p>Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
+            <p><strong>One connection, named accounts.</strong> Open a connection to manage its accounts, or add another MCP.</p>
             <button id="set-up-another-mcp" type="button">Set up another MCP</button>
           </div>
         </div>
@@ -85,6 +57,7 @@ const page = `<!doctype html>
           <p class="field-note">Miftah keeps rejected names and paths hidden. For files you expect to see, check private access, validate the configuration, replace symlinks with regular files, then refresh.</p>
         </div>
         <div id="configuration-catalog" class="configuration-catalog"></div>
+        <p class="field-note catalog-boundary">Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
       </section>
 
       <section id="setup-completion-view" class="work-section setup-completion" hidden aria-labelledby="setup-completion-title">
@@ -128,6 +101,37 @@ const page = `<!doctype html>
           <button id="setup-wizard-continue" type="button">Continue</button>
         </div>
       </section>
+
+      <details id="authentication-guide" class="authentication-guide">
+        <summary>How authentication works</summary>
+        <div class="authentication-guide-body" aria-labelledby="intro-title">
+          <p class="step">Connection ownership</p>
+          <h2 id="intro-title">Know who owns authentication before you connect</h2>
+          <div class="mode-grid">
+            <article class="mode mode-native">
+              <p class="mode-tag">Managed here</p>
+              <h3>Remote native OAuth</h3>
+              <p>Miftah discovers standards-based endpoints, opens consent, and stores tokens only in the OS vault.</p>
+            </article>
+            <article class="mode">
+              <p class="mode-tag">Provider-owned login</p>
+              <h3>Provider adapter</h3>
+              <p>Miftah launches a pinned local adapter. The upstream owns browser login and its private token cache.</p>
+            </article>
+            <article class="mode">
+              <p class="mode-tag">Manual setup</p>
+              <h3>Upstream-owned auth</h3>
+              <p>Use the provider's documented API key, credential file, or login flow. Miftah passes only configured references.</p>
+            </article>
+            <article class="mode mode-unsupported">
+              <p class="mode-tag">Not imported</p>
+              <h3>Unsupported state</h3>
+              <p>Passwords, browser cookies, and arbitrary third-party token caches are never accepted or scraped.</p>
+            </article>
+          </div>
+          <p class="restart-note"><strong>Trust boundary:</strong> Profiles and a generated client entry describe local configuration; they do not prove a credential works or belongs to the intended account. A reviewed safe check may establish readiness only where declared, and a configured identity probe is separate. Miftah policy and redacted audit protect the wrapper, not provider-side token scopes or retention.</p>
+        </div>
+      </details>
 
       <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
         <div class="section-heading">
@@ -223,10 +227,11 @@ const page = `<!doctype html>
       <div id="workspace-view" hidden>
         <section class="summary" aria-label="Configuration summary">
           <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
-          <article><p class="summary-label">Durable default</p><strong id="default-profile">—</strong><span>Existing clients keep their active profile until restart.</span></article>
+          <article><p class="summary-label">Default for new connections</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
+          <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
           <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
         </section>
-        <p class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Restart Claude Desktop or open a new client connection before expecting the new default or connection to be active.</p>
+        <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
 
         <section class="work-section" aria-labelledby="profile-inventory-title">
           <div class="section-heading">
@@ -462,7 +467,11 @@ p { color: var(--muted); line-height: 1.6; }
 .gate { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr); gap: clamp(2rem, 7vw, 6rem); border-top: 1px solid var(--line); padding: 2rem 0 4rem; }
 .gate h2 { max-width: 31rem; }
 .field-note { margin: .65rem 0 0; font-size: .8rem; }
-.intro, .work-section { border-top: 1px solid var(--line); padding: 2rem 0 clamp(3rem, 7vw, 6rem); }
+.work-section { border-top: 1px solid var(--line); padding: 2rem 0 clamp(3rem, 7vw, 6rem); }
+.authentication-guide { margin: 0 0 clamp(3rem, 7vw, 6rem); padding: 0; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
+.authentication-guide > summary { padding: 1.15rem 1.25rem; color: var(--ink); }
+.authentication-guide[open] > summary { border-bottom: 1px solid var(--line); }
+.authentication-guide-body { padding: 1.5rem 1.25rem 0; }
 .mode-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 2rem; background: var(--line); border: 1px solid var(--line); }
 .mode { min-height: 14rem; padding: 1.3rem; background: var(--panel); }
 .mode-native { box-shadow: inset 0 .2rem 0 var(--key); }
@@ -508,7 +517,7 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .setup-review p { margin: 0 0 .65rem; }
 .setup-review ul { display: grid; gap: .35rem; margin: .8rem 0 1rem; padding-left: 1.25rem; color: var(--muted); }
 .setup-review .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
-.summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
 .summary span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
@@ -521,9 +530,15 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-catalog-status ul:empty { display: none; }
 .catalog-actions { display: grid; gap: .8rem; justify-items: start; }
 .catalog-actions p { margin: 0; }
+.catalog-actions strong { color: var(--ink); }
+.catalog-boundary { margin-top: 1rem; }
 .configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
 .configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
+.configuration-profiles { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
+.configuration-profiles li { padding: .28rem .5rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.configuration-profiles .configuration-default { border-color: var(--key); }
+.configuration-card .configuration-switch { margin-top: .7rem; color: var(--ink); }
 .configuration-card button { min-height: 2.4rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
@@ -621,6 +636,7 @@ const script = `(() => {
   let activeSetupDraft = undefined;
   let returningSetupVisible = false;
   let setupWizardSource = "connector";
+  let profileSwitchingFromMcp = false;
 
   function message(text) {
     if (status) status.textContent = text;
@@ -976,7 +992,23 @@ const script = `(() => {
       const summary = document.createElement("p");
       const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : 0;
       const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "unknown";
-      summary.textContent = profileCount + " profile" + (profileCount === 1 ? "" : "s") + " · default " + defaultProfile;
+      summary.textContent = "Default for new connections: " + defaultProfile;
+      const configuredProfileNames = Array.isArray(configuration.profileNames)
+        ? configuration.profileNames.filter((profile) => typeof profile === "string")
+        : [];
+      const profileNames = configuredProfileNames.length > 0
+        ? configuredProfileNames
+        : defaultProfile === "unknown" ? [] : [defaultProfile];
+      const profileList = document.createElement("ul");
+      profileList.className = "configuration-profiles";
+      const visibleProfileCount = profileNames.length > 0 ? profileNames.length : profileCount;
+      profileList.setAttribute("aria-label", visibleProfileCount + " named account profile" + (visibleProfileCount === 1 ? "" : "s"));
+      profileNames.forEach((profile) => {
+        const item = document.createElement("li");
+        item.textContent = profile + (profile === defaultProfile ? " · default" : "");
+        if (profile === defaultProfile) item.className = "configuration-default";
+        profileList.append(item);
+      });
       const ownership = document.createElement("p");
       ownership.className = "configuration-meta";
       const authentication = record(configuration.authentication);
@@ -985,12 +1017,17 @@ const script = `(() => {
         : authentication.mode === "miftah-native-oauth"
           ? "Miftah-managed native OAuth available"
           : "manual upstream authentication required";
-      details.append(title, summary, ownership);
+      const switching = document.createElement("p");
+      switching.className = "configuration-switch";
+      switching.textContent = configuration.profileSwitchingFromMcp === true
+        ? "Live account switch: use miftah_use_profile in your MCP client."
+        : "Live account switch: off. Open a new connection to use another default.";
+      details.append(title, summary, profileList, switching, ownership);
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.configuration = id;
       const selected = id.length > 0 && id === catalog.selectedConfigurationId;
-      button.textContent = selected ? "Open now" : "Open configuration";
+      button.textContent = selected ? "Open now" : "Manage connection";
       button.className = selected ? "secondary" : "";
       button.disabled = !id || selected;
       card.append(details, button);
@@ -1738,9 +1775,24 @@ const script = `(() => {
     const configVersion = byId("config-version");
     const configuredDefaultProfile = typeof metadata.defaultProfile === "string" ? metadata.defaultProfile : "";
     const defaultProfile = byId("default-profile");
+    const profileSwitchingState = byId("profile-switching-state");
+    const profileSwitchingCopy = byId("profile-switching-copy");
+    const activeProfileGuidance = byId("active-profile-guidance");
+    profileSwitchingFromMcp = metadata.profileSwitchingFromMcp === true;
     if (configName) configName.textContent = String(metadata.name || "—");
     if (configVersion) configVersion.textContent = "Config v" + String(metadata.version || "—");
     if (defaultProfile) defaultProfile.textContent = configuredDefaultProfile || "—";
+    if (profileSwitchingState) profileSwitchingState.textContent = profileSwitchingFromMcp ? "Available" : "Off";
+    if (profileSwitchingCopy) {
+      profileSwitchingCopy.textContent = profileSwitchingFromMcp
+        ? "Use miftah_use_profile in your MCP client to switch this active session."
+        : "Open a new connection after changing the durable default.";
+    }
+    if (activeProfileGuidance) {
+      activeProfileGuidance.textContent = profileSwitchingFromMcp
+        ? "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you use miftah_use_profile in the MCP client."
+        : "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you reconnect.";
+    }
     const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
     const profiles = profileMetadata.map((item) => String(item.name || "")).filter(Boolean);
     const upstreams = Array.isArray(metadata.upstreams) ? metadata.upstreams.map((item) => String(record(item).name || "")).filter(Boolean) : [];
@@ -1766,7 +1818,9 @@ const script = `(() => {
     if (auditState) auditState.textContent = String(audit.state || "unknown");
     renderConnections(results[1], metadata.authentication);
     renderAudit(results[2]);
-    message("Console data refreshed. Existing MCP clients still need a restart for durable changes.");
+    message(profileSwitchingFromMcp
+      ? "Console data refreshed. Durable changes apply to new connections; use miftah_use_profile for this active MCP session."
+      : "Console data refreshed. Open a new MCP connection before expecting durable changes to be active.");
   }
 
   if (unlockForm instanceof HTMLFormElement && bootstrapInput instanceof HTMLInputElement) {
@@ -2242,7 +2296,10 @@ const script = `(() => {
           : "This profile is already the durable default.";
         if (result) result.textContent = publicResult;
         await refresh();
-        message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
+        message(publicResult + (profileSwitchingFromMcp
+          ? " New connections will use it; use miftah_use_profile to switch this active MCP session."
+          : " Open a new MCP connection to use it.") +
+          " If you are using the configuration catalog, select this configuration again before another Console change.");
       } catch (error) { message(errorMessage(error)); }
       finally { setDefaultProfile.disabled = false; }
     });

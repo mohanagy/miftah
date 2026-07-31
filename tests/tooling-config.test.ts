@@ -43,4 +43,15 @@ describe("repository tooling contracts", () => {
 
     expect(windowsVerifier.slice(0, functionIndex)).toMatch(jsdocAdjacencyPattern);
   });
+
+  it("serializes complete core test files on Windows so ACL helpers cannot exhaust one another", () => {
+    const workflow = readRepositoryFile(".github/workflows/ci.yml");
+
+    expect(workflow).toMatch(
+      /- name: Test core contracts \(Windows, serialized files\)\s+if: \$\{\{ runner\.os == 'Windows' \}\}\s+run: npm run test:core -- --no-file-parallelism[ \t]*(?:\r?\n|$)/u
+    );
+    expect(workflow).toMatch(
+      /- name: Test core contracts\s+if: \$\{\{ runner\.os != 'Windows' \}\}\s+run: npm run test:core[ \t]*(?:\r?\n|$)/u
+    );
+  });
 });
