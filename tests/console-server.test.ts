@@ -351,6 +351,128 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
   return { success, failure: { json: json.value, status: status.textContent } };
 }
 
+async function recoverSetupCompletionAfterUnlock(javascript: string): Promise<{
+  readonly locked: { readonly completionHidden: boolean; readonly focus: string };
+  readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
+}> {
+  class FakeElement {
+    hidden = false;
+    textContent = "";
+
+    scrollIntoView(): void {}
+  }
+  class FakeInput extends FakeElement {
+    focus(): void {
+      focused = "bootstrap";
+    }
+  }
+  class FakeSelect extends FakeElement {
+    value = "claude-desktop";
+
+    addEventListener(): void {}
+
+    focus(): void {
+      focused = "client";
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+
+    addEventListener(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  let focused = "";
+  let locked = true;
+  const unlock = new FakeElement();
+  unlock.hidden = true;
+  const dashboard = new FakeElement();
+  const completion = new FakeElement();
+  completion.hidden = true;
+  const bootstrap = new FakeInput();
+  const client = new FakeSelect();
+  const generate = new FakeButton();
+  const clientJson = new FakeTextArea();
+  const copy = new FakeButton();
+  copy.disabled = true;
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return new FakeElement();
+        if (id === "unlock-view") return unlock;
+        if (id === "dashboard-view") return dashboard;
+        if (id === "bootstrap") return bootstrap;
+        if (id === "setup-completion-view") return completion;
+        if (id === "setup-completion-client-select") return client;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-json") return clientJson;
+        if (id === "setup-completion-copy-json") return copy;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown) => {
+      const requestPath = String(path);
+      if (locked) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (requestPath === "/api/v1/session") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { csrfToken: "x".repeat(32) } })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            initialized: false,
+            catalog: {
+              configurations: [{ name: "analytics", profileCount: 1 }],
+              readyCount: 1,
+              attentionCount: 0
+            }
+          }
+        })
+      };
+    }
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { refreshAfterSetup, resumeSession };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
+    readonly resumeSession: () => Promise<void>;
+  };
+  await harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
+    .catch(() => undefined);
+  const lockedState = { completionHidden: completion.hidden, focus: focused };
+  locked = false;
+  await harness.resumeSession();
+  return {
+    locked: lockedState,
+    recovered: { completionHidden: completion.hidden, focus: focused }
+  };
+}
+
 async function reviewThenCreatePresetForm(
   javascript: string,
   reviewOptions: {
@@ -1947,6 +2069,24 @@ describe("local Console control server", () => {
       await expect(supersedeSetupCompletionClientRequests(javascript)).resolves.toEqual({
         success: { json: "", status: "Current setup is ready." },
         failure: { json: "", status: "Newer setup is ready." }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps setup completion behind unlock recovery and restores it after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      await expect(recoverSetupCompletionAfterUnlock(javascript)).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        recovered: { completionHidden: false, focus: "client" }
       });
     } finally {
       await server.close();

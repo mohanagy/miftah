@@ -707,6 +707,7 @@ const script = `(() => {
   let profileReadinessTargets = [];
   let profileReadinessGeneration = 0;
   let setupCompletion = undefined;
+  let pendingSetupCompletion = undefined;
   let setupCompletionGeneration = 0;
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
@@ -826,6 +827,7 @@ const script = `(() => {
       }
       csrfToken = resumed.csrfToken;
       await refresh();
+      restorePendingSetupCompletion();
     } catch (error) {
       message(errorMessage(error));
     }
@@ -1073,11 +1075,23 @@ const script = `(() => {
     return generation === setupCompletionGeneration && client === selectedSetupCompletionClient();
   }
 
+  function restorePendingSetupCompletion() {
+    if (pendingSetupCompletion === undefined) return;
+    const completion = pendingSetupCompletion;
+    pendingSetupCompletion = undefined;
+    replaceSetupCompletion(completion);
+  }
+
   async function refreshAfterSetup(completion) {
     try {
       await refresh();
     } finally {
-      replaceSetupCompletion(completion);
+      if (unlockView instanceof HTMLElement && !unlockView.hidden) {
+        pendingSetupCompletion = completion;
+      } else {
+        pendingSetupCompletion = undefined;
+        replaceSetupCompletion(completion);
+      }
     }
   }
 
@@ -2079,6 +2093,7 @@ const script = `(() => {
         }
         csrfToken = payload.data.csrfToken;
         await refresh();
+        restorePendingSetupCompletion();
       } catch (error) {
         message(errorMessage(error));
         bootstrapInput.focus();
