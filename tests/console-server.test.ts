@@ -1666,6 +1666,185 @@ describe("local Console control server", () => {
     }
   });
 
+  it("reports MCP connections and hides rejected-file help until the catalog needs attention", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toMatch(/<p id="configuration-catalog-rejected-guidance"[^>]* hidden>/u);
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('catalog.discoveredCount === 1 ? "MCP connection found" : "MCP connections found"');
+      expect(javascript).not.toContain("configuration files found");
+      expect(javascript).toContain("configurationCatalogRejectedGuidance.hidden = catalog.attentionCount === 0;");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("offers client-specific copyable account-switch requests without claiming Console controls the session", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="catalog-client-select"');
+      expect(html).toContain('<option value="claude-desktop">Claude Desktop</option>');
+      expect(html).toContain('<option value="claude-code">Claude Code</option>');
+      expect(html).toContain('<option value="cursor">Cursor</option>');
+      expect(html).toContain('<option value="vscode">VS Code</option>');
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("function profileSwitchRequest(client, profile)");
+      expect(javascript).toContain("Use the Miftah account named");
+      expect(javascript).toContain("Copy switch request");
+      expect(javascript).toContain("navigator.clipboard.writeText(profileSwitchRequest(client, profile))");
+      expect(javascript).toContain("Console does not switch a running client session.");
+      expect(javascript).not.toContain("Live account switch: use miftah_use_profile in your MCP client.");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("groups connection management behind accessible task navigation", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('<nav id="workspace-task-navigation" aria-label="Connection tasks">');
+      expect(html).toContain('href="#connection-overview">Overview</a>');
+      expect(html).toContain('href="#connection-accounts">Accounts</a>');
+      expect(html).toContain('href="#connection-authentication">Authentication</a>');
+      expect(html).toContain('href="#connection-client-setup">Client setup</a>');
+      expect(html).toContain('href="#connection-audit">Audit</a>');
+      expect(html).toContain('id="connection-overview"');
+      expect(html).toContain('id="connection-accounts"');
+      expect(html).toContain('id="connection-authentication"');
+      expect(html).toContain('id="connection-client-setup"');
+      expect(html).toContain('id="connection-audit"');
+
+      const accounts = html.slice(
+        html.indexOf('id="connection-accounts"'),
+        html.indexOf('id="connection-authentication"')
+      );
+      expect(accounts).toContain('id="confirm-profile-removal"');
+      expect(accounts).toContain('id="remove-profile"');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps the selected setup form ahead of optional authentication theory", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      const wizard = html.indexOf('id="setup-wizard-view"');
+      const connectorForm = html.indexOf('id="preset-onboarding-view"');
+      const importForm = html.indexOf('id="client-entry-onboarding-view"');
+      const browserSignInForm = html.indexOf('id="onboarding-view"');
+      const authenticationReference = html.indexOf('id="authentication-guide"');
+
+      expect(wizard).toBeGreaterThan(-1);
+      expect(connectorForm).toBeGreaterThan(wizard);
+      expect(importForm).toBeGreaterThan(connectorForm);
+      expect(browserSignInForm).toBeGreaterThan(importForm);
+      expect(authenticationReference).toBeGreaterThan(browserSignInForm);
+      expect(html).toContain("<summary>How authentication works</summary>");
+      expect(html).not.toContain('<details id="authentication-guide" class="authentication-guide" open>');
+      expect(html).toContain("<label>Connection type");
+      expect(html).toContain('<optgroup label="Named presets">');
+      expect(html).toContain('<optgroup label="Connection types">');
+      expect(html).not.toContain("<label>Known connector");
+      expect(html).not.toContain('id="native-oauth-setup-link"');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("finishes setup with a client-specific install, verification, second-account, and switching handoff", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="setup-completion-created"');
+      expect(html).toContain('id="setup-completion-client-select"');
+      expect(html).toContain('id="setup-completion-generate-entry"');
+      expect(html).toContain('id="setup-completion-client-target"');
+      expect(html).toContain('id="setup-completion-client-json"');
+      expect(html).toContain('id="setup-completion-copy-json"');
+      expect(html).toContain('id="setup-completion-readiness"');
+      expect(html).toContain('id="setup-completion-second-account"');
+      expect(html).toContain('id="setup-completion-switch"');
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("function completionFromSetupResult(result");
+      expect(javascript).toContain("Created Miftah connection");
+      expect(javascript).toContain('/api/v1/client-snippets?client=');
+      expect(javascript).toContain("target.label");
+      expect(javascript).toContain("restart or reconnect");
+      expect(javascript).toContain("Open Manage connection");
+      expect(javascript).toContain("copy its switch request");
+      expect(javascript).toContain("A generated entry does not prove that a credential works");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps new Console actions keyboard-visible, announced, target-sized, and responsive", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="setup-completion-readiness" role="status" aria-live="polite" aria-atomic="true"');
+      expect(html).toContain('aria-label="Connection tasks"');
+
+      const stylesheet = await fetch(new URL("/app.css", server.url));
+      expect(stylesheet.status).toBe(200);
+      const css = await stylesheet.text();
+      expect(css).toContain("button:focus-visible, summary:focus-visible");
+      expect(css).toContain("#workspace-task-navigation a:focus-visible");
+      expect(css).toContain(".configuration-profiles button { min-height: 2.75rem;");
+      expect(css).toContain(".setup-completion-copy { grid-template-columns: 1fr;");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName)');
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
@@ -1709,7 +1888,6 @@ describe("local Console control server", () => {
       expect(html).not.toContain('aria-pressed=');
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
-      expect(html).toContain('id="native-oauth-setup-link"');
       expect(html).toContain("Remote MCP with browser sign-in");
       expect(html).toContain("Check sign-in and create profile");
       expect(html).toContain("Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration.");
@@ -1857,7 +2035,6 @@ describe("local Console control server", () => {
       expect(discoveryUnavailableBranch).toContain("hideSetupWizardPaths()");
       expect(discoveryUnavailableBranch).toContain("returningSetupVisible = false");
       expect(javascript).toContain("Choose a short lowercase name");
-      expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/profiles/provider-account");
@@ -1910,7 +2087,7 @@ describe("local Console control server", () => {
         const assignmentIndex = assignment.index;
         expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
       }
-      expect(javascript).toContain("configuration files found");
+      expect(javascript).toContain("MCP connections found");
       expect(javascript).toContain("need attention");
       expect(javascript).toContain('"file-permissions": "private file permission"');
       expect(javascript).not.toContain('"file-permissions": "private file permissions"');
