@@ -238,6 +238,586 @@ async function submitPresetFormWithStaleValue(
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+async function supersedeSetupCompletionClientRequests(javascript: string): Promise<{
+  readonly success: { readonly json: string; readonly status: string };
+  readonly failure: { readonly json: string; readonly status: string };
+}> {
+  type Listener = () => void | Promise<void>;
+  type PendingResponse = {
+    readonly resolve: (response: {
+      readonly ok: boolean;
+      readonly status: number;
+      readonly json: () => Promise<Record<string, unknown>>;
+    }) => void;
+  };
+  class FakeElement {
+    readonly listeners = new Map<string, Listener>();
+    hidden = false;
+    textContent = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+  }
+  class FakeSelect extends FakeElement {
+    constructor(public value: string) {
+      super();
+    }
+
+    focus(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  const status = new FakeElement();
+  const completionView = new FakeElement();
+  const select = new FakeSelect("claude-desktop");
+  const generate = new FakeButton();
+  const target = new FakeElement();
+  const json = new FakeTextArea();
+  const guidance = new FakeElement();
+  const copy = new FakeButton();
+  const handoff = new FakeElement();
+  const switching = new FakeElement();
+  const pending: PendingResponse[] = [];
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "setup-completion-view") return completionView;
+        if (id === "setup-completion-client-select") return select;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-target") return target;
+        if (id === "setup-completion-client-json") return json;
+        if (id === "setup-completion-client-guidance") return guidance;
+        if (id === "setup-completion-copy-json") return copy;
+        if (id === "setup-completion-handoff") return handoff;
+        if (id === "setup-completion-switch") return switching;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async () => new Promise((resolve) => pending.push({ resolve }))
+  });
+
+  const click = generate.listeners.get("click");
+  const change = select.listeners.get("change");
+  if (click === undefined || change === undefined) throw new Error("Expected setup completion client handlers.");
+
+  const successRequest = click();
+  select.value = "cursor";
+  await change();
+  select.value = "claude-desktop";
+  await change();
+  status.textContent = "Current setup is ready.";
+  pending[0]?.resolve({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      data: [{
+        target: { label: "Claude Desktop settings" },
+        json: "{\"mcpServers\":{\"stale\":{}}}",
+        guidance: "Stale guidance"
+      }]
+    })
+  });
+  await successRequest;
+  const success = { json: json.value, status: status.textContent };
+
+  const failureRequest = click();
+  select.value = "cursor";
+  await change();
+  select.value = "claude-desktop";
+  await change();
+  status.textContent = "Newer setup is ready.";
+  pending[1]?.resolve({
+    ok: false,
+    status: 500,
+    json: async () => ({ error: { code: "snippet_failed", message: "Stale request failed." } })
+  });
+  await failureRequest;
+  return { success, failure: { json: json.value, status: status.textContent } };
+}
+
+async function recoverSetupCompletionAfterUnlock(
+  javascript: string,
+  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" | "control-recovery" = "none"
+): Promise<{
+  readonly locked: { readonly completionHidden: boolean; readonly focus: string };
+  readonly afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
+  readonly afterReauthentication: { readonly completionHidden: boolean; readonly focus: string };
+  readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
+  readonly statusPreserved: boolean;
+  readonly setupRefreshErrorName?: string;
+  readonly setupRefreshErrorMessage?: string;
+  readonly persistentActionsEnabled?: boolean;
+}> {
+  class FakeElement {
+    hidden = false;
+    textContent = "";
+
+    scrollIntoView(): void {}
+  }
+  class FakeInput extends FakeElement {
+    focus(): void {
+      focused = "bootstrap";
+    }
+  }
+  class FakeSelect extends FakeElement {
+    value = "claude-desktop";
+
+    addEventListener(): void {}
+
+    focus(): void {
+      focused = "client";
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+
+    addEventListener(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  let focused = "";
+  let locked = refreshFailure !== "setup-origin-overlap" && refreshFailure !== "current-setup-failure";
+  let activeRefreshFailure = refreshFailure;
+  let releaseDelayedRecovery: (() => void) | undefined;
+  const delayedRecovery = new Promise<void>((resolve) => {
+    releaseDelayedRecovery = resolve;
+  });
+  let markOverlapRecoveryRequested: (() => void) | undefined;
+  const overlapRecoveryRequested = new Promise<void>((resolve) => {
+    markOverlapRecoveryRequested = resolve;
+  });
+  let releaseFirstOverlapRecovery: (() => void) | undefined;
+  const firstOverlapRecovery = new Promise<void>((resolve) => {
+    releaseFirstOverlapRecovery = resolve;
+  });
+  const unlock = new FakeElement();
+  unlock.hidden = true;
+  const dashboard = new FakeElement();
+  const status = new FakeElement();
+  const completion = new FakeElement();
+  completion.hidden = true;
+  const bootstrap = new FakeInput();
+  const client = new FakeSelect();
+  const generate = new FakeButton();
+  const clientJson = new FakeTextArea();
+  const copy = new FakeButton();
+  copy.disabled = true;
+  const saveDraft = new FakeButton();
+  const resumeDraft = new FakeButton();
+  const runReadiness = new FakeButton();
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "unlock-view") return unlock;
+        if (id === "dashboard-view") return dashboard;
+        if (id === "bootstrap") return bootstrap;
+        if (id === "setup-completion-view") return completion;
+        if (id === "setup-completion-client-select") return client;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-json") return clientJson;
+        if (id === "setup-completion-copy-json") return copy;
+        if (id === "save-setup-draft") return saveDraft;
+        if (id === "resume-setup-draft") return resumeDraft;
+        if (id === "run-profile-readiness") return runReadiness;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown) => {
+      const requestPath = String(path);
+      if (locked) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (requestPath === "/api/v1/session") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { csrfToken: "x".repeat(32) } })
+        };
+      }
+      if (activeRefreshFailure === "config" && requestPath === "/api/v1/config") {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { code: "config_failed", message: "Configuration refresh failed." } })
+        };
+      }
+      if (activeRefreshFailure === "current-setup-failure" && requestPath === "/api/v1/config") {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { code: "config_failed", message: "Configuration refresh failed." } })
+        };
+      }
+      if (activeRefreshFailure === "overlapping-reauth" && requestPath === "/api/v1/health") {
+        markOverlapRecoveryRequested?.();
+        await firstOverlapRecovery;
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (activeRefreshFailure === "overlapping-reauth" && requestPath === "/api/v1/connections") {
+        await delayedRecovery;
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (activeRefreshFailure === "overlapping-reauth" && requestPath === "/api/v1/audit?limit=50") {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/health") {
+        markOverlapRecoveryRequested?.();
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/connections") {
+        await delayedRecovery;
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (activeRefreshFailure === "setup-origin-overlap" && requestPath === "/api/v1/audit?limit=50") {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (activeRefreshFailure === "racing-recovery" && requestPath === "/api/v1/connections") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if ((activeRefreshFailure === "late" || activeRefreshFailure === "racing-recovery") && requestPath !== "/api/v1/config") {
+        return requestPath === "/api/v1/health"
+          ? {
+              ok: false,
+              status: 500,
+              json: async () => ({ error: { code: "health_failed", message: "Health refresh failed." } })
+            }
+          : { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: activeRefreshFailure !== "none"
+            ? {
+                initialized: true,
+                name: "analytics",
+                version: "1",
+                defaultProfile: "default",
+                profiles: [{ name: "default" }],
+                upstreams: []
+              }
+            : {
+                initialized: false,
+                catalog: {
+                  configurations: [{ name: "analytics", profileCount: 1 }],
+                  readyCount: 1,
+                  attentionCount: 0
+                }
+              }
+        })
+      };
+    }
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { refreshAfterSetup, resumeSession };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
+    readonly resumeSession: () => Promise<void>;
+  };
+  const waitForUnlock = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (!unlock.hidden) return;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error("Expected session recovery to reveal the unlock view.");
+  };
+  let setupRefreshErrorName = "";
+  let setupRefreshErrorMessage = "";
+  const setupRefresh = harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
+    .catch((error: unknown) => {
+      const failure = typeof error === "object" && error !== null
+        ? error as { readonly name?: unknown; readonly message?: unknown }
+        : {};
+      setupRefreshErrorName = typeof failure.name === "string" ? failure.name : "NonError";
+      setupRefreshErrorMessage = typeof failure.message === "string" ? failure.message : String(error);
+    });
+  if (refreshFailure === "setup-origin-overlap") {
+    await overlapRecoveryRequested;
+    await waitForUnlock();
+    const lockedState = { completionHidden: completion.hidden, focus: focused };
+    const afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
+    activeRefreshFailure = "none";
+    await harness.resumeSession();
+    const afterReauthentication = { completionHidden: completion.hidden, focus: focused };
+    const reauthenticatedStatus = status.textContent;
+    releaseDelayedRecovery?.();
+    await setupRefresh;
+    return {
+      locked: lockedState,
+      afterRefreshFailure,
+      afterReauthentication,
+      recovered: { completionHidden: completion.hidden, focus: focused },
+      statusPreserved: status.textContent === reauthenticatedStatus,
+      setupRefreshErrorName
+    };
+  }
+  await setupRefresh;
+  if (refreshFailure === "current-setup-failure") {
+    const state = { completionHidden: completion.hidden, focus: focused };
+    return {
+      locked: state,
+      afterRefreshFailure: state,
+      afterReauthentication: state,
+      recovered: state,
+      statusPreserved: true,
+      setupRefreshErrorMessage
+    };
+  }
+  const lockedState = { completionHidden: completion.hidden, focus: focused };
+  if (refreshFailure === "control-recovery") {
+    saveDraft.disabled = true;
+    resumeDraft.disabled = true;
+    runReadiness.disabled = true;
+    locked = false;
+    await harness.resumeSession();
+    const state = { completionHidden: completion.hidden, focus: focused };
+    return {
+      locked: lockedState,
+      afterRefreshFailure: state,
+      afterReauthentication: state,
+      recovered: state,
+      statusPreserved: true,
+      persistentActionsEnabled: !saveDraft.disabled && !resumeDraft.disabled && !runReadiness.disabled
+    };
+  }
+  locked = false;
+  let afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
+  let afterReauthentication: { readonly completionHidden: boolean; readonly focus: string };
+  if (refreshFailure === "overlapping-reauth") {
+    const staleResume = harness.resumeSession();
+    await overlapRecoveryRequested;
+    releaseFirstOverlapRecovery?.();
+    await waitForUnlock();
+    afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
+    activeRefreshFailure = "none";
+    await harness.resumeSession();
+    afterReauthentication = { completionHidden: completion.hidden, focus: focused };
+    releaseDelayedRecovery?.();
+    await staleResume;
+  } else {
+    await harness.resumeSession();
+    afterRefreshFailure = { completionHidden: completion.hidden, focus: focused };
+    if (refreshFailure === "racing-recovery") {
+      activeRefreshFailure = "none";
+      await harness.resumeSession();
+    }
+    afterReauthentication = { completionHidden: completion.hidden, focus: focused };
+  }
+  const reauthenticatedStatus = status.textContent;
+  return {
+    locked: lockedState,
+    afterRefreshFailure,
+    afterReauthentication,
+    recovered: { completionHidden: completion.hidden, focus: focused },
+    statusPreserved: status.textContent === reauthenticatedStatus
+  };
+}
+
+async function settleStaleConfigurationSelectionAfterReauthentication(
+  javascript: string,
+  outcome: "success" | "failure"
+): Promise<{
+  readonly before: { readonly completionHidden: boolean; readonly focus: string; readonly status: string };
+  readonly after: { readonly completionHidden: boolean; readonly focus: string; readonly status: string };
+}> {
+  type Response = {
+    readonly ok: boolean;
+    readonly status: number;
+    readonly json: () => Promise<Record<string, unknown>>;
+  };
+  class FakeElement {
+    hidden = false;
+    textContent = "";
+
+    scrollIntoView(): void {}
+  }
+  class FakeInput extends FakeElement {
+    focus(): void {
+      focused = "bootstrap";
+    }
+  }
+  class FakeSelect extends FakeElement {
+    value = "claude-desktop";
+
+    addEventListener(): void {}
+
+    focus(): void {
+      focused = "client";
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+
+    addEventListener(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  let focused = "";
+  let locked = true;
+  let releaseSelection: ((response: Response) => void) | undefined;
+  const status = new FakeElement();
+  const unlock = new FakeElement();
+  unlock.hidden = true;
+  const dashboard = new FakeElement();
+  const completion = new FakeElement();
+  completion.hidden = true;
+  const bootstrap = new FakeInput();
+  const client = new FakeSelect();
+  const generate = new FakeButton();
+  const clientJson = new FakeTextArea();
+  const copy = new FakeButton();
+  copy.disabled = true;
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "unlock-view") return unlock;
+        if (id === "dashboard-view") return dashboard;
+        if (id === "bootstrap") return bootstrap;
+        if (id === "setup-completion-view") return completion;
+        if (id === "setup-completion-client-select") return client;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-json") return clientJson;
+        if (id === "setup-completion-copy-json") return copy;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown): Promise<Response> => {
+      const requestPath = String(path);
+      if (requestPath.includes("/configurations/analytics/select")) {
+        return await new Promise<Response>((resolve) => {
+          releaseSelection = resolve;
+        });
+      }
+      if (locked) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (requestPath === "/api/v1/session") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { csrfToken: "x".repeat(32) } })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            initialized: false,
+            catalog: {
+              configurations: [{ name: "analytics", profileCount: 1 }],
+              readyCount: 1,
+              attentionCount: 0
+            }
+          }
+        })
+      };
+    }
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { api, errorMessage, message, refresh, refreshAfterSetup, resumeSession };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly api: (path: string, options?: Record<string, unknown>) => Promise<unknown>;
+    readonly errorMessage: (error: unknown) => string;
+    readonly message: (text: string) => void;
+    readonly refresh: () => Promise<void>;
+    readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
+    readonly resumeSession: () => Promise<void>;
+  };
+
+  await harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
+    .catch(() => undefined);
+  locked = false;
+  const staleSelection = harness.api("/api/v1/configurations/analytics/select", { method: "POST", body: {} })
+    .then(async () => await harness.refresh())
+    .catch((error) => harness.message(harness.errorMessage(error)));
+  await harness.resumeSession();
+  const before = { completionHidden: completion.hidden, focus: focused, status: status.textContent };
+  releaseSelection?.(outcome === "success"
+    ? { ok: true, status: 200, json: async () => ({ data: {} }) }
+    : {
+        ok: false,
+        status: 500,
+        json: async () => ({ error: { code: "selection_failed", message: "Stale selection failed." } })
+      });
+  await staleSelection;
+  return {
+    before,
+    after: { completionHidden: completion.hidden, focus: focused, status: status.textContent }
+  };
+}
+
 async function reviewThenCreatePresetForm(
   javascript: string,
   reviewOptions: {
@@ -808,7 +1388,7 @@ async function resumeMissingSetupDraft(javascript: string): Promise<{
   readonly controlsUpdated: number;
   readonly message: string;
 }> {
-  const start = javascript.indexOf("if (resumeSetupDraft instanceof HTMLButtonElement)");
+  const start = javascript.indexOf("\n  if (resumeSetupDraft instanceof HTMLButtonElement)") + 1;
   const end = javascript.indexOf("\n\n  if (discardSetupDraft instanceof HTMLButtonElement)", start);
   if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft resume action.");
 
@@ -824,7 +1404,7 @@ async function resumeMissingSetupDraft(javascript: string): Promise<{
   let restored = false;
   let controlsUpdated = 0;
   let status = "";
-  runInNewContext(`let activeSetupDraft = { revision: 1 };\n${javascript.slice(start, end)}`, {
+  runInNewContext(`let activeSetupDraft = { revision: 1 };\nlet authenticationEpoch = 0;\n${javascript.slice(start, end)}`, {
     resumeSetupDraft: button,
     HTMLButtonElement: FakeButton,
     api: async () => null,
@@ -853,7 +1433,7 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   readonly disabledWhilePending: boolean;
   readonly enabledAfterCompletion: boolean;
 }> {
-  const start = javascript.indexOf("if (saveSetupDraft instanceof HTMLButtonElement)");
+  const start = javascript.indexOf("\n  if (saveSetupDraft instanceof HTMLButtonElement)") + 1;
   const end = javascript.indexOf("\n\n  if (resumeSetupDraft instanceof HTMLButtonElement)", start);
   if (start < 0 || end < 0) throw new Error("Expected the saved setup-draft save action.");
 
@@ -872,6 +1452,7 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   let releaseRequest: () => void = () => undefined;
   const request = new Promise<void>((resolve) => { releaseRequest = resolve; });
   runInNewContext(javascript.slice(start, end), {
+    authenticationEpoch: 0,
     saveSetupDraft: button,
     HTMLButtonElement: FakeButton,
     message(): void {},
@@ -1666,6 +2247,318 @@ describe("local Console control server", () => {
     }
   });
 
+  it("reports MCP connections and hides rejected-file help until the catalog needs attention", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toMatch(/<p id="configuration-catalog-rejected-guidance"[^>]* hidden>/u);
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('catalog.discoveredCount === 1 ? "MCP connection found" : "MCP connections found"');
+      expect(javascript).not.toContain("configuration files found");
+      expect(javascript).toContain("configurationCatalogRejectedGuidance.hidden = catalog.attentionCount === 0;");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("offers client-specific copyable account-switch requests without claiming Console controls the session", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="catalog-client-select"');
+      expect(html).toContain('<option value="claude-desktop">Claude Desktop</option>');
+      expect(html).toContain('<option value="claude-code">Claude Code</option>');
+      expect(html).toContain('<option value="cursor">Cursor</option>');
+      expect(html).toContain('<option value="vscode">VS Code</option>');
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("function profileSwitchRequest(client, profile)");
+      expect(javascript).toContain("Use the Miftah account named");
+      expect(javascript).toContain("Copy switch request");
+      expect(javascript).toContain("navigator.clipboard.writeText(profileSwitchRequest(client, profile))");
+      expect(javascript).toContain("Console does not switch a running client session.");
+      expect(javascript).not.toContain("Live account switch: use miftah_use_profile in your MCP client.");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("groups connection management behind accessible task navigation", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('<nav id="workspace-task-navigation" aria-label="Connection tasks">');
+      expect(html).toContain('href="#connection-overview">Overview</a>');
+      expect(html).toContain('href="#connection-accounts">Accounts</a>');
+      expect(html).toContain('href="#connection-authentication">Authentication</a>');
+      expect(html).toContain('href="#connection-client-setup">Client setup</a>');
+      expect(html).toContain('href="#connection-audit">Audit</a>');
+      expect(html).toContain('id="connection-overview"');
+      expect(html).toContain('id="connection-accounts"');
+      expect(html).toContain('id="connection-authentication"');
+      expect(html).toContain('id="connection-client-setup"');
+      expect(html).toContain('id="connection-audit"');
+
+      const accounts = html.slice(
+        html.indexOf('id="connection-accounts"'),
+        html.indexOf('id="connection-authentication"')
+      );
+      expect(accounts).toContain('id="confirm-profile-removal"');
+      expect(accounts).toContain('id="remove-profile"');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps the selected setup form ahead of optional authentication theory", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      const wizard = html.indexOf('id="setup-wizard-view"');
+      const connectorForm = html.indexOf('id="preset-onboarding-view"');
+      const importForm = html.indexOf('id="client-entry-onboarding-view"');
+      const browserSignInForm = html.indexOf('id="onboarding-view"');
+      const authenticationReference = html.indexOf('id="authentication-guide"');
+
+      expect(wizard).toBeGreaterThan(-1);
+      expect(connectorForm).toBeGreaterThan(wizard);
+      expect(importForm).toBeGreaterThan(connectorForm);
+      expect(browserSignInForm).toBeGreaterThan(importForm);
+      expect(authenticationReference).toBeGreaterThan(browserSignInForm);
+      expect(html).toContain("<summary>How authentication works</summary>");
+      expect(html).not.toContain('<details id="authentication-guide" class="authentication-guide" open>');
+      expect(html).toContain("<label>Connection type");
+      expect(html).toContain('<optgroup label="Named presets">');
+      expect(html).toContain('<optgroup label="Connection types">');
+      expect(html).not.toContain("<label>Known connector");
+      expect(html).not.toContain('id="native-oauth-setup-link"');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("finishes setup with a client-specific install, verification, second-account, and switching handoff", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="setup-completion-created"');
+      expect(html).toContain('id="setup-completion-client-select"');
+      expect(html).toContain('id="setup-completion-generate-entry"');
+      expect(html).toContain('id="setup-completion-client-target"');
+      expect(html).toContain('id="setup-completion-client-json"');
+      expect(html).toContain('id="setup-completion-copy-json"');
+      expect(html).toContain('id="setup-completion-readiness"');
+      expect(html).toContain('id="setup-completion-second-account"');
+      expect(html).toContain('id="setup-completion-switch"');
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("function completionFromSetupResult(result");
+      expect(javascript).toContain("Created Miftah connection");
+      expect(javascript).toContain('/api/v1/client-snippets?client=');
+      expect(javascript).toContain("target.label");
+      expect(javascript).toContain("restart or reconnect");
+      expect(javascript).toContain("Open Manage connection");
+      expect(javascript).toContain("copy its switch request");
+      expect(javascript).toContain("A generated entry does not prove that a credential works");
+      expect(javascript).toContain("async function refreshAfterSetup(completion)");
+      expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);
+      expect(javascript).toContain("setupCompletionView.scrollIntoView");
+      expect(javascript).toContain("setupCompletionClientSelect.focus");
+      expect(javascript).toContain('if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";');
+      expect(javascript).toContain("function setupCompletionRequestIsCurrent(generation, client)");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores superseded setup-completion client responses after the client choice changes", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      await expect(supersedeSetupCompletionClientRequests(javascript)).resolves.toEqual({
+        success: { json: "", status: "Current setup is ready." },
+        failure: { json: "", status: "Newer setup is ready." }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps setup completion behind unlock recovery and restores it after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      await expect(recoverSetupCompletionAfterUnlock(javascript)).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "current-setup-failure")).resolves.toEqual({
+        locked: { completionHidden: false, focus: "client" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true,
+        setupRefreshErrorMessage: "Configuration refresh failed."
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "control-recovery")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true,
+        persistentActionsEnabled: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "late")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "config")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "racing-recovery")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "overlapping-reauth")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "setup-origin-overlap")).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true,
+        setupRefreshErrorName: "MiftahStaleAuthenticationRequest"
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores stale configuration-selection success after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const state = await settleStaleConfigurationSelectionAfterReauthentication(javascript, "success");
+      expect(state.before.completionHidden).toBe(false);
+      expect(state.before.focus).toBe("client");
+      expect(state.after).toEqual(state.before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores stale configuration-selection failure after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const state = await settleStaleConfigurationSelectionAfterReauthentication(javascript, "failure");
+      expect(state.before.completionHidden).toBe(false);
+      expect(state.before.focus).toBe("client");
+      expect(state.after).toEqual(state.before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps new Console actions keyboard-visible, announced, target-sized, and responsive", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('id="setup-completion-readiness" role="status" aria-live="polite" aria-atomic="true"');
+      expect(html).toContain('aria-label="Connection tasks"');
+
+      const stylesheet = await fetch(new URL("/app.css", server.url));
+      expect(stylesheet.status).toBe(200);
+      const css = await stylesheet.text();
+      expect(css).toContain("button:focus-visible, summary:focus-visible");
+      expect(css).toContain("#workspace-task-navigation a:focus-visible");
+      expect(css).toContain(".configuration-profiles button { min-height: 2.75rem;");
+      expect(css).toContain(".setup-completion-copy { grid-template-columns: 1fr;");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName)');
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves a navigation-safe local dashboard shell without exposing bootstrap credentials", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
@@ -1709,7 +2602,6 @@ describe("local Console control server", () => {
       expect(html).not.toContain('aria-pressed=');
       expect(html).toContain("Local executable + argument array");
       expect(html).toContain("Remote HTTPS MCP endpoint");
-      expect(html).toContain('id="native-oauth-setup-link"');
       expect(html).toContain("Remote MCP with browser sign-in");
       expect(html).toContain("Check sign-in and create profile");
       expect(html).toContain("Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration.");
@@ -1857,7 +2749,6 @@ describe("local Console control server", () => {
       expect(discoveryUnavailableBranch).toContain("hideSetupWizardPaths()");
       expect(discoveryUnavailableBranch).toContain("returningSetupVisible = false");
       expect(javascript).toContain("Choose a short lowercase name");
-      expect(javascript).toContain("native-oauth-setup-link");
       expect(javascript).toContain("/api/v1/connections/discover");
       expect(javascript).toContain("/api/v1/profiles/native-oauth/discover");
       expect(javascript).toContain("/api/v1/profiles/provider-account");
@@ -1889,10 +2780,10 @@ describe("local Console control server", () => {
       });
       expect(javascript).toContain("if (resumeSetupDraft.disabled) return;");
       expect(javascript).toContain("resumeSetupDraft.disabled = true;");
-      expect(javascript).toContain("finally { resumeSetupDraft.disabled = false; }");
+      expect(javascript).toContain("if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;");
       expect(javascript).toContain("if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;");
       expect(javascript).toContain("discardSetupDraft.disabled = true;");
-      expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
+      expect(javascript).toContain("if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;");
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("completion.environment");
       expect(javascript).toContain("setupCompletionEnvironment");
@@ -1904,13 +2795,17 @@ describe("local Console control server", () => {
       expect(refreshBody.indexOf("clearSetupCompletion();")).toBeLessThan(
         refreshBody.indexOf('api("/api/v1/config")')
       );
-      const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
-      expect(completionAssignments).toHaveLength(3);
-      for (const assignment of completionAssignments) {
-        const assignmentIndex = assignment.index;
-        expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
-      }
-      expect(javascript).toContain("configuration files found");
+      const completionAssignments = [...javascript.matchAll(/setupCompletion = value;/gu)];
+      expect(completionAssignments).toHaveLength(1);
+      const refreshAfterSetup = javascript.slice(
+        javascript.indexOf("async function refreshAfterSetup(completion)"),
+        javascript.indexOf("function clearSetupCompletion()")
+      );
+      expect(refreshAfterSetup.indexOf("await refresh();")).toBeLessThan(
+        refreshAfterSetup.indexOf("replaceSetupCompletion(completion);")
+      );
+      expect(refreshAfterSetup).toContain("finally");
+      expect(javascript).toContain("MCP connections found");
       expect(javascript).toContain("need attention");
       expect(javascript).toContain('"file-permissions": "private file permission"');
       expect(javascript).not.toContain('"file-permissions": "private file permissions"');

@@ -48,13 +48,21 @@ const page = `<!doctype html>
           </div>
           <div class="catalog-actions">
             <p><strong>One connection, named accounts.</strong> Open a connection to manage its accounts, or add another MCP.</p>
+            <label for="catalog-client-select">Where do you use this MCP?
+              <select id="catalog-client-select">
+                <option value="claude-desktop">Claude Desktop</option>
+                <option value="claude-code">Claude Code</option>
+                <option value="cursor">Cursor</option>
+                <option value="vscode">VS Code</option>
+              </select>
+            </label>
             <button id="set-up-another-mcp" type="button">Set up another MCP</button>
           </div>
         </div>
         <div class="configuration-catalog-status" role="status" aria-live="polite" aria-atomic="true">
           <p id="configuration-catalog-summary"></p>
           <ul id="configuration-catalog-attention"></ul>
-          <p class="field-note">Miftah keeps rejected names and paths hidden. For files you expect to see, check private access, validate the configuration, replace symlinks with regular files, then refresh.</p>
+          <p id="configuration-catalog-rejected-guidance" class="field-note" hidden>Miftah keeps rejected names and paths hidden. For connections you expect to see, check private access, validate the configuration, replace symlinks with regular files, then refresh.</p>
         </div>
         <div id="configuration-catalog" class="configuration-catalog"></div>
         <p class="field-note catalog-boundary">Only validated files in Miftah's standard configuration directory appear here. Client settings and running MCP processes are never inspected.</p>
@@ -68,11 +76,44 @@ const page = `<!doctype html>
           </div>
           <p>Miftah shows only the checks it actually ran or can safely run. It never treats configuration publication as client adoption.</p>
         </div>
-        <div class="setup-completion-copy" role="status" aria-live="polite" aria-atomic="true">
-          <p id="setup-completion-verification"></p>
-          <p id="setup-completion-next-action"></p>
-          <p id="setup-completion-environment"></p>
-          <p id="setup-completion-handoff"></p>
+        <div class="setup-completion-copy">
+          <article>
+            <h3>1. Connection created</h3>
+            <p id="setup-completion-created" role="status" aria-live="polite" aria-atomic="true"></p>
+          </article>
+          <article class="setup-completion-client">
+            <h3>2. Install the client entry</h3>
+            <div class="input-row">
+              <label class="grow">MCP client
+                <select id="setup-completion-client-select">
+                  <option value="claude-desktop">Claude Desktop</option>
+                  <option value="claude-code">Claude Code</option>
+                  <option value="cursor">Cursor</option>
+                  <option value="vscode">VS Code</option>
+                </select>
+              </label>
+              <button id="setup-completion-generate-entry" type="button">Generate client entry</button>
+            </div>
+            <p id="setup-completion-client-target" class="field-note"></p>
+            <label for="setup-completion-client-json">Generated non-secret client JSON</label>
+            <textarea id="setup-completion-client-json" readonly rows="9" spellcheck="false"></textarea>
+            <p id="setup-completion-client-guidance" class="field-note"></p>
+            <button id="setup-completion-copy-json" type="button" disabled>Copy client JSON</button>
+            <p id="setup-completion-handoff"></p>
+          </article>
+          <article>
+            <h3>3. Check readiness</h3>
+            <div id="setup-completion-readiness" role="status" aria-live="polite" aria-atomic="true">
+              <p id="setup-completion-verification"></p>
+              <p id="setup-completion-next-action"></p>
+              <p id="setup-completion-environment"></p>
+            </div>
+          </article>
+          <article>
+            <h3>4. Add and switch accounts</h3>
+            <p id="setup-completion-second-account"></p>
+            <p id="setup-completion-switch"></p>
+          </article>
         </div>
       </section>
 
@@ -88,7 +129,7 @@ const page = `<!doctype html>
           <legend>What do you already have?</legend>
           <p class="field-note">Choose one path. Nothing is saved, launched, discovered, or sent to an MCP while you are on this step.</p>
           <div class="setup-source-grid">
-            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Known connector or pinned package</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Preset or connection type</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
@@ -102,37 +143,6 @@ const page = `<!doctype html>
         </div>
       </section>
 
-      <details id="authentication-guide" class="authentication-guide">
-        <summary>How authentication works</summary>
-        <div class="authentication-guide-body" aria-labelledby="intro-title">
-          <p class="step">Connection ownership</p>
-          <h2 id="intro-title">Know who owns authentication before you connect</h2>
-          <div class="mode-grid">
-            <article class="mode mode-native">
-              <p class="mode-tag">Managed here</p>
-              <h3>Remote native OAuth</h3>
-              <p>Miftah discovers standards-based endpoints, opens consent, and stores tokens only in the OS vault.</p>
-            </article>
-            <article class="mode">
-              <p class="mode-tag">Provider-owned login</p>
-              <h3>Provider adapter</h3>
-              <p>Miftah launches a pinned local adapter. The upstream owns browser login and its private token cache.</p>
-            </article>
-            <article class="mode">
-              <p class="mode-tag">Manual setup</p>
-              <h3>Upstream-owned auth</h3>
-              <p>Use the provider's documented API key, credential file, or login flow. Miftah passes only configured references.</p>
-            </article>
-            <article class="mode mode-unsupported">
-              <p class="mode-tag">Not imported</p>
-              <h3>Unsupported state</h3>
-              <p>Passwords, browser cookies, and arbitrary third-party token caches are never accepted or scraped.</p>
-            </article>
-          </div>
-          <p class="restart-note"><strong>Trust boundary:</strong> Profiles and a generated client entry describe local configuration; they do not prove a credential works or belongs to the intended account. A reviewed safe check may establish readiness only where declared, and a configured identity probe is separate. Miftah policy and redacted audit protect the wrapper, not provider-side token scopes or retention.</p>
-        </div>
-      </details>
-
       <section id="preset-onboarding-view" class="work-section" hidden aria-labelledby="preset-onboarding-title">
         <div class="section-heading">
           <div>
@@ -142,16 +152,20 @@ const page = `<!doctype html>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="support-tools"></label>
-          <label>Known connector
+          <label>Connection type
             <select name="preset" id="preset-selection">
-              <option value="generic">Generic reference MCP</option>
-              <option value="sentry">Sentry</option>
-              <option value="github">GitHub</option>
-              <option value="google-search-console">Google Search Console</option>
-              <option value="generic-npx">Custom npx package</option>
-              <option value="generic-docker">Custom Docker image</option>
-              <option value="local-stdio">Local executable + argument array</option>
-              <option value="streamable-http">Remote HTTPS MCP endpoint</option>
+              <optgroup label="Named presets">
+                <option value="sentry">Sentry</option>
+                <option value="github">GitHub</option>
+                <option value="google-search-console">Google Search Console</option>
+              </optgroup>
+              <optgroup label="Connection types">
+                <option value="generic">Generic reference MCP</option>
+                <option value="generic-npx">Custom npx package</option>
+                <option value="generic-docker">Custom Docker image</option>
+                <option value="local-stdio">Local executable + argument array</option>
+                <option value="streamable-http">Remote HTTPS MCP endpoint</option>
+              </optgroup>
             </select>
           </label>
           <div id="setup-draft-actions" class="wide setup-draft-actions">
@@ -183,7 +197,6 @@ const page = `<!doctype html>
             <ul id="preset-review-details"></ul>
             <div class="form-action"><button id="preset-create-reviewed" type="button" disabled>Create reviewed configuration</button><button id="preset-review-edit" type="button" class="secondary">Keep editing</button></div>
           </div>
-          <div class="wide form-action"><button id="native-oauth-setup-link" type="button" class="secondary">Remote MCP with browser sign-in</button></div>
         </form>
       </section>
 
@@ -224,8 +237,46 @@ const page = `<!doctype html>
         </form>
       </section>
 
+      <details id="authentication-guide" class="authentication-guide">
+        <summary>How authentication works</summary>
+        <div class="authentication-guide-body" aria-labelledby="intro-title">
+          <p class="step">Connection ownership</p>
+          <h2 id="intro-title">Know who owns authentication before you connect</h2>
+          <div class="mode-grid">
+            <article class="mode mode-native">
+              <p class="mode-tag">Managed here</p>
+              <h3>Remote native OAuth</h3>
+              <p>Miftah discovers standards-based endpoints, opens consent, and stores tokens only in the OS vault.</p>
+            </article>
+            <article class="mode">
+              <p class="mode-tag">Provider-owned login</p>
+              <h3>Provider adapter</h3>
+              <p>Miftah launches a pinned local adapter. The upstream owns browser login and its private token cache.</p>
+            </article>
+            <article class="mode">
+              <p class="mode-tag">Manual setup</p>
+              <h3>Upstream-owned auth</h3>
+              <p>Use the provider's documented API key, credential file, or login flow. Miftah passes only configured references.</p>
+            </article>
+            <article class="mode mode-unsupported">
+              <p class="mode-tag">Not imported</p>
+              <h3>Unsupported state</h3>
+              <p>Passwords, browser cookies, and arbitrary third-party token caches are never accepted or scraped.</p>
+            </article>
+          </div>
+          <p class="restart-note"><strong>Trust boundary:</strong> Profiles and a generated client entry describe local configuration; they do not prove a credential works or belongs to the intended account. A reviewed safe check may establish readiness only where declared, and a configured identity probe is separate. Miftah policy and redacted audit protect the wrapper, not provider-side token scopes or retention.</p>
+        </div>
+      </details>
+
       <div id="workspace-view" hidden>
-        <section class="summary" aria-label="Configuration summary">
+        <nav id="workspace-task-navigation" aria-label="Connection tasks">
+          <a href="#connection-overview">Overview</a>
+          <a href="#connection-accounts">Accounts</a>
+          <a href="#connection-authentication">Authentication</a>
+          <a href="#connection-client-setup">Client setup</a>
+          <a href="#connection-audit">Audit</a>
+        </nav>
+        <section id="connection-overview" class="summary" aria-label="Configuration summary">
           <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
           <article><p class="summary-label">Default for new connections</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
           <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
@@ -233,7 +284,7 @@ const page = `<!doctype html>
         </section>
         <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
 
-        <section class="work-section" aria-labelledby="profile-inventory-title">
+        <section id="connection-accounts" class="work-section" aria-labelledby="profile-inventory-title">
           <div class="section-heading">
             <div><p class="step">Configured accounts</p><h2 id="profile-inventory-title">Know which accounts are available</h2></div>
             <p>These are profile names and non-secret labels only. Miftah does not read credentials, headers, launch arguments, token caches, or OAuth vault data to build this list.</p>
@@ -296,6 +347,7 @@ const page = `<!doctype html>
           <p id="profile-removal-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
 
+        <div id="connection-authentication" class="workspace-task-group">
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -384,8 +436,9 @@ const page = `<!doctype html>
             </details>
           </details>
         </section>
+        </div>
 
-        <section class="work-section split" aria-labelledby="client-title">
+        <section id="connection-client-setup" class="work-section split" aria-labelledby="client-title">
           <div>
             <p class="step">Client handoff</p>
             <h2 id="client-title">Review and copy configuration</h2>
@@ -410,7 +463,7 @@ const page = `<!doctype html>
           </div>
         </section>
 
-        <section class="work-section" aria-labelledby="audit-title">
+        <section id="connection-audit" class="work-section" aria-labelledby="audit-title">
           <div class="section-heading">
             <div><p class="step">Recent activity</p><h2 id="audit-title">Redacted Console audit</h2></div>
             <button id="refresh-dashboard" type="button" class="secondary">Refresh</button>
@@ -518,6 +571,11 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .setup-review ul { display: grid; gap: .35rem; margin: .8rem 0 1rem; padding-left: 1.25rem; color: var(--muted); }
 .setup-review .form-action { justify-content: flex-start; flex-wrap: wrap; gap: .6rem; }
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+#workspace-task-navigation { display: flex; flex-wrap: wrap; gap: .55rem; margin: 0 0 1rem; }
+#workspace-task-navigation a { display: inline-flex; min-height: 2.75rem; align-items: center; padding: .55rem .85rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); border-radius: .28rem; text-decoration: none; font-weight: 700; }
+#workspace-task-navigation a:hover { border-color: var(--key); }
+#workspace-task-navigation a:focus-visible { outline: 2px solid var(--key); outline-offset: 2px; }
+#connection-overview, #connection-accounts, #connection-authentication, #connection-client-setup, #connection-audit { scroll-margin-top: 1rem; }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
 .summary span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
@@ -536,15 +594,21 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
 .configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
 .configuration-profiles { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
-.configuration-profiles li { padding: .28rem .5rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.configuration-profiles li { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .28rem .5rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
 .configuration-profiles .configuration-default { border-color: var(--key); }
+.configuration-profiles button { min-height: 2.75rem; padding: 0 .65rem; }
 .configuration-card .configuration-switch { margin-top: .7rem; color: var(--ink); }
-.configuration-card button { min-height: 2.4rem; font-size: .78rem; }
+.configuration-card .configuration-switch-technical { color: var(--muted); font-size: .75rem; }
+.configuration-card button { min-height: 2.75rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
 .setup-completion { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
-.setup-completion-copy { display: grid; gap: .75rem; max-width: 58rem; }
-.setup-completion-copy p { margin: 0; }
+.setup-completion-copy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; max-width: 68rem; }
+.setup-completion-copy article { padding: 1rem; border: 1px solid var(--line); background: var(--panel); }
+.setup-completion-copy h3 { margin: 0 0 .75rem; }
+.setup-completion-copy p { margin: .55rem 0 0; }
+.setup-completion-client { grid-column: 1 / -1; }
+.setup-completion-client textarea { margin-bottom: .65rem; }
 .profile-readiness { border-left: .2rem solid var(--key); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(239 180 77 / 7%), transparent 50%); }
 .profile-readiness .input-row { max-width: 42rem; }
 .profile-inventory-list { display: grid; gap: .65rem; }
@@ -563,7 +627,7 @@ summary { cursor: pointer; font-weight: 700; }
 .status { position: sticky; bottom: 1rem; min-height: 1.5rem; width: fit-content; max-width: 100%; margin: 1rem 0 0; padding: .7rem 1rem; color: var(--ink); background: #222923; border: 1px solid var(--line); box-shadow: 0 .7rem 2rem rgb(0 0 0 / 35%); }
 .status:empty { visibility: hidden; }
 @media (max-width: 850px) { .mode-grid, .summary, .configuration-catalog { grid-template-columns: repeat(2, 1fr); } .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; } }
-@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary, .configuration-catalog { grid-template-columns: 1fr; } .wide { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
+@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary, .configuration-catalog, .setup-completion-copy { grid-template-columns: 1fr; } .wide, .setup-completion-client { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 `;
 
@@ -583,6 +647,10 @@ const script = `(() => {
   const configurationCatalog = byId("configuration-catalog");
   const configurationCatalogSummary = byId("configuration-catalog-summary");
   const configurationCatalogAttention = byId("configuration-catalog-attention");
+  const configurationCatalogRejectedGuidance = byId("configuration-catalog-rejected-guidance");
+  const catalogClientSelect = byId("catalog-client-select");
+  let catalogSwitchCopies = [];
+  let catalogSwitchButtons = [];
   const setUpAnotherMcp = byId("set-up-another-mcp");
   const setupWizardView = byId("setup-wizard-view");
   const setupWizardStep = byId("setup-wizard-step");
@@ -594,10 +662,19 @@ const script = `(() => {
   const setupWizardContinue = byId("setup-wizard-continue");
   const setupDraftActions = byId("setup-draft-actions");
   const setupCompletionView = byId("setup-completion-view");
+  const setupCompletionCreated = byId("setup-completion-created");
   const setupCompletionVerification = byId("setup-completion-verification");
   const setupCompletionNextAction = byId("setup-completion-next-action");
   const setupCompletionEnvironment = byId("setup-completion-environment");
   const setupCompletionHandoff = byId("setup-completion-handoff");
+  const setupCompletionClientSelect = byId("setup-completion-client-select");
+  const setupCompletionGenerateEntry = byId("setup-completion-generate-entry");
+  const setupCompletionClientTarget = byId("setup-completion-client-target");
+  const setupCompletionClientJson = byId("setup-completion-client-json");
+  const setupCompletionClientGuidance = byId("setup-completion-client-guidance");
+  const setupCompletionCopyJson = byId("setup-completion-copy-json");
+  const setupCompletionSecondAccount = byId("setup-completion-second-account");
+  const setupCompletionSwitch = byId("setup-completion-switch");
   const providerAuthenticationView = byId("provider-authentication-view");
   const providerAuthenticationCopy = byId("provider-authentication-copy");
   const providerAccountEditor = byId("provider-account-editor");
@@ -630,6 +707,11 @@ const script = `(() => {
   let profileReadinessTargets = [];
   let profileReadinessGeneration = 0;
   let setupCompletion = undefined;
+  let pendingSetupCompletion = undefined;
+  let setupCompletionGeneration = 0;
+  let setupRefreshGeneration = 0;
+  let authenticationEpoch = 0;
+  let sessionRecoveryGeneration = 0;
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
@@ -637,21 +719,36 @@ const script = `(() => {
   let returningSetupVisible = false;
   let setupWizardSource = "connector";
   let profileSwitchingFromMcp = false;
+  const staleAuthenticationRequestName = "MiftahStaleAuthenticationRequest";
 
   function message(text) {
-    if (status) status.textContent = text;
+    if (status && typeof text === "string") status.textContent = text;
+  }
+
+  function staleAuthenticationRequestError() {
+    const error = new Error("This response belongs to an earlier Console session.");
+    error.name = staleAuthenticationRequestName;
+    return error;
+  }
+
+  function isStaleAuthenticationRequest(error) {
+    return error instanceof Error && error.name === staleAuthenticationRequestName;
   }
 
   function errorMessage(error) {
+    if (isStaleAuthenticationRequest(error)) return undefined;
     return error instanceof Error ? error.message : "The Console request failed.";
   }
 
   function restoreUnlock(recoveryMessage) {
+    authenticationEpoch += 1;
+    sessionRecoveryGeneration += 1;
     csrfToken = "";
     returningSetupVisible = false;
-    setupCompletion = undefined;
+    clearSetupCompletion();
     activeSetupDraft = undefined;
     renderSetupDraftControls();
+    presetCreateInFlight = false;
     clearPresetReview();
     if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
@@ -706,6 +803,7 @@ const script = `(() => {
   }
 
   async function api(path, options) {
+    const requestAuthenticationEpoch = authenticationEpoch;
     const request = options || {};
     const headers = { "Accept": "application/json" };
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
@@ -718,12 +816,14 @@ const script = `(() => {
         body: request.body === undefined ? undefined : JSON.stringify(request.body)
       });
     } catch {
+      if (requestAuthenticationEpoch !== authenticationEpoch) throw staleAuthenticationRequestError();
       const recovery = "This Console process is no longer reachable. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
       restoreUnlock(recovery);
       throw new Error(recovery);
     }
     let payload;
     try { payload = await response.json(); } catch { payload = undefined; }
+    if (requestAuthenticationEpoch !== authenticationEpoch) throw staleAuthenticationRequestError();
     if (!response.ok) {
       if (response.status === 401) {
         const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
@@ -740,16 +840,21 @@ const script = `(() => {
   }
 
   async function resumeSession() {
+    const resumeAuthenticationEpoch = authenticationEpoch;
+    let resumeMessageEpoch = resumeAuthenticationEpoch;
     message("Checking this browser session…");
     try {
       const resumed = record(await api("/api/v1/session"));
+      if (authenticationEpoch !== resumeAuthenticationEpoch) return;
       if (typeof resumed.csrfToken !== "string" || resumed.csrfToken.length < 32) {
         throw new Error("Miftah did not return a valid session proof.");
       }
+      authenticationEpoch += 1;
+      resumeMessageEpoch = authenticationEpoch;
       csrfToken = resumed.csrfToken;
-      await refresh();
+      await refreshAfterAuthentication();
     } catch (error) {
-      message(errorMessage(error));
+      if (authenticationEpoch === resumeMessageEpoch) message(errorMessage(error));
     }
   }
 
@@ -889,8 +994,42 @@ const script = `(() => {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
 
+  function completionFromSetupResult(result, fallback = {}) {
+    const setupResult = record(result);
+    const completion = record(setupResult.completion);
+    const safeFallback = record(fallback);
+    const name = typeof setupResult.name === "string" ? setupResult.name : typeof safeFallback.name === "string" ? safeFallback.name : "";
+    const defaultProfile = typeof setupResult.defaultProfile === "string"
+      ? setupResult.defaultProfile
+      : typeof setupResult.profile === "string"
+        ? setupResult.profile
+        : typeof safeFallback.defaultProfile === "string" ? safeFallback.defaultProfile : "";
+    const profileCount = Number.isSafeInteger(setupResult.profileCount) && setupResult.profileCount > 0
+      ? setupResult.profileCount
+      : 1;
+    return { ...completion, setup: { name, defaultProfile, profileCount } };
+  }
+
+  function selectedSetupCompletionClient() {
+    const selected = setupCompletionClientSelect instanceof HTMLSelectElement
+      ? setupCompletionClientSelect.value
+      : "claude-desktop";
+    return ["claude-desktop", "claude-code", "cursor", "vscode"].includes(selected)
+      ? selected
+      : "claude-desktop";
+  }
+
+  function renderSetupCompletionSwitch(setup) {
+    if (!setupCompletionSwitch) return;
+    const client = selectedSetupCompletionClient();
+    setupCompletionSwitch.textContent =
+      "After adding another account, return to Your MCP connections and copy its switch request for " +
+      catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
+  }
+
   function renderSetupCompletion(value) {
     const completion = record(value);
+    const setup = record(completion.setup);
     const verification = record(completion.verification);
     const environment = record(completion.environment);
     const handoff = record(completion.clientHandoff);
@@ -899,25 +1038,126 @@ const script = `(() => {
     const environmentMessage = typeof environment.message === "string" ? environment.message : "";
     const environmentNextAction = typeof environment.nextAction === "string" ? environment.nextAction : "";
     const handoffMessage = typeof handoff.message === "string" ? handoff.message : "";
-    if (!verificationMessage && !environmentMessage && !handoffMessage) {
+    const setupName = typeof setup.name === "string" ? setup.name : "";
+    const defaultProfile = typeof setup.defaultProfile === "string" ? setup.defaultProfile : "";
+    const profileCount = Number.isSafeInteger(setup.profileCount) ? setup.profileCount : 0;
+    if (!setupName && !verificationMessage && !environmentMessage && !handoffMessage) {
       if (setupCompletionView) setupCompletionView.hidden = true;
       return;
     }
-    if (setupCompletionVerification) setupCompletionVerification.textContent = verificationMessage;
+    if (setupCompletionCreated) {
+      setupCompletionCreated.textContent = setupName
+        ? "Created Miftah connection '" + setupName + "' with " + profileCount + " named account" + (profileCount === 1 ? "" : "s") +
+          (defaultProfile ? "; default for new sessions: '" + defaultProfile + "'." : ".")
+        : "The Miftah connection was created.";
+    }
+    const verificationState = typeof verification.state === "string" ? verification.state : "manual";
+    if (setupCompletionVerification) {
+      setupCompletionVerification.textContent = "Verification (" + verificationState + "): " + verificationMessage;
+    }
     if (setupCompletionNextAction) {
-      setupCompletionNextAction.textContent = nextAction;
-      setupCompletionNextAction.hidden = !nextAction;
+      const safeAction = nextAction || (verificationState === "available"
+        ? "Open Manage connection, choose Authentication, then run the reviewed safe check."
+        : verificationState === "not-declared"
+          ? "No automatic check is available. After client setup, use one provider-documented read-only action for manual verification."
+          : "Complete the provider authorization or reported readiness step before treating the account as verified.");
+      setupCompletionNextAction.textContent = safeAction;
+      setupCompletionNextAction.hidden = !safeAction;
     }
     if (setupCompletionEnvironment) {
-      setupCompletionEnvironment.textContent = [environmentMessage, environmentNextAction].filter(Boolean).join(" ");
+      const environmentState = typeof environment.state === "string" ? environment.state : "not-reported";
+      setupCompletionEnvironment.textContent = "Secret readiness (" + environmentState + "): " +
+        [environmentMessage, environmentNextAction].filter(Boolean).join(" ");
       setupCompletionEnvironment.hidden = !environmentMessage && !environmentNextAction;
     }
     if (setupCompletionHandoff) setupCompletionHandoff.textContent = handoffMessage;
-    if (setupCompletionView) setupCompletionView.hidden = false;
+    if (setupCompletionSecondAccount) {
+      setupCompletionSecondAccount.textContent =
+        "Open Manage connection, then choose Accounts or Authentication. Miftah shows only the supported way to add another named account for this connection.";
+    }
+    renderSetupCompletionSwitch(setup);
+    if (setupCompletionView) {
+      setupCompletionView.hidden = false;
+      if (typeof setupCompletionView.scrollIntoView === "function") {
+        setupCompletionView.scrollIntoView({ block: "start" });
+      }
+    }
+    if (setupCompletionClientSelect instanceof HTMLSelectElement) {
+      setupCompletionClientSelect.focus({ preventScroll: true });
+    }
+  }
+
+  function replaceSetupCompletion(value) {
+    setupCompletionGeneration += 1;
+    setupCompletion = value;
+    if (setupCompletionGenerateEntry instanceof HTMLButtonElement) {
+      setupCompletionGenerateEntry.disabled = false;
+    }
+    renderSetupCompletion(setupCompletion);
+  }
+
+  function setupCompletionRequestIsCurrent(generation, client) {
+    return generation === setupCompletionGeneration && client === selectedSetupCompletionClient();
+  }
+
+  function restorePendingSetupCompletion() {
+    if (pendingSetupCompletion === undefined) return;
+    const completion = pendingSetupCompletion;
+    pendingSetupCompletion = undefined;
+    replaceSetupCompletion(completion);
+  }
+
+  function resetAuthenticatedActionControls() {
+    if (saveSetupDraft instanceof HTMLButtonElement) saveSetupDraft.disabled = false;
+    if (resumeSetupDraft instanceof HTMLButtonElement) resumeSetupDraft.disabled = false;
+    if (runProfileReadiness instanceof HTMLButtonElement) runProfileReadiness.disabled = false;
+  }
+
+  async function refreshAfterAuthentication() {
+    const refreshAuthenticationEpoch = authenticationEpoch;
+    const recoveryGeneration = sessionRecoveryGeneration;
+    try {
+      await refresh();
+      if (authenticationEpoch === refreshAuthenticationEpoch && sessionRecoveryGeneration === recoveryGeneration) {
+        resetAuthenticatedActionControls();
+      }
+    } finally {
+      if (authenticationEpoch === refreshAuthenticationEpoch && sessionRecoveryGeneration === recoveryGeneration) {
+        restorePendingSetupCompletion();
+      }
+    }
+  }
+
+  async function refreshAfterSetup(completion) {
+    const setupAuthenticationEpoch = authenticationEpoch;
+    const refreshGeneration = ++setupRefreshGeneration;
+    pendingSetupCompletion = completion;
+    try {
+      await refresh();
+    } catch (error) {
+      if (authenticationEpoch !== setupAuthenticationEpoch || refreshGeneration !== setupRefreshGeneration) {
+        if (isStaleAuthenticationRequest(error)) throw error;
+        throw staleAuthenticationRequestError();
+      }
+      throw error;
+    } finally {
+      if (authenticationEpoch === setupAuthenticationEpoch && refreshGeneration === setupRefreshGeneration) {
+        if (unlockView instanceof HTMLElement && !unlockView.hidden) {
+          pendingSetupCompletion = completion;
+        } else {
+          pendingSetupCompletion = undefined;
+          replaceSetupCompletion(completion);
+        }
+      }
+    }
   }
 
   function clearSetupCompletion() {
-    setupCompletion = undefined;
+    replaceSetupCompletion(undefined);
+    if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
+    if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
+    if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
+    if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = true;
     renderSetupCompletion(undefined);
   }
 
@@ -948,6 +1188,38 @@ const script = `(() => {
     };
   }
 
+  function selectedCatalogClient() {
+    const supported = ["claude-desktop", "claude-code", "cursor", "vscode"];
+    const selected = catalogClientSelect instanceof HTMLSelectElement ? catalogClientSelect.value : "";
+    return supported.includes(selected) ? selected : "claude-desktop";
+  }
+
+  function catalogClientDisplayName(client) {
+    return {
+      "claude-desktop": "Claude Desktop",
+      "claude-code": "Claude Code",
+      cursor: "Cursor",
+      vscode: "VS Code"
+    }[client] || "your MCP client";
+  }
+
+  function profileSwitchRequest(client, profile) {
+    return "In " + catalogClientDisplayName(client) + ", send this message: Use the Miftah account named " + profile + " for this chat.";
+  }
+
+  function updateCatalogSwitchCopy() {
+    const client = selectedCatalogClient();
+    const clientName = catalogClientDisplayName(client);
+    catalogSwitchCopies.forEach((copy) => {
+      copy.textContent = "Choose an account below, then paste the copied request into " + clientName + ". This changes this chat, not the durable default.";
+    });
+    catalogSwitchButtons.forEach((button) => {
+      if (!(button instanceof HTMLButtonElement)) return;
+      const profile = button.dataset.copyProfileSwitch || "";
+      button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName);
+    });
+  }
+
   function renderConfigurationCatalog(metadata) {
     const catalog = catalogConfigurations(metadata);
     const hasCatalogState = catalog.discoveredCount > 0 || catalog.readyCount > 0 || catalog.attentionCount > 0;
@@ -956,12 +1228,15 @@ const script = `(() => {
       setUpAnotherMcp.hidden = catalog.discoveryState !== "ready" || catalog.configurations.length === 0;
     }
     if (configurationCatalogSummary) {
-      const files = catalog.discoveredCount === 1 ? "configuration file found" : "configuration files found";
+      const connections = catalog.discoveredCount === 1 ? "MCP connection found" : "MCP connections found";
       const attention = catalog.attentionCount === 1 ? "needs attention" : "need attention";
       configurationCatalogSummary.textContent =
-        catalog.discoveredCount + " " + files + " · " +
+        catalog.discoveredCount + " " + connections + " · " +
         catalog.readyCount + " ready · " +
         catalog.attentionCount + " " + attention;
+    }
+    if (configurationCatalogRejectedGuidance) {
+      configurationCatalogRejectedGuidance.hidden = catalog.attentionCount === 0;
     }
     if (configurationCatalogAttention) {
       configurationCatalogAttention.replaceChildren();
@@ -982,6 +1257,8 @@ const script = `(() => {
     }
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
+    catalogSwitchCopies = [];
+    catalogSwitchButtons = [];
     catalog.configurations.forEach((configuration) => {
       const id = typeof configuration.id === "string" ? configuration.id : "";
       const card = document.createElement("article");
@@ -1005,8 +1282,28 @@ const script = `(() => {
       profileList.setAttribute("aria-label", visibleProfileCount + " named account profile" + (visibleProfileCount === 1 ? "" : "s"));
       profileNames.forEach((profile) => {
         const item = document.createElement("li");
-        item.textContent = profile + (profile === defaultProfile ? " · default" : "");
+        const profileName = document.createElement("span");
+        profileName.textContent = profile + (profile === defaultProfile ? " · default" : "");
+        item.append(profileName);
         if (profile === defaultProfile) item.className = "configuration-default";
+        if (configuration.profileSwitchingFromMcp === true) {
+          const copySwitchRequest = document.createElement("button");
+          copySwitchRequest.type = "button";
+          copySwitchRequest.className = "secondary";
+          copySwitchRequest.dataset.copyProfileSwitch = profile;
+          copySwitchRequest.textContent = "Copy switch request";
+          copySwitchRequest.addEventListener("click", async () => {
+            const client = selectedCatalogClient();
+            try {
+              await navigator.clipboard.writeText(profileSwitchRequest(client, profile));
+              message("Account-switch request copied for " + catalogClientDisplayName(client) + ". Paste it into the chat where Miftah is connected.");
+            } catch {
+              message("Clipboard access was unavailable. Copy this request manually: " + profileSwitchRequest(client, profile));
+            }
+          });
+          catalogSwitchButtons.push(copySwitchRequest);
+          item.append(copySwitchRequest);
+        }
         profileList.append(item);
       });
       const ownership = document.createElement("p");
@@ -1020,9 +1317,16 @@ const script = `(() => {
       const switching = document.createElement("p");
       switching.className = "configuration-switch";
       switching.textContent = configuration.profileSwitchingFromMcp === true
-        ? "Live account switch: use miftah_use_profile in your MCP client."
+        ? "Choose an account below, then paste the copied request into your MCP client. This changes this chat, not the durable default."
         : "Live account switch: off. Open a new connection to use another default.";
-      details.append(title, summary, profileList, switching, ownership);
+      if (configuration.profileSwitchingFromMcp === true) switching.dataset.catalogSwitchCopy = "true";
+      if (configuration.profileSwitchingFromMcp === true) catalogSwitchCopies.push(switching);
+      const switchingTechnical = document.createElement("p");
+      switchingTechnical.className = "configuration-switch-technical";
+      switchingTechnical.textContent = configuration.profileSwitchingFromMcp === true
+        ? "Technical detail: the client can call miftah_use_profile. Console does not switch a running client session."
+        : "Changing the durable default affects only new client connections.";
+      details.append(title, summary, profileList, switching, switchingTechnical, ownership);
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.configuration = id;
@@ -1033,7 +1337,12 @@ const script = `(() => {
       card.append(details, button);
       configurationCatalog.append(card);
     });
+    updateCatalogSwitchCopy();
     return catalog;
+  }
+
+  if (catalogClientSelect instanceof HTMLSelectElement) {
+    catalogClientSelect.addEventListener("change", updateCatalogSwitchCopy);
   }
 
   function renderProviderAuthentication(value) {
@@ -1723,10 +2032,11 @@ const script = `(() => {
   }
 
   async function refresh() {
+    const refreshAuthenticationEpoch = authenticationEpoch;
     clearSetupCompletion();
-    const metadata = record(await api("/api/v1/config"));
     if (unlockView) unlockView.hidden = true;
     if (dashboardView) dashboardView.hidden = false;
+    const metadata = record(await api("/api/v1/config"));
     const catalog = renderConfigurationCatalog(metadata);
     if (metadata.initialized !== true) {
       renderProviderAuthentication(undefined);
@@ -1750,7 +2060,7 @@ const script = `(() => {
         returningSetupVisible = false;
         if (setupWizardView) setupWizardView.hidden = true;
         if (workspaceView) workspaceView.hidden = true;
-        message("Miftah found configuration files, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
+        message("Miftah found MCP connections, but none passed every trust and validation check. Review the safe reason summary, correct the expected files, then refresh.");
         return;
       }
       if (catalog.discoveryState === "unavailable") {
@@ -1785,12 +2095,12 @@ const script = `(() => {
     if (profileSwitchingState) profileSwitchingState.textContent = profileSwitchingFromMcp ? "Available" : "Off";
     if (profileSwitchingCopy) {
       profileSwitchingCopy.textContent = profileSwitchingFromMcp
-        ? "Use miftah_use_profile in your MCP client to switch this active session."
+        ? "Return to Your MCP connections and copy the request for the named account you want in this chat."
         : "Open a new connection after changing the durable default.";
     }
     if (activeProfileGuidance) {
       activeProfileGuidance.textContent = profileSwitchingFromMcp
-        ? "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you use miftah_use_profile in the MCP client."
+        ? "Active vs durable: changing the default affects new connections. For this chat, use a profile's Copy switch request action above. Technical detail: the client calls miftah_use_profile; Console does not switch a running client."
         : "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you reconnect.";
     }
     const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
@@ -1807,11 +2117,18 @@ const script = `(() => {
     setOptions(byId("manual-connection-profile"), profiles);
     setOptions(byId("manual-connection-upstream"), upstreams);
     renderProfileReadiness(metadata.authentication, configuredDefaultProfile);
-    const results = await Promise.all([
+    const recoveryGeneration = sessionRecoveryGeneration;
+    const settledResults = await Promise.allSettled([
       api("/api/v1/health"),
       api("/api/v1/connections"),
       api("/api/v1/audit?limit=50")
     ]);
+    if (authenticationEpoch !== refreshAuthenticationEpoch || sessionRecoveryGeneration !== recoveryGeneration) {
+      throw staleAuthenticationRequestError();
+    }
+    const failedResult = settledResults.find((result) => result.status === "rejected");
+    if (failedResult && failedResult.status === "rejected") throw failedResult.reason;
+    const results = settledResults.map((result) => result.status === "fulfilled" ? result.value : undefined);
     const health = record(results[0]);
     const audit = record(health.audit);
     const auditState = byId("audit-state");
@@ -1819,13 +2136,15 @@ const script = `(() => {
     renderConnections(results[1], metadata.authentication);
     renderAudit(results[2]);
     message(profileSwitchingFromMcp
-      ? "Console data refreshed. Durable changes apply to new connections; use miftah_use_profile for this active MCP session."
+      ? "Console data refreshed. Durable changes apply to new connections; use a Copy switch request action above for this chat."
       : "Console data refreshed. Open a new MCP connection before expecting durable changes to be active.");
   }
 
   if (unlockForm instanceof HTMLFormElement && bootstrapInput instanceof HTMLInputElement) {
     unlockForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const bootstrapAuthenticationEpoch = authenticationEpoch;
+      let bootstrapMessageEpoch = bootstrapAuthenticationEpoch;
       message("Opening the local Console…");
       try {
         const response = await fetch("/api/v1/sessions", {
@@ -1835,15 +2154,20 @@ const script = `(() => {
         });
         bootstrapInput.value = "";
         const payload = await response.json();
+        if (authenticationEpoch !== bootstrapAuthenticationEpoch) return;
         if (!response.ok) throw bootstrapResponseError(response, payload);
         if (!payload || !payload.data || typeof payload.data.csrfToken !== "string") {
           throw new Error("Miftah did not return a valid session proof.");
         }
+        authenticationEpoch += 1;
+        bootstrapMessageEpoch = authenticationEpoch;
         csrfToken = payload.data.csrfToken;
-        await refresh();
+        await refreshAfterAuthentication();
       } catch (error) {
-        message(errorMessage(error));
-        bootstrapInput.focus();
+        if (authenticationEpoch === bootstrapMessageEpoch) {
+          message(errorMessage(error));
+          if (!(unlockView instanceof HTMLElement) || !unlockView.hidden) bootstrapInput.focus();
+        }
       }
     });
   }
@@ -1854,6 +2178,7 @@ const script = `(() => {
       if (!(button instanceof HTMLButtonElement)) return;
       const configurationId = button.dataset.configuration || "";
       if (!configurationId) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       button.disabled = true;
       message("Opening the selected Miftah configuration…");
       try {
@@ -1864,7 +2189,9 @@ const script = `(() => {
         });
         await refresh();
       } catch (error) { message(errorMessage(error)); }
-      finally { button.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) button.disabled = false;
+      }
     });
   }
 
@@ -1903,19 +2230,15 @@ const script = `(() => {
             resource: String(data.get("resource") || "").trim()
           }
         }));
-        const completion = record(result.completion);
+        const completion = completionFromSetupResult(result, {
+          name: String(data.get("name") || "").trim(),
+          defaultProfile: String(data.get("profile") || "").trim()
+        });
         onboardingForm.reset();
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
     });
-  }
-
-  const nativeOAuthSetupLink = byId("native-oauth-setup-link");
-  if (nativeOAuthSetupLink instanceof HTMLButtonElement) {
-    nativeOAuthSetupLink.addEventListener("click", () => selectSetupSource("browser-sign-in"));
   }
 
   if (setupSourceChoice instanceof HTMLElement) {
@@ -1978,6 +2301,7 @@ const script = `(() => {
   if (saveSetupDraft instanceof HTMLButtonElement) {
     saveSetupDraft.addEventListener("click", async () => {
       if (saveSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       saveSetupDraft.disabled = true;
       message("Saving only the connector choice…");
       try {
@@ -1985,13 +2309,16 @@ const script = `(() => {
         restoreSetupDraft(draft);
         message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
       } catch (error) { message(errorMessage(error)); }
-      finally { saveSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) saveSetupDraft.disabled = false;
+      }
     });
   }
 
   if (resumeSetupDraft instanceof HTMLButtonElement) {
     resumeSetupDraft.addEventListener("click", async () => {
       if (resumeSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       resumeSetupDraft.disabled = true;
       message("Loading the saved connector choice…");
       try {
@@ -2005,13 +2332,16 @@ const script = `(() => {
         restoreSetupDraft(draft);
         message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
       } catch (error) { message(errorMessage(error)); }
-      finally { resumeSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;
+      }
     });
   }
 
   if (discardSetupDraft instanceof HTMLButtonElement) {
     discardSetupDraft.addEventListener("click", async () => {
       if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       discardSetupDraft.disabled = true;
       message("Discarding the saved connector choice…");
       try {
@@ -2020,7 +2350,9 @@ const script = `(() => {
         renderSetupDraftControls();
         message("Discarded the saved connector choice. The current form stays open and is not saved.");
       } catch (error) { message(errorMessage(error)); }
-      finally { discardSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;
+      }
     });
   }
 
@@ -2034,12 +2366,13 @@ const script = `(() => {
         return;
       }
       if (presetCreateInFlight || presetCreateReviewed.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       message("Creating the reviewed Miftah configuration…");
       presetCreateInFlight = true;
       setPresetReviewActionsDisabled(true);
       try {
         const result = record(await api("/api/v1/onboarding/preset", { method: "POST", body: request }));
-        const completion = record(result.completion);
+        const completion = completionFromSetupResult(result);
         clearPresetReview();
         activeSetupDraft = undefined;
         renderSetupDraftControls();
@@ -2048,13 +2381,13 @@ const script = `(() => {
           updatePresetFields();
         }
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
-        presetCreateInFlight = false;
-        if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
+        if (authenticationEpoch === actionAuthenticationEpoch) {
+          presetCreateInFlight = false;
+          if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
+        }
       }
     });
   }
@@ -2076,6 +2409,7 @@ const script = `(() => {
   if (clientEntryOnboardingForm instanceof HTMLFormElement) {
     clientEntryOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const actionAuthenticationEpoch = authenticationEpoch;
       const documentInput = clientEntryOnboardingForm.querySelector("textarea[name='document']");
       message("Importing one selected MCP entry…");
       try {
@@ -2088,15 +2422,15 @@ const script = `(() => {
             document: String(data.get("document") || "")
           }
         }));
-        const completion = record(result.completion);
+        const completion = completionFromSetupResult(result);
         clientEntryOnboardingForm.reset();
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
-        if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
+        if (authenticationEpoch === actionAuthenticationEpoch && documentInput instanceof HTMLTextAreaElement) {
+          documentInput.value = "";
+        }
       }
     });
   }
@@ -2218,6 +2552,7 @@ const script = `(() => {
       const reference = button.dataset.connection || "";
       const action = button.dataset.action || "";
       if (!reference || !action) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       button.disabled = true;
       message(action === "credential" ? "Removing the exact local vault credential…" : "Running " + action + "…");
       try {
@@ -2227,7 +2562,9 @@ const script = `(() => {
         });
         await refresh();
       } catch (error) { message(errorMessage(error)); }
-      finally { button.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) button.disabled = false;
+      }
     });
   }
 
@@ -2252,6 +2589,7 @@ const script = `(() => {
       }
       clearProfileReadinessResult();
       const readinessGeneration = profileReadinessGeneration;
+      const actionAuthenticationEpoch = authenticationEpoch;
       const selectedProfile = profile.value;
       const selectedUpstream = upstream.value;
       runProfileReadiness.disabled = true;
@@ -2273,7 +2611,9 @@ const script = `(() => {
       } catch (error) {
         if (readinessGeneration === profileReadinessGeneration) message(errorMessage(error));
       }
-      finally { runProfileReadiness.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) runProfileReadiness.disabled = false;
+      }
     });
   }
 
@@ -2283,6 +2623,7 @@ const script = `(() => {
       const profile = byId("default-profile-selection");
       const result = byId("default-profile-result");
       if (!(profile instanceof HTMLSelectElement) || !profile.value) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       const selectedProfile = profile.value;
       setDefaultProfile.disabled = true;
       message("Saving the durable default profile…");
@@ -2297,11 +2638,13 @@ const script = `(() => {
         if (result) result.textContent = publicResult;
         await refresh();
         message(publicResult + (profileSwitchingFromMcp
-          ? " New connections will use it; use miftah_use_profile to switch this active MCP session."
+          ? " New connections will use it; use a Copy switch request action above for this chat."
           : " Open a new MCP connection to use it.") +
           " If you are using the configuration catalog, select this configuration again before another Console change.");
       } catch (error) { message(errorMessage(error)); }
-      finally { setDefaultProfile.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) setDefaultProfile.disabled = false;
+      }
     });
   }
 
@@ -2312,6 +2655,7 @@ const script = `(() => {
     const input = byId("profile-description-input");
     const result = byId("profile-description-result");
     if (!(profile instanceof HTMLSelectElement) || !profile.value || !(input instanceof HTMLInputElement)) return;
+    const actionAuthenticationEpoch = authenticationEpoch;
     const selectedProfile = profile.value;
     const description = input.value.trim();
     if (!clearDescription && !description) {
@@ -2337,8 +2681,10 @@ const script = `(() => {
       message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
     } catch (error) { message(errorMessage(error)); }
     finally {
-      if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = false;
-      if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = false;
+      if (authenticationEpoch === actionAuthenticationEpoch) {
+        if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = false;
+        if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = false;
+      }
     }
   }
 
@@ -2368,6 +2714,7 @@ const script = `(() => {
         input.focus();
         return;
       }
+      const actionAuthenticationEpoch = authenticationEpoch;
       renameProfile.disabled = true;
       message("Renaming the selected account in Miftah configuration…");
       try {
@@ -2384,7 +2731,9 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally {
         const editor = byId("profile-rename-editor");
-        if (editor instanceof HTMLElement && !editor.hidden) renameProfile.disabled = false;
+        if (authenticationEpoch === actionAuthenticationEpoch && editor instanceof HTMLElement && !editor.hidden) {
+          renameProfile.disabled = false;
+        }
       }
     });
   }
@@ -2403,6 +2752,7 @@ const script = `(() => {
       }
       const selectedProfile = profile.value;
       const replacementProfile = replacement.value;
+      const actionAuthenticationEpoch = authenticationEpoch;
       removeProfile.disabled = true;
       message("Removing the selected account from Miftah configuration…");
       try {
@@ -2419,7 +2769,70 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally {
         const editor = byId("profile-removal-editor");
-        if (editor instanceof HTMLElement && !editor.hidden) removeProfile.disabled = false;
+        if (authenticationEpoch === actionAuthenticationEpoch && editor instanceof HTMLElement && !editor.hidden) {
+          removeProfile.disabled = false;
+        }
+      }
+    });
+  }
+
+  if (setupCompletionClientSelect instanceof HTMLSelectElement) {
+    setupCompletionClientSelect.addEventListener("change", () => {
+      setupCompletionGeneration += 1;
+      renderSetupCompletionSwitch(record(record(setupCompletion).setup));
+      if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
+      if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
+      if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
+      if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";
+      if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = true;
+      if (setupCompletionGenerateEntry instanceof HTMLButtonElement) setupCompletionGenerateEntry.disabled = false;
+    });
+  }
+
+  if (setupCompletionGenerateEntry instanceof HTMLButtonElement) {
+    setupCompletionGenerateEntry.addEventListener("click", async () => {
+      if (setupCompletionGenerateEntry.disabled) return;
+      setupCompletionGenerateEntry.disabled = true;
+      const client = selectedSetupCompletionClient();
+      const generation = setupCompletionGeneration;
+      try {
+        const snippets = await api("/api/v1/client-snippets?client=" + encodeURIComponent(client));
+        if (!setupCompletionRequestIsCurrent(generation, client)) return;
+        const snippet = Array.isArray(snippets) ? record(snippets[0]) : {};
+        const target = record(snippet.target);
+        const json = typeof snippet.json === "string" ? snippet.json : "";
+        const guidance = typeof snippet.guidance === "string" ? snippet.guidance : "";
+        if (!json || typeof target.label !== "string") throw new Error("A client entry was not available for the selected client.");
+        if (setupCompletionClientTarget) {
+          setupCompletionClientTarget.textContent = "Merge this one entry into " + target.label + ". Miftah did not edit that file.";
+        }
+        if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = json;
+        if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = guidance;
+        if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = false;
+        if (setupCompletionHandoff) {
+          setupCompletionHandoff.textContent =
+            "Review and merge the entry, then restart or reconnect " + catalogClientDisplayName(client) +
+            ". A generated entry does not prove that a credential works or belongs to the intended account.";
+        }
+        message("Generated the copy-only client entry for " + catalogClientDisplayName(client) + ". Review it before merging.");
+      } catch (error) {
+        if (setupCompletionRequestIsCurrent(generation, client)) message(errorMessage(error));
+      } finally {
+        if (setupCompletionRequestIsCurrent(generation, client)) setupCompletionGenerateEntry.disabled = false;
+      }
+    });
+  }
+
+  if (setupCompletionCopyJson instanceof HTMLButtonElement) {
+    setupCompletionCopyJson.addEventListener("click", async () => {
+      if (!(setupCompletionClientJson instanceof HTMLTextAreaElement) || !setupCompletionClientJson.value) return;
+      try {
+        await navigator.clipboard.writeText(setupCompletionClientJson.value);
+        message("Client JSON copied. Miftah did not modify any client file.");
+      } catch {
+        setupCompletionClientJson.focus();
+        setupCompletionClientJson.select();
+        message("Clipboard access was unavailable. The client JSON is selected for manual copy.");
       }
     });
   }
