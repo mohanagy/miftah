@@ -826,8 +826,7 @@ const script = `(() => {
         throw new Error("Miftah did not return a valid session proof.");
       }
       csrfToken = resumed.csrfToken;
-      await refresh();
-      restorePendingSetupCompletion();
+      await refreshAfterAuthentication();
     } catch (error) {
       message(errorMessage(error));
     }
@@ -1080,6 +1079,16 @@ const script = `(() => {
     const completion = pendingSetupCompletion;
     pendingSetupCompletion = undefined;
     replaceSetupCompletion(completion);
+  }
+
+  async function refreshAfterAuthentication() {
+    try {
+      await refresh();
+    } finally {
+      if (!(unlockView instanceof HTMLElement) || unlockView.hidden) {
+        restorePendingSetupCompletion();
+      }
+    }
   }
 
   async function refreshAfterSetup(completion) {
@@ -2092,11 +2101,10 @@ const script = `(() => {
           throw new Error("Miftah did not return a valid session proof.");
         }
         csrfToken = payload.data.csrfToken;
-        await refresh();
-        restorePendingSetupCompletion();
+        await refreshAfterAuthentication();
       } catch (error) {
         message(errorMessage(error));
-        bootstrapInput.focus();
+        if (!(unlockView instanceof HTMLElement) || !unlockView.hidden) bootstrapInput.focus();
       }
     });
   }

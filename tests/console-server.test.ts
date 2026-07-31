@@ -351,7 +351,7 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
   return { success, failure: { json: json.value, status: status.textContent } };
 }
 
-async function recoverSetupCompletionAfterUnlock(javascript: string): Promise<{
+async function recoverSetupCompletionAfterUnlock(javascript: string, lateRefreshFailure = false): Promise<{
   readonly locked: { readonly completionHidden: boolean; readonly focus: string };
   readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
 }> {
@@ -437,18 +437,36 @@ async function recoverSetupCompletionAfterUnlock(javascript: string): Promise<{
           json: async () => ({ data: { csrfToken: "x".repeat(32) } })
         };
       }
+      if (lateRefreshFailure && requestPath !== "/api/v1/config") {
+        return requestPath === "/api/v1/health"
+          ? {
+              ok: false,
+              status: 500,
+              json: async () => ({ error: { code: "health_failed", message: "Health refresh failed." } })
+            }
+          : { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          data: {
-            initialized: false,
-            catalog: {
-              configurations: [{ name: "analytics", profileCount: 1 }],
-              readyCount: 1,
-              attentionCount: 0
-            }
-          }
+          data: lateRefreshFailure
+            ? {
+                initialized: true,
+                name: "analytics",
+                version: "1",
+                defaultProfile: "default",
+                profiles: [{ name: "default" }],
+                upstreams: []
+              }
+            : {
+                initialized: false,
+                catalog: {
+                  configurations: [{ name: "analytics", profileCount: 1 }],
+                  readyCount: 1,
+                  attentionCount: 0
+                }
+              }
         })
       };
     }
@@ -2085,6 +2103,10 @@ describe("local Console control server", () => {
       expect(script.status).toBe(200);
       const javascript = await script.text();
       await expect(recoverSetupCompletionAfterUnlock(javascript)).resolves.toEqual({
+        locked: { completionHidden: true, focus: "bootstrap" },
+        recovered: { completionHidden: false, focus: "client" }
+      });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, true)).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         recovered: { completionHidden: false, focus: "client" }
       });
