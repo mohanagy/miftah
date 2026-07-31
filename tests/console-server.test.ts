@@ -2233,7 +2233,7 @@ describe("local Console control server", () => {
       expect(authenticationReference).toBeGreaterThan(setupWizard);
       expect(html).toContain("<summary>How authentication works</summary>");
       expect(html).toContain("One connection, named accounts");
-      expect(html).toContain("Default for new connections");
+      expect(html).toContain("Default account for new MCP sessions");
       expect(html).toContain("Live account switch");
 
       const script = await fetch(new URL("/app.js", server.url));
@@ -2289,10 +2289,42 @@ describe("local Console control server", () => {
       const javascript = await script.text();
       expect(javascript).toContain("function profileSwitchRequest(client, profile)");
       expect(javascript).toContain("Use the Miftah account named");
-      expect(javascript).toContain("Copy switch request");
+      expect(javascript).toContain('"Use " + profile + " in this chat"');
       expect(javascript).toContain("navigator.clipboard.writeText(profileSwitchRequest(client, profile))");
-      expect(javascript).toContain("Console does not switch a running client session.");
+      expect(javascript).toContain("Console does not switch the running client");
       expect(javascript).not.toContain("Live account switch: use miftah_use_profile in your MCP client.");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("presents account switching as one clear user action without repeating protocol guidance", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html.match(/id="catalog-switch-guidance"/gu)).toHaveLength(1);
+      expect(html).toContain("Default account for new MCP sessions");
+      expect(html).not.toContain("Default for new connections");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('copySwitchRequest.textContent = "Use " + profile + " in this chat";');
+      expect(javascript).toContain(
+        'button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat")'
+      );
+      expect(javascript).toContain(
+        '"Copied a request to use " + profile + " in " + catalogClientDisplayName(client)'
+      );
+      expect(javascript).toContain('"Default account for new MCP sessions: " + defaultProfile');
+      expect(javascript).not.toContain('copySwitchRequest.textContent = "Copy switch request"');
+      expect(javascript).not.toContain("catalogSwitchCopies");
+      expect(javascript.match(/miftah_use_profile/gu)).toHaveLength(1);
     } finally {
       await server.close();
     }
@@ -2553,7 +2585,9 @@ describe("local Console control server", () => {
       const script = await fetch(new URL("/app.js", server.url));
       expect(script.status).toBe(200);
       const javascript = await script.text();
-      expect(javascript).toContain('button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName)');
+      expect(javascript).toContain(
+        'button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat")'
+      );
     } finally {
       await server.close();
     }
