@@ -133,6 +133,11 @@ async function bootstrapSession(server: Awaited<ReturnType<typeof startConsoleSe
 
 function exerciseWorkspaceTaskNavigation(javascript: string, initialHash = ""): {
   readonly selected: () => string;
+  readonly tabState: () => readonly {
+    readonly taskId: string;
+    readonly ariaSelected: string | null;
+    readonly tabindex: string | null;
+  }[];
   readonly draftValue: () => string;
   readonly focused: () => string;
   readonly hash: () => string;
@@ -230,6 +235,11 @@ function exerciseWorkspaceTaskNavigation(javascript: string, initialHash = ""): 
 
   return {
     selected,
+    tabState: () => tabs.map((tab) => ({
+      taskId: tab.getAttribute("data-workspace-task") ?? "",
+      ariaSelected: tab.getAttribute("aria-selected"),
+      tabindex: tab.getAttribute("tabindex")
+    })),
     draftValue: () => panels[1]!.draft,
     focused: () => focused,
     hash: () => browserWindow.location.hash,
@@ -1599,12 +1609,15 @@ function exerciseSessionResumeLifecycle(javascript: string): {
   readonly callsAfterStartup: number;
   readonly callsAfterNormalPageShow: number;
   readonly callsAfterPersistedPageShow: number;
+  readonly navigationCallsAfterStartup: number;
+  readonly navigationCallsAfterPersistedPageShow: number;
 } {
   const start = javascript.lastIndexOf('if (typeof window !== "undefined")');
   const end = javascript.indexOf("\n})();", start);
   if (start < 0 || end < 0) throw new Error("Expected the Console session-resume startup block.");
 
   let resumeCalls = 0;
+  let navigationCalls = 0;
   let pageShow: ((event: { readonly persisted: boolean }) => void) | undefined;
   runInNewContext(javascript.slice(start, end), {
     window: {
@@ -1616,17 +1629,20 @@ function exerciseSessionResumeLifecycle(javascript: string): {
       resumeCalls += 1;
     },
     initializeWorkspaceTaskNavigation(): void {
-      // Navigation behavior has its own focused contract.
+      navigationCalls += 1;
     }
   });
   const callsAfterStartup = resumeCalls;
+  const navigationCallsAfterStartup = navigationCalls;
   pageShow?.({ persisted: false });
   const callsAfterNormalPageShow = resumeCalls;
   pageShow?.({ persisted: true });
   return {
     callsAfterStartup,
     callsAfterNormalPageShow,
-    callsAfterPersistedPageShow: resumeCalls
+    callsAfterPersistedPageShow: resumeCalls,
+    navigationCallsAfterStartup,
+    navigationCallsAfterPersistedPageShow: navigationCalls
   };
 }
 
@@ -2701,33 +2717,60 @@ describe("local Console control server", () => {
       expect(script.status).toBe(200);
       const javascript = await script.text();
       const navigation = exerciseWorkspaceTaskNavigation(javascript);
+      const expectOneActiveTab = (taskId: string): void => {
+        const tabState = navigation.tabState();
+        expect(tabState.filter((tab) => tab.ariaSelected === "true")).toEqual([
+          expect.objectContaining({ taskId, tabindex: "0" })
+        ]);
+        expect(tabState.filter((tab) => tab.tabindex === "0")).toEqual([
+          expect.objectContaining({ taskId, ariaSelected: "true" })
+        ]);
+      };
 
       expect(navigation.selected()).toBe("connection-overview");
+      expectOneActiveTab("connection-overview");
       navigation.click("connection-accounts");
       expect(navigation.selected()).toBe("connection-accounts");
+      expectOneActiveTab("connection-accounts");
       expect(navigation.draftValue()).toBe("production");
       expect(navigation.hash()).toBe("#connection-accounts");
 
       navigation.keydown("connection-accounts", "ArrowRight");
       expect(navigation.selected()).toBe("connection-authentication");
+      expectOneActiveTab("connection-authentication");
       expect(navigation.focused()).toBe("workspace-task-authentication");
       expect(navigation.draftValue()).toBe("production");
 
-      navigation.keydown("connection-authentication", "End");
+      navigation.keydown("connection-authentication", "ArrowLeft");
+      expect(navigation.selected()).toBe("connection-accounts");
+      expectOneActiveTab("connection-accounts");
+      expect(navigation.focused()).toBe("workspace-task-accounts");
+
+      navigation.keydown("connection-accounts", "End");
       expect(navigation.selected()).toBe("connection-audit");
+      expectOneActiveTab("connection-audit");
       navigation.keydown("connection-audit", "Home");
       expect(navigation.selected()).toBe("connection-overview");
+      expectOneActiveTab("connection-overview");
 
       navigation.restore("#connection-client-setup");
       expect(navigation.selected()).toBe("connection-client-setup");
+      expectOneActiveTab("connection-client-setup");
       expect(navigation.draftValue()).toBe("production");
 
-      expect(exerciseWorkspaceTaskNavigation(javascript, "#connection-audit").selected()).toBe(
-        "connection-audit"
-      );
-      expect(exerciseWorkspaceTaskNavigation(javascript, "#stale-session-state").selected()).toBe(
-        "connection-overview"
-      );
+      const restoredNavigation = exerciseWorkspaceTaskNavigation(javascript, "#connection-audit");
+      expect(restoredNavigation.selected()).toBe("connection-audit");
+      expect(restoredNavigation.tabState().filter((tab) => tab.ariaSelected === "true")).toEqual([
+        expect.objectContaining({ taskId: "connection-audit", tabindex: "0" })
+      ]);
+      expect(restoredNavigation.tabState().filter((tab) => tab.tabindex === "0")).toHaveLength(1);
+
+      const staleNavigation = exerciseWorkspaceTaskNavigation(javascript, "#stale-session-state");
+      expect(staleNavigation.selected()).toBe("connection-overview");
+      expect(staleNavigation.tabState().filter((tab) => tab.ariaSelected === "true")).toEqual([
+        expect.objectContaining({ taskId: "connection-overview", tabindex: "0" })
+      ]);
+      expect(staleNavigation.tabState().filter((tab) => tab.tabindex === "0")).toHaveLength(1);
     } finally {
       await server.close();
     }
@@ -3104,7 +3147,9 @@ describe("local Console control server", () => {
       expect(exerciseSessionResumeLifecycle(javascript)).toEqual({
         callsAfterStartup: 1,
         callsAfterNormalPageShow: 1,
-        callsAfterPersistedPageShow: 2
+        callsAfterPersistedPageShow: 2,
+        navigationCallsAfterStartup: 1,
+        navigationCallsAfterPersistedPageShow: 1
       });
       expect(bootstrapResponseErrorMessage(
         javascript,
