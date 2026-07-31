@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-07-31
+
+### Fixed
+
+- [#325](https://github.com/mohanagy/miftah/issues/325) Made Console setup completion and account switching remain actionable through overlapping refreshes and reauthentication. Successful setup now keeps its client handoff and focus without overriding the unlock screen; stale session responses cannot replace a newer configuration, status, or generated client entry; and Save draft, Resume draft, and readiness actions recover after successful reauthentication. Existing authentication, redaction, audit, no-shell subprocess, file-containment, Windows, and public API boundaries are unchanged.
+- [#327](https://github.com/mohanagy/miftah/issues/327) Prepared the compatible v0.5.6 patch release for the Console actionability correction. Miftah remains experimental and pre-1.0. Technical delivery and owner dogfooding do not satisfy external evaluator counts; external validation remains incomplete under #25, #88, #202, and #290.
+
 ## [0.5.5] - 2026-07-31
 
 ### Changed
