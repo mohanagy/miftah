@@ -709,6 +709,7 @@ const script = `(() => {
   let setupCompletion = undefined;
   let pendingSetupCompletion = undefined;
   let setupCompletionGeneration = 0;
+  let authenticationEpoch = 0;
   let sessionRecoveryGeneration = 0;
   let latestSessionRecoveryMessage = "";
   let pendingPresetRequest = undefined;
@@ -728,6 +729,7 @@ const script = `(() => {
   }
 
   function restoreUnlock(recoveryMessage) {
+    authenticationEpoch += 1;
     sessionRecoveryGeneration += 1;
     latestSessionRecoveryMessage = typeof recoveryMessage === "string" ? recoveryMessage : "";
     csrfToken = "";
@@ -789,6 +791,7 @@ const script = `(() => {
   }
 
   async function api(path, options) {
+    const requestAuthenticationEpoch = authenticationEpoch;
     const request = options || {};
     const headers = { "Accept": "application/json" };
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
@@ -802,7 +805,7 @@ const script = `(() => {
       });
     } catch {
       const recovery = "This Console process is no longer reachable. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
-      restoreUnlock(recovery);
+      if (requestAuthenticationEpoch === authenticationEpoch) restoreUnlock(recovery);
       throw new Error(recovery);
     }
     let payload;
@@ -811,7 +814,7 @@ const script = `(() => {
       if (response.status === 401) {
         const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
         const recovery = sessionRecoveryMessage(code);
-        restoreUnlock(recovery);
+        if (requestAuthenticationEpoch === authenticationEpoch) restoreUnlock(recovery);
         throw new Error(recovery);
       }
       const publicMessage = payload && payload.error && typeof payload.error.message === "string"
@@ -823,16 +826,21 @@ const script = `(() => {
   }
 
   async function resumeSession() {
+    const resumeAuthenticationEpoch = authenticationEpoch;
+    let resumeMessageEpoch = resumeAuthenticationEpoch;
     message("Checking this browser session…");
     try {
       const resumed = record(await api("/api/v1/session"));
+      if (authenticationEpoch !== resumeAuthenticationEpoch) return;
       if (typeof resumed.csrfToken !== "string" || resumed.csrfToken.length < 32) {
         throw new Error("Miftah did not return a valid session proof.");
       }
+      authenticationEpoch += 1;
+      resumeMessageEpoch = authenticationEpoch;
       csrfToken = resumed.csrfToken;
       await refreshAfterAuthentication();
     } catch (error) {
-      message(errorMessage(error));
+      if (authenticationEpoch === resumeMessageEpoch) message(errorMessage(error));
     }
   }
 
@@ -1086,11 +1094,12 @@ const script = `(() => {
   }
 
   async function refreshAfterAuthentication() {
+    const refreshAuthenticationEpoch = authenticationEpoch;
     const recoveryGeneration = sessionRecoveryGeneration;
     try {
       await refresh();
     } finally {
-      if (sessionRecoveryGeneration === recoveryGeneration) {
+      if (authenticationEpoch === refreshAuthenticationEpoch && sessionRecoveryGeneration === recoveryGeneration) {
         restorePendingSetupCompletion();
       }
     }
@@ -2099,6 +2108,8 @@ const script = `(() => {
   if (unlockForm instanceof HTMLFormElement && bootstrapInput instanceof HTMLInputElement) {
     unlockForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const bootstrapAuthenticationEpoch = authenticationEpoch;
+      let bootstrapMessageEpoch = bootstrapAuthenticationEpoch;
       message("Opening the local Console…");
       try {
         const response = await fetch("/api/v1/sessions", {
@@ -2108,15 +2119,20 @@ const script = `(() => {
         });
         bootstrapInput.value = "";
         const payload = await response.json();
+        if (authenticationEpoch !== bootstrapAuthenticationEpoch) return;
         if (!response.ok) throw bootstrapResponseError(response, payload);
         if (!payload || !payload.data || typeof payload.data.csrfToken !== "string") {
           throw new Error("Miftah did not return a valid session proof.");
         }
+        authenticationEpoch += 1;
+        bootstrapMessageEpoch = authenticationEpoch;
         csrfToken = payload.data.csrfToken;
         await refreshAfterAuthentication();
       } catch (error) {
-        message(errorMessage(error));
-        if (!(unlockView instanceof HTMLElement) || !unlockView.hidden) bootstrapInput.focus();
+        if (authenticationEpoch === bootstrapMessageEpoch) {
+          message(errorMessage(error));
+          if (!(unlockView instanceof HTMLElement) || !unlockView.hidden) bootstrapInput.focus();
+        }
       }
     });
   }
