@@ -567,6 +567,159 @@ async function recoverSetupCompletionAfterUnlock(
   };
 }
 
+async function settleStaleConfigurationSelectionAfterReauthentication(
+  javascript: string,
+  outcome: "success" | "failure"
+): Promise<{
+  readonly before: { readonly completionHidden: boolean; readonly focus: string; readonly status: string };
+  readonly after: { readonly completionHidden: boolean; readonly focus: string; readonly status: string };
+}> {
+  type Response = {
+    readonly ok: boolean;
+    readonly status: number;
+    readonly json: () => Promise<Record<string, unknown>>;
+  };
+  class FakeElement {
+    hidden = false;
+    textContent = "";
+
+    scrollIntoView(): void {}
+  }
+  class FakeInput extends FakeElement {
+    focus(): void {
+      focused = "bootstrap";
+    }
+  }
+  class FakeSelect extends FakeElement {
+    value = "claude-desktop";
+
+    addEventListener(): void {}
+
+    focus(): void {
+      focused = "client";
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+
+    addEventListener(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  let focused = "";
+  let locked = true;
+  let releaseSelection: ((response: Response) => void) | undefined;
+  const status = new FakeElement();
+  const unlock = new FakeElement();
+  unlock.hidden = true;
+  const dashboard = new FakeElement();
+  const completion = new FakeElement();
+  completion.hidden = true;
+  const bootstrap = new FakeInput();
+  const client = new FakeSelect();
+  const generate = new FakeButton();
+  const clientJson = new FakeTextArea();
+  const copy = new FakeButton();
+  copy.disabled = true;
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "unlock-view") return unlock;
+        if (id === "dashboard-view") return dashboard;
+        if (id === "bootstrap") return bootstrap;
+        if (id === "setup-completion-view") return completion;
+        if (id === "setup-completion-client-select") return client;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-json") return clientJson;
+        if (id === "setup-completion-copy-json") return copy;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: FakeInput,
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async (path: unknown): Promise<Response> => {
+      const requestPath = String(path);
+      if (requestPath.includes("/configurations/analytics/select")) {
+        return await new Promise<Response>((resolve) => {
+          releaseSelection = resolve;
+        });
+      }
+      if (locked) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: "session_expired", message: "Session expired." } })
+        };
+      }
+      if (requestPath === "/api/v1/session") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { csrfToken: "x".repeat(32) } })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            initialized: false,
+            catalog: {
+              configurations: [{ name: "analytics", profileCount: 1 }],
+              readyCount: 1,
+              attentionCount: 0
+            }
+          }
+        })
+      };
+    }
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { api, errorMessage, message, refresh, refreshAfterSetup, resumeSession };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly api: (path: string, options?: Record<string, unknown>) => Promise<unknown>;
+    readonly errorMessage: (error: unknown) => string;
+    readonly message: (text: string) => void;
+    readonly refresh: () => Promise<void>;
+    readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
+    readonly resumeSession: () => Promise<void>;
+  };
+
+  await harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
+    .catch(() => undefined);
+  locked = false;
+  const staleSelection = harness.api("/api/v1/configurations/analytics/select", { method: "POST", body: {} })
+    .then(async () => await harness.refresh())
+    .catch((error) => harness.message(harness.errorMessage(error)));
+  await harness.resumeSession();
+  const before = { completionHidden: completion.hidden, focus: focused, status: status.textContent };
+  releaseSelection?.(outcome === "success"
+    ? { ok: true, status: 200, json: async () => ({ data: {} }) }
+    : {
+        ok: false,
+        status: 500,
+        json: async () => ({ error: { code: "selection_failed", message: "Stale selection failed." } })
+      });
+  await staleSelection;
+  return {
+    before,
+    after: { completionHidden: completion.hidden, focus: focused, status: status.textContent }
+  };
+}
+
 async function reviewThenCreatePresetForm(
   javascript: string,
   reviewOptions: {
@@ -1153,7 +1306,7 @@ async function resumeMissingSetupDraft(javascript: string): Promise<{
   let restored = false;
   let controlsUpdated = 0;
   let status = "";
-  runInNewContext(`let activeSetupDraft = { revision: 1 };\n${javascript.slice(start, end)}`, {
+  runInNewContext(`let activeSetupDraft = { revision: 1 };\nlet authenticationEpoch = 0;\n${javascript.slice(start, end)}`, {
     resumeSetupDraft: button,
     HTMLButtonElement: FakeButton,
     api: async () => null,
@@ -1201,6 +1354,7 @@ async function saveSetupDraftOnlyOnce(javascript: string): Promise<{
   let releaseRequest: () => void = () => undefined;
   const request = new Promise<void>((resolve) => { releaseRequest = resolve; });
   runInNewContext(javascript.slice(start, end), {
+    authenticationEpoch: 0,
     saveSetupDraft: button,
     HTMLButtonElement: FakeButton,
     message(): void {},
@@ -2213,6 +2367,42 @@ describe("local Console control server", () => {
     }
   });
 
+  it("ignores stale configuration-selection success after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const state = await settleStaleConfigurationSelectionAfterReauthentication(javascript, "success");
+      expect(state.before.completionHidden).toBe(false);
+      expect(state.before.focus).toBe("client");
+      expect(state.after).toEqual(state.before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores stale configuration-selection failure after reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const state = await settleStaleConfigurationSelectionAfterReauthentication(javascript, "failure");
+      expect(state.before.completionHidden).toBe(false);
+      expect(state.before.focus).toBe("client");
+      expect(state.after).toEqual(state.before);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps new Console actions keyboard-visible, announced, target-sized, and responsive", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
@@ -2463,10 +2653,10 @@ describe("local Console control server", () => {
       });
       expect(javascript).toContain("if (resumeSetupDraft.disabled) return;");
       expect(javascript).toContain("resumeSetupDraft.disabled = true;");
-      expect(javascript).toContain("finally { resumeSetupDraft.disabled = false; }");
+      expect(javascript).toContain("if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;");
       expect(javascript).toContain("if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;");
       expect(javascript).toContain("discardSetupDraft.disabled = true;");
-      expect(javascript).toContain("finally { discardSetupDraft.disabled = false; }");
+      expect(javascript).toContain("if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;");
       expect(javascript).toContain("renderSetupCompletion");
       expect(javascript).toContain("completion.environment");
       expect(javascript).toContain("setupCompletionEnvironment");

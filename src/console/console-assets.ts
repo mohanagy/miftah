@@ -719,12 +719,24 @@ const script = `(() => {
   let returningSetupVisible = false;
   let setupWizardSource = "connector";
   let profileSwitchingFromMcp = false;
+  const staleAuthenticationRequestName = "MiftahStaleAuthenticationRequest";
 
   function message(text) {
-    if (status) status.textContent = text;
+    if (status && typeof text === "string") status.textContent = text;
+  }
+
+  function staleAuthenticationRequestError() {
+    const error = new Error("This response belongs to an earlier Console session.");
+    error.name = staleAuthenticationRequestName;
+    return error;
+  }
+
+  function isStaleAuthenticationRequest(error) {
+    return error instanceof Error && error.name === staleAuthenticationRequestName;
   }
 
   function errorMessage(error) {
+    if (isStaleAuthenticationRequest(error)) return undefined;
     return error instanceof Error ? error.message : "The Console request failed.";
   }
 
@@ -737,6 +749,7 @@ const script = `(() => {
     clearSetupCompletion();
     activeSetupDraft = undefined;
     renderSetupDraftControls();
+    presetCreateInFlight = false;
     clearPresetReview();
     if (setupCompletionView) setupCompletionView.hidden = true;
     if (dashboardView) dashboardView.hidden = true;
@@ -804,17 +817,19 @@ const script = `(() => {
         body: request.body === undefined ? undefined : JSON.stringify(request.body)
       });
     } catch {
+      if (requestAuthenticationEpoch !== authenticationEpoch) throw staleAuthenticationRequestError();
       const recovery = "This Console process is no longer reachable. Run \`miftah dashboard\` in the terminal for a new URL and one-time code.";
-      if (requestAuthenticationEpoch === authenticationEpoch) restoreUnlock(recovery);
+      restoreUnlock(recovery);
       throw new Error(recovery);
     }
     let payload;
     try { payload = await response.json(); } catch { payload = undefined; }
+    if (requestAuthenticationEpoch !== authenticationEpoch) throw staleAuthenticationRequestError();
     if (!response.ok) {
       if (response.status === 401) {
         const code = payload && payload.error && typeof payload.error.code === "string" ? payload.error.code : "";
         const recovery = sessionRecoveryMessage(code);
-        if (requestAuthenticationEpoch === authenticationEpoch) restoreUnlock(recovery);
+        restoreUnlock(recovery);
         throw new Error(recovery);
       }
       const publicMessage = payload && payload.error && typeof payload.error.message === "string"
@@ -2143,6 +2158,7 @@ const script = `(() => {
       if (!(button instanceof HTMLButtonElement)) return;
       const configurationId = button.dataset.configuration || "";
       if (!configurationId) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       button.disabled = true;
       message("Opening the selected Miftah configuration…");
       try {
@@ -2153,7 +2169,9 @@ const script = `(() => {
         });
         await refresh();
       } catch (error) { message(errorMessage(error)); }
-      finally { button.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) button.disabled = false;
+      }
     });
   }
 
@@ -2263,6 +2281,7 @@ const script = `(() => {
   if (saveSetupDraft instanceof HTMLButtonElement) {
     saveSetupDraft.addEventListener("click", async () => {
       if (saveSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       saveSetupDraft.disabled = true;
       message("Saving only the connector choice…");
       try {
@@ -2270,13 +2289,16 @@ const script = `(() => {
         restoreSetupDraft(draft);
         message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
       } catch (error) { message(errorMessage(error)); }
-      finally { saveSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) saveSetupDraft.disabled = false;
+      }
     });
   }
 
   if (resumeSetupDraft instanceof HTMLButtonElement) {
     resumeSetupDraft.addEventListener("click", async () => {
       if (resumeSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       resumeSetupDraft.disabled = true;
       message("Loading the saved connector choice…");
       try {
@@ -2290,13 +2312,16 @@ const script = `(() => {
         restoreSetupDraft(draft);
         message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
       } catch (error) { message(errorMessage(error)); }
-      finally { resumeSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;
+      }
     });
   }
 
   if (discardSetupDraft instanceof HTMLButtonElement) {
     discardSetupDraft.addEventListener("click", async () => {
       if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       discardSetupDraft.disabled = true;
       message("Discarding the saved connector choice…");
       try {
@@ -2305,7 +2330,9 @@ const script = `(() => {
         renderSetupDraftControls();
         message("Discarded the saved connector choice. The current form stays open and is not saved.");
       } catch (error) { message(errorMessage(error)); }
-      finally { discardSetupDraft.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;
+      }
     });
   }
 
@@ -2319,6 +2346,7 @@ const script = `(() => {
         return;
       }
       if (presetCreateInFlight || presetCreateReviewed.disabled) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       message("Creating the reviewed Miftah configuration…");
       presetCreateInFlight = true;
       setPresetReviewActionsDisabled(true);
@@ -2336,8 +2364,10 @@ const script = `(() => {
         await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
-        presetCreateInFlight = false;
-        if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
+        if (authenticationEpoch === actionAuthenticationEpoch) {
+          presetCreateInFlight = false;
+          if (pendingPresetRequest !== undefined) setPresetReviewActionsDisabled(false);
+        }
       }
     });
   }
@@ -2359,6 +2389,7 @@ const script = `(() => {
   if (clientEntryOnboardingForm instanceof HTMLFormElement) {
     clientEntryOnboardingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const actionAuthenticationEpoch = authenticationEpoch;
       const documentInput = clientEntryOnboardingForm.querySelector("textarea[name='document']");
       message("Importing one selected MCP entry…");
       try {
@@ -2377,7 +2408,9 @@ const script = `(() => {
         await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
-        if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
+        if (authenticationEpoch === actionAuthenticationEpoch && documentInput instanceof HTMLTextAreaElement) {
+          documentInput.value = "";
+        }
       }
     });
   }
@@ -2499,6 +2532,7 @@ const script = `(() => {
       const reference = button.dataset.connection || "";
       const action = button.dataset.action || "";
       if (!reference || !action) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       button.disabled = true;
       message(action === "credential" ? "Removing the exact local vault credential…" : "Running " + action + "…");
       try {
@@ -2508,7 +2542,9 @@ const script = `(() => {
         });
         await refresh();
       } catch (error) { message(errorMessage(error)); }
-      finally { button.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) button.disabled = false;
+      }
     });
   }
 
@@ -2533,6 +2569,7 @@ const script = `(() => {
       }
       clearProfileReadinessResult();
       const readinessGeneration = profileReadinessGeneration;
+      const actionAuthenticationEpoch = authenticationEpoch;
       const selectedProfile = profile.value;
       const selectedUpstream = upstream.value;
       runProfileReadiness.disabled = true;
@@ -2554,7 +2591,9 @@ const script = `(() => {
       } catch (error) {
         if (readinessGeneration === profileReadinessGeneration) message(errorMessage(error));
       }
-      finally { runProfileReadiness.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) runProfileReadiness.disabled = false;
+      }
     });
   }
 
@@ -2564,6 +2603,7 @@ const script = `(() => {
       const profile = byId("default-profile-selection");
       const result = byId("default-profile-result");
       if (!(profile instanceof HTMLSelectElement) || !profile.value) return;
+      const actionAuthenticationEpoch = authenticationEpoch;
       const selectedProfile = profile.value;
       setDefaultProfile.disabled = true;
       message("Saving the durable default profile…");
@@ -2582,7 +2622,9 @@ const script = `(() => {
           : " Open a new MCP connection to use it.") +
           " If you are using the configuration catalog, select this configuration again before another Console change.");
       } catch (error) { message(errorMessage(error)); }
-      finally { setDefaultProfile.disabled = false; }
+      finally {
+        if (authenticationEpoch === actionAuthenticationEpoch) setDefaultProfile.disabled = false;
+      }
     });
   }
 
@@ -2593,6 +2635,7 @@ const script = `(() => {
     const input = byId("profile-description-input");
     const result = byId("profile-description-result");
     if (!(profile instanceof HTMLSelectElement) || !profile.value || !(input instanceof HTMLInputElement)) return;
+    const actionAuthenticationEpoch = authenticationEpoch;
     const selectedProfile = profile.value;
     const description = input.value.trim();
     if (!clearDescription && !description) {
@@ -2618,8 +2661,10 @@ const script = `(() => {
       message(publicResult + " Existing MCP clients need a restart; if you are using the configuration catalog, select this configuration again before another Console change.");
     } catch (error) { message(errorMessage(error)); }
     finally {
-      if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = false;
-      if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = false;
+      if (authenticationEpoch === actionAuthenticationEpoch) {
+        if (setProfileDescription instanceof HTMLButtonElement) setProfileDescription.disabled = false;
+        if (clearProfileDescription instanceof HTMLButtonElement) clearProfileDescription.disabled = false;
+      }
     }
   }
 
@@ -2649,6 +2694,7 @@ const script = `(() => {
         input.focus();
         return;
       }
+      const actionAuthenticationEpoch = authenticationEpoch;
       renameProfile.disabled = true;
       message("Renaming the selected account in Miftah configuration…");
       try {
@@ -2665,7 +2711,9 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally {
         const editor = byId("profile-rename-editor");
-        if (editor instanceof HTMLElement && !editor.hidden) renameProfile.disabled = false;
+        if (authenticationEpoch === actionAuthenticationEpoch && editor instanceof HTMLElement && !editor.hidden) {
+          renameProfile.disabled = false;
+        }
       }
     });
   }
@@ -2684,6 +2732,7 @@ const script = `(() => {
       }
       const selectedProfile = profile.value;
       const replacementProfile = replacement.value;
+      const actionAuthenticationEpoch = authenticationEpoch;
       removeProfile.disabled = true;
       message("Removing the selected account from Miftah configuration…");
       try {
@@ -2700,7 +2749,9 @@ const script = `(() => {
       } catch (error) { message(errorMessage(error)); }
       finally {
         const editor = byId("profile-removal-editor");
-        if (editor instanceof HTMLElement && !editor.hidden) removeProfile.disabled = false;
+        if (authenticationEpoch === actionAuthenticationEpoch && editor instanceof HTMLElement && !editor.hidden) {
+          removeProfile.disabled = false;
+        }
       }
     });
   }
