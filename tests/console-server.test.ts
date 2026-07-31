@@ -1811,6 +1811,12 @@ describe("local Console control server", () => {
       expect(javascript).toContain("Open Manage connection");
       expect(javascript).toContain("copy its switch request");
       expect(javascript).toContain("A generated entry does not prove that a credential works");
+      expect(javascript).toContain("async function refreshAfterSetup(completion)");
+      expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);
+      expect(javascript).toContain("setupCompletionView.scrollIntoView");
+      expect(javascript).toContain("setupCompletionClientSelect.focus");
+      expect(javascript).toContain('if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";');
+      expect(javascript).toContain("if (client !== selectedSetupCompletionClient()) return;");
     } finally {
       await server.close();
     }
@@ -2082,11 +2088,15 @@ describe("local Console control server", () => {
         refreshBody.indexOf('api("/api/v1/config")')
       );
       const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
-      expect(completionAssignments).toHaveLength(3);
-      for (const assignment of completionAssignments) {
-        const assignmentIndex = assignment.index;
-        expect(javascript.slice(assignmentIndex - 80, assignmentIndex)).toContain("await refresh();");
-      }
+      expect(completionAssignments).toHaveLength(1);
+      const refreshAfterSetup = javascript.slice(
+        javascript.indexOf("async function refreshAfterSetup(completion)"),
+        javascript.indexOf("function clearSetupCompletion()")
+      );
+      expect(refreshAfterSetup.indexOf("await refresh();")).toBeLessThan(
+        refreshAfterSetup.indexOf("setupCompletion = completion;")
+      );
+      expect(refreshAfterSetup).toContain("finally");
       expect(javascript).toContain("MCP connections found");
       expect(javascript).toContain("need attention");
       expect(javascript).toContain('"file-permissions": "private file permission"');

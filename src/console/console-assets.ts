@@ -1048,7 +1048,24 @@ const script = `(() => {
         "Open Manage connection, then choose Accounts or Authentication. Miftah shows only the supported way to add another named account for this connection.";
     }
     renderSetupCompletionSwitch(setup);
-    if (setupCompletionView) setupCompletionView.hidden = false;
+    if (setupCompletionView) {
+      setupCompletionView.hidden = false;
+      if (typeof setupCompletionView.scrollIntoView === "function") {
+        setupCompletionView.scrollIntoView({ block: "start" });
+      }
+    }
+    if (setupCompletionClientSelect instanceof HTMLSelectElement) {
+      setupCompletionClientSelect.focus({ preventScroll: true });
+    }
+  }
+
+  async function refreshAfterSetup(completion) {
+    try {
+      await refresh();
+    } finally {
+      setupCompletion = completion;
+      renderSetupCompletion(setupCompletion);
+    }
   }
 
   function clearSetupCompletion() {
@@ -2117,9 +2134,7 @@ const script = `(() => {
         });
         onboardingForm.reset();
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
     });
   }
@@ -2254,9 +2269,7 @@ const script = `(() => {
           updatePresetFields();
         }
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         presetCreateInFlight = false;
@@ -2297,9 +2310,7 @@ const script = `(() => {
         const completion = completionFromSetupResult(result);
         clientEntryOnboardingForm.reset();
         returningSetupVisible = false;
-        await refresh();
-        setupCompletion = completion;
-        renderSetupCompletion(setupCompletion);
+        await refreshAfterSetup(completion);
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (documentInput instanceof HTMLTextAreaElement) documentInput.value = "";
@@ -2636,6 +2647,7 @@ const script = `(() => {
       if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
       if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
       if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
+      if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";
       if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = true;
     });
   }
@@ -2647,6 +2659,7 @@ const script = `(() => {
       const client = selectedSetupCompletionClient();
       try {
         const snippets = await api("/api/v1/client-snippets?client=" + encodeURIComponent(client));
+        if (client !== selectedSetupCompletionClient()) return;
         const snippet = Array.isArray(snippets) ? record(snippets[0]) : {};
         const target = record(snippet.target);
         const json = typeof snippet.json === "string" ? snippet.json : "";
