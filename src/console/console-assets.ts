@@ -1125,13 +1125,20 @@ const script = `(() => {
     pendingSetupCompletion = completion;
     try {
       await refresh();
+    } catch (error) {
+      if (authenticationEpoch !== setupAuthenticationEpoch || refreshGeneration !== setupRefreshGeneration) {
+        if (isStaleAuthenticationRequest(error)) throw error;
+        throw staleAuthenticationRequestError();
+      }
+      throw error;
     } finally {
-      if (authenticationEpoch !== setupAuthenticationEpoch || refreshGeneration !== setupRefreshGeneration) return;
-      if (unlockView instanceof HTMLElement && !unlockView.hidden) {
-        pendingSetupCompletion = completion;
-      } else {
-        pendingSetupCompletion = undefined;
-        replaceSetupCompletion(completion);
+      if (authenticationEpoch === setupAuthenticationEpoch && refreshGeneration === setupRefreshGeneration) {
+        if (unlockView instanceof HTMLElement && !unlockView.hidden) {
+          pendingSetupCompletion = completion;
+        } else {
+          pendingSetupCompletion = undefined;
+          replaceSetupCompletion(completion);
+        }
       }
     }
   }

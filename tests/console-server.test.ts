@@ -353,13 +353,15 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
 
 async function recoverSetupCompletionAfterUnlock(
   javascript: string,
-  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" = "none"
+  refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" = "none"
 ): Promise<{
   readonly locked: { readonly completionHidden: boolean; readonly focus: string };
   readonly afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
   readonly afterReauthentication: { readonly completionHidden: boolean; readonly focus: string };
   readonly recovered: { readonly completionHidden: boolean; readonly focus: string };
   readonly statusPreserved: boolean;
+  readonly setupRefreshErrorName?: string;
+  readonly setupRefreshErrorMessage?: string;
 }> {
   class FakeElement {
     hidden = false;
@@ -391,7 +393,7 @@ async function recoverSetupCompletionAfterUnlock(
   }
 
   let focused = "";
-  let locked = refreshFailure !== "setup-origin-overlap";
+  let locked = refreshFailure !== "setup-origin-overlap" && refreshFailure !== "current-setup-failure";
   let activeRefreshFailure = refreshFailure;
   let releaseDelayedRecovery: (() => void) | undefined;
   const delayedRecovery = new Promise<void>((resolve) => {
@@ -458,6 +460,13 @@ async function recoverSetupCompletionAfterUnlock(
         };
       }
       if (activeRefreshFailure === "config" && requestPath === "/api/v1/config") {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { code: "config_failed", message: "Configuration refresh failed." } })
+        };
+      }
+      if (activeRefreshFailure === "current-setup-failure" && requestPath === "/api/v1/config") {
         return {
           ok: false,
           status: 500,
@@ -550,8 +559,16 @@ async function recoverSetupCompletionAfterUnlock(
     readonly refreshAfterSetup: (completion: Record<string, unknown>) => Promise<void>;
     readonly resumeSession: () => Promise<void>;
   };
+  let setupRefreshErrorName = "";
+  let setupRefreshErrorMessage = "";
   const setupRefresh = harness.refreshAfterSetup({ setup: { name: "analytics", defaultProfile: "default", profileCount: 1 } })
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      const failure = typeof error === "object" && error !== null
+        ? error as { readonly name?: unknown; readonly message?: unknown }
+        : {};
+      setupRefreshErrorName = typeof failure.name === "string" ? failure.name : "NonError";
+      setupRefreshErrorMessage = typeof failure.message === "string" ? failure.message : String(error);
+    });
   if (refreshFailure === "setup-origin-overlap") {
     await overlapRecoveryRequested;
     while (unlock.hidden) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -568,10 +585,22 @@ async function recoverSetupCompletionAfterUnlock(
       afterRefreshFailure,
       afterReauthentication,
       recovered: { completionHidden: completion.hidden, focus: focused },
-      statusPreserved: status.textContent === reauthenticatedStatus
+      statusPreserved: status.textContent === reauthenticatedStatus,
+      setupRefreshErrorName
     };
   }
   await setupRefresh;
+  if (refreshFailure === "current-setup-failure") {
+    const state = { completionHidden: completion.hidden, focus: focused };
+    return {
+      locked: state,
+      afterRefreshFailure: state,
+      afterReauthentication: state,
+      recovered: state,
+      statusPreserved: true,
+      setupRefreshErrorMessage
+    };
+  }
   const lockedState = { completionHidden: completion.hidden, focus: focused };
   locked = false;
   let afterRefreshFailure: { readonly completionHidden: boolean; readonly focus: string };
@@ -2378,6 +2407,14 @@ describe("local Console control server", () => {
         recovered: { completionHidden: false, focus: "client" },
         statusPreserved: true
       });
+      await expect(recoverSetupCompletionAfterUnlock(javascript, "current-setup-failure")).resolves.toEqual({
+        locked: { completionHidden: false, focus: "client" },
+        afterRefreshFailure: { completionHidden: false, focus: "client" },
+        afterReauthentication: { completionHidden: false, focus: "client" },
+        recovered: { completionHidden: false, focus: "client" },
+        statusPreserved: true,
+        setupRefreshErrorMessage: "Configuration refresh failed."
+      });
       await expect(recoverSetupCompletionAfterUnlock(javascript, "late")).resolves.toEqual({
         locked: { completionHidden: true, focus: "bootstrap" },
         afterRefreshFailure: { completionHidden: false, focus: "client" },
@@ -2411,7 +2448,8 @@ describe("local Console control server", () => {
         afterRefreshFailure: { completionHidden: true, focus: "bootstrap" },
         afterReauthentication: { completionHidden: false, focus: "client" },
         recovered: { completionHidden: false, focus: "client" },
-        statusPreserved: true
+        statusPreserved: true,
+        setupRefreshErrorName: "MiftahStaleAuthenticationRequest"
       });
     } finally {
       await server.close();
