@@ -707,6 +707,7 @@ const script = `(() => {
   let profileReadinessTargets = [];
   let profileReadinessGeneration = 0;
   let setupCompletion = undefined;
+  let setupCompletionGeneration = 0;
   let pendingPresetRequest = undefined;
   let presetReviewGeneration = 0;
   let presetCreateInFlight = false;
@@ -726,7 +727,7 @@ const script = `(() => {
   function restoreUnlock(recoveryMessage) {
     csrfToken = "";
     returningSetupVisible = false;
-    setupCompletion = undefined;
+    clearSetupCompletion();
     activeSetupDraft = undefined;
     renderSetupDraftControls();
     clearPresetReview();
@@ -1059,17 +1060,29 @@ const script = `(() => {
     }
   }
 
+  function replaceSetupCompletion(value) {
+    setupCompletionGeneration += 1;
+    setupCompletion = value;
+    if (setupCompletionGenerateEntry instanceof HTMLButtonElement) {
+      setupCompletionGenerateEntry.disabled = false;
+    }
+    renderSetupCompletion(setupCompletion);
+  }
+
+  function setupCompletionRequestIsCurrent(generation, client) {
+    return generation === setupCompletionGeneration && client === selectedSetupCompletionClient();
+  }
+
   async function refreshAfterSetup(completion) {
     try {
       await refresh();
     } finally {
-      setupCompletion = completion;
-      renderSetupCompletion(setupCompletion);
+      replaceSetupCompletion(completion);
     }
   }
 
   function clearSetupCompletion() {
-    setupCompletion = undefined;
+    replaceSetupCompletion(undefined);
     if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
     if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
     if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
@@ -2643,12 +2656,14 @@ const script = `(() => {
 
   if (setupCompletionClientSelect instanceof HTMLSelectElement) {
     setupCompletionClientSelect.addEventListener("change", () => {
+      setupCompletionGeneration += 1;
       renderSetupCompletionSwitch(record(record(setupCompletion).setup));
       if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
       if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
       if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
       if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";
       if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = true;
+      if (setupCompletionGenerateEntry instanceof HTMLButtonElement) setupCompletionGenerateEntry.disabled = false;
     });
   }
 
@@ -2657,9 +2672,10 @@ const script = `(() => {
       if (setupCompletionGenerateEntry.disabled) return;
       setupCompletionGenerateEntry.disabled = true;
       const client = selectedSetupCompletionClient();
+      const generation = setupCompletionGeneration;
       try {
         const snippets = await api("/api/v1/client-snippets?client=" + encodeURIComponent(client));
-        if (client !== selectedSetupCompletionClient()) return;
+        if (!setupCompletionRequestIsCurrent(generation, client)) return;
         const snippet = Array.isArray(snippets) ? record(snippets[0]) : {};
         const target = record(snippet.target);
         const json = typeof snippet.json === "string" ? snippet.json : "";
@@ -2677,8 +2693,11 @@ const script = `(() => {
             ". A generated entry does not prove that a credential works or belongs to the intended account.";
         }
         message("Generated the copy-only client entry for " + catalogClientDisplayName(client) + ". Review it before merging.");
-      } catch (error) { message(errorMessage(error)); }
-      finally { setupCompletionGenerateEntry.disabled = false; }
+      } catch (error) {
+        if (setupCompletionRequestIsCurrent(generation, client)) message(errorMessage(error));
+      } finally {
+        if (setupCompletionRequestIsCurrent(generation, client)) setupCompletionGenerateEntry.disabled = false;
+      }
     });
   }
 

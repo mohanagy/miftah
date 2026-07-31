@@ -238,6 +238,119 @@ async function submitPresetFormWithStaleValue(
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+async function supersedeSetupCompletionClientRequests(javascript: string): Promise<{
+  readonly success: { readonly json: string; readonly status: string };
+  readonly failure: { readonly json: string; readonly status: string };
+}> {
+  type Listener = () => void | Promise<void>;
+  type PendingResponse = {
+    readonly resolve: (response: {
+      readonly ok: boolean;
+      readonly status: number;
+      readonly json: () => Promise<Record<string, unknown>>;
+    }) => void;
+  };
+  class FakeElement {
+    readonly listeners = new Map<string, Listener>();
+    hidden = false;
+    textContent = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+  }
+  class FakeButton extends FakeElement {
+    disabled = false;
+  }
+  class FakeSelect extends FakeElement {
+    constructor(public value: string) {
+      super();
+    }
+
+    focus(): void {}
+  }
+  class FakeTextArea extends FakeElement {
+    value = "";
+  }
+
+  const status = new FakeElement();
+  const completionView = new FakeElement();
+  const select = new FakeSelect("claude-desktop");
+  const generate = new FakeButton();
+  const target = new FakeElement();
+  const json = new FakeTextArea();
+  const guidance = new FakeElement();
+  const copy = new FakeButton();
+  const handoff = new FakeElement();
+  const switching = new FakeElement();
+  const pending: PendingResponse[] = [];
+  runInNewContext(javascript, {
+    document: {
+      getElementById(id: string): unknown {
+        if (id === "status") return status;
+        if (id === "setup-completion-view") return completionView;
+        if (id === "setup-completion-client-select") return select;
+        if (id === "setup-completion-generate-entry") return generate;
+        if (id === "setup-completion-client-target") return target;
+        if (id === "setup-completion-client-json") return json;
+        if (id === "setup-completion-client-guidance") return guidance;
+        if (id === "setup-completion-copy-json") return copy;
+        if (id === "setup-completion-handoff") return handoff;
+        if (id === "setup-completion-switch") return switching;
+        return undefined;
+      },
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: FakeSelect,
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: FakeButton,
+    HTMLTextAreaElement: FakeTextArea,
+    Element: FakeElement,
+    navigator: { clipboard: { writeText: async () => undefined } },
+    fetch: async () => new Promise((resolve) => pending.push({ resolve }))
+  });
+
+  const click = generate.listeners.get("click");
+  const change = select.listeners.get("change");
+  if (click === undefined || change === undefined) throw new Error("Expected setup completion client handlers.");
+
+  const successRequest = click();
+  select.value = "cursor";
+  await change();
+  select.value = "claude-desktop";
+  await change();
+  status.textContent = "Current setup is ready.";
+  pending[0]?.resolve({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      data: [{
+        target: { label: "Claude Desktop settings" },
+        json: "{\"mcpServers\":{\"stale\":{}}}",
+        guidance: "Stale guidance"
+      }]
+    })
+  });
+  await successRequest;
+  const success = { json: json.value, status: status.textContent };
+
+  const failureRequest = click();
+  select.value = "cursor";
+  await change();
+  select.value = "claude-desktop";
+  await change();
+  status.textContent = "Newer setup is ready.";
+  pending[1]?.resolve({
+    ok: false,
+    status: 500,
+    json: async () => ({ error: { code: "snippet_failed", message: "Stale request failed." } })
+  });
+  await failureRequest;
+  return { success, failure: { json: json.value, status: status.textContent } };
+}
+
 async function reviewThenCreatePresetForm(
   javascript: string,
   reviewOptions: {
@@ -1816,7 +1929,25 @@ describe("local Console control server", () => {
       expect(javascript).toContain("setupCompletionView.scrollIntoView");
       expect(javascript).toContain("setupCompletionClientSelect.focus");
       expect(javascript).toContain('if (setupCompletionHandoff) setupCompletionHandoff.textContent = "";');
-      expect(javascript).toContain("if (client !== selectedSetupCompletionClient()) return;");
+      expect(javascript).toContain("function setupCompletionRequestIsCurrent(generation, client)");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores superseded setup-completion client responses after the client choice changes", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      await expect(supersedeSetupCompletionClientRequests(javascript)).resolves.toEqual({
+        success: { json: "", status: "Current setup is ready." },
+        failure: { json: "", status: "Newer setup is ready." }
+      });
     } finally {
       await server.close();
     }
@@ -2087,14 +2218,14 @@ describe("local Console control server", () => {
       expect(refreshBody.indexOf("clearSetupCompletion();")).toBeLessThan(
         refreshBody.indexOf('api("/api/v1/config")')
       );
-      const completionAssignments = [...javascript.matchAll(/setupCompletion = completion;/gu)];
+      const completionAssignments = [...javascript.matchAll(/setupCompletion = value;/gu)];
       expect(completionAssignments).toHaveLength(1);
       const refreshAfterSetup = javascript.slice(
         javascript.indexOf("async function refreshAfterSetup(completion)"),
         javascript.indexOf("function clearSetupCompletion()")
       );
       expect(refreshAfterSetup.indexOf("await refresh();")).toBeLessThan(
-        refreshAfterSetup.indexOf("setupCompletion = completion;")
+        refreshAfterSetup.indexOf("replaceSetupCompletion(completion);")
       );
       expect(refreshAfterSetup).toContain("finally");
       expect(javascript).toContain("MCP connections found");
