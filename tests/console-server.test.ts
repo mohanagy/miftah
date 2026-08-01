@@ -2803,13 +2803,23 @@ describe("local Console control server", () => {
       expect(html).toContain("<label>Choose an MCP");
       expect(html).toContain('<optgroup label="Built-in MCPs">');
       expect(html).toContain('<optgroup label="Custom MCPs">');
-      expect(html).toContain('<option value="generic">Custom MCP</option>');
+      expect(html).toMatch(
+        /<optgroup label="Built-in MCPs">[\s\S]*?<option value="generic">Example MCP<\/option>[\s\S]*?<\/optgroup>/u
+      );
       expect(html).toContain("Secret environment variable name (optional)");
       expect(html).not.toContain("Preset or connection type");
       expect(html).not.toContain("Generic reference MCP");
       expect(html).not.toContain("Credential environment variable (optional)");
-      expect(html).not.toContain("works with any MCP");
-      expect(html).not.toContain("OAuth works with every MCP");
+      const misleadingUniversalClaims = [
+        /works with (?:all|any|every) MCP/iu,
+        /supports (?:all|any|every) MCP/iu,
+        /OAuth works with (?:all|any|every) MCP/iu,
+        /(?:all|every) (?:remote )?MCP[^.<\n]{0,60}supports OAuth/iu,
+        /universal (?:MCP|OAuth)/iu
+      ];
+      for (const claim of misleadingUniversalClaims) {
+        expect(html).not.toMatch(claim);
+      }
       expect(html).toContain("only when the server advertises it");
       expect(html).not.toContain("<label>Known connector");
       expect(html).not.toContain('id="native-oauth-setup-link"');

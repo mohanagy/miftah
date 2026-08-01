@@ -159,9 +159,9 @@ const page = `<!doctype html>
                 <option value="sentry">Sentry</option>
                 <option value="github">GitHub</option>
                 <option value="google-search-console">Google Search Console</option>
+                <option value="generic">Example MCP</option>
               </optgroup>
               <optgroup label="Custom MCPs">
-                <option value="generic">Custom MCP</option>
                 <option value="generic-npx">Exact npx package</option>
                 <option value="generic-docker">Pinned Docker image</option>
                 <option value="local-stdio">Local executable and arguments</option>
