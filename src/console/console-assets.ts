@@ -600,7 +600,7 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; padding: .9rem 1rem; border: 1px solid var(--line); background: var(--panel); }
 .configuration-card > div { min-width: 0; }
 .configuration-card h3 { margin: 0; overflow-wrap: anywhere; }
-.configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
+.configuration-card p { margin: .25rem 0 0; overflow-wrap: anywhere; font-size: .82rem; }
 .configuration-card .configuration-meta { color: var(--muted); font: .7rem/1.45 ui-monospace, monospace; }
 .configuration-profiles { display: flex; flex-wrap: wrap; gap: .35rem; margin: .55rem 0 0; padding: 0; list-style: none; }
 .configuration-profiles li { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .22rem .4rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }

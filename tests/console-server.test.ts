@@ -3015,6 +3015,9 @@ describe("local Console control server", () => {
       expect(css).toContain("#workspace-task-navigation a:focus-visible");
       expect(css).toContain(".configuration-profiles button { min-height: 2.75rem;");
       expect(css).toContain(".configuration-card > div { min-width: 0; }");
+      expect(css).toContain(
+        ".configuration-card p { margin: .25rem 0 0; overflow-wrap: anywhere; font-size: .82rem; }"
+      );
       expect(css).toContain(".configuration-profiles span { min-width: 0; overflow-wrap: anywhere; }");
       expect(css).toMatch(
         /@media \(max-width: 850px\)[\s\S]*?\.configuration-catalog \{ grid-template-columns: 1fr; \}/u
