@@ -525,7 +525,7 @@ p { color: var(--muted); line-height: 1.6; }
 .gate { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr); gap: clamp(2rem, 7vw, 6rem); border-top: 1px solid var(--line); padding: 2rem 0 4rem; }
 .gate h2 { max-width: 31rem; }
 .field-note { margin: .65rem 0 0; font-size: .8rem; }
-.work-section { border-top: 1px solid var(--line); padding: 2rem 0 clamp(3rem, 7vw, 6rem); }
+.work-section { border-top: 1px solid var(--line); padding: 1.75rem 0 clamp(2.5rem, 5vw, 4.5rem); }
 .authentication-guide { margin: 0 0 clamp(3rem, 7vw, 6rem); padding: 0; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
 .authentication-guide > summary { padding: 1.15rem 1.25rem; color: var(--ink); }
 .authentication-guide[open] > summary { border-bottom: 1px solid var(--line); }
@@ -535,7 +535,7 @@ p { color: var(--muted); line-height: 1.6; }
 .mode-native { box-shadow: inset 0 .2rem 0 var(--key); }
 .mode-unsupported { box-shadow: inset 0 .2rem 0 var(--danger); }
 .mode p:last-child { font-size: .88rem; }
-.section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, .75fr); gap: 3rem; align-items: end; margin-bottom: 2rem; }
+.section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, .75fr); gap: 2rem; align-items: end; margin-bottom: 1.5rem; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: clamp(1.2rem, 3vw, 2rem); border: 1px solid var(--line); background: rgb(21 26 23 / 88%); }
 .form-grid.compact { margin-top: 1.2rem; }
 .wide { grid-column: 1 / -1; }
@@ -588,24 +588,26 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 .summary span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
-.configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
-.configuration-catalog-status { margin: 0 0 1rem; padding: .85rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
+.configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+.configuration-catalog-status { margin: 0 0 .75rem; padding: .75rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
 .configuration-catalog-status p { margin: 0; }
 .configuration-catalog-status ul { margin: .55rem 0 0; padding-left: 1.2rem; color: var(--muted); }
 .configuration-catalog-status ul:empty { display: none; }
-.catalog-actions { display: grid; gap: .8rem; justify-items: start; }
+.catalog-actions { display: grid; gap: .6rem; justify-items: start; }
 .catalog-actions p { margin: 0; }
 .catalog-actions strong { color: var(--ink); }
-.catalog-boundary { margin-top: 1rem; }
-.configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
+.catalog-boundary { margin-top: .75rem; }
+.configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; padding: .9rem 1rem; border: 1px solid var(--line); background: var(--panel); }
+.configuration-card > div { min-width: 0; }
+.configuration-card h3 { margin: 0; overflow-wrap: anywhere; }
 .configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
-.configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
-.configuration-profiles { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
-.configuration-profiles li { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .28rem .5rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.configuration-card .configuration-meta { color: var(--muted); font: .7rem/1.45 ui-monospace, monospace; }
+.configuration-profiles { display: flex; flex-wrap: wrap; gap: .35rem; margin: .55rem 0 0; padding: 0; list-style: none; }
+.configuration-profiles li { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .22rem .4rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.configuration-profiles span { min-width: 0; overflow-wrap: anywhere; }
 .configuration-profiles .configuration-default { border-color: var(--key); }
-.configuration-profiles button { min-height: 2.75rem; padding: 0 .65rem; }
-.configuration-card .configuration-switch { margin-top: .7rem; color: var(--ink); }
-.configuration-card .configuration-switch-technical { color: var(--muted); font-size: .75rem; }
+.configuration-profiles button { min-height: 2.75rem; max-width: 100%; padding: 0 .65rem; white-space: normal; overflow-wrap: anywhere; }
+.configuration-card > button { align-self: start; white-space: nowrap; }
 .configuration-card button { min-height: 2.75rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
@@ -633,8 +635,20 @@ summary { cursor: pointer; font-weight: 700; }
 .audit-list li { display: grid; grid-template-columns: 10rem 1fr auto; gap: 1rem; padding: .8rem 0; border-bottom: 1px solid var(--line); color: var(--muted); font: .76rem/1.45 ui-monospace, monospace; }
 .status { position: sticky; bottom: 1rem; min-height: 1.5rem; width: fit-content; max-width: 100%; margin: 1rem 0 0; padding: .7rem 1rem; color: var(--ink); background: #222923; border: 1px solid var(--line); box-shadow: 0 .7rem 2rem rgb(0 0 0 / 35%); }
 .status:empty { visibility: hidden; }
-@media (max-width: 850px) { .mode-grid, .summary, .configuration-catalog { grid-template-columns: repeat(2, 1fr); } .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; } }
-@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary, .configuration-catalog, .setup-completion-copy { grid-template-columns: 1fr; } .wide, .setup-completion-client { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
+@media (max-width: 850px) {
+  .mode-grid, .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .configuration-catalog { grid-template-columns: 1fr; }
+  .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; }
+}
+@media (max-width: 620px) {
+  .gate, .form-grid, .mode-grid, .summary, .configuration-catalog, .setup-completion-copy { grid-template-columns: 1fr; }
+  .wide, .setup-completion-client { grid-column: 1; }
+  .masthead { flex-direction: column; }
+  .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; }
+  .configuration-card > button { width: 100%; }
+  .connection-actions { justify-content: flex-start; }
+  .audit-list li { grid-template-columns: 1fr; gap: .2rem; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 `;
 
@@ -1334,13 +1348,15 @@ const script = `(() => {
     configurationCatalog.replaceChildren();
     catalogSwitchButtons = [];
     catalogSwitchUnavailableCount = 0;
-    catalog.configurations.forEach((configuration) => {
+    catalog.configurations.forEach((configuration, index) => {
       const id = typeof configuration.id === "string" ? configuration.id : "";
       const card = document.createElement("article");
       card.className = "configuration-card";
       const details = document.createElement("div");
-      const title = document.createElement("strong");
+      const title = document.createElement("h3");
+      title.id = "configuration-title-" + index;
       title.textContent = typeof configuration.name === "string" ? configuration.name : "Unnamed configuration";
+      card.setAttribute("aria-labelledby", title.id);
       const summary = document.createElement("p");
       const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : 0;
       const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "unknown";

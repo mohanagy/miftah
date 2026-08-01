@@ -2996,7 +2996,7 @@ describe("local Console control server", () => {
     }
   });
 
-  it("keeps new Console actions keyboard-visible, announced, target-sized, and responsive", async () => {
+  it("keeps the connection catalog hierarchy keyboard-visible, compact, and responsive", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
     });
@@ -3014,6 +3014,15 @@ describe("local Console control server", () => {
       expect(css).toContain("button:focus-visible, summary:focus-visible");
       expect(css).toContain("#workspace-task-navigation a:focus-visible");
       expect(css).toContain(".configuration-profiles button { min-height: 2.75rem;");
+      expect(css).toContain(".configuration-card > div { min-width: 0; }");
+      expect(css).toContain(".configuration-profiles span { min-width: 0; overflow-wrap: anywhere; }");
+      expect(css).toMatch(
+        /@media \(max-width: 850px\)[\s\S]*?\.configuration-catalog \{ grid-template-columns: 1fr; \}/u
+      );
+      expect(css).toMatch(
+        /@media \(max-width: 620px\)[\s\S]*?\.configuration-card > button \{ width: 100%; \}/u
+      );
+      expect(css).not.toContain(".configuration-switch-technical");
       expect(css).toContain(".setup-completion-copy { grid-template-columns: 1fr;");
 
       const script = await fetch(new URL("/app.js", server.url));
@@ -3022,6 +3031,8 @@ describe("local Console control server", () => {
       expect(javascript).toContain(
         'button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat")'
       );
+      expect(javascript).toContain('title.id = "configuration-title-" + index;');
+      expect(javascript).toContain('card.setAttribute("aria-labelledby", title.id);');
     } finally {
       await server.close();
     }
