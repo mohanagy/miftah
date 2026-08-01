@@ -2776,7 +2776,7 @@ describe("local Console control server", () => {
     }
   });
 
-  it("keeps the selected setup form ahead of optional authentication theory", async () => {
+  it("uses task-oriented setup language ahead of optional authentication theory", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
     });
@@ -2798,9 +2798,19 @@ describe("local Console control server", () => {
       expect(authenticationReference).toBeGreaterThan(browserSignInForm);
       expect(html).toContain("<summary>How authentication works</summary>");
       expect(html).not.toContain('<details id="authentication-guide" class="authentication-guide" open>');
-      expect(html).toContain("<label>Connection type");
-      expect(html).toContain('<optgroup label="Named presets">');
-      expect(html).toContain('<optgroup label="Connection types">');
+      expect(html).toContain("<legend>Choose your MCP</legend>");
+      expect(html).toContain("<span>Built-in or custom MCP</span>");
+      expect(html).toContain("<label>Choose an MCP");
+      expect(html).toContain('<optgroup label="Built-in MCPs">');
+      expect(html).toContain('<optgroup label="Custom MCPs">');
+      expect(html).toContain('<option value="generic">Custom MCP</option>');
+      expect(html).toContain("Secret environment variable name (optional)");
+      expect(html).not.toContain("Preset or connection type");
+      expect(html).not.toContain("Generic reference MCP");
+      expect(html).not.toContain("Credential environment variable (optional)");
+      expect(html).not.toContain("works with any MCP");
+      expect(html).not.toContain("OAuth works with every MCP");
+      expect(html).toContain("only when the server advertises it");
       expect(html).not.toContain("<label>Known connector");
       expect(html).not.toContain('id="native-oauth-setup-link"');
     } finally {
@@ -3048,8 +3058,8 @@ describe("local Console control server", () => {
       expect(html).toContain('data-setup-source="browser-sign-in"');
       expect(html).toContain('data-setup-source="import"');
       expect(html).not.toContain('aria-pressed=');
-      expect(html).toContain("Local executable + argument array");
-      expect(html).toContain("Remote HTTPS MCP endpoint");
+      expect(html).toContain("Local executable and arguments");
+      expect(html).toContain("Remote HTTPS URL");
       expect(html).toContain("Remote MCP with browser sign-in");
       expect(html).toContain("Check sign-in and create profile");
       expect(html).toContain("Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration.");
@@ -3212,7 +3222,7 @@ describe("local Console control server", () => {
       await expect(resumeMissingSetupDraft(javascript)).resolves.toEqual({
         restored: false,
         controlsUpdated: 1,
-        message: "No saved connector choice exists. Start with a configuration name and connector above."
+        message: "No saved MCP choice exists. Start with a configuration name and MCP above."
       });
       await expect(resumeSetupDraftWithoutConnectionValues(javascript)).resolves.toEqual({
         name: "saved-connector",
