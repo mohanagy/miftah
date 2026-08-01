@@ -127,14 +127,14 @@ const page = `<!doctype html>
           <p id="setup-wizard-copy">Start with what you already have. Miftah will show one setup path at a time and will not write anything until that path reaches its create action.</p>
         </div>
         <fieldset id="setup-source-choice" class="setup-source-choice" tabindex="-1">
-          <legend>What do you already have?</legend>
-          <p class="field-note">Choose one path. Nothing is saved, launched, discovered, or sent to an MCP while you are on this step.</p>
+          <legend>Choose your MCP</legend>
+          <p class="field-note">Choose what you have now. The next step asks only for the details needed by that path.</p>
           <div class="setup-source-grid">
-            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Preset or connection type</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Built-in or custom MCP</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
-            <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Copy an existing client entry</span></label>
           </div>
         </fieldset>
         <div class="setup-wizard-actions">
@@ -149,29 +149,29 @@ const page = `<!doctype html>
           <div>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
-          <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
+          <p>Choose a built-in MCP or describe the custom MCP you already use. The fields below will ask for its package, executable, or HTTPS URL. Browser sign-in is a separate setup path.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="support-tools"></label>
-          <label>Connection type
+          <label>Choose an MCP
             <select name="preset" id="preset-selection">
-              <optgroup label="Named presets">
+              <optgroup label="Built-in MCPs">
                 <option value="sentry">Sentry</option>
                 <option value="github">GitHub</option>
                 <option value="google-search-console">Google Search Console</option>
+                <option value="generic">Example MCP</option>
               </optgroup>
-              <optgroup label="Connection types">
-                <option value="generic">Generic reference MCP</option>
-                <option value="generic-npx">Custom npx package</option>
-                <option value="generic-docker">Custom Docker image</option>
-                <option value="local-stdio">Local executable + argument array</option>
-                <option value="streamable-http">Remote HTTPS MCP endpoint</option>
+              <optgroup label="Custom MCPs">
+                <option value="generic-npx">Exact npx package</option>
+                <option value="generic-docker">Pinned Docker image</option>
+                <option value="local-stdio">Local executable and arguments</option>
+                <option value="streamable-http">Remote HTTPS URL</option>
               </optgroup>
             </select>
           </label>
           <div id="setup-draft-actions" class="wide setup-draft-actions">
-            <p class="field-note">Save your configuration name and connector choice to continue later. Miftah does not save a URL, executable, arguments, path, client entry, environment variable, secret, OAuth state, or browser sign-in details. You will enter those again when you continue.</p>
-            <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save connector choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved connector choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
+            <p class="field-note">Save the configuration name and MCP choice to continue later. Connection details and authentication are entered again when you continue.</p>
+            <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save MCP choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved MCP choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
           </div>
           <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
           <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
@@ -187,7 +187,7 @@ const page = `<!doctype html>
             <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
             <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
           </fieldset>
-          <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
+          <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Secret environment variable name (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
           <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache. For a local executable, use the environment-variable field for a secret reference; never put a token in an argument.</p>
@@ -1810,7 +1810,7 @@ const script = `(() => {
       throw new Error("Use a lowercase configuration name of up to 64 letters, numbers, dots, underscores, or hyphens before saving.");
     }
     if (!Object.prototype.hasOwnProperty.call(presetInputNames, preset)) {
-      throw new Error("Choose a supported connector before saving.");
+      throw new Error("Choose a supported MCP option before saving.");
     }
     return {
       source: "connector",
@@ -1835,7 +1835,7 @@ const script = `(() => {
       draft.stage !== "connection" ||
       typeof draft.savedAt !== "string"
     ) {
-      throw new Error("Miftah did not return a safe saved connector choice.");
+      throw new Error("Miftah did not return a safe saved MCP choice.");
     }
     const form = byId("preset-onboarding-form");
     const selection = byId("preset-selection");
@@ -2053,7 +2053,7 @@ const script = `(() => {
     } else if (source === "local") {
       message("Enter the exact executable and arguments below. Miftah saves a no-shell argument array and will not run it during setup.");
     } else {
-      message("Choose a known connector or pinned package below.");
+      message("Choose a built-in MCP or enter the exact custom package details below.");
     }
   }
 
@@ -2146,7 +2146,7 @@ const script = `(() => {
       }
       setupWizardSource = "connector";
       showSetupWizardChooser(false);
-      message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
+      message("No safe Miftah configuration exists yet. Choose your MCP below to create the first one.");
       return;
     }
     hideSetupWizardPaths();
@@ -2379,11 +2379,11 @@ const script = `(() => {
       if (saveSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       saveSetupDraft.disabled = true;
-      message("Saving only the connector choice…");
+      message("Saving only the MCP choice…");
       try {
         const draft = await api("/api/v1/setup-draft", { method: "PUT", body: setupDraftIntent() });
         restoreSetupDraft(draft);
-        message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
+        message("Saved the configuration name and MCP choice. Re-enter every connection detail when you continue.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) saveSetupDraft.disabled = false;
@@ -2396,17 +2396,17 @@ const script = `(() => {
       if (resumeSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       resumeSetupDraft.disabled = true;
-      message("Loading the saved connector choice…");
+      message("Loading the saved MCP choice…");
       try {
         const draft = await api("/api/v1/setup-draft");
         if (draft === undefined || draft === null) {
           activeSetupDraft = undefined;
           renderSetupDraftControls();
-          message("No saved connector choice exists. Start with a configuration name and connector above.");
+          message("No saved MCP choice exists. Start with a configuration name and MCP above.");
           return;
         }
         restoreSetupDraft(draft);
-        message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
+        message("Restored only the configuration name and MCP choice. Re-enter every connection value before reviewing.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;
@@ -2419,12 +2419,12 @@ const script = `(() => {
       if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       discardSetupDraft.disabled = true;
-      message("Discarding the saved connector choice…");
+      message("Discarding the saved MCP choice…");
       try {
         await api("/api/v1/setup-draft", { method: "DELETE", body: { revision: activeSetupDraft.revision } });
         activeSetupDraft = undefined;
         renderSetupDraftControls();
-        message("Discarded the saved connector choice. The current form stays open and is not saved.");
+        message("Discarded the saved MCP choice. The current form stays open and is not saved.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;
