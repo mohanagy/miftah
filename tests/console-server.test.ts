@@ -131,6 +131,133 @@ async function bootstrapSession(server: Awaited<ReturnType<typeof startConsoleSe
   return { cookie, csrfToken: body.data.csrfToken };
 }
 
+function exerciseWorkspaceTaskNavigation(javascript: string, initialHash = ""): {
+  readonly selected: () => string;
+  readonly tabState: () => readonly {
+    readonly taskId: string;
+    readonly ariaSelected: string | null;
+    readonly tabindex: string | null;
+  }[];
+  readonly draftValue: () => string;
+  readonly focused: () => string;
+  readonly hash: () => string;
+  readonly click: (taskId: string) => void;
+  readonly keydown: (taskId: string, key: string) => void;
+  readonly restore: (hash: string) => void;
+} {
+  type Listener = (event: { readonly key?: string; readonly preventDefault: () => void }) => void;
+
+  class FakeElement {
+    readonly listeners = new Map<string, Listener>();
+    readonly attributes = new Map<string, string>();
+    readonly children: FakeElement[] = [];
+    hidden = false;
+    draft = "";
+
+    constructor(readonly id: string) {}
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    getAttribute(name: string): string | null {
+      return this.attributes.get(name) ?? null;
+    }
+
+    setAttribute(name: string, value: string): void {
+      this.attributes.set(name, value);
+    }
+
+    querySelectorAll(): FakeElement[] {
+      return this.children;
+    }
+
+    focus(): void {
+      focused = this.id;
+    }
+  }
+
+  const taskIds = [
+    "connection-overview",
+    "connection-accounts",
+    "connection-authentication",
+    "connection-client-setup",
+    "connection-audit"
+  ];
+  const navigation = new FakeElement("workspace-task-navigation");
+  const panels = taskIds.map((id) => new FakeElement(id));
+  const tabs = taskIds.map((id) => {
+    const tab = new FakeElement(`workspace-task-${id.slice("connection-".length)}`);
+    tab.setAttribute("data-workspace-task", id);
+    navigation.children.push(tab);
+    return tab;
+  });
+  panels[1]!.draft = "production";
+  let focused = "";
+  const windowListeners = new Map<string, () => void>();
+  const browserWindow = {
+    location: { hash: initialHash },
+    addEventListener(name: string, listener: () => void): void {
+      windowListeners.set(name, listener);
+    }
+  };
+  const browserHistory = {
+    replaceState(_state: null, _title: string, hash: string): void {
+      browserWindow.location.hash = hash;
+    }
+  };
+  const result: Record<string, unknown> = {};
+  const start = javascript.indexOf("  function workspaceTaskIdFromHash");
+  const end = javascript.indexOf("\n  function staleAuthenticationRequestError", start);
+  if (start < 0 || end < 0) throw new Error("Expected focused workspace navigation functions.");
+  runInNewContext(
+    `${javascript.slice(start, end)}\n` +
+      "result.selectWorkspaceTask = selectWorkspaceTask;\n" +
+      "result.workspaceTaskIdFromHash = workspaceTaskIdFromHash;\n" +
+      "initializeWorkspaceTaskNavigation();",
+    {
+      workspaceTaskNavigation: navigation,
+      workspaceTaskPanels: panels,
+      HTMLElement: FakeElement,
+      window: browserWindow,
+      history: browserHistory,
+      result
+    }
+  );
+
+  const selectWorkspaceTask = result.selectWorkspaceTask as (taskId: string, updateHash: boolean) => void;
+  const workspaceTaskIdFromHash = result.workspaceTaskIdFromHash as (hash: string) => string;
+  const selected = (): string => panels.find((panel) => !panel.hidden)?.id ?? "";
+  const event = (key?: string): { readonly key?: string; readonly preventDefault: () => void } => ({
+    ...(key === undefined ? {} : { key }),
+    preventDefault: () => undefined
+  });
+
+  return {
+    selected,
+    tabState: () => tabs.map((tab) => ({
+      taskId: tab.getAttribute("data-workspace-task") ?? "",
+      ariaSelected: tab.getAttribute("aria-selected"),
+      tabindex: tab.getAttribute("tabindex")
+    })),
+    draftValue: () => panels[1]!.draft,
+    focused: () => focused,
+    hash: () => browserWindow.location.hash,
+    click(taskId: string): void {
+      const tab = tabs[taskIds.indexOf(taskId)];
+      tab?.listeners.get("click")?.(event());
+    },
+    keydown(taskId: string, key: string): void {
+      const tab = tabs[taskIds.indexOf(taskId)];
+      tab?.listeners.get("keydown")?.(event(key));
+    },
+    restore(hash: string): void {
+      browserWindow.location.hash = hash;
+      selectWorkspaceTask(workspaceTaskIdFromHash(hash), false);
+    }
+  };
+}
+
 async function submitPresetFormWithStaleValue(
   javascript: string,
   suppliedValues?: Readonly<Record<string, string>>
@@ -1482,12 +1609,15 @@ function exerciseSessionResumeLifecycle(javascript: string): {
   readonly callsAfterStartup: number;
   readonly callsAfterNormalPageShow: number;
   readonly callsAfterPersistedPageShow: number;
+  readonly navigationCallsAfterStartup: number;
+  readonly navigationCallsAfterPersistedPageShow: number;
 } {
   const start = javascript.lastIndexOf('if (typeof window !== "undefined")');
   const end = javascript.indexOf("\n})();", start);
   if (start < 0 || end < 0) throw new Error("Expected the Console session-resume startup block.");
 
   let resumeCalls = 0;
+  let navigationCalls = 0;
   let pageShow: ((event: { readonly persisted: boolean }) => void) | undefined;
   runInNewContext(javascript.slice(start, end), {
     window: {
@@ -1497,16 +1627,22 @@ function exerciseSessionResumeLifecycle(javascript: string): {
     },
     resumeSession(): void {
       resumeCalls += 1;
+    },
+    initializeWorkspaceTaskNavigation(): void {
+      navigationCalls += 1;
     }
   });
   const callsAfterStartup = resumeCalls;
+  const navigationCallsAfterStartup = navigationCalls;
   pageShow?.({ persisted: false });
   const callsAfterNormalPageShow = resumeCalls;
   pageShow?.({ persisted: true });
   return {
     callsAfterStartup,
     callsAfterNormalPageShow,
-    callsAfterPersistedPageShow: resumeCalls
+    callsAfterPersistedPageShow: resumeCalls,
+    navigationCallsAfterStartup,
+    navigationCallsAfterPersistedPageShow: navigationCalls
   };
 }
 
@@ -1762,6 +1898,136 @@ function preserveProfileDescriptionSelectionAcrossRefresh(javascript: string): {
   profile.value = "personal";
   render(metadata);
   return { profile: profile.value, description: input.value };
+}
+
+async function exerciseCatalogAccountSwitch(
+  javascript: string,
+  client: "claude-desktop" | "claude-code" | "cursor" | "vscode"
+): Promise<{
+  readonly action: string;
+  readonly accessibleName: string;
+  readonly copied: string;
+  readonly guidance: string;
+  readonly message: string;
+}> {
+  const start = javascript.indexOf("function selectedCatalogClient");
+  const end = javascript.indexOf("\n  function renderProviderAuthentication", start);
+  if (start < 0 || end < 0) throw new Error("Expected the configuration-catalog renderer.");
+
+  type Listener = () => void | Promise<void>;
+  class FakeElement {
+    readonly attributes = new Map<string, string>();
+    readonly children: FakeElement[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, Listener>();
+    className = "";
+    disabled = false;
+    hidden = false;
+    textContent = "";
+    type = "";
+
+    addEventListener(name: string, listener: Listener): void {
+      this.listeners.set(name, listener);
+    }
+
+    append(...children: FakeElement[]): void {
+      this.children.push(...children);
+    }
+
+    replaceChildren(...children: FakeElement[]): void {
+      this.children.splice(0, this.children.length, ...children);
+    }
+
+    setAttribute(name: string, value: string): void {
+      this.attributes.set(name, value);
+    }
+  }
+  class FakeButton extends FakeElement {}
+  class FakeSelect extends FakeElement {
+    constructor(public value: string) {
+      super();
+    }
+  }
+
+  const catalog = new FakeElement();
+  const guidance = new FakeElement();
+  guidance.hidden = true;
+  const clientSelect = new FakeSelect("claude-desktop");
+  const copied: string[] = [];
+  let status = "";
+  const render = runInNewContext(
+    `${javascript.slice(start, end)}\nrenderConfigurationCatalog`,
+    {
+      catalogClientSelect: clientSelect,
+      catalogSwitchGuidance: guidance,
+      catalogSwitchButtons: [],
+      catalogSwitchUnavailableCount: 0,
+      configurationCatalog: catalog,
+      configurationCatalogAttention: undefined,
+      configurationCatalogRejectedGuidance: undefined,
+      configurationCatalogSummary: undefined,
+      configurationCatalogView: undefined,
+      setUpAnotherMcp: undefined,
+      catalogConfigurations: (metadata: unknown) => metadata,
+      document: {
+        createElement(tag: string): FakeElement {
+          return tag === "button" ? new FakeButton() : new FakeElement();
+        }
+      },
+      HTMLButtonElement: FakeButton,
+      HTMLSelectElement: FakeSelect,
+      navigator: { clipboard: { writeText: async (value: string) => { copied.push(value); } } },
+      message: (value: string) => { status = value; },
+      record: (value: unknown): Record<string, unknown> =>
+        typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
+    }
+  ) as (metadata: unknown) => void;
+
+  render({
+    discoveryState: "ready",
+    selectedConfigurationId: "",
+    discoveredCount: 2,
+    readyCount: 2,
+    attentionCount: 0,
+    attentionReasons: [],
+    configurations: [{
+      id: "analytics",
+      name: "Analytics",
+      profileCount: 2,
+      defaultProfile: "craftmyletter",
+      profileNames: ["craftmyletter", "govalidate"],
+      profileSwitchingFromMcp: true,
+      authentication: { mode: "provider-adapter" }
+    }, {
+      id: "legacy",
+      name: "Legacy",
+      profileCount: 1,
+      defaultProfile: "default",
+      profileNames: ["default"],
+      profileSwitchingFromMcp: false,
+      authentication: { mode: "manual-only" }
+    }]
+  });
+  clientSelect.value = client;
+  await clientSelect.listeners.get("change")?.();
+
+  const allElements: FakeElement[] = [];
+  const visit = (element: FakeElement): void => {
+    allElements.push(element);
+    element.children.forEach(visit);
+  };
+  visit(catalog);
+  const action = allElements.find((element) => element.dataset.copyProfileSwitch === "govalidate");
+  if (action === undefined) throw new Error("Expected the govalidate account action.");
+  await action.listeners.get("click")?.();
+
+  return {
+    action: action.textContent,
+    accessibleName: action.attributes.get("aria-label") ?? "",
+    copied: copied[0] ?? "",
+    guidance: guidance.textContent,
+    message: status
+  };
 }
 
 async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascript: string): Promise<{
@@ -2233,7 +2499,7 @@ describe("local Console control server", () => {
       expect(authenticationReference).toBeGreaterThan(setupWizard);
       expect(html).toContain("<summary>How authentication works</summary>");
       expect(html).toContain("One connection, named accounts");
-      expect(html).toContain("Default for new connections");
+      expect(html).toContain("Default account for new MCP sessions");
       expect(html).toContain("Live account switch");
 
       const script = await fetch(new URL("/app.js", server.url));
@@ -2289,10 +2555,86 @@ describe("local Console control server", () => {
       const javascript = await script.text();
       expect(javascript).toContain("function profileSwitchRequest(client, profile)");
       expect(javascript).toContain("Use the Miftah account named");
-      expect(javascript).toContain("Copy switch request");
+      expect(javascript).toContain('"Use " + profile + " in this chat"');
       expect(javascript).toContain("navigator.clipboard.writeText(profileSwitchRequest(client, profile))");
-      expect(javascript).toContain("Console does not switch a running client session.");
+      expect(javascript).toContain("Console does not switch the running client");
       expect(javascript).not.toContain("Live account switch: use miftah_use_profile in your MCP client.");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("presents account switching as one clear user action without repeating protocol guidance", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const page = await fetch(server.url);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html.match(/id="catalog-switch-guidance"/gu)).toHaveLength(1);
+      expect(html).toContain("Default account for new MCP sessions");
+      expect(html).not.toContain("Default for new connections");
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain('copySwitchRequest.textContent = "Use " + profile + " in this chat";');
+      expect(javascript).toContain(
+        'button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat")'
+      );
+      expect(javascript).toContain(
+        '"Copied a request to use " + profile + " in " + catalogClientDisplayName(client)'
+      );
+      expect(javascript).toContain('"Default account for new MCP sessions: " + defaultProfile');
+      expect(javascript).not.toContain('copySwitchRequest.textContent = "Copy switch request"');
+      expect(javascript).not.toContain("catalogSwitchCopies");
+      expect(javascript.match(/miftah_use_profile/gu)).toHaveLength(1);
+      expect(javascript).not.toContain("copy its switch request");
+      expect(javascript).not.toContain("Open a new connection after changing the durable default.");
+      expect(javascript).not.toContain("changing the default affects new connections.");
+      expect(javascript).not.toContain(
+        "Account switching in an active chat is unavailable. Choose another default, then start a new MCP session."
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("renders and copies the selected account action for every supported client", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const clients = [
+        ["claude-desktop", "Claude Desktop"],
+        ["claude-code", "Claude Code"],
+        ["cursor", "Cursor"],
+        ["vscode", "VS Code"]
+      ] as const;
+
+      for (const [client, displayName] of clients) {
+        const result = await exerciseCatalogAccountSwitch(javascript, client);
+        expect(result.action).toBe("Use govalidate in this chat");
+        expect(result.accessibleName).toBe(
+          `Copy request to use govalidate in the current ${displayName} chat`
+        );
+        expect(result.guidance).toContain(`paste the copied request into ${displayName}`);
+        expect(result.guidance).toContain(
+          "Some connections do not support account switching in an active chat."
+        );
+        expect(result.copied).toBe(
+          `In ${displayName}, send this message: Use the Miftah account named govalidate for this chat.`
+        );
+        expect(result.message).toBe(
+          `Copied a request to use govalidate in ${displayName}. Paste it into the chat where Miftah is connected.`
+        );
+      }
     } finally {
       await server.close();
     }
@@ -2307,17 +2649,39 @@ describe("local Console control server", () => {
       const page = await fetch(server.url);
       expect(page.status).toBe(200);
       const html = await page.text();
-      expect(html).toContain('<nav id="workspace-task-navigation" aria-label="Connection tasks">');
-      expect(html).toContain('href="#connection-overview">Overview</a>');
-      expect(html).toContain('href="#connection-accounts">Accounts</a>');
-      expect(html).toContain('href="#connection-authentication">Authentication</a>');
-      expect(html).toContain('href="#connection-client-setup">Client setup</a>');
-      expect(html).toContain('href="#connection-audit">Audit</a>');
-      expect(html).toContain('id="connection-overview"');
-      expect(html).toContain('id="connection-accounts"');
-      expect(html).toContain('id="connection-authentication"');
-      expect(html).toContain('id="connection-client-setup"');
-      expect(html).toContain('id="connection-audit"');
+      expect(html).toContain(
+        '<nav id="workspace-task-navigation" aria-label="Connection tasks" role="tablist">'
+      );
+      expect(html).toContain(
+        'id="workspace-task-overview" href="#connection-overview" role="tab" aria-controls="connection-overview" aria-selected="true" tabindex="0" data-workspace-task="connection-overview">Overview</a>'
+      );
+      expect(html).toContain(
+        'id="workspace-task-accounts" href="#connection-accounts" role="tab" aria-controls="connection-accounts" aria-selected="false" tabindex="-1" data-workspace-task="connection-accounts">Accounts</a>'
+      );
+      expect(html).toContain(
+        'id="workspace-task-authentication" href="#connection-authentication" role="tab" aria-controls="connection-authentication" aria-selected="false" tabindex="-1" data-workspace-task="connection-authentication">Authentication</a>'
+      );
+      expect(html).toContain(
+        'id="workspace-task-client-setup" href="#connection-client-setup" role="tab" aria-controls="connection-client-setup" aria-selected="false" tabindex="-1" data-workspace-task="connection-client-setup">Client setup</a>'
+      );
+      expect(html).toContain(
+        'id="workspace-task-audit" href="#connection-audit" role="tab" aria-controls="connection-audit" aria-selected="false" tabindex="-1" data-workspace-task="connection-audit">Audit</a>'
+      );
+      expect(html).toContain(
+        'id="connection-overview" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-overview" tabindex="0"'
+      );
+      expect(html).toContain(
+        'id="connection-accounts" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-accounts" tabindex="0" hidden'
+      );
+      expect(html).toContain(
+        'id="connection-authentication" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-authentication" tabindex="0" hidden'
+      );
+      expect(html).toContain(
+        'id="connection-client-setup" class="workspace-task-panel work-section split" role="tabpanel" aria-labelledby="workspace-task-client-setup" tabindex="0" hidden'
+      );
+      expect(html).toContain(
+        'id="connection-audit" class="workspace-task-panel work-section" role="tabpanel" aria-labelledby="workspace-task-audit" tabindex="0" hidden'
+      );
 
       const accounts = html.slice(
         html.indexOf('id="connection-accounts"'),
@@ -2325,12 +2689,94 @@ describe("local Console control server", () => {
       );
       expect(accounts).toContain('id="confirm-profile-removal"');
       expect(accounts).toContain('id="remove-profile"');
+
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      expect(javascript).toContain("function initializeWorkspaceTaskNavigation()");
+      expect(javascript).toContain('panel.hidden = panel.id !== selectedTaskId');
+      expect(javascript).toContain('tab.setAttribute("aria-selected", String(selected))');
+      expect(javascript).toContain('event.key === "ArrowRight"');
+      expect(javascript).toContain('event.key === "ArrowLeft"');
+      expect(javascript).toContain('event.key === "Home"');
+      expect(javascript).toContain('event.key === "End"');
+      expect(javascript).toContain('history.replaceState(null, "", "#" + selectedTaskId)');
+      expect(javascript).toContain("workspaceTaskIdFromHash(window.location.hash)");
     } finally {
       await server.close();
     }
   });
 
-  it("keeps the selected setup form ahead of optional authentication theory", async () => {
+  it("keeps one workspace task active across keyboard changes, refresh, and reauthentication", async () => {
+    const server = await startConsoleServer(await writeConfig(), {
+      bootstrapCredential: "test-only-bootstrap-credential"
+    });
+
+    try {
+      const script = await fetch(new URL("/app.js", server.url));
+      expect(script.status).toBe(200);
+      const javascript = await script.text();
+      const navigation = exerciseWorkspaceTaskNavigation(javascript);
+      const expectOneActiveTab = (taskId: string): void => {
+        const tabState = navigation.tabState();
+        expect(tabState.filter((tab) => tab.ariaSelected === "true")).toEqual([
+          expect.objectContaining({ taskId, tabindex: "0" })
+        ]);
+        expect(tabState.filter((tab) => tab.tabindex === "0")).toEqual([
+          expect.objectContaining({ taskId, ariaSelected: "true" })
+        ]);
+      };
+
+      expect(navigation.selected()).toBe("connection-overview");
+      expectOneActiveTab("connection-overview");
+      navigation.click("connection-accounts");
+      expect(navigation.selected()).toBe("connection-accounts");
+      expectOneActiveTab("connection-accounts");
+      expect(navigation.draftValue()).toBe("production");
+      expect(navigation.hash()).toBe("#connection-accounts");
+
+      navigation.keydown("connection-accounts", "ArrowRight");
+      expect(navigation.selected()).toBe("connection-authentication");
+      expectOneActiveTab("connection-authentication");
+      expect(navigation.focused()).toBe("workspace-task-authentication");
+      expect(navigation.draftValue()).toBe("production");
+
+      navigation.keydown("connection-authentication", "ArrowLeft");
+      expect(navigation.selected()).toBe("connection-accounts");
+      expectOneActiveTab("connection-accounts");
+      expect(navigation.focused()).toBe("workspace-task-accounts");
+
+      navigation.keydown("connection-accounts", "End");
+      expect(navigation.selected()).toBe("connection-audit");
+      expectOneActiveTab("connection-audit");
+      navigation.keydown("connection-audit", "Home");
+      expect(navigation.selected()).toBe("connection-overview");
+      expectOneActiveTab("connection-overview");
+
+      navigation.restore("#connection-client-setup");
+      expect(navigation.selected()).toBe("connection-client-setup");
+      expectOneActiveTab("connection-client-setup");
+      expect(navigation.draftValue()).toBe("production");
+
+      const restoredNavigation = exerciseWorkspaceTaskNavigation(javascript, "#connection-audit");
+      expect(restoredNavigation.selected()).toBe("connection-audit");
+      expect(restoredNavigation.tabState().filter((tab) => tab.ariaSelected === "true")).toEqual([
+        expect.objectContaining({ taskId: "connection-audit", tabindex: "0" })
+      ]);
+      expect(restoredNavigation.tabState().filter((tab) => tab.tabindex === "0")).toHaveLength(1);
+
+      const staleNavigation = exerciseWorkspaceTaskNavigation(javascript, "#stale-session-state");
+      expect(staleNavigation.selected()).toBe("connection-overview");
+      expect(staleNavigation.tabState().filter((tab) => tab.ariaSelected === "true")).toEqual([
+        expect.objectContaining({ taskId: "connection-overview", tabindex: "0" })
+      ]);
+      expect(staleNavigation.tabState().filter((tab) => tab.tabindex === "0")).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses task-oriented setup language ahead of optional authentication theory", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
     });
@@ -2352,9 +2798,29 @@ describe("local Console control server", () => {
       expect(authenticationReference).toBeGreaterThan(browserSignInForm);
       expect(html).toContain("<summary>How authentication works</summary>");
       expect(html).not.toContain('<details id="authentication-guide" class="authentication-guide" open>');
-      expect(html).toContain("<label>Connection type");
-      expect(html).toContain('<optgroup label="Named presets">');
-      expect(html).toContain('<optgroup label="Connection types">');
+      expect(html).toContain("<legend>Choose your MCP</legend>");
+      expect(html).toContain("<span>Built-in or custom MCP</span>");
+      expect(html).toContain("<label>Choose an MCP");
+      expect(html).toContain('<optgroup label="Built-in MCPs">');
+      expect(html).toContain('<optgroup label="Custom MCPs">');
+      expect(html).toMatch(
+        /<optgroup label="Built-in MCPs">[\s\S]*?<option value="generic">Example MCP<\/option>[\s\S]*?<\/optgroup>/u
+      );
+      expect(html).toContain("Secret environment variable name (optional)");
+      expect(html).not.toContain("Preset or connection type");
+      expect(html).not.toContain("Generic reference MCP");
+      expect(html).not.toContain("Credential environment variable (optional)");
+      const misleadingUniversalClaims = [
+        /works with (?:all|any|every) MCP/iu,
+        /supports (?:all|any|every) MCP/iu,
+        /OAuth works with (?:all|any|every) MCP/iu,
+        /(?:all|every) (?:remote )?MCP[^.<\n]{0,60}supports OAuth/iu,
+        /universal (?:MCP|OAuth)/iu
+      ];
+      for (const claim of misleadingUniversalClaims) {
+        expect(html).not.toMatch(claim);
+      }
+      expect(html).toContain("only when the server advertises it");
       expect(html).not.toContain("<label>Known connector");
       expect(html).not.toContain('id="native-oauth-setup-link"');
     } finally {
@@ -2390,7 +2856,7 @@ describe("local Console control server", () => {
       expect(javascript).toContain("target.label");
       expect(javascript).toContain("restart or reconnect");
       expect(javascript).toContain("Open Manage connection");
-      expect(javascript).toContain("copy its switch request");
+      expect(javascript).toContain("use the named account action");
       expect(javascript).toContain("A generated entry does not prove that a credential works");
       expect(javascript).toContain("async function refreshAfterSetup(completion)");
       expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);
@@ -2530,7 +2996,7 @@ describe("local Console control server", () => {
     }
   });
 
-  it("keeps new Console actions keyboard-visible, announced, target-sized, and responsive", async () => {
+  it("keeps the connection catalog hierarchy keyboard-visible, compact, and responsive", async () => {
     const server = await startConsoleServer(await writeConfig(), {
       bootstrapCredential: "test-only-bootstrap-credential"
     });
@@ -2548,12 +3014,28 @@ describe("local Console control server", () => {
       expect(css).toContain("button:focus-visible, summary:focus-visible");
       expect(css).toContain("#workspace-task-navigation a:focus-visible");
       expect(css).toContain(".configuration-profiles button { min-height: 2.75rem;");
+      expect(css).toContain(".configuration-card > div { min-width: 0; }");
+      expect(css).toContain(
+        ".configuration-card p { margin: .25rem 0 0; overflow-wrap: anywhere; font-size: .82rem; }"
+      );
+      expect(css).toContain(".configuration-profiles span { min-width: 0; overflow-wrap: anywhere; }");
+      expect(css).toMatch(
+        /@media \(max-width: 850px\)[\s\S]*?\.configuration-catalog \{ grid-template-columns: 1fr; \}/u
+      );
+      expect(css).toMatch(
+        /@media \(max-width: 620px\)[\s\S]*?\.configuration-card > button \{ width: 100%; \}/u
+      );
+      expect(css).not.toContain(".configuration-switch-technical");
       expect(css).toContain(".setup-completion-copy { grid-template-columns: 1fr;");
 
       const script = await fetch(new URL("/app.js", server.url));
       expect(script.status).toBe(200);
       const javascript = await script.text();
-      expect(javascript).toContain('button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName)');
+      expect(javascript).toContain(
+        'button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat")'
+      );
+      expect(javascript).toContain('title.id = "configuration-title-" + index;');
+      expect(javascript).toContain('card.setAttribute("aria-labelledby", title.id);');
     } finally {
       await server.close();
     }
@@ -2600,8 +3082,8 @@ describe("local Console control server", () => {
       expect(html).toContain('data-setup-source="browser-sign-in"');
       expect(html).toContain('data-setup-source="import"');
       expect(html).not.toContain('aria-pressed=');
-      expect(html).toContain("Local executable + argument array");
-      expect(html).toContain("Remote HTTPS MCP endpoint");
+      expect(html).toContain("Local executable and arguments");
+      expect(html).toContain("Remote HTTPS URL");
       expect(html).toContain("Remote MCP with browser sign-in");
       expect(html).toContain("Check sign-in and create profile");
       expect(html).toContain("Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration.");
@@ -2699,7 +3181,9 @@ describe("local Console control server", () => {
       expect(exerciseSessionResumeLifecycle(javascript)).toEqual({
         callsAfterStartup: 1,
         callsAfterNormalPageShow: 1,
-        callsAfterPersistedPageShow: 2
+        callsAfterPersistedPageShow: 2,
+        navigationCallsAfterStartup: 1,
+        navigationCallsAfterPersistedPageShow: 1
       });
       expect(bootstrapResponseErrorMessage(
         javascript,
@@ -2762,7 +3246,7 @@ describe("local Console control server", () => {
       await expect(resumeMissingSetupDraft(javascript)).resolves.toEqual({
         restored: false,
         controlsUpdated: 1,
-        message: "No saved connector choice exists. Start with a configuration name and connector above."
+        message: "No saved MCP choice exists. Start with a configuration name and MCP above."
       });
       await expect(resumeSetupDraftWithoutConnectionValues(javascript)).resolves.toEqual({
         name: "saved-connector",

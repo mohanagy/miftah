@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-08-01
+
+### Changed
+
+- [#334](https://github.com/mohanagy/miftah/issues/334) Tightened the Console connection catalog for faster scanning: cards use a compact hierarchy for the connection name, durable default, named-account actions, authentication status, and Manage connection action; medium and narrow layouts collapse before controls can crowd or clip; and long account or connection names wrap without hiding status counts or keyboard focus. Existing authentication, redaction, audit, containment, no-shell, and public API guarantees are unchanged.
+- [#333](https://github.com/mohanagy/miftah/issues/333) Replaced first-use Console setup vocabulary with task-oriented language: the chooser now leads with **Choose your MCP**, groups built-in and custom options plainly, names custom MCP, local executable, remote HTTPS, browser sign-in, existing-client-entry, and secret-reference paths distinctly, and limits help text to the information needed for the next step. The wording does not claim universal MCP or OAuth compatibility, and existing authentication, redaction, audit, containment, no-shell, and public API guarantees are unchanged.
+- [#332](https://github.com/mohanagy/miftah/issues/332) Turned Console management navigation into five focused, keyboard-accessible sections: Overview, Accounts, Authentication, Client setup, and Audit. Only the selected task is shown; the non-secret URL fragment restores a valid selection after refresh or reauthentication, while switching tasks leaves in-page form drafts untouched and performs no writes. Destructive account removal remains confined to Accounts, and existing redaction, audit, OAuth, containment, no-shell, and public API guarantees are unchanged.
+- [#331](https://github.com/mohanagy/miftah/issues/331) Made Console account switching read like a user action: each named account now offers a client-specific `Use <account> in this chat` action, copied-request confirmation names the account and selected client, and the durable default is described as applying to new MCP sessions. Shared guidance appears once instead of on every connection card. The existing `miftah_use_profile` request, supported clients, redaction, audit, credential handling, containment, and public APIs are unchanged.
+- [#339](https://github.com/mohanagy/miftah/issues/339) Prepared the compatible v0.5.7 patch release for clearer account switching, focused task sections, setup written in user language, and a responsive connection catalog. Miftah remains experimental and pre-1.0. Technical delivery and owner dogfooding do not satisfy external evaluator counts; external validation remains incomplete under #25, #88, #202, and #290.
+
 ## [0.5.6] - 2026-07-31
 
 ### Fixed

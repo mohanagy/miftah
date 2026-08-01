@@ -56,6 +56,7 @@ const page = `<!doctype html>
                 <option value="vscode">VS Code</option>
               </select>
             </label>
+            <p id="catalog-switch-guidance" class="field-note" hidden></p>
             <button id="set-up-another-mcp" type="button">Set up another MCP</button>
           </div>
         </div>
@@ -126,14 +127,14 @@ const page = `<!doctype html>
           <p id="setup-wizard-copy">Start with what you already have. Miftah will show one setup path at a time and will not write anything until that path reaches its create action.</p>
         </div>
         <fieldset id="setup-source-choice" class="setup-source-choice" tabindex="-1">
-          <legend>What do you already have?</legend>
-          <p class="field-note">Choose one path. Nothing is saved, launched, discovered, or sent to an MCP while you are on this step.</p>
+          <legend>Choose your MCP</legend>
+          <p class="field-note">Choose what you have now. The next step asks only for the details needed by that path.</p>
           <div class="setup-source-grid">
-            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Preset or connection type</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="connector" data-setup-source="connector" checked><span>Built-in or custom MCP</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="remote" data-setup-source="remote"><span>Remote HTTPS endpoint</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="local" data-setup-source="local"><span>Local executable</span></label>
             <label class="setup-source-option"><input type="radio" name="setup-source" value="browser-sign-in" data-setup-source="browser-sign-in"><span>Remote MCP with browser sign-in</span></label>
-            <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Existing client entry</span></label>
+            <label class="setup-source-option"><input type="radio" name="setup-source" value="import" data-setup-source="import"><span>Copy an existing client entry</span></label>
           </div>
         </fieldset>
         <div class="setup-wizard-actions">
@@ -148,29 +149,29 @@ const page = `<!doctype html>
           <div>
             <h2 id="preset-onboarding-title">Set up an MCP</h2>
           </div>
-          <p>Choose a known connector, a reviewed local executable, or a remote HTTPS endpoint. Miftah writes validated configuration references; it never asks for a password or token here. If the remote MCP signs you in in a browser, use the browser sign-in flow below.</p>
+          <p>Choose a built-in MCP or describe the custom MCP you already use. The fields below will ask for its package, executable, or HTTPS URL. Browser sign-in is a separate setup path.</p>
         </div>
         <form id="preset-onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="support-tools"></label>
-          <label>Connection type
+          <label>Choose an MCP
             <select name="preset" id="preset-selection">
-              <optgroup label="Named presets">
+              <optgroup label="Built-in MCPs">
                 <option value="sentry">Sentry</option>
                 <option value="github">GitHub</option>
                 <option value="google-search-console">Google Search Console</option>
+                <option value="generic">Example MCP</option>
               </optgroup>
-              <optgroup label="Connection types">
-                <option value="generic">Generic reference MCP</option>
-                <option value="generic-npx">Custom npx package</option>
-                <option value="generic-docker">Custom Docker image</option>
-                <option value="local-stdio">Local executable + argument array</option>
-                <option value="streamable-http">Remote HTTPS MCP endpoint</option>
+              <optgroup label="Custom MCPs">
+                <option value="generic-npx">Exact npx package</option>
+                <option value="generic-docker">Pinned Docker image</option>
+                <option value="local-stdio">Local executable and arguments</option>
+                <option value="streamable-http">Remote HTTPS URL</option>
               </optgroup>
             </select>
           </label>
           <div id="setup-draft-actions" class="wide setup-draft-actions">
-            <p class="field-note">Save your configuration name and connector choice to continue later. Miftah does not save a URL, executable, arguments, path, client entry, environment variable, secret, OAuth state, or browser sign-in details. You will enter those again when you continue.</p>
-            <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save connector choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved connector choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
+            <p class="field-note">Save the configuration name and MCP choice to continue later. Connection details and authentication are entered again when you continue.</p>
+            <div class="form-action"><button id="save-setup-draft" type="button" class="secondary">Save MCP choice</button><button id="resume-setup-draft" type="button" class="secondary">Continue saved MCP choice</button><button id="discard-setup-draft" type="button" class="secondary" hidden disabled>Discard saved choice</button></div>
           </div>
           <label class="wide" data-preset-field="generic-npx" hidden>NPM package (exact version)<input name="npmPackage" maxlength="1024" placeholder="@scope/server@1.2.3"></label>
           <label class="wide" data-preset-field="generic-docker" hidden>Docker image (digest pinned)<input name="dockerImage" maxlength="2048" placeholder="registry.example/mcp@sha256:…"></label>
@@ -186,7 +187,7 @@ const page = `<!doctype html>
             <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
             <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
           </fieldset>
-          <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Credential environment variable (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
+          <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Secret environment variable name (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
           <p class="field-note wide">For provider-owned login such as Google Search Console, Miftah saves the client-secrets path only. The upstream owns its browser login and private token cache. For a local executable, use the environment-variable field for a secret reference; never put a token in an argument.</p>
@@ -269,22 +270,25 @@ const page = `<!doctype html>
       </details>
 
       <div id="workspace-view" hidden>
-        <nav id="workspace-task-navigation" aria-label="Connection tasks">
-          <a href="#connection-overview">Overview</a>
-          <a href="#connection-accounts">Accounts</a>
-          <a href="#connection-authentication">Authentication</a>
-          <a href="#connection-client-setup">Client setup</a>
-          <a href="#connection-audit">Audit</a>
+        <nav id="workspace-task-navigation" aria-label="Connection tasks" role="tablist">
+          <a id="workspace-task-overview" href="#connection-overview" role="tab" aria-controls="connection-overview" aria-selected="true" tabindex="0" data-workspace-task="connection-overview">Overview</a>
+          <a id="workspace-task-accounts" href="#connection-accounts" role="tab" aria-controls="connection-accounts" aria-selected="false" tabindex="-1" data-workspace-task="connection-accounts">Accounts</a>
+          <a id="workspace-task-authentication" href="#connection-authentication" role="tab" aria-controls="connection-authentication" aria-selected="false" tabindex="-1" data-workspace-task="connection-authentication">Authentication</a>
+          <a id="workspace-task-client-setup" href="#connection-client-setup" role="tab" aria-controls="connection-client-setup" aria-selected="false" tabindex="-1" data-workspace-task="connection-client-setup">Client setup</a>
+          <a id="workspace-task-audit" href="#connection-audit" role="tab" aria-controls="connection-audit" aria-selected="false" tabindex="-1" data-workspace-task="connection-audit">Audit</a>
         </nav>
-        <section id="connection-overview" class="summary" aria-label="Configuration summary">
-          <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
-          <article><p class="summary-label">Default for new connections</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
-          <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
-          <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
+        <section id="connection-overview" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-overview" tabindex="0">
+          <div class="summary" aria-label="Configuration summary">
+            <article><p class="summary-label">Configuration</p><strong id="config-name">—</strong><span id="config-version">—</span></article>
+            <article><p class="summary-label">Default account for new MCP sessions</p><strong id="default-profile">—</strong><span>Existing sessions keep their active account.</span></article>
+            <article><p class="summary-label">Live account switch</p><strong id="profile-switching-state">—</strong><span id="profile-switching-copy">—</span></article>
+            <article><p class="summary-label">Audit journal</p><strong id="audit-state">—</strong><span>Redacted local lifecycle records only.</span></article>
+          </div>
+          <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
         </section>
-        <p id="active-profile-guidance" class="restart-note"><strong>Active vs durable:</strong> Console changes update configuration on disk. Existing MCP sessions keep their active account.</p>
 
-        <section id="connection-accounts" class="work-section" aria-labelledby="profile-inventory-title">
+        <div id="connection-accounts" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-accounts" tabindex="0" hidden>
+        <section class="work-section" aria-labelledby="profile-inventory-title">
           <div class="section-heading">
             <div><p class="step">Configured accounts</p><h2 id="profile-inventory-title">Know which accounts are available</h2></div>
             <p>These are profile names and non-secret labels only. Miftah does not read credentials, headers, launch arguments, token caches, or OAuth vault data to build this list.</p>
@@ -346,8 +350,9 @@ const page = `<!doctype html>
           <p class="field-note">Profiles with native OAuth bindings stay protected: Miftah will not split configuration deletion from OS-vault cleanup until it can do both atomically.</p>
           <p id="profile-removal-result" class="field-note" role="status" aria-live="polite"></p>
         </section>
+        </div>
 
-        <div id="connection-authentication" class="workspace-task-group">
+        <div id="connection-authentication" class="workspace-task-panel" role="tabpanel" aria-labelledby="workspace-task-authentication" tabindex="0" hidden>
         <section id="provider-authentication-view" class="work-section provider-authentication" hidden aria-labelledby="provider-authentication-title">
           <div class="section-heading">
             <div><p class="step">Authentication ownership</p><h2 id="provider-authentication-title">Authentication setup</h2></div>
@@ -438,7 +443,7 @@ const page = `<!doctype html>
         </section>
         </div>
 
-        <section id="connection-client-setup" class="work-section split" aria-labelledby="client-title">
+        <section id="connection-client-setup" class="workspace-task-panel work-section split" role="tabpanel" aria-labelledby="workspace-task-client-setup" tabindex="0" hidden>
           <div>
             <p class="step">Client handoff</p>
             <h2 id="client-title">Review and copy configuration</h2>
@@ -463,7 +468,7 @@ const page = `<!doctype html>
           </div>
         </section>
 
-        <section id="connection-audit" class="work-section" aria-labelledby="audit-title">
+        <section id="connection-audit" class="workspace-task-panel work-section" role="tabpanel" aria-labelledby="workspace-task-audit" tabindex="0" hidden>
           <div class="section-heading">
             <div><p class="step">Recent activity</p><h2 id="audit-title">Redacted Console audit</h2></div>
             <button id="refresh-dashboard" type="button" class="secondary">Refresh</button>
@@ -520,7 +525,7 @@ p { color: var(--muted); line-height: 1.6; }
 .gate { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr); gap: clamp(2rem, 7vw, 6rem); border-top: 1px solid var(--line); padding: 2rem 0 4rem; }
 .gate h2 { max-width: 31rem; }
 .field-note { margin: .65rem 0 0; font-size: .8rem; }
-.work-section { border-top: 1px solid var(--line); padding: 2rem 0 clamp(3rem, 7vw, 6rem); }
+.work-section { border-top: 1px solid var(--line); padding: 1.75rem 0 clamp(2.5rem, 5vw, 4.5rem); }
 .authentication-guide { margin: 0 0 clamp(3rem, 7vw, 6rem); padding: 0; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
 .authentication-guide > summary { padding: 1.15rem 1.25rem; color: var(--ink); }
 .authentication-guide[open] > summary { border-bottom: 1px solid var(--line); }
@@ -530,7 +535,7 @@ p { color: var(--muted); line-height: 1.6; }
 .mode-native { box-shadow: inset 0 .2rem 0 var(--key); }
 .mode-unsupported { box-shadow: inset 0 .2rem 0 var(--danger); }
 .mode p:last-child { font-size: .88rem; }
-.section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, .75fr); gap: 3rem; align-items: end; margin-bottom: 2rem; }
+.section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, .75fr); gap: 2rem; align-items: end; margin-bottom: 1.5rem; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: clamp(1.2rem, 3vw, 2rem); border: 1px solid var(--line); background: rgb(21 26 23 / 88%); }
 .form-grid.compact { margin-top: 1.2rem; }
 .wide { grid-column: 1 / -1; }
@@ -574,31 +579,35 @@ button.danger { color: #ffd7cf; background: transparent; border: 1px solid #7043
 #workspace-task-navigation { display: flex; flex-wrap: wrap; gap: .55rem; margin: 0 0 1rem; }
 #workspace-task-navigation a { display: inline-flex; min-height: 2.75rem; align-items: center; padding: .55rem .85rem; color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); border-radius: .28rem; text-decoration: none; font-weight: 700; }
 #workspace-task-navigation a:hover { border-color: var(--key); }
+#workspace-task-navigation a[aria-selected="true"] { color: #19150d; background: var(--key); border-color: var(--key); }
 #workspace-task-navigation a:focus-visible { outline: 2px solid var(--key); outline-offset: 2px; }
+.workspace-task-panel[hidden] { display: none; }
 #connection-overview, #connection-accounts, #connection-authentication, #connection-client-setup, #connection-audit { scroll-margin-top: 1rem; }
 .summary article { display: flex; min-height: 9rem; flex-direction: column; gap: .45rem; padding: 1.25rem; background: var(--panel); }
 .summary strong { font: 500 1.5rem/1.15 Georgia, serif; }
 .summary span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
 .restart-note { margin: 1rem 0 4rem; padding: 1rem 1.2rem; border-left: .2rem solid var(--key); background: rgb(239 180 77 / 7%); }
 .connection-list { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
-.configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
-.configuration-catalog-status { margin: 0 0 1rem; padding: .85rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
+.configuration-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+.configuration-catalog-status { margin: 0 0 .75rem; padding: .75rem 1rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); }
 .configuration-catalog-status p { margin: 0; }
 .configuration-catalog-status ul { margin: .55rem 0 0; padding-left: 1.2rem; color: var(--muted); }
 .configuration-catalog-status ul:empty { display: none; }
-.catalog-actions { display: grid; gap: .8rem; justify-items: start; }
+.catalog-actions { display: grid; gap: .6rem; justify-items: start; }
 .catalog-actions p { margin: 0; }
 .catalog-actions strong { color: var(--ink); }
-.catalog-boundary { margin-top: 1rem; }
-.configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--panel); }
-.configuration-card p { margin: .25rem 0 0; font-size: .82rem; }
-.configuration-card .configuration-meta { font: .73rem/1.5 ui-monospace, monospace; }
-.configuration-profiles { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
-.configuration-profiles li { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .28rem .5rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.catalog-boundary { margin-top: .75rem; }
+.configuration-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; padding: .9rem 1rem; border: 1px solid var(--line); background: var(--panel); }
+.configuration-card > div { min-width: 0; }
+.configuration-card h3 { margin: 0; overflow-wrap: anywhere; }
+.configuration-card p { margin: .25rem 0 0; overflow-wrap: anywhere; font-size: .82rem; }
+.configuration-card .configuration-meta { color: var(--muted); font: .7rem/1.45 ui-monospace, monospace; }
+.configuration-profiles { display: flex; flex-wrap: wrap; gap: .35rem; margin: .55rem 0 0; padding: 0; list-style: none; }
+.configuration-profiles li { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .22rem .4rem; color: var(--ink); background: var(--ground); border: 1px solid var(--line); font: .72rem/1.35 ui-monospace, monospace; }
+.configuration-profiles span { min-width: 0; overflow-wrap: anywhere; }
 .configuration-profiles .configuration-default { border-color: var(--key); }
-.configuration-profiles button { min-height: 2.75rem; padding: 0 .65rem; }
-.configuration-card .configuration-switch { margin-top: .7rem; color: var(--ink); }
-.configuration-card .configuration-switch-technical { color: var(--muted); font-size: .75rem; }
+.configuration-profiles button { min-height: 2.75rem; max-width: 100%; padding: 0 .65rem; white-space: normal; overflow-wrap: anywhere; }
+.configuration-card > button { align-self: start; white-space: nowrap; }
 .configuration-card button { min-height: 2.75rem; font-size: .78rem; }
 .provider-authentication { border-left: .2rem solid var(--safe); padding-left: 1.2rem; background: linear-gradient(90deg, rgb(117 201 154 / 7%), transparent 50%); }
 .provider-authentication .section-heading { margin-bottom: 0; }
@@ -626,8 +635,20 @@ summary { cursor: pointer; font-weight: 700; }
 .audit-list li { display: grid; grid-template-columns: 10rem 1fr auto; gap: 1rem; padding: .8rem 0; border-bottom: 1px solid var(--line); color: var(--muted); font: .76rem/1.45 ui-monospace, monospace; }
 .status { position: sticky; bottom: 1rem; min-height: 1.5rem; width: fit-content; max-width: 100%; margin: 1rem 0 0; padding: .7rem 1rem; color: var(--ink); background: #222923; border: 1px solid var(--line); box-shadow: 0 .7rem 2rem rgb(0 0 0 / 35%); }
 .status:empty { visibility: hidden; }
-@media (max-width: 850px) { .mode-grid, .summary, .configuration-catalog { grid-template-columns: repeat(2, 1fr); } .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; } }
-@media (max-width: 620px) { .gate, .form-grid, .mode-grid, .summary, .configuration-catalog, .setup-completion-copy { grid-template-columns: 1fr; } .wide, .setup-completion-client { grid-column: 1; } .masthead { flex-direction: column; } .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; } .connection-actions { justify-content: flex-start; } .audit-list li { grid-template-columns: 1fr; gap: .2rem; } }
+@media (max-width: 850px) {
+  .mode-grid, .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .configuration-catalog { grid-template-columns: 1fr; }
+  .section-heading, .split { grid-template-columns: 1fr; gap: 1rem; }
+}
+@media (max-width: 620px) {
+  .gate, .form-grid, .mode-grid, .summary, .configuration-catalog, .setup-completion-copy { grid-template-columns: 1fr; }
+  .wide, .setup-completion-client { grid-column: 1; }
+  .masthead { flex-direction: column; }
+  .input-row, .connection, .configuration-card { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; }
+  .configuration-card > button { width: 100%; }
+  .connection-actions { justify-content: flex-start; }
+  .audit-list li { grid-template-columns: 1fr; gap: .2rem; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 `;
 
@@ -643,14 +664,23 @@ const script = `(() => {
   const presetOnboardingView = byId("preset-onboarding-view");
   const clientEntryOnboardingView = byId("client-entry-onboarding-view");
   const workspaceView = byId("workspace-view");
+  const workspaceTaskNavigation = byId("workspace-task-navigation");
+  const workspaceTaskPanels = [
+    byId("connection-overview"),
+    byId("connection-accounts"),
+    byId("connection-authentication"),
+    byId("connection-client-setup"),
+    byId("connection-audit")
+  ].filter((panel) => panel instanceof HTMLElement);
   const configurationCatalogView = byId("configuration-catalog-view");
   const configurationCatalog = byId("configuration-catalog");
   const configurationCatalogSummary = byId("configuration-catalog-summary");
   const configurationCatalogAttention = byId("configuration-catalog-attention");
   const configurationCatalogRejectedGuidance = byId("configuration-catalog-rejected-guidance");
   const catalogClientSelect = byId("catalog-client-select");
-  let catalogSwitchCopies = [];
+  const catalogSwitchGuidance = byId("catalog-switch-guidance");
   let catalogSwitchButtons = [];
+  let catalogSwitchUnavailableCount = 0;
   const setUpAnotherMcp = byId("set-up-another-mcp");
   const setupWizardView = byId("setup-wizard-view");
   const setupWizardStep = byId("setup-wizard-step");
@@ -723,6 +753,56 @@ const script = `(() => {
 
   function message(text) {
     if (status && typeof text === "string") status.textContent = text;
+  }
+
+  function workspaceTaskIdFromHash(hash) {
+    const taskId = typeof hash === "string" && hash.startsWith("#") ? hash.slice(1) : "";
+    return workspaceTaskPanels.some((panel) => panel.id === taskId) ? taskId : "connection-overview";
+  }
+
+  function selectWorkspaceTask(taskId, updateHash) {
+    if (!(workspaceTaskNavigation instanceof HTMLElement)) return;
+    const selectedTaskId = workspaceTaskIdFromHash("#" + taskId);
+    const tabs = [...workspaceTaskNavigation.querySelectorAll("a[data-workspace-task]")];
+    workspaceTaskPanels.forEach((panel) => {
+      panel.hidden = panel.id !== selectedTaskId;
+    });
+    tabs.forEach((tab) => {
+      const selected = tab.getAttribute("data-workspace-task") === selectedTaskId;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.setAttribute("tabindex", selected ? "0" : "-1");
+    });
+    if (updateHash === true && typeof history !== "undefined") {
+      history.replaceState(null, "", "#" + selectedTaskId);
+    }
+  }
+
+  function initializeWorkspaceTaskNavigation() {
+    if (!(workspaceTaskNavigation instanceof HTMLElement) || typeof window === "undefined") return;
+    const tabs = [...workspaceTaskNavigation.querySelectorAll("a[data-workspace-task]")];
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        selectWorkspaceTask(String(tab.getAttribute("data-workspace-task") || ""), true);
+      });
+      tab.addEventListener("keydown", (event) => {
+        let targetIndex;
+        if (event.key === "ArrowRight") targetIndex = (index + 1) % tabs.length;
+        if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") targetIndex = 0;
+        if (event.key === "End") targetIndex = tabs.length - 1;
+        if (targetIndex === undefined) return;
+        event.preventDefault();
+        const target = tabs[targetIndex];
+        if (!(target instanceof HTMLElement)) return;
+        selectWorkspaceTask(String(target.getAttribute("data-workspace-task") || ""), true);
+        target.focus();
+      });
+    });
+    window.addEventListener("hashchange", () => {
+      selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
+    });
+    selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
   }
 
   function staleAuthenticationRequestError() {
@@ -1023,7 +1103,7 @@ const script = `(() => {
     if (!setupCompletionSwitch) return;
     const client = selectedSetupCompletionClient();
     setupCompletionSwitch.textContent =
-      "After adding another account, return to Your MCP connections and copy its switch request for " +
+      "After adding another account, return to Your MCP connections and use the named account action for " +
       catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
   }
 
@@ -1210,13 +1290,22 @@ const script = `(() => {
   function updateCatalogSwitchCopy() {
     const client = selectedCatalogClient();
     const clientName = catalogClientDisplayName(client);
-    catalogSwitchCopies.forEach((copy) => {
-      copy.textContent = "Choose an account below, then paste the copied request into " + clientName + ". This changes this chat, not the durable default.";
-    });
+    if (catalogSwitchGuidance) {
+      const unavailableGuidance = catalogSwitchUnavailableCount > 0
+        ? " Some connections do not support account switching in an active chat. Change their default account, then start a new MCP session."
+        : "";
+      catalogSwitchGuidance.textContent = catalogSwitchButtons.length > 0
+        ? "Choose an account action below, then paste the copied request into " + clientName +
+          ". It changes that chat only; Console does not switch the running client or change the default account. " +
+          "Technical detail: the client can call miftah_use_profile." + unavailableGuidance
+        : catalogSwitchUnavailableCount > 0
+          ? "Account switching in an active chat is unavailable for these connections. Change the default account, then start a new MCP session."
+          : "";
+    }
     catalogSwitchButtons.forEach((button) => {
       if (!(button instanceof HTMLButtonElement)) return;
       const profile = button.dataset.copyProfileSwitch || "";
-      button.setAttribute("aria-label", "Copy switch request for " + profile + " in " + clientName);
+      button.setAttribute("aria-label", "Copy request to use " + profile + " in the current " + clientName + " chat");
     });
   }
 
@@ -1257,19 +1346,21 @@ const script = `(() => {
     }
     if (!configurationCatalog) return catalog;
     configurationCatalog.replaceChildren();
-    catalogSwitchCopies = [];
     catalogSwitchButtons = [];
-    catalog.configurations.forEach((configuration) => {
+    catalogSwitchUnavailableCount = 0;
+    catalog.configurations.forEach((configuration, index) => {
       const id = typeof configuration.id === "string" ? configuration.id : "";
       const card = document.createElement("article");
       card.className = "configuration-card";
       const details = document.createElement("div");
-      const title = document.createElement("strong");
+      const title = document.createElement("h3");
+      title.id = "configuration-title-" + index;
       title.textContent = typeof configuration.name === "string" ? configuration.name : "Unnamed configuration";
+      card.setAttribute("aria-labelledby", title.id);
       const summary = document.createElement("p");
       const profileCount = typeof configuration.profileCount === "number" ? configuration.profileCount : 0;
       const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "unknown";
-      summary.textContent = "Default for new connections: " + defaultProfile;
+      summary.textContent = "Default account for new MCP sessions: " + defaultProfile;
       const configuredProfileNames = Array.isArray(configuration.profileNames)
         ? configuration.profileNames.filter((profile) => typeof profile === "string")
         : [];
@@ -1291,12 +1382,15 @@ const script = `(() => {
           copySwitchRequest.type = "button";
           copySwitchRequest.className = "secondary";
           copySwitchRequest.dataset.copyProfileSwitch = profile;
-          copySwitchRequest.textContent = "Copy switch request";
+          copySwitchRequest.textContent = "Use " + profile + " in this chat";
           copySwitchRequest.addEventListener("click", async () => {
             const client = selectedCatalogClient();
             try {
               await navigator.clipboard.writeText(profileSwitchRequest(client, profile));
-              message("Account-switch request copied for " + catalogClientDisplayName(client) + ". Paste it into the chat where Miftah is connected.");
+              message(
+                "Copied a request to use " + profile + " in " + catalogClientDisplayName(client) +
+                ". Paste it into the chat where Miftah is connected."
+              );
             } catch {
               message("Clipboard access was unavailable. Copy this request manually: " + profileSwitchRequest(client, profile));
             }
@@ -1314,19 +1408,11 @@ const script = `(() => {
         : authentication.mode === "miftah-native-oauth"
           ? "Miftah-managed native OAuth available"
           : "manual upstream authentication required";
-      const switching = document.createElement("p");
-      switching.className = "configuration-switch";
-      switching.textContent = configuration.profileSwitchingFromMcp === true
-        ? "Choose an account below, then paste the copied request into your MCP client. This changes this chat, not the durable default."
-        : "Live account switch: off. Open a new connection to use another default.";
-      if (configuration.profileSwitchingFromMcp === true) switching.dataset.catalogSwitchCopy = "true";
-      if (configuration.profileSwitchingFromMcp === true) catalogSwitchCopies.push(switching);
-      const switchingTechnical = document.createElement("p");
-      switchingTechnical.className = "configuration-switch-technical";
-      switchingTechnical.textContent = configuration.profileSwitchingFromMcp === true
-        ? "Technical detail: the client can call miftah_use_profile. Console does not switch a running client session."
-        : "Changing the durable default affects only new client connections.";
-      details.append(title, summary, profileList, switching, switchingTechnical, ownership);
+      details.append(title, summary, profileList);
+      if (configuration.profileSwitchingFromMcp !== true) {
+        catalogSwitchUnavailableCount += 1;
+      }
+      details.append(ownership);
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.configuration = id;
@@ -1337,6 +1423,9 @@ const script = `(() => {
       card.append(details, button);
       configurationCatalog.append(card);
     });
+    if (catalogSwitchGuidance) {
+      catalogSwitchGuidance.hidden = catalogSwitchButtons.length === 0 && catalogSwitchUnavailableCount === 0;
+    }
     updateCatalogSwitchCopy();
     return catalog;
   }
@@ -1737,7 +1826,7 @@ const script = `(() => {
       throw new Error("Use a lowercase configuration name of up to 64 letters, numbers, dots, underscores, or hyphens before saving.");
     }
     if (!Object.prototype.hasOwnProperty.call(presetInputNames, preset)) {
-      throw new Error("Choose a supported connector before saving.");
+      throw new Error("Choose a supported MCP option before saving.");
     }
     return {
       source: "connector",
@@ -1762,7 +1851,7 @@ const script = `(() => {
       draft.stage !== "connection" ||
       typeof draft.savedAt !== "string"
     ) {
-      throw new Error("Miftah did not return a safe saved connector choice.");
+      throw new Error("Miftah did not return a safe saved MCP choice.");
     }
     const form = byId("preset-onboarding-form");
     const selection = byId("preset-selection");
@@ -1980,7 +2069,7 @@ const script = `(() => {
     } else if (source === "local") {
       message("Enter the exact executable and arguments below. Miftah saves a no-shell argument array and will not run it during setup.");
     } else {
-      message("Choose a known connector or pinned package below.");
+      message("Choose a built-in MCP or enter the exact custom package details below.");
     }
   }
 
@@ -2073,12 +2162,15 @@ const script = `(() => {
       }
       setupWizardSource = "connector";
       showSetupWizardChooser(false);
-      message("No safe Miftah configuration exists yet. Set up a known connector or create a native OAuth profile below.");
+      message("No safe Miftah configuration exists yet. Choose your MCP below to create the first one.");
       return;
     }
     hideSetupWizardPaths();
     if (setupWizardView) setupWizardView.hidden = true;
     if (workspaceView) workspaceView.hidden = false;
+    if (typeof window !== "undefined") {
+      selectWorkspaceTask(workspaceTaskIdFromHash(window.location.hash), false);
+    }
     if (setupDraftActions) setupDraftActions.hidden = false;
     renderProviderAuthentication(metadata.authentication);
     const configName = byId("config-name");
@@ -2096,12 +2188,12 @@ const script = `(() => {
     if (profileSwitchingCopy) {
       profileSwitchingCopy.textContent = profileSwitchingFromMcp
         ? "Return to Your MCP connections and copy the request for the named account you want in this chat."
-        : "Open a new connection after changing the durable default.";
+        : "Change the default account, then start a new MCP session.";
     }
     if (activeProfileGuidance) {
       activeProfileGuidance.textContent = profileSwitchingFromMcp
-        ? "Active vs durable: changing the default affects new connections. For this chat, use a profile's Copy switch request action above. Technical detail: the client calls miftah_use_profile; Console does not switch a running client."
-        : "Active vs durable: changing the default affects new connections. Existing sessions keep their account until you reconnect.";
+        ? "Active vs durable: changing the default affects new MCP sessions. For this chat, return to Your MCP connections and use the account action you need. Console does not switch a running client."
+        : "Active vs durable: changing the default affects new MCP sessions. Existing sessions keep their account until you reconnect.";
     }
     const profileMetadata = Array.isArray(metadata.profiles) ? metadata.profiles.map(record) : [];
     const profiles = profileMetadata.map((item) => String(item.name || "")).filter(Boolean);
@@ -2136,7 +2228,7 @@ const script = `(() => {
     renderConnections(results[1], metadata.authentication);
     renderAudit(results[2]);
     message(profileSwitchingFromMcp
-      ? "Console data refreshed. Durable changes apply to new connections; use a Copy switch request action above for this chat."
+      ? "Console data refreshed. Default-account changes apply to new MCP sessions; use an account action above for this chat."
       : "Console data refreshed. Open a new MCP connection before expecting durable changes to be active.");
   }
 
@@ -2303,11 +2395,11 @@ const script = `(() => {
       if (saveSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       saveSetupDraft.disabled = true;
-      message("Saving only the connector choice…");
+      message("Saving only the MCP choice…");
       try {
         const draft = await api("/api/v1/setup-draft", { method: "PUT", body: setupDraftIntent() });
         restoreSetupDraft(draft);
-        message("Saved the configuration name and connector choice. Re-enter every connection detail when you continue.");
+        message("Saved the configuration name and MCP choice. Re-enter every connection detail when you continue.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) saveSetupDraft.disabled = false;
@@ -2320,17 +2412,17 @@ const script = `(() => {
       if (resumeSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       resumeSetupDraft.disabled = true;
-      message("Loading the saved connector choice…");
+      message("Loading the saved MCP choice…");
       try {
         const draft = await api("/api/v1/setup-draft");
         if (draft === undefined || draft === null) {
           activeSetupDraft = undefined;
           renderSetupDraftControls();
-          message("No saved connector choice exists. Start with a configuration name and connector above.");
+          message("No saved MCP choice exists. Start with a configuration name and MCP above.");
           return;
         }
         restoreSetupDraft(draft);
-        message("Restored only the configuration name and connector choice. Re-enter every connection value before reviewing.");
+        message("Restored only the configuration name and MCP choice. Re-enter every connection value before reviewing.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) resumeSetupDraft.disabled = false;
@@ -2343,12 +2435,12 @@ const script = `(() => {
       if (activeSetupDraft === undefined || discardSetupDraft.disabled) return;
       const actionAuthenticationEpoch = authenticationEpoch;
       discardSetupDraft.disabled = true;
-      message("Discarding the saved connector choice…");
+      message("Discarding the saved MCP choice…");
       try {
         await api("/api/v1/setup-draft", { method: "DELETE", body: { revision: activeSetupDraft.revision } });
         activeSetupDraft = undefined;
         renderSetupDraftControls();
-        message("Discarded the saved connector choice. The current form stays open and is not saved.");
+        message("Discarded the saved MCP choice. The current form stays open and is not saved.");
       } catch (error) { message(errorMessage(error)); }
       finally {
         if (authenticationEpoch === actionAuthenticationEpoch) discardSetupDraft.disabled = false;
@@ -2638,7 +2730,7 @@ const script = `(() => {
         if (result) result.textContent = publicResult;
         await refresh();
         message(publicResult + (profileSwitchingFromMcp
-          ? " New connections will use it; use a Copy switch request action above for this chat."
+          ? " New MCP sessions will use it; use an account action above for this chat."
           : " Open a new MCP connection to use it.") +
           " If you are using the configuration catalog, select this configuration again before another Console change.");
       } catch (error) { message(errorMessage(error)); }
@@ -2879,6 +2971,7 @@ const script = `(() => {
     refreshButton.addEventListener("click", () => void refresh().catch((error) => message(errorMessage(error))));
   }
   if (typeof window !== "undefined") {
+    initializeWorkspaceTaskNavigation();
     window.addEventListener("pageshow", (event) => {
       if (event.persisted) void resumeSession();
     });
