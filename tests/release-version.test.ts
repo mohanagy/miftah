@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "0.5.7";
+const releaseVersion = "0.5.8";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v0.5.7 release artifacts", () => {
+describe("v0.5.8 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [0.5.7] - 2026-8-1\n\n### Changed\n"
+      changelog: "## [0.5.8] - 2026-8-9\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [0.5.7] - 2026-08-01\n\n### Changed\n"
+      changelog: "Release candidate: ## [0.5.8] - 2026-08-09\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,22 +71,22 @@ describe("v0.5.7 release artifacts", () => {
     }
   });
 
-  it("documents the Console usability patch while retaining the experimental package status", () => {
+  it("documents actionable startup diagnostics and the safe maintenance refresh", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(notes).toContain("Miftah remains experimental and pre-1.0");
+    expect(notes).toContain("### Fixed");
+    expect(notes).toContain("[#347](https://github.com/mohanagy/miftah/issues/347)");
+    expect(notes).toMatch(/bounded/iu);
+    expect(notes).toMatch(/secret-redacted/iu);
+    expect(notes).toContain("miftah test-profile");
+    expect(notes).toContain("miftah doctor");
+    expect(notes).toContain("uvx");
     expect(notes).toContain("### Changed");
-    const changedStart = notes.indexOf("### Changed");
-    const changedEnd = notes.indexOf("\n### ", changedStart + "### Changed".length);
-    const changedNotes = notes.slice(changedStart, changedEnd < 0 ? undefined : changedEnd);
-    for (const issue of [331, 332, 333, 334, 339]) {
-      expect(changedNotes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
-    }
-    expect(notes).toMatch(/account switching/iu);
-    expect(notes).toMatch(/task sections/iu);
-    expect(notes).toMatch(/setup.*user language/iu);
-    expect(notes).toMatch(/responsive/iu);
+    expect(notes).toContain("[#349](https://github.com/mohanagy/miftah/pull/349)");
+    expect(notes).toContain("[#350](https://github.com/mohanagy/miftah/issues/350)");
+    expect(notes).toMatch(/dependency/iu);
     expect(notes).toContain("external validation remains incomplete under #25, #88, #202, and #290");
 
     const readme = readRepositoryFile("README.md");

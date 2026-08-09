@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-09
+
+### Fixed
+
+- [#347](https://github.com/mohanagy/miftah/issues/347) Made upstream startup failures actionable without exposing configuration or credential material. Runtime warnings now include a bounded, secret-redacted failure class and exact `miftah test-profile` and `miftah doctor` remediation commands; diagnostics also recognize pinned `uvx` package invocations while retaining the existing fail-closed startup boundary.
+
+### Changed
+
+- [#349](https://github.com/mohanagy/miftah/pull/349) Refreshed the compatible `dotenv`, ESLint, and TypeScript ESLint dependencies after the full supported Node and operating-system matrix passed. The deferred Vitest 4 and TypeScript 7 major upgrades are not part of this release.
+- [#350](https://github.com/mohanagy/miftah/issues/350) Prepared the compatible v0.5.8 patch release for actionable upstream-startup diagnostics and the safe dependency refresh. Miftah remains experimental and pre-1.0. Technical delivery and owner dogfooding do not satisfy external evaluator counts; external validation remains incomplete under #25, #88, #202, and #290.
+
 ## [0.5.7] - 2026-08-01
 
 ### Changed
