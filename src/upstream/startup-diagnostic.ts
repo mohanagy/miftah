@@ -1,4 +1,5 @@
 import { MiftahError, type MiftahErrorCode } from "../utils/errors.js";
+import { quoteShellArgument } from "../utils/shell-command.js";
 
 export type UpstreamStartupDiagnosticKind = "process-exit" | "signal" | "timeout" | "initialization";
 
@@ -40,11 +41,7 @@ export function startupFailureProfile(error: unknown): string | undefined {
   return typeof error.details?.profile === "string" ? error.details.profile : undefined;
 }
 
-function quotedCliArgument(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 /** Renders the exact legacy readiness command used to diagnose an upstream start. */
 export function testProfileDiagnosticCommand(configPath: string, profile: string): string {
-  return `miftah test-profile --config ${quotedCliArgument(configPath)} --profile ${quotedCliArgument(profile)}`;
+  return `miftah test-profile --config ${quoteShellArgument(configPath)} --profile ${quoteShellArgument(profile)}`;
 }

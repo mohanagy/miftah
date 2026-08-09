@@ -26,6 +26,7 @@ import type { MiftahConfig } from "../src/config/types.js";
 import type { AuditScope } from "../src/audit/audit-trail.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import {
+  formatResourceSubscriptionCapabilityWarning,
   hasCompatibleCachedToolTarget,
   MiftahServer,
   resolveClientVisibleToolName
@@ -37,10 +38,22 @@ import type { RoutingContextSnapshot } from "../src/routing/routing-types.js";
 import { MultiUpstreamProcessManager } from "../src/upstream/multi-upstream-process-manager.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 import { IdentityManager } from "../src/identity/identity-manager.js";
+import { MiftahError } from "../src/utils/errors.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 const toolCollisionPattern = /TOOL_COLLISION/;
 const managementToolNames = managementToolDescriptors({ delegatedAgentApproval: false }).map((descriptor) => descriptor.name);
+
+function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  if (descriptor === undefined) throw new Error("process.platform descriptor was unavailable");
+  Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+  try {
+    return callback();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
 
 async function fixtureLifecycleState(initializedPath: string, toolListStartedPath: string) {
   const [initialized, toolListStarted] = await Promise.all([
@@ -3488,6 +3501,22 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("labels Windows startup warning commands explicitly for PowerShell", () => {
+    const error = new MiftahError(
+      "UPSTREAM_INIT_FAILED",
+      "UPSTREAM_INIT_FAILED: could not initialize profile",
+      { profile: "team's-profile" }
+    );
+    const warning = withPlatform("win32", () => formatResourceSubscriptionCapabilityWarning(
+      error,
+      "C:\\Miftah $env:USER owner's config.json"
+    ));
+
+    expect(warning).toBe(
+      "UPSTREAM_INIT_FAILED: could not initialize profile Run in PowerShell: miftah test-profile --config 'C:\\Miftah $env:USER owner''s config.json' --profile 'team''s-profile'"
+    );
+  });
+
   it("keeps startup warnings concise and points to the exact profile diagnostic command", async () => {
     const configPath = "/Users/example/My Config/miftah.json";
     const config = validateConfig({
@@ -3530,6 +3559,7 @@ describe("Miftah MCP wrapper", () => {
       );
       const warning = String(emitWarning.mock.calls[0]?.[0]);
       expect(warning).toContain("UPSTREAM_INIT_FAILED");
+      expect(warning).toContain(process.platform === "win32" ? "Run in PowerShell:" : "Run:");
       expect(warning).not.toContain("ModuleNotFoundError");
     } finally {
       emitWarning.mockRestore();

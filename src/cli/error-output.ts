@@ -1,4 +1,5 @@
 import { startupDiagnosticFromError, testProfileDiagnosticCommand } from "../upstream/startup-diagnostic.js";
+import { commandInstruction } from "../utils/shell-command.js";
 
 export interface UpstreamFailureCommandContext {
   readonly configPath: string;
@@ -22,6 +23,6 @@ export function formatUpstreamStartupFailure(error: unknown, context: UpstreamFa
     ...(diagnostic.signal === undefined ? [] : [`Signal: ${diagnostic.signal}`]),
     ...(diagnostic.truncated ? ["Cause output was truncated."] : []),
     `Remediation: ${diagnostic.remediation}`,
-    `Retry: ${testProfileDiagnosticCommand(context.configPath, context.profile)}`
+    commandInstruction("Retry", testProfileDiagnosticCommand(context.configPath, context.profile))
   ].join("\n");
 }
