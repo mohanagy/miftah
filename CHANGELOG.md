@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
-- [#347](https://github.com/mohanagy/miftah/issues/347) Made upstream startup failures actionable without exposing configuration or credential material. Runtime warnings now include a bounded, secret-redacted failure class and exact `miftah test-profile` and `miftah doctor` remediation commands; diagnostics also recognize pinned `uvx` package invocations while retaining the existing fail-closed startup boundary.
+- [#347](https://github.com/mohanagy/miftah/issues/347) Made upstream startup failures actionable without exposing configuration or credential material. Runtime warnings remain concise and point to the exact `miftah test-profile` command; `test-profile` and `doctor` now surface a bounded, secret-redacted failure cause and remediation. Diagnostics also recognize pinned `uvx` package invocations while retaining the existing fail-closed startup boundary.
 
 ### Changed
 

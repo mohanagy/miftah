@@ -78,10 +78,12 @@ describe("v0.5.8 release artifacts", () => {
     expect(notes).toContain("Miftah remains experimental and pre-1.0");
     expect(notes).toContain("### Fixed");
     expect(notes).toContain("[#347](https://github.com/mohanagy/miftah/issues/347)");
-    expect(notes).toMatch(/bounded/iu);
-    expect(notes).toMatch(/secret-redacted/iu);
-    expect(notes).toContain("miftah test-profile");
-    expect(notes).toContain("miftah doctor");
+    expect(notes).toMatch(
+      /Runtime warnings remain concise and point to the exact `miftah test-profile` command/iu,
+    );
+    expect(notes).toMatch(
+      /`test-profile` and `doctor` now surface a bounded, secret-redacted failure cause and remediation/iu,
+    );
     expect(notes).toContain("uvx");
     expect(notes).toContain("### Changed");
     expect(notes).toContain("[#349](https://github.com/mohanagy/miftah/pull/349)");
