@@ -101,6 +101,7 @@ describe("continuous integration workflow contract", () => {
     expect(scripts["test:core"]).toContain("tests/windows-config-migration-acl.test.ts");
     expect(scripts["test:package"]).toBe("vitest run tests/package-contract.test.ts");
     expect(scripts["smoke:cli"]).toBe("node dist/cli/main.js schema");
+    expect(scripts["test:cli"]).toContain("vitest run tests/cli-error-output.test.ts");
     expect(scripts["test:cli"]).toContain("npm run test:package");
     expect(scripts["test:cli"]).toContain("npm run smoke:cli");
     expect(scripts["test:coverage"]).toContain("vitest run --coverage");
