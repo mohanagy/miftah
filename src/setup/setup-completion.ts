@@ -1,4 +1,5 @@
 import type { MiftahConfig } from "../config/types.js";
+import { commandInstruction, quoteShellArgument } from "../utils/shell-command.js";
 
 /**
  * A non-secret statement of what setup actually completed. It deliberately
@@ -186,29 +187,12 @@ export function inspectConfigEnvironment(
   return readiness;
 }
 
-function quoteForPosixShell(value: string): string {
-  return `'${value.replaceAll("'", "'\"'\"'")}'`;
-}
-
-function quoteForPowerShell(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-/** Windows completion commands target PowerShell; both forms keep every dynamic value literal. */
-function quoteShellArgument(value: string): string {
-  return process.platform === "win32" ? quoteForPowerShell(value) : quoteForPosixShell(value);
-}
-
 function displayConfigPath(configPath: string | undefined): string {
   return quoteShellArgument(configPath ?? "CONFIG_PATH");
 }
 
 function displayProfile(profile: string): string {
   return quoteShellArgument(profile);
-}
-
-function commandInstruction(action: string, command: string): string {
-  return `${action}${process.platform === "win32" ? " in PowerShell" : ""}: ${command}`;
 }
 
 function verificationCompletion(input: SetupCompletionInput): SetupCompletion["verification"] {

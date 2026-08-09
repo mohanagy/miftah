@@ -69,6 +69,7 @@ import {
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { commandInstruction } from "../../utils/shell-command.js";
 import { MIFTAH_VERSION } from "../../version.js";
 import { startupFailureProfile, testProfileDiagnosticCommand } from "../../upstream/startup-diagnostic.js";
 import {
@@ -269,6 +270,18 @@ const profileSwitchApprovalErrors: ApprovalErrorFactory = {
       "PROFILE_SWITCH_CONFIRMATION_REQUIRED: human confirmation requires an MCP client that supports form elicitation"
     )
 };
+
+/** Keeps the serve warning concise while naming the shell required by its exact retry command. */
+export function formatResourceSubscriptionCapabilityWarning(
+  safeError: MiftahError,
+  runtimeConfigPath: string | undefined
+): string {
+  const profile = startupFailureProfile(safeError);
+  const retry = runtimeConfigPath === undefined || profile === undefined
+    ? ""
+    : ` ${commandInstruction("Run", testProfileDiagnosticCommand(runtimeConfigPath, profile))}`;
+  return `${safeError.message}${retry}`;
+}
 
 /** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
@@ -689,11 +702,9 @@ export class MiftahServer {
 
   private reportResourceSubscriptionCapabilityFailure(error: unknown): void {
     const safeError = this.toSafeError(error);
-    const profile = startupFailureProfile(safeError);
-    const retry = this.runtimeConfigPath === undefined || profile === undefined
-      ? ""
-      : ` Run: ${testProfileDiagnosticCommand(this.runtimeConfigPath, profile)}`;
-    process.emitWarning(`${safeError.message}${retry}`, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" });
+    process.emitWarning(formatResourceSubscriptionCapabilityWarning(safeError, this.runtimeConfigPath), {
+      code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE"
+    });
   }
 
   private resetMcpRoots(): void {

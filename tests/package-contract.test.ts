@@ -1872,7 +1872,9 @@ describe("packed artifact contract", () => {
         expect(failedInit.stderr).toContain("UPSTREAM_INIT_FAILED");
         expect(failedInit.stderr).toContain("Cause:");
         expect(failedInit.stderr).toContain("Remediation:");
-        expect(failedInit.stderr).toContain("Retry: miftah test-profile --config");
+        expect(failedInit.stderr).toContain(
+          `${process.platform === "win32" ? "Retry in PowerShell" : "Retry"}: miftah test-profile --config`
+        );
         expect(`${failedInit.stdout}${failedInit.stderr}`).not.toContain(failedInitSecret);
         expect(await readFile(upstreamShutdownPath, "utf8")).toBe("ended");
 
