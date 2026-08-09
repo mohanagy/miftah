@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { formatUpstreamStartupFailure } from "../src/cli/error-output.js";
 import { MiftahError } from "../src/utils/errors.js";
@@ -47,7 +48,42 @@ describe("CLI upstream error output", () => {
     expect(formatUpstreamStartupFailure(error, {
       configPath: "/tmp/$HOME/config.json",
       profile: "team's-profile"
-    })).toContain("--config '/tmp/$HOME/config.json' --profile 'team'\\\\''s-profile'");
+    })).toContain("--config '/tmp/$HOME/config.json' --profile 'team'\\''s-profile'");
+  });
+
+  it.runIf(process.platform !== "win32")("round-trips diagnostic command arguments through a POSIX shell", () => {
+    const error = new MiftahError("UPSTREAM_INIT_FAILED", "UPSTREAM_INIT_FAILED", {
+      startupDiagnostic: {
+        errorCode: "UPSTREAM_INIT_FAILED",
+        kind: "initialization",
+        cause: "safe cause",
+        truncated: false,
+        remediation: "Retry."
+      }
+    });
+    const configPath = "/tmp/$HOME/owner's config.json";
+    const profile = "team's-profile";
+    const output = formatUpstreamStartupFailure(error, { configPath, profile });
+    const retryCommand = output
+      .split("\n")
+      .find((line) => line.startsWith("Retry: "))
+      ?.slice("Retry: ".length);
+
+    if (retryCommand === undefined) {
+      throw new Error("Expected a retry command in the formatted diagnostic.");
+    }
+    expect(retryCommand).toBe(
+      "miftah test-profile --config '/tmp/$HOME/owner'\\''s config.json' --profile 'team'\\''s-profile'"
+    );
+    const receivedArguments = execFileSync(
+      "/bin/sh",
+      ["-c", ['miftah() { printf "%s\\n" "$@"; }', retryCommand].join("\n")],
+      { encoding: "utf8" }
+    )
+      .trimEnd()
+      .split("\n");
+
+    expect(receivedArguments).toEqual(["test-profile", "--config", configPath, "--profile", profile]);
   });
 
   it("falls back to the safe top-level message for unrelated errors", () => {

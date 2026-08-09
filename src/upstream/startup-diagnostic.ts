@@ -41,7 +41,7 @@ export function startupFailureProfile(error: unknown): string | undefined {
 }
 
 function quotedCliArgument(value: string): string {
-  return `'${value.replaceAll("'", "'\\\\''")}'`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /** Renders the exact legacy readiness command used to diagnose an upstream start. */
