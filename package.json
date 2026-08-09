@@ -50,7 +50,7 @@
     "test:package": "vitest run tests/package-contract.test.ts",
     "test:coverage": "vitest run --coverage",
     "smoke:cli": "node dist/cli/main.js schema",
-    "test:cli": "npm run test:package && npm run smoke:cli",
+    "test:cli": "vitest run tests/cli-error-output.test.ts && npm run test:package && npm run smoke:cli",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
