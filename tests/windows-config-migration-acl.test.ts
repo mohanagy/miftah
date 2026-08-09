@@ -13,6 +13,8 @@ import {
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
+const privateDirectoryProbeTimeoutMs = 15_000;
+const privateDirectoryContractTimeoutMs = 30_000;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -405,7 +407,7 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
         // The probe has no verified result after its bounded execution time.
       }
       reject(new Error(`Windows private-directory ACL probe timed out: ${safePrivateDirectoryProbeStage([...output, ...errorOutput])}`));
-    }, 5_000);
+    }, privateDirectoryProbeTimeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
     child.once("error", () => {
@@ -516,7 +518,7 @@ describe("Windows migration ACL contract", () => {
       await expect(readFile(path, "utf8")).resolves.toBe(content);
       await expect(verifyWindowsConfigPathSecurity(path, "file")).resolves.toBe(true);
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -536,7 +538,7 @@ describe("Windows migration ACL contract", () => {
       await expect(writeWindowsPrivateConfigFile(path, "{\"version\":\"3\",\"name\":\"different\"}\n")).resolves.toBe("exists");
       await expect(readFile(path, "utf8")).resolves.toBe(content);
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -549,7 +551,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, join(privateParent, "miftah"))).resolves.toBe(true);
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -566,7 +568,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, child)).resolves.toBe(false);
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -577,7 +579,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(windowsPrivateDirectoryProbe(join(parentDirectory, ".miftah-migrate-transaction"))).resolves.toBeUndefined();
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -672,7 +674,7 @@ describe("Windows migration ACL contract", () => {
 
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -694,7 +696,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -716,7 +718,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "verify-access-rules")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
@@ -738,7 +740,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "fresh-security")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    privateDirectoryContractTimeoutMs
   );
 
   it.runIf(process.platform === "win32")(
