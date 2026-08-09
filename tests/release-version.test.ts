@@ -87,6 +87,10 @@ describe("v0.5.8 release artifacts", () => {
     expect(notes).toContain("[#349](https://github.com/mohanagy/miftah/pull/349)");
     expect(notes).toContain("[#350](https://github.com/mohanagy/miftah/issues/350)");
     expect(notes).toMatch(/dependency/iu);
+    expect(notes).toMatch(/\bdotenv\b/iu);
+    expect(notes).toMatch(/TypeScript ESLint/iu);
+    expect(notes).toContain("Vitest 4");
+    expect(notes).toContain("TypeScript 7");
     expect(notes).toContain("external validation remains incomplete under #25, #88, #202, and #290");
 
     const readme = readRepositoryFile("README.md");
