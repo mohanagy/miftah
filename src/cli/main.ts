@@ -361,7 +361,8 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       }
     } catch (error) {
       if (command !== "test-profile") throw error;
-      process.stderr.write(`${formatUpstreamStartupFailure(error, { configPath: args.config, profile })}\n`);
+      const output = formatUpstreamStartupFailure(error, { configPath: args.config, profile });
+      process.stderr.write(`${runtime.redactor.redactText(output)}\n`);
       process.exitCode = exitCodeForError(error);
     } finally {
       await runtime.manager.close();

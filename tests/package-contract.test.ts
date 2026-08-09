@@ -1876,6 +1876,35 @@ describe("packed artifact contract", () => {
         expect(`${failedInit.stdout}${failedInit.stderr}`).not.toContain(failedInitSecret);
         expect(await readFile(upstreamShutdownPath, "utf8")).toBe("ended");
 
+        const failedToolListSecret = "packed-cli-tool-list-secret";
+        const failedToolListConfigPath = await writeCliConfig(
+          "failed tool list config.json",
+          cliConfig(
+            "packed-cli-failed-tool-list",
+            {
+              work: {
+                env: {
+                  API_TOKEN: `secretref:plain://${failedToolListSecret}`,
+                  TEST_FAIL_LIST_TOOLS: "true"
+                }
+              }
+            },
+            [fakeStdioUpstreamFixture],
+            { secrets: { allowPlaintextSecrets: true } }
+          )
+        );
+        const failedToolList = await runInstalledBinaryAsync(
+          binary,
+          ["test-profile", "--config", failedToolListConfigPath, "--profile", "work"],
+          cliContractDirectory
+        );
+        expect(failedToolList.status).toBe(1);
+        expect(failedToolList.stdout).toBe("");
+        expect(failedToolList.stderr).toContain("test tool list failure");
+        expect(failedToolList.stderr).toContain("[REDACTED]");
+        expect(failedToolList.stderr).not.toContain(failedToolListSecret);
+        expect(failedToolList.stderr).not.toContain(`secretref:plain://${failedToolListSecret}`);
+
         const auditPath = join(cliContractDirectory, "audit output with spaces", "events with spaces.jsonl");
         const auditUsername = ["user", "name"].join("");
         const auditPassword = ["pass", "word"].join("");

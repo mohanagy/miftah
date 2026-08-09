@@ -447,6 +447,46 @@ function registerBasics(): void {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "classifies a child signal during initialization in the startup diagnostic",
+    async () => {
+      const manager = new UpstreamProcessManager(
+        {
+          transport: "stdio",
+          command: process.execPath,
+          args: [
+            "--eval",
+            [
+              "process.stderr.write('signal startup diagnostic\\n');",
+              "setTimeout(() => process.kill(process.pid, 'SIGTERM'), 10);"
+            ].join("\n")
+          ]
+        },
+        { work: {} },
+        { startupTimeoutMs: 1_000 }
+      );
+
+      try {
+        const failure = await manager.get("work").catch((error: unknown) => error);
+        expect(failure).toMatchObject({
+          code: "UPSTREAM_INIT_FAILED",
+          details: {
+            startupDiagnostic: {
+              errorCode: "UPSTREAM_INIT_FAILED",
+              kind: "signal",
+              signal: "SIGTERM",
+              cause: expect.stringContaining("signal startup diagnostic"),
+              truncated: false,
+              remediation: expect.stringContaining("upstream")
+            }
+          }
+        });
+      } finally {
+        await manager.close();
+      }
+    }
+  );
+
   it("shuts down an idle profile and starts a fresh process on its next use", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-idle-"));
     const startCountPath = join(directory, "starts");
@@ -792,7 +832,18 @@ function registerRecovery(): void {
     try {
       const startup = manager.get("work");
       void startup.catch(() => undefined);
-      await expect(startup).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(startup).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED",
+        details: {
+          startupDiagnostic: {
+            errorCode: "UPSTREAM_START_FAILED",
+            kind: "timeout",
+            cause: expect.stringContaining("startup timed out after 200ms"),
+            truncated: false,
+            remediation: expect.stringContaining("upstream")
+          }
+        }
+      });
       expect(Date.now() - startedAt).toBeLessThan(500);
       expect(manager.listHealth()).toMatchObject([{ profile: "work", processState: "failed" }]);
     } finally {
