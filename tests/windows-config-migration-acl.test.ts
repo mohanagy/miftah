@@ -13,7 +13,22 @@ import {
 
 const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
+// Hosted Windows runners can spend substantial time starting PowerShell before the first script instruction runs.
+const powerShellBootstrapTimeoutMs = 60_000;
+const powerShellProbeExecutionTimeoutMs = 5_000;
+const privateDirectoryProbeExecutionTimeoutMs = 15_000;
+const hangingAclProbeTimeoutMs = 5_000;
+const powerShellContractSlackMs = 30_000;
+const aclProbeBootstrapMarker = "MIFTAH_ACL_PROBE_BOOTSTRAP";
+const privateDirectoryProbeBootstrapMarker = "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP";
+const unsafeAncestorProbeBootstrapMarker = "MIFTAH_ACL_UNSAFE_ANCESTOR_PROBE_BOOTSTRAP";
+const copyFileSecurityProbeBootstrapMarker = "MIFTAH_ACL_COPY_FILE_PROBE_BOOTSTRAP";
 const temporaryDirectories: string[] = [];
+
+function powerShellContractTimeout(probeCount: number): number {
+  const maximumFunctionalProbeTime = powerShellBootstrapTimeoutMs + privateDirectoryProbeExecutionTimeoutMs;
+  return probeCount * maximumFunctionalProbeTime + powerShellContractSlackMs;
+}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -32,6 +47,58 @@ function trustedPowerShellExecutable(): string {
   const executable = win32.join(win32.resolve(systemRoot), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   if (!existsSync(executable)) throw new Error("Windows PowerShell was unavailable for the ACL integration contract");
   return executable;
+}
+
+function bufferIncludesAsciiMarker(bytes: Buffer, marker: string): boolean {
+  return bytes.includes(Buffer.from(marker, "utf8")) || bytes.includes(Buffer.from(marker, "utf16le"));
+}
+
+function createPowerShellProbeDeadline(
+  child: Pick<ReturnType<typeof spawn>, "kill">,
+  bootstrapMarker: string | undefined,
+  executionTimeoutMs: number,
+  onTimeout: () => void
+): { clear: () => void; observe: (chunk: Buffer) => void } {
+  let phase: "bootstrap" | "execution" = bootstrapMarker === undefined ? "execution" : "bootstrap";
+  let markerTail = Buffer.alloc(0);
+  let settled = false;
+  let timeout: NodeJS.Timeout | undefined;
+  const maximumMarkerBytes = bootstrapMarker === undefined ? 0 : Buffer.byteLength(bootstrapMarker, "utf16le");
+
+  const expire = (): void => {
+    if (settled) return;
+    settled = true;
+    try {
+      child.kill();
+    } catch {
+      // The probe has no verified result after its bounded phase deadline.
+    }
+    onTimeout();
+  };
+  const arm = (durationMs: number): void => {
+    if (timeout !== undefined) clearTimeout(timeout);
+    timeout = setTimeout(expire, durationMs);
+  };
+
+  arm(phase === "bootstrap" ? powerShellBootstrapTimeoutMs : executionTimeoutMs);
+
+  return {
+    clear: () => {
+      settled = true;
+      if (timeout !== undefined) clearTimeout(timeout);
+    },
+    observe: (chunk) => {
+      if (settled || phase !== "bootstrap" || bootstrapMarker === undefined) return;
+      const candidate = Buffer.concat([markerTail, chunk]);
+      if (bufferIncludesAsciiMarker(candidate, bootstrapMarker)) {
+        phase = "execution";
+        markerTail = Buffer.alloc(0);
+        arm(executionTimeoutMs);
+        return;
+      }
+      markerTail = candidate.subarray(-Math.min(candidate.length, maximumMarkerBytes - 1));
+    }
+  };
 }
 
 function aclEnvironment(request: string): NodeJS.ProcessEnv {
@@ -54,7 +121,8 @@ function restrictedAclEnvironment(request: string): NodeJS.ProcessEnv {
   return environment;
 }
 
-const aclProbe = String.raw`$ErrorActionPreference = 'Stop'
+const aclProbe = String.raw`[Console]::Error.Write('${aclProbeBootstrapMarker}')
+$ErrorActionPreference = 'Stop'
 $requestName = '${requestEnvironmentName}'
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
 $stage = 'bootstrap'
@@ -104,7 +172,8 @@ try {
 const encodedAclProbe = Buffer.from(aclProbe, "utf16le").toString("base64");
 const encodedHangingAclProbe = Buffer.from("Start-Sleep -Seconds 10", "utf16le").toString("base64");
 
-const unsafeAncestorProbe = String.raw`$ErrorActionPreference = 'Stop'
+const unsafeAncestorProbe = String.raw`[Console]::Out.Write('${unsafeAncestorProbeBootstrapMarker}')
+$ErrorActionPreference = 'Stop'
 $requestName = '${privateDirectoryRequestEnvironmentName}'
 try {
   $encoded = [Environment]::GetEnvironmentVariable($requestName, [EnvironmentVariableTarget]::Process)
@@ -125,7 +194,7 @@ try {
 }`;
 const encodedUnsafeAncestorProbe = Buffer.from(unsafeAncestorProbe, "utf16le").toString("base64");
 
-const privateDirectoryProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP')
+const privateDirectoryProbe = String.raw`[Console]::Out.Write('${privateDirectoryProbeBootstrapMarker}')
 $ErrorActionPreference = 'Stop'
 $requestName = '${privateDirectoryRequestEnvironmentName}'
 $directorySections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
@@ -181,7 +250,7 @@ try {
 
 const encodedPrivateDirectoryProbe = Buffer.from(privateDirectoryProbe, "utf16le").toString("base64");
 
-const copyFileSecurityProbe = String.raw`[Console]::Out.Write('MIFTAH_ACL_COPY_FILE_PROBE_BOOTSTRAP')
+const copyFileSecurityProbe = String.raw`[Console]::Out.Write('${copyFileSecurityProbeBootstrapMarker}')
 $ErrorActionPreference = 'Stop'
 $requestName = '${privateDirectoryRequestEnvironmentName}'
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
@@ -283,6 +352,7 @@ function safeAclProbeStage(output: readonly Buffer[]): string {
     )?.[0];
     if (stage !== undefined) return stage;
   }
+  if (bufferIncludesAsciiMarker(bytes, aclProbeBootstrapMarker)) return "MIFTAH_ACL_PROBE_STAGE:bootstrap";
   return "MIFTAH_ACL_PROBE_STAGE:unavailable";
 }
 
@@ -301,7 +371,7 @@ function safePrivateDirectoryProbeStage(output: readonly Buffer[]): string {
   if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_SECTIONS")) {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:sections";
   }
-  if (bytes.toString("utf8").includes("MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP")) {
+  if (bufferIncludesAsciiMarker(bytes, privateDirectoryProbeBootstrapMarker)) {
     return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:bootstrap";
   }
   return "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_STAGE:unavailable";
@@ -329,7 +399,7 @@ function safeCopyFileSecurityProbeStage(output: readonly Buffer[]): string {
   if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_SECTIONS")) {
     return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:sections";
   }
-  if (bytes.toString("utf8").includes("MIFTAH_ACL_COPY_FILE_PROBE_BOOTSTRAP")) {
+  if (bufferIncludesAsciiMarker(bytes, copyFileSecurityProbeBootstrapMarker)) {
     return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:bootstrap";
   }
   return "MIFTAH_ACL_COPY_FILE_PROBE_STAGE:unavailable";
@@ -352,6 +422,7 @@ async function windowsAclSddl(
 ): Promise<string> {
   const request = Buffer.from(JSON.stringify({ path, operation }), "utf8").toString("base64");
   return new Promise((resolve, reject) => {
+    const isFunctionalProbe = encodedCommand === encodedAclProbe;
     const child = spawn(
       trustedPowerShellExecutable(),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
@@ -359,22 +430,28 @@ async function windowsAclSddl(
     );
     const output: Buffer[] = [];
     const errorOutput: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The probe has no verified result after its bounded execution time.
+    const deadline = createPowerShellProbeDeadline(
+      child,
+      isFunctionalProbe ? aclProbeBootstrapMarker : undefined,
+      isFunctionalProbe ? powerShellProbeExecutionTimeoutMs : hangingAclProbeTimeoutMs,
+      () => {
+        reject(new Error(`Windows ACL probe timed out: ${safeAclProbeStage([...output, ...errorOutput])}`));
       }
-      reject(new Error(`Windows ACL probe timed out: ${safeAclProbeStage([...output, ...errorOutput])}`));
-    }, 5_000);
-    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
+    );
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output.push(chunk);
+      deadline.observe(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      errorOutput.push(chunk);
+      deadline.observe(chunk);
+    });
     child.once("error", () => {
-      clearTimeout(timeout);
+      deadline.clear();
       reject(new Error("Windows ACL probe could not start"));
     });
     child.once("close", (code) => {
-      clearTimeout(timeout);
+      deadline.clear();
       if (code !== 0) {
         reject(new Error(`Windows ACL probe failed: ${safeAclProbeStage([...output, ...errorOutput])}`));
         return;
@@ -398,22 +475,26 @@ async function windowsPrivateDirectoryProbe(directory: string): Promise<void> {
     );
     const output: Buffer[] = [];
     const errorOutput: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The probe has no verified result after its bounded execution time.
-      }
-      reject(new Error(`Windows private-directory ACL probe timed out: ${safePrivateDirectoryProbeStage([...output, ...errorOutput])}`));
-    }, 5_000);
-    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
+    const deadline = createPowerShellProbeDeadline(
+      child,
+      privateDirectoryProbeBootstrapMarker,
+      privateDirectoryProbeExecutionTimeoutMs,
+      () => reject(new Error(`Windows private-directory ACL probe timed out: ${safePrivateDirectoryProbeStage([...output, ...errorOutput])}`))
+    );
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output.push(chunk);
+      deadline.observe(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      errorOutput.push(chunk);
+      deadline.observe(chunk);
+    });
     child.once("error", () => {
-      clearTimeout(timeout);
+      deadline.clear();
       reject(new Error("Windows private-directory ACL probe could not start"));
     });
     child.once("close", (code) => {
-      clearTimeout(timeout);
+      deadline.clear();
       if (code === 0) {
         resolve();
         return;
@@ -429,22 +510,22 @@ async function grantUntrustedAncestorMutation(directory: string): Promise<void> 
     const child = spawn(
       trustedPowerShellExecutable(),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedUnsafeAncestorProbe],
-      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: "ignore" }
+      { env: restrictedAclEnvironment(request), shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
     );
-    const timeout = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The test probe has no verified result after its bounded execution time.
-      }
-      reject(new Error("Windows unsafe-ancestor ACL probe timed out"));
-    }, 5_000);
+    const deadline = createPowerShellProbeDeadline(
+      child,
+      unsafeAncestorProbeBootstrapMarker,
+      powerShellProbeExecutionTimeoutMs,
+      () => reject(new Error("Windows unsafe-ancestor ACL probe timed out"))
+    );
+    child.stdout?.on("data", (chunk: Buffer) => deadline.observe(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => deadline.observe(chunk));
     child.once("error", () => {
-      clearTimeout(timeout);
+      deadline.clear();
       reject(new Error("Windows unsafe-ancestor ACL probe could not start"));
     });
     child.once("close", (code) => {
-      clearTimeout(timeout);
+      deadline.clear();
       if (code === 0) {
         resolve();
         return;
@@ -473,22 +554,26 @@ async function windowsCopyFileSecurityProbe(
     );
     const output: Buffer[] = [];
     const errorOutput: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The probe has no verified result after its bounded execution time.
-      }
-      reject(new Error(`Windows copy-file ACL probe timed out: ${safeCopyFileSecurityProbeStage([...output, ...errorOutput])}`));
-    }, 5_000);
-    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => errorOutput.push(chunk));
+    const deadline = createPowerShellProbeDeadline(
+      child,
+      copyFileSecurityProbeBootstrapMarker,
+      powerShellProbeExecutionTimeoutMs,
+      () => reject(new Error(`Windows copy-file ACL probe timed out: ${safeCopyFileSecurityProbeStage([...output, ...errorOutput])}`))
+    );
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output.push(chunk);
+      deadline.observe(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      errorOutput.push(chunk);
+      deadline.observe(chunk);
+    });
     child.once("error", () => {
-      clearTimeout(timeout);
+      deadline.clear();
       reject(new Error("Windows copy-file ACL probe could not start"));
     });
     child.once("close", (code) => {
-      clearTimeout(timeout);
+      deadline.clear();
       if (code === 0) {
         resolve();
         return;
@@ -516,7 +601,7 @@ describe("Windows migration ACL contract", () => {
       await expect(readFile(path, "utf8")).resolves.toBe(content);
       await expect(verifyWindowsConfigPathSecurity(path, "file")).resolves.toBe(true);
     },
-    10_000
+    powerShellContractTimeout(1)
   );
 
   it.runIf(process.platform === "win32")(
@@ -536,7 +621,7 @@ describe("Windows migration ACL contract", () => {
       await expect(writeWindowsPrivateConfigFile(path, "{\"version\":\"3\",\"name\":\"different\"}\n")).resolves.toBe("exists");
       await expect(readFile(path, "utf8")).resolves.toBe(content);
     },
-    10_000
+    powerShellContractTimeout(1)
   );
 
   it.runIf(process.platform === "win32")(
@@ -549,7 +634,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, join(privateParent, "miftah"))).resolves.toBe(true);
     },
-    10_000
+    powerShellContractTimeout(1)
   );
 
   it.runIf(process.platform === "win32")(
@@ -566,7 +651,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(createWindowsPrivateDirectoryInPrivateParent(privateParent, child)).resolves.toBe(false);
     },
-    10_000
+    powerShellContractTimeout(2)
   );
 
   it.runIf(process.platform === "win32")(
@@ -577,7 +662,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(windowsPrivateDirectoryProbe(join(parentDirectory, ".miftah-migrate-transaction"))).resolves.toBeUndefined();
     },
-    10_000
+    powerShellContractTimeout(1)
   );
 
   it.runIf(process.platform === "win32")(
@@ -609,7 +694,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
-    10_000
+    powerShellContractTimeout(3)
   );
 
   it.runIf(process.platform === "win32")(
@@ -624,7 +709,7 @@ describe("Windows migration ACL contract", () => {
 
       await expect(verifyWindowsConfigPathSecurity(path, "file")).resolves.toBe(true);
     },
-    10_000
+    powerShellContractTimeout(1)
   );
 
   it.runIf(process.platform === "win32")(
@@ -646,7 +731,7 @@ describe("Windows migration ACL contract", () => {
 
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedSddl);
     },
-    10_000
+    powerShellContractTimeout(3)
   );
 
   it.runIf(process.platform === "win32")(
@@ -672,7 +757,7 @@ describe("Windows migration ACL contract", () => {
 
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    powerShellContractTimeout(4)
   );
 
   it.runIf(process.platform === "win32")(
@@ -694,7 +779,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath)).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    powerShellContractTimeout(4)
   );
 
   it.runIf(process.platform === "win32")(
@@ -716,7 +801,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "verify-access-rules")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    powerShellContractTimeout(4)
   );
 
   it.runIf(process.platform === "win32")(
@@ -738,7 +823,7 @@ describe("Windows migration ACL contract", () => {
       await expect(windowsCopyFileSecurityProbe(sourcePath, targetPath, "fresh-security")).resolves.toBeUndefined();
       expect(await windowsAclSddl(targetPath, "read")).toBe(expectedPersistedInheritedDaclSddl(expectedSddl));
     },
-    10_000
+    powerShellContractTimeout(4)
   );
 
   it.runIf(process.platform === "win32")(
@@ -767,6 +852,6 @@ describe("Windows migration ACL contract", () => {
       expect(await windowsAclSddl(`${configPath}.bak`, "read")).toBe(expectedSddl);
       expect(await readFile(`${configPath}.bak`, "utf8")).toBe(source);
     },
-    20_000
+    powerShellContractTimeout(3)
   );
 });

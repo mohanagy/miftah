@@ -60,6 +60,7 @@ export class ContainedStdioClientTransport implements Transport {
   private explicitlyClosing = false;
   private closeEmitted = false;
   private containmentFailure: Error | undefined;
+  private unexpectedExit: { readonly exitCode: number | null; readonly signal: NodeJS.Signals | null } | undefined;
 
   constructor(
     private readonly server: StdioServerParameters,
@@ -95,7 +96,8 @@ export class ContainedStdioClientTransport implements Transport {
         this.containedPid = child.pid;
         resolve();
       });
-      child.once("exit", () => {
+      child.once("exit", (exitCode, signal) => {
+        if (!this.explicitlyClosing) this.unexpectedExit = { exitCode, signal };
         // Node emits `exit` before `close` when a child leaves descendants
         // holding inherited stdio. Reap at the exit boundary; waiting for
         // `close` here would prevent crash recovery forever.
@@ -124,6 +126,11 @@ export class ContainedStdioClientTransport implements Transport {
   /** Returns the direct child PID only while it is still live. */
   get pid(): number | null {
     return this.child?.pid ?? null;
+  }
+
+  /** Returns the natural child exit that ended a live transport, excluding Miftah cleanup signals. */
+  get startupExit(): { readonly exitCode: number | null; readonly signal: NodeJS.Signals | null } | undefined {
+    return this.unexpectedExit;
   }
 
   /**

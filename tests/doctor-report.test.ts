@@ -185,6 +185,19 @@ describe("doctor report", () => {
     }
   });
 
+  it("recognizes uvx packages without treating --with dependencies as the launched package", () => {
+    const checks = [
+      diagnoseCommandPinning("uvx", ["mcp-search-console@0.3.2"]),
+      diagnoseCommandPinning("uvx", ["--with", "mcp<2", "mcp-search-console@0.3.2"]),
+      diagnoseCommandPinning("uvx", ["--from", "mcp-search-console@0.3.2", "mcp-search-console"]),
+      diagnoseCommandPinning("uvx", ["--with=mcp<2", "mcp-search-console"])
+    ];
+
+    expect(checks.map((check) => check.status)).toEqual(["pass", "pass", "pass", "warning"]);
+    expect(checks.every((check) => check.target === "package dependency")).toBe(true);
+    expect(formatDoctorReport(normalizeDoctorReport(checks))).not.toContain("mcp-search-console");
+  });
+
   it("warns for malformed semantic versions in package invocations", () => {
     const malformedVersions = ["1.2.3-.", "1.2.3-alpha..beta", "01.2.3"];
     const checks = malformedVersions.map((version) => diagnoseCommandPinning("npx", [`package@${version}`]));

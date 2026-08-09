@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { SecretRedactor } from "../secrets/redact.js";
+import type { UpstreamStartupDiagnostic } from "../upstream/startup-diagnostic.js";
 
 export const DOCTOR_CODES = {
   CONFIGURATION: "DOCTOR_CONFIGURATION",
@@ -33,6 +34,7 @@ export interface DoctorCheck {
   target: string;
   explanation: string;
   remediation: string;
+  diagnostic?: UpstreamStartupDiagnostic;
 }
 
 export interface DoctorReport {
@@ -107,6 +109,7 @@ const packageLaunchers = new Map<string, string>([
   ["yarn", "dlx"],
   ["npm", "exec"]
 ]);
+const uvxValueOptions = new Set(["--constraint", "--from", "--index", "--override", "--python", "--with", "--with-editable"]);
 const semverNumericIdentifier = "(?:0|[1-9]\\d*)";
 const semverPrereleaseIdentifier = `(?:${semverNumericIdentifier}|\\d*[A-Za-z-][0-9A-Za-z-]*)`;
 const strictSemver = new RegExp(
@@ -161,6 +164,25 @@ function isDigestPinned(image: string): boolean {
 }
 
 function packageArgument(command: string, args: readonly string[]): string | undefined {
+  if (command === "uvx") {
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = args[index];
+      if (!argument) return undefined;
+      if (argument === "--from") return args[index + 1];
+      if (argument.startsWith("--from=")) return argument.slice("--from=".length) || undefined;
+      if (uvxValueOptions.has(argument)) {
+        index += 1;
+        continue;
+      }
+      if (argument.startsWith("--with=") || argument.startsWith("--constraint=") ||
+          argument.startsWith("--override=") || argument.startsWith("--python=") || argument.startsWith("--index=")) {
+        continue;
+      }
+      if (argument === "--") continue;
+      if (!argument.startsWith("-")) return argument;
+    }
+    return undefined;
+  }
   const launcherArgument = packageLaunchers.get(command);
   if (launcherArgument === undefined) return undefined;
 
@@ -196,7 +218,14 @@ function compareText(left: string, right: string): number {
 
 export function normalizeDoctorReport<T extends DoctorCheck>(checks: readonly T[]): DoctorReport {
   const normalizedChecks = checks
-    .map(({ code, status, target, explanation, remediation }) => ({ code, status, target, explanation, remediation }))
+    .map(({ code, status, target, explanation, remediation, diagnostic }) => ({
+      code,
+      status,
+      target,
+      explanation,
+      remediation,
+      ...(diagnostic === undefined ? {} : { diagnostic })
+    }))
     .sort(
       (left, right) =>
         codePosition(left.code) - codePosition(right.code) ||
@@ -220,6 +249,12 @@ export function formatDoctorReport(report: DoctorReport): string {
     (check) =>
       `[${check.status.toUpperCase()}] ${check.code} — ${check.target}\n` +
       `  ${check.explanation}\n` +
+      (check.diagnostic === undefined
+        ? ""
+        : `  Cause: ${check.diagnostic.cause.replace(/\n/gu, "\n    ")}\n` +
+          (check.diagnostic.exitCode === undefined ? "" : `  Exit code: ${check.diagnostic.exitCode}\n`) +
+          (check.diagnostic.signal === undefined ? "" : `  Signal: ${check.diagnostic.signal}\n`) +
+          (check.diagnostic.truncated ? "  Cause output was truncated.\n" : "")) +
       `  Remediation: ${check.remediation}`
   );
   return [`Doctor: ${report.overallStatus}`, `Summary: ${summary}`, ...checks].join("\n");

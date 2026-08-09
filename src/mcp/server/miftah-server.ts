@@ -69,7 +69,9 @@ import {
 import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-process-manager.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { commandInstruction } from "../../utils/shell-command.js";
 import { MIFTAH_VERSION } from "../../version.js";
+import { startupFailureProfile, testProfileDiagnosticCommand } from "../../upstream/startup-diagnostic.js";
 import {
   OperationPipeline,
   evaluatePolicyEnforcement,
@@ -269,6 +271,18 @@ const profileSwitchApprovalErrors: ApprovalErrorFactory = {
     )
 };
 
+/** Keeps the serve warning concise while naming the shell required by its exact retry command. */
+export function formatResourceSubscriptionCapabilityWarning(
+  safeError: MiftahError,
+  runtimeConfigPath: string | undefined
+): string {
+  const profile = startupFailureProfile(safeError);
+  const retry = runtimeConfigPath === undefined || profile === undefined
+    ? ""
+    : ` ${commandInstruction("Run", testProfileDiagnosticCommand(runtimeConfigPath, profile))}`;
+  return `${safeError.message}${retry}`;
+}
+
 /** Hosts Miftah's MCP surface and coordinates profile routing, upstream discovery, and client notifications. */
 export class MiftahServer {
   readonly server: Server;
@@ -322,7 +336,8 @@ export class MiftahServer {
     private readonly routingContextCollector?: RoutingContextCollector,
     private readonly plugins?: PluginRegistry,
     private readonly oauth?: RemoteOAuthRuntime,
-    identityManager?: IdentityManager
+    identityManager?: IdentityManager,
+    private readonly runtimeConfigPath?: string
   ) {
     bindProfileTransitionConfirmationVerifier(profiles, (request) => {
       const binding = this.profileTransitionConfirmations.get(request.proof);
@@ -687,7 +702,9 @@ export class MiftahServer {
 
   private reportResourceSubscriptionCapabilityFailure(error: unknown): void {
     const safeError = this.toSafeError(error);
-    process.emitWarning(safeError.message, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" });
+    process.emitWarning(formatResourceSubscriptionCapabilityWarning(safeError, this.runtimeConfigPath), {
+      code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE"
+    });
   }
 
   private resetMcpRoots(): void {

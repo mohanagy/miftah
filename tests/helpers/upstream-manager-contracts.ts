@@ -10,6 +10,7 @@ import { MultiUpstreamProcessManager } from "../../src/upstream/multi-upstream-p
 import { UpstreamProcessManager } from "../../src/upstream/upstream-process-manager.js";
 import { SecretRedactor } from "../../src/secrets/redact.js";
 import { MiftahError } from "../../src/utils/errors.js";
+import { startupDiagnosticFromError } from "../../src/upstream/startup-diagnostic.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "fake-upstream.mjs");
 const retainedStdioDescendantFixture = join(
@@ -397,6 +398,95 @@ function registerBasics(): void {
     }
   });
 
+  it("captures a bounded redacted diagnostic when a child exits before initialization", async () => {
+    const secret = "split-startup-diagnostic-secret";
+    const manager = new UpstreamProcessManager(
+      {
+        transport: "stdio",
+        command: process.execPath,
+        args: [
+          "--eval",
+          [
+            "const secret = process.env.API_TOKEN;",
+            "process.stderr.write('ModuleNotFoundError: missing safe dependency\\n');",
+            "process.stderr.write(secret.slice(0, 7));",
+            "setImmediate(() => {",
+            "  process.stderr.write(secret.slice(7) + '\\n' + Array.from({ length: 300 }, () => 'x'.repeat(40)).join('\\n'));",
+            "  process.exit(23);",
+            "});"
+          ].join("\n")
+        ]
+      },
+      { work: { env: { API_TOKEN: secret } } },
+      { startupTimeoutMs: 1_000 }
+    );
+
+    try {
+      const failure = await manager.get("work").catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(MiftahError);
+      expect(failure).toMatchObject({
+        code: "UPSTREAM_INIT_FAILED",
+        details: {
+          startupDiagnostic: {
+            kind: "process-exit",
+            exitCode: 23,
+            cause: expect.stringContaining("ModuleNotFoundError"),
+            truncated: true,
+            remediation: expect.stringContaining("upstream")
+          }
+        }
+      });
+      const serialized = JSON.stringify(failure);
+      expect(serialized).toContain("[REDACTED]");
+      expect(serialized).not.toContain(secret);
+      const diagnostic = startupDiagnosticFromError(failure);
+      if (diagnostic === undefined) throw new Error("Expected a safe startup diagnostic");
+      expect(Buffer.byteLength(diagnostic.cause, "utf8")).toBeLessThanOrEqual(8_192);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "classifies a child signal during initialization in the startup diagnostic",
+    async () => {
+      const manager = new UpstreamProcessManager(
+        {
+          transport: "stdio",
+          command: process.execPath,
+          args: [
+            "--eval",
+            [
+              "process.stderr.write('signal startup diagnostic\\n');",
+              "setTimeout(() => process.kill(process.pid, 'SIGTERM'), 10);"
+            ].join("\n")
+          ]
+        },
+        { work: {} },
+        { startupTimeoutMs: 1_000 }
+      );
+
+      try {
+        const failure = await manager.get("work").catch((error: unknown) => error);
+        expect(failure).toMatchObject({
+          code: "UPSTREAM_INIT_FAILED",
+          details: {
+            startupDiagnostic: {
+              errorCode: "UPSTREAM_INIT_FAILED",
+              kind: "signal",
+              signal: "SIGTERM",
+              cause: expect.stringContaining("signal startup diagnostic"),
+              truncated: false,
+              remediation: expect.stringContaining("upstream")
+            }
+          }
+        });
+      } finally {
+        await manager.close();
+      }
+    }
+  );
+
   it("shuts down an idle profile and starts a fresh process on its next use", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-idle-"));
     const startCountPath = join(directory, "starts");
@@ -742,7 +832,18 @@ function registerRecovery(): void {
     try {
       const startup = manager.get("work");
       void startup.catch(() => undefined);
-      await expect(startup).rejects.toMatchObject({ code: "UPSTREAM_START_FAILED" });
+      await expect(startup).rejects.toMatchObject({
+        code: "UPSTREAM_START_FAILED",
+        details: {
+          startupDiagnostic: {
+            errorCode: "UPSTREAM_START_FAILED",
+            kind: "timeout",
+            cause: expect.stringContaining("startup timed out after 200ms"),
+            truncated: false,
+            remediation: expect.stringContaining("upstream")
+          }
+        }
+      });
       expect(Date.now() - startedAt).toBeLessThan(500);
       expect(manager.listHealth()).toMatchObject([{ profile: "work", processState: "failed" }]);
     } finally {

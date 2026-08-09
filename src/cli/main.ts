@@ -34,6 +34,7 @@ import { openSystemBrowser } from "../console/open-browser.js";
 import { ConsoleDashboardApplicationService } from "../console/console-dashboard-application-service.js";
 import { FileSetupDraftStore } from "../setup/setup-draft.js";
 import { environmentReferencesFromConfig } from "../setup/setup-completion.js";
+import { formatUpstreamStartupFailure } from "./error-output.js";
 
 function oauthSelector(args: { readonly connection?: string; readonly profile?: string; readonly upstream?: string }) {
   return {
@@ -350,14 +351,22 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "list-tools" || command === "test-profile") {
     const runtime = await createRuntime(args.config);
     const profile = args.profile ?? runtime.config.defaultProfile;
-    if (command === "list-tools") {
-      process.stdout.write(`${JSON.stringify(await runtime.manager.listTools(profile), null, 2)}\n`);
-    } else {
-      const session = await runtime.manager.get(profile);
-      await session.listTools();
-      process.stdout.write(`${JSON.stringify({ ok: true, profile }, null, 2)}\n`);
+    try {
+      if (command === "list-tools") {
+        process.stdout.write(`${JSON.stringify(await runtime.manager.listTools(profile), null, 2)}\n`);
+      } else {
+        const session = await runtime.manager.get(profile);
+        await session.listTools();
+        process.stdout.write(`${JSON.stringify({ ok: true, profile }, null, 2)}\n`);
+      }
+    } catch (error) {
+      if (command !== "test-profile") throw error;
+      const output = formatUpstreamStartupFailure(error, { configPath: args.config, profile });
+      process.stderr.write(`${runtime.redactor.redactText(output)}\n`);
+      process.exitCode = exitCodeForError(error);
+    } finally {
+      await runtime.manager.close();
     }
-    await runtime.manager.close();
     return;
   }
   if (command === "logs") {

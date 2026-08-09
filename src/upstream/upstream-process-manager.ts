@@ -22,6 +22,7 @@ import {
   ContainedStdioClientTransport,
   createContainedStdioClientTransport
 } from "./contained-stdio-transport.js";
+import type { UpstreamStartupDiagnostic, UpstreamStartupDiagnosticKind } from "./startup-diagnostic.js";
 
 const defaultStartupTimeoutMs = 30_000;
 const defaultShutdownTimeoutMs = 5_000;
@@ -31,6 +32,44 @@ const initialRestartDelayMs = 100;
 const maximumRestartDelayMs = 5_000;
 const restartJitterFraction = 0.2;
 const restartStabilityWindowMs = 30_000;
+const maxStartupDiagnosticBytes = 8_192;
+const startupRemediation = "Correct the upstream command, runtime, or dependency configuration, then retry the upstream profile.";
+const escapeCharacter = String.fromCodePoint(27);
+const ansiCsiPattern = new RegExp(`${escapeCharacter}\\[[0-?]*[ -/]*[@-~]`, "gu");
+
+class BoundedStartupStderr {
+  private readonly chunks: Buffer[] = [];
+  private bytes = 0;
+  truncated = false;
+
+  write(value: string): void {
+    if (value.length === 0) return;
+    const encoded = Buffer.from(value, "utf8");
+    const remaining = maxStartupDiagnosticBytes - this.bytes;
+    if (remaining <= 0) {
+      this.truncated = true;
+      return;
+    }
+    const accepted = encoded.subarray(0, remaining);
+    this.chunks.push(accepted);
+    this.bytes += accepted.length;
+    if (accepted.length < encoded.length) this.truncated = true;
+  }
+
+  value(): string {
+    return sanitizeStartupDiagnostic(Buffer.concat(this.chunks).toString("utf8")).trim();
+  }
+}
+
+function sanitizeStartupDiagnostic(value: string): string {
+  return Array.from(value.replace(ansiCsiPattern, ""), (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 8 || codePoint === 11 || codePoint === 12 ||
+      (codePoint >= 14 && codePoint <= 31) || codePoint === 127
+      ? ""
+      : character;
+  }).join("");
+}
 const credentialKeyPattern = /(token|secret|password|api[_-]?key|auth|private|credential|cookie)/i;
 
 /**
@@ -448,6 +487,7 @@ export class UpstreamProcessManager {
     let startingAttempt: StartingAttempt | undefined;
     let transportClosed = createCloseSignal();
     let reserved = false;
+    const startupStderr = new BoundedStartupStderr();
 
     const trackTransportClose = (managedTransport: Transport): TransportCloseSignal => {
       const closeSignal = createCloseSignal();
@@ -503,7 +543,7 @@ export class UpstreamProcessManager {
         });
         this.assertCurrentStartup(profile, generation);
         transport = stdioTransport;
-        this.attachStderr(profile, stdioTransport.stderr, suppressStderr);
+        this.attachStderr(profile, stdioTransport.stderr, suppressStderr, startupStderr);
       } else {
         if (!this.upstream.url) {
           throw new MiftahError("UPSTREAM_START_FAILED", "UPSTREAM_START_FAILED: remote upstream requires a url");
@@ -651,7 +691,7 @@ export class UpstreamProcessManager {
       if (this.startingAttempts.get(profile) === startingAttempt) this.startingAttempts.delete(profile);
       const current = this.isCurrent(profile, generation);
       const failure = current
-        ? this.asStartFailure(profile, error)
+        ? this.asStartFailure(profile, error, stdioTransport, startupStderr)
         : new MiftahError("UPSTREAM_START_FAILED", `UPSTREAM_START_FAILED: startup for '${profile}' was cancelled`);
       if (current) {
         this.setProcessState(profile, "failed", { error: failure.message, resetCapabilities: true, pid: null });
@@ -758,19 +798,27 @@ export class UpstreamProcessManager {
   }
 
   /** Emits process stderr only after applying static and dynamically resolved secret redaction. */
-  private attachStderr(profile: string, stderr: Stream | null, suppressOutput = false): void {
+  private attachStderr(
+    profile: string,
+    stderr: Stream | null,
+    suppressOutput = false,
+    startupCapture?: BoundedStartupStderr
+  ): void {
     if (suppressOutput) {
       let emitted = false;
       stderr?.on("data", () => {
         if (emitted) return;
         emitted = true;
+        startupCapture?.write("[REDACTED]\n");
         this.options.onStderr?.(profile, "[REDACTED]\n");
       });
       return;
     }
     const streamRedactor = this.redactor.createTextStream();
     const emit = (value: string): void => {
-      if (value.length > 0) this.options.onStderr?.(profile, value);
+      if (value.length === 0) return;
+      startupCapture?.write(value);
+      this.options.onStderr?.(profile, value);
     };
     stderr?.on("data", (chunk: Buffer) => {
       emit(streamRedactor.write(chunk.toString("utf8")));
@@ -1329,14 +1377,58 @@ export class UpstreamProcessManager {
     }
   }
 
-  private asStartFailure(profile: string, error: unknown): MiftahError {
-    if (error instanceof MiftahError) return error;
+  private asStartFailure(
+    profile: string,
+    error: unknown,
+    stdioTransport?: ContainedStdioClientTransport,
+    startupStderr?: BoundedStartupStderr
+  ): MiftahError {
+    if (
+      error instanceof MiftahError &&
+      error.code !== "UPSTREAM_START_FAILED" &&
+      error.code !== "UPSTREAM_INIT_FAILED"
+    ) {
+      return error;
+    }
     if (this.upstream.transport !== "stdio") {
+      if (error instanceof MiftahError) return error;
       const remoteError = asRemoteError(profile, this.upstream.transport, error);
       if (remoteError) return remoteError;
     }
-    return new MiftahError("UPSTREAM_INIT_FAILED", `UPSTREAM_INIT_FAILED: could not initialize profile '${profile}'`, {
-      cause: this.redactProcessOutput(error instanceof Error ? error.message : String(error))
+    const failure = error instanceof MiftahError
+      ? error
+      : new MiftahError("UPSTREAM_INIT_FAILED", `UPSTREAM_INIT_FAILED: could not initialize profile '${profile}'`);
+    const processExit = stdioTransport?.startupExit;
+    const capturedCause = startupStderr?.value();
+    const fallbackCause = typeof failure.details?.cause === "string"
+      ? failure.details.cause
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    const cause = capturedCause && capturedCause.length > 0
+      ? capturedCause
+      : sanitizeStartupDiagnostic(this.redactProcessOutput(fallbackCause)).trim();
+    const kind: UpstreamStartupDiagnosticKind = processExit?.signal
+      ? "signal"
+      : processExit?.exitCode !== undefined && processExit.exitCode !== null
+        ? "process-exit"
+        : failure.message.includes("startup timed out")
+          ? "timeout"
+          : "initialization";
+    const diagnostic: UpstreamStartupDiagnostic = {
+      errorCode: failure.code,
+      kind,
+      cause,
+      ...(processExit?.exitCode === undefined || processExit.exitCode === null ? {} : { exitCode: processExit.exitCode }),
+      ...(processExit?.signal === undefined || processExit.signal === null ? {} : { signal: processExit.signal }),
+      truncated: startupStderr?.truncated ?? false,
+      remediation: startupRemediation
+    };
+    return new MiftahError(failure.code, failure.message, {
+      ...failure.details,
+      cause,
+      profile,
+      startupDiagnostic: diagnostic
     });
   }
 

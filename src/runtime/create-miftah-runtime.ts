@@ -40,7 +40,8 @@ async function createConfiguredMiftahRuntime(
       }),
     runtime.plugins,
     runtime.oauth,
-    runtime.identities
+    runtime.identities,
+    runtimeConfigPath
   );
 
   return {
