@@ -1840,6 +1840,7 @@ describe("packed artifact contract", () => {
         expect(missingSecret.stdout).toBe("");
         expect(missingSecret.stderr).toContain("SECRET_ENV_MISSING");
         expect(missingSecret.stderr).not.toContain(`secretref:env://${unavailableSecretName}`);
+        expect(missingSecret.stderr).not.toContain("Remediation:");
         await expect(readFile(missingSecretStartPath, "utf8")).rejects.toThrow();
 
         const failedInitSecret = "packed-cli-init-secret";
@@ -1869,6 +1870,9 @@ describe("packed artifact contract", () => {
         expect(failedInit.status).toBe(5);
         expect(failedInit.stdout).toBe("");
         expect(failedInit.stderr).toContain("UPSTREAM_INIT_FAILED");
+        expect(failedInit.stderr).toContain("Cause:");
+        expect(failedInit.stderr).toContain("Remediation:");
+        expect(failedInit.stderr).toContain("Retry: miftah test-profile --config");
         expect(`${failedInit.stdout}${failedInit.stderr}`).not.toContain(failedInitSecret);
         expect(await readFile(upstreamShutdownPath, "utf8")).toBe("ended");
 
