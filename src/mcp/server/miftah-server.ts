@@ -70,6 +70,7 @@ import { MultiUpstreamProcessManager } from "../../upstream/multi-upstream-proce
 import type { UpstreamRequestOptions, UpstreamSession } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
 import { MIFTAH_VERSION } from "../../version.js";
+import { startupFailureProfile, testProfileDiagnosticCommand } from "../../upstream/startup-diagnostic.js";
 import {
   OperationPipeline,
   evaluatePolicyEnforcement,
@@ -322,7 +323,8 @@ export class MiftahServer {
     private readonly routingContextCollector?: RoutingContextCollector,
     private readonly plugins?: PluginRegistry,
     private readonly oauth?: RemoteOAuthRuntime,
-    identityManager?: IdentityManager
+    identityManager?: IdentityManager,
+    private readonly runtimeConfigPath?: string
   ) {
     bindProfileTransitionConfirmationVerifier(profiles, (request) => {
       const binding = this.profileTransitionConfirmations.get(request.proof);
@@ -687,7 +689,11 @@ export class MiftahServer {
 
   private reportResourceSubscriptionCapabilityFailure(error: unknown): void {
     const safeError = this.toSafeError(error);
-    process.emitWarning(safeError.message, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" });
+    const profile = startupFailureProfile(safeError);
+    const retry = this.runtimeConfigPath === undefined || profile === undefined
+      ? ""
+      : ` Run: ${testProfileDiagnosticCommand(this.runtimeConfigPath, profile)}`;
+    process.emitWarning(`${safeError.message}${retry}`, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" });
   }
 
   private resetMcpRoots(): void {

@@ -3488,6 +3488,56 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("keeps startup warnings concise and points to the exact profile diagnostic command", async () => {
+    const configPath = "/Users/example/My Config/miftah.json";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_FAIL_INITIALIZE: "true",
+            TEST_STDERR_MESSAGE: "ModuleNotFoundError: hidden from serve warning"
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(
+      config,
+      new ProfileManager(config),
+      manager,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      configPath
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "resource-subscription-diagnostic-client", version: "1.0.0" });
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      expect(emitWarning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "miftah test-profile --config '/Users/example/My Config/miftah.json' --profile 'work'"
+        ),
+        { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CAPABILITY_UNAVAILABLE" }
+      );
+      const warning = String(emitWarning.mock.calls[0]?.[0]);
+      expect(warning).toContain("UPSTREAM_INIT_FAILED");
+      expect(warning).not.toContain("ModuleNotFoundError");
+    } finally {
+      emitWarning.mockRestore();
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("releases subscription-capability probes before serving the active profile at capacity", async () => {
     const config = validateConfig({
       version: "1",

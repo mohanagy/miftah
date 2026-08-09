@@ -23,6 +23,7 @@ import { resolveProcessEnvironment } from "../upstream/upstream-process-manager.
 import { resolveWindowsStdioCommand } from "../upstream/windows-stdio-command.js";
 import { MiftahError } from "../utils/errors.js";
 import { SecretRedactor } from "../secrets/redact.js";
+import { startupDiagnosticFromError } from "../upstream/startup-diagnostic.js";
 import { createRuntime } from "./create-runtime.js";
 import {
   DOCTOR_CODES,
@@ -57,9 +58,10 @@ function check(
   status: DoctorCheck["status"],
   target: string,
   explanation: string,
-  remediation: string
+  remediation: string,
+  diagnostic?: DoctorCheck["diagnostic"]
 ): DoctorCheck {
-  return { code, status, target, explanation, remediation };
+  return { code, status, target, explanation, remediation, ...(diagnostic === undefined ? {} : { diagnostic }) };
 }
 
 function skippedDiscoveryCheck(code: DoctorCheck["code"], target: string, capability: string): DoctorCheck {
@@ -537,6 +539,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
     };
     const probeTarget = async (target: DoctorTarget): Promise<void> => {
       const targetText = targetLabel(target);
+      let executableAvailable = true;
       let runtime: Awaited<ReturnType<typeof createRuntime>>;
       try {
         runtime = await createRuntime(canonicalConfigPath, {
@@ -574,6 +577,7 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             available ? noAction() : "Install or correct the executable before starting the wrapper."
           )
         );
+        executableAvailable = available;
       } else {
         checks.push(
           check(
@@ -598,15 +602,17 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
             noAction()
           )
         );
-      } catch {
+      } catch (error) {
         incompleteProfiles.add(target.profile);
+        const diagnostic = executableAvailable ? startupDiagnosticFromError(error) : undefined;
         checks.push(
           check(
             DOCTOR_CODES.STARTUP,
             "error",
             targetText,
             "Upstream startup or initialization did not complete.",
-            "Correct upstream availability or configuration before retrying doctor."
+            diagnostic?.remediation ?? "Correct upstream availability or configuration before retrying doctor.",
+            diagnostic
           ),
           skippedDiscoveryCheck(DOCTOR_CODES.TOOLS_DISCOVERY, targetText, "Tool"),
           unavailableIdentityCheck(target, targetText, "startup"),

@@ -791,6 +791,7 @@ describe("doctor readiness runner", () => {
         ...baseConfig(
           stdioUpstream({
             API_TOKEN: "secretref:dotenv://MIFTAH_DOCTOR_SECRET",
+            TEST_STDERR_MESSAGE: "ModuleNotFoundError: missing safe dependency",
             TEST_FAIL_INITIALIZE: "true"
           })
         ),
@@ -802,7 +803,17 @@ describe("doctor readiness runner", () => {
     const report = await runDoctor(configPath);
 
     expect(report.overallStatus).toBe("failed");
-    expect(check(report, DOCTOR_CODES.STARTUP).status).toBe("error");
+    expect(check(report, DOCTOR_CODES.STARTUP)).toMatchObject({
+      status: "error",
+      explanation: "Upstream startup or initialization did not complete.",
+      diagnostic: {
+        errorCode: "UPSTREAM_INIT_FAILED",
+        cause: expect.stringContaining("ModuleNotFoundError"),
+        kind: "initialization",
+        truncated: false,
+        remediation: expect.stringContaining("upstream")
+      }
+    });
     expect(JSON.stringify(report)).not.toContain(secret);
   });
 
