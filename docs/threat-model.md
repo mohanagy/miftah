@@ -85,6 +85,8 @@ secret references, audit destination, and explicitly allowlisted plugins.
 | **Plugin, dependency, or source supply-chain compromise** gains same-user host access. | Local plugins are explicitly allowlisted, preflighted below the configuration directory, isolated in a child host, and given only limited routing signals. | These controls are not a substitute for dependency provenance, code review, signatures, host hardening, or separate OS identities. Treat configured plugin code and the package supply chain as operator trust decisions. |
 | **Denial of service and concurrency exhaustion** consumes processes, output buffers, HTTP sessions, audit capacity, or host resources. | Provider output and time are bounded; HTTP bodies and sessions are bounded before allocation; lifecycle management keeps a no-eviction capacity reservation through cleanup/recovery; failures are surfaced instead of silently admitting unlimited replacements. | Miftah does not provide a general host resource quota, distributed rate limit, or protection from a malicious same-user process, local administrator, upstream, or network. Operators must size and monitor the host and set appropriate deployment limits. |
 
+The [tool-description quarantine study](research/tool-description-quarantine.md) evaluates descriptor hashes and heuristic prompt-injection scanning. It is not a production security control: upstream tool descriptions and schemas remain untrusted input, and an operator-approved upstream remains able to receive the credentials intentionally supplied to it.
+
 ## Security-sensitive defaults and validation
 
 Security defaults deliberately favor refusal over convenience:
