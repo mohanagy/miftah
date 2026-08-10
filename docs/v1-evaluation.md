@@ -51,7 +51,8 @@ The participant chooses the documented terminal wizard, browser Console, preset,
 ```bash
 miftah validate --config <config-path>
 miftah doctor --config <config-path>
-miftah test-profile --config <config-path> --profile <profile-name>
+miftah test-profile --config <config-path> --profile <profile-a>
+miftah test-profile --config <config-path> --profile <profile-b>
 ```
 
 Passing diagnostics demonstrates only what each command reports. It does not prove provider scopes, account identity, or a successful real workflow.
@@ -101,7 +102,9 @@ Provider class / auth owner: ... / Miftah, upstream, or provider
 Client / OS: ... / ...
 Setup path chosen without coaching: ...
 Two same-provider profiles configured: yes/no
-validate / doctor / test-profile outcomes: pass, fail, or not run
+validate / doctor outcomes: pass, fail, or not run
+test-profile <profile-a> outcome: pass, fail, or not run
+test-profile <profile-b> outcome: pass, fail, or not run
 Initial and switched profile confirmed: yes/no
 Identity evidence: verified, not verified, or mismatched
 Real workflow outcome: completed/failed, with deidentified description
@@ -130,6 +133,6 @@ Map the final evidence explicitly:
 - issue #88: OAuth, Console, recovery, compatibility, and three returning users;
 - issue #202: three unaided participants can discover trust, auth, account, client, and recovery controls;
 - issue #290: three unaided participants achieve the README's safe first-use contract;
-- issue #39: at least three real providers are represented and all underlying issue gates are actually closed.
+- issue #39: at least three real providers are represented, the independent security review is closed, and the final v1 target is reconciled under the [independent review brief](independent-security-review.md); provider evidence alone cannot close this release gate.
 
 Failed attempts are learning, not completion. Keep every issue open until its own acceptance criteria are supported by linked evidence.

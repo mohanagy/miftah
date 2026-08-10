@@ -35,7 +35,7 @@ Miftah maintainers provide architecture and setup help, answer scope questions, 
 The reviewer provides:
 
 1. a private report with target identifiers, scope, exclusions, methods, findings, severity and rationale, affected versions, reproduction guidance, and recommended remediation;
-2. a remediation-verification addendum that records the exact fix commit or package for every critical or high finding and the retest result;
+2. a remediation-verification addendum that records the exact fix commit or package for every critical or high finding and the independent reviewer's retest result or written acceptance;
 3. a public completion summary naming the reviewer or organization when permitted, review dates, target, scope, exclusions, severity counts, remediation status, and residual limitations without exploit-enabling detail;
 4. the signed or otherwise attributable independence declaration.
 
@@ -47,9 +47,9 @@ The review gate closes only when:
 
 - the external reviewer has delivered the required report and independence declaration;
 - there is no unresolved critical or high-severity finding in the reviewed v1 target;
-- every critical or high finding has an exact remediation commit, regression test where practical, and reviewer retest or explicit verification acceptance;
+- every critical or high finding has an exact remediation commit, regression test where practical, and independent reviewer retest or written verification acceptance by that reviewer;
 - the public completion summary states the exact target, scope, exclusions, severity counts, and remediation status;
-- any change between the reviewed target and the v1 release candidate has been included in the review or accepted through a documented delta assessment.
+- any change between the reviewed target and the v1 release candidate has been included in the review or accepted by the independent reviewer through a documented delta assessment.
 
 Medium and lower findings must have a documented disposition, owner, and timeframe. Acceptance of residual risk must name the decision maker and rationale. Passing existing CI or publishing this brief does not satisfy the gate.
 
@@ -61,6 +61,6 @@ Medium and lower findings must have a documented disposition, owner, and timefra
 - [ ] Receive and archive the independence declaration and private report.
 - [ ] Triage findings without changing reviewer-authored severity evidence.
 - [ ] Remediate and add regression coverage.
-- [ ] Obtain reviewer verification or a documented accepted alternative.
+- [ ] Obtain independent reviewer verification or written acceptance by that reviewer.
 - [ ] Publish the safe completion summary and link it from #37.
 - [ ] Reconcile the final v1 candidate against the reviewed target before closing #39.

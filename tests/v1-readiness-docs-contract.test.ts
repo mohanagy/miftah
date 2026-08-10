@@ -11,6 +11,7 @@ describe("v1 readiness documentation contract", () => {
   it("links the evaluator and independent-review entry points from the README", () => {
     const readme = read("README.md");
 
+    expect(readme).toContain(`@lubab/miftah@${packageVersion}`);
     expect(readme).toContain("[v1 external evaluation](docs/v1-evaluation.md)");
     expect(readme).toContain(
       "[independent security review brief](docs/independent-security-review.md)",
@@ -28,6 +29,9 @@ describe("v1 readiness documentation contract", () => {
     expect(guide).toMatch(/two named profiles for the same provider/i);
     expect(guide).toMatch(/no tokens, OAuth codes, raw configuration/i);
     expect(guide).toMatch(/deidentified evidence template/i);
+    expect(guide).toContain("--profile <profile-a>");
+    expect(guide).toContain("--profile <profile-b>");
+    expect(guide).toMatch(/issue #39:.*independent security review/i);
 
     for (const command of [
       "miftah version",
@@ -44,6 +48,7 @@ describe("v1 readiness documentation contract", () => {
   it("defines an independent security review with actionable closure gates", () => {
     const brief = read("docs/independent-security-review.md");
 
+    expect(brief).toContain(`@lubab/miftah@${packageVersion}`);
     expect(brief).toMatch(/issues? #37 and #39/i);
     expect(brief).toContain("SECURITY.md");
     expect(brief).toContain("threat-model.md");
@@ -62,6 +67,7 @@ describe("v1 readiness documentation contract", () => {
     expect(validation).toContain(`@lubab/miftah@${packageVersion}`);
     expect(validation).toContain("Recorded completed external workflows: 0");
     expect(validation).toContain("Recorded returning external users: 0");
+    expect(validation).toContain("Recorded unaided README evaluators: 0");
     expect(threatModel).toContain(
       "[independent security review brief](independent-security-review.md)",
     );
