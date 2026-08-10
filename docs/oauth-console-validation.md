@@ -41,10 +41,11 @@ OAuth and Console are being validated for a pre-v1 feature release. Passing this
 
 ## External design-partner evidence
 
-Snapshot date: 2026-07-22.
+Snapshot date: 2026-08-11. Evaluator target: `@lubab/miftah@0.5.8`.
 
 - Interested external users: 5
 - Recorded completed external workflows: 0
 - Recorded returning external users: 0
+- Recorded unaided README evaluators: 0
 
-The external design-partner gate remains open. Closing it requires five external users to complete real multi-account workflows and at least three to return after setup. Record only deidentified workflow, setup friction, return behavior, and rejected assumptions; never record credentials, OAuth codes, tokens, provider payloads, or personal account identifiers.
+The external design-partner gate remains open. Use the [v1 external evaluation](v1-evaluation.md) protocol to define a completed real workflow, a later-session return, unaided participation, version pinning, and the deidentified public record. Never record credentials, OAuth codes, tokens, provider payloads, or personal account identifiers.

@@ -123,7 +123,7 @@ These are design boundaries, not permission to ignore them. Use separate OS iden
 
 ## Independent review status
 
-**Current project status (2026-07-14): not yet commissioned.** This document does not claim an independent review, an external finding count, or remediation of findings that have not been reported. The maintainer-authored controls above are implementation statements, not a substitute for external assurance.
+**Current project status (2026-08-11): not yet commissioned.** The [independent security review brief](independent-security-review.md) defines the target, independence, scope, deliverables, disclosure path, and closure gate. This document does not claim an independent review, an external finding count, or remediation of findings that have not been reported. The maintainer-authored controls above are implementation statements, not a substitute for external assurance.
 
 The planned independent review scope is the security-critical implementation and its tests: configuration/schema parsing; secret resolution and redaction; child-process and Windows Job Object containment; profile/runtime and container isolation; local HTTP ingress/session handling; routing, policy, approval, and identity boundaries; audit confidentiality/integrity; local plugins and dependency/supply-chain controls; and denial-of-service/capacity behavior. Reviewers should test negative paths and trust-boundary crossings, not only happy-path configuration.
 

@@ -165,6 +165,8 @@ Read the [Security boundary](docs/security.md) and [threat model](docs/threat-mo
 - [OAuth guide](docs/oauth-support.md) — native remote OAuth and upstream-owned OAuth
 - [CLI reference](docs/cli.md) — commands, diagnostics, exit codes, logs, and [Troubleshooting](docs/cli.md#troubleshooting)
 - [Console guide](docs/console-api.md) — optional local dashboard and API
+- [v1 external evaluation](docs/v1-evaluation.md) — privacy-safe workflows, unaided first-use checks, and returning-user evidence
+- [independent security review brief](docs/independent-security-review.md) — review scope, deliverables, disclosure, and closure gates
 - [Security boundary](docs/security.md), [Threat model](docs/threat-model.md), [OAuth and Console security design](docs/oauth-console-threat-model.md), and [Architecture](docs/architecture.md)
 - [profile credential isolation](docs/config.md#profile-credential-isolation), [routing context](docs/config.md#routing-context), and [provider routing matchers](docs/config.md#provider-routing-matchers)
 - [Provider adapters](docs/provider-adapters.md), [plugins](docs/plugins.md), and [library API](docs/library-api.md)
