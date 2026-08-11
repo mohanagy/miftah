@@ -124,6 +124,12 @@ Only literal `127.0.0.1` and `::1` are loopback bind values. A hostname, `localh
 
 Each accepted HTTP session owns a fresh Miftah runtime, profile manager, routing/approval/lock/lease state, and upstream manager. HTTP sessions always use in-memory `session` profile state, even when the base configuration opts into durable state, so one client's selection cannot persist into or alter another client's session.
 
+Modern `2026-07-28` HTTP requests must carry `Mcp-Method` and, for named operations such as `tools/call`, `Mcp-Name`. The SDK validates each value, including encoded names, against the parsed JSON-RPC request before Miftah creates a request-scoped broker or reaches routing, policy, audit, or an upstream. Missing, malformed, duplicated, or mismatched values fail with a generic HTTP 400 JSON-RPC error. These mirrored headers are routing hints, never credentials or authorization evidence.
+
+Miftah does not yet support schema-aware `Mcp-Param-*` forwarding. Its modern HTTP catalog removes `x-mcp-header` declarations so conforming clients do not advertise the extension, and any received parameter header fails with a fixed HTTP 400 response before broker execution. Header names and values are not reflected, audited, or sent upstream. STDIO and the legacy initialized HTTP path retain their existing JSON-RPC argument behavior.
+
+Modern cacheable results use `ttlMs: 0` and `cacheScope: "private"`. This is deliberate: the request-scoped gateway has no positive-TTL cache keyed by authenticated principal, profile, policy, and configuration revision, so it never shares a catalog across principals or serves a stale catalog after those inputs change. Resource, resource-template, and prompt lists are canonically ordered, and proxied resource-template routes are derived deterministically from the upstream and original template. Legacy responses do not receive the modern cache fields.
+
 ## Profile credential isolation
 
 `profiles.<profile>.isolation` is an opt-in, POSIX-only filesystem boundary for a local STDIO target. Miftah derives a deterministic runtime tree from the canonical configuration file, profile, and upstream name; it never accepts an operator-selected runtime root. The tree contains `home`, `appdata`, `localappdata`, and `xdg/config`, `xdg/cache`, `xdg/data`, `xdg/state`, and `xdg/runtime`. On macOS and Linux, Miftah verifies owner control, uses restrictive `0700` directories and `0600` copied files where the platform supports those modes, and refuses a reused target without its matching Miftah marker.

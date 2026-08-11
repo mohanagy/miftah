@@ -359,7 +359,8 @@ export class MiftahServer {
     private readonly runtimeConfigPath?: string,
     private readonly modernProfileContext?: ModernProfileContextRuntimeOptions,
     private readonly resourceSubscriptionsEnabled = true,
-    private readonly approvalContinuations = new ApprovalContinuationStore()
+    private readonly approvalContinuations = new ApprovalContinuationStore(),
+    private readonly stripMcpParameterHeaderAnnotations = false
   ) {
     if (
       modernProfileContext !== undefined &&
@@ -398,6 +399,14 @@ export class MiftahServer {
             : {})
         },
         requestState: { verify: (state) => this.approvalContinuations.verify(state) },
+        cacheHints: {
+          "tools/list": { ttlMs: 0, cacheScope: "private" },
+          "prompts/list": { ttlMs: 0, cacheScope: "private" },
+          "resources/list": { ttlMs: 0, cacheScope: "private" },
+          "resources/templates/list": { ttlMs: 0, cacheScope: "private" },
+          "resources/read": { ttlMs: 0, cacheScope: "private" },
+          "server/discover": { ttlMs: 0, cacheScope: "private" }
+        },
         instructions: [
           "Miftah wraps an upstream MCP and routes requests through local credential profiles.",
           ...(this.resourcePromptProxy.available
@@ -1053,11 +1062,14 @@ export class MiftahServer {
               : this.profileToolSnapshot(source.activeProfile, upstreamRequest.options)
           );
           audit.update({ profile });
+          const tools = [
+            ...this.visibleManagementTools(),
+            ...snapshot.getTools().map((tool) => this.profileContextTool(tool, true))
+          ];
           return {
-            tools: [
-              ...this.visibleManagementTools(),
-              ...snapshot.getTools().map((tool) => this.profileContextTool(tool, true))
-            ]
+            tools: this.stripMcpParameterHeaderAnnotations
+              ? tools.map(stripMcpParameterHeaderAnnotations)
+              : tools
           };
         }
       );
@@ -3602,22 +3614,55 @@ function aggregateProgressOptions(
 function redactDirectResourceList(result: ListResourcesResult): ListResourcesResult {
   return {
     ...result,
-    resources: result.resources.map(redactDirectResource)
+    resources: result.resources.map(redactDirectResource).sort(compareResources)
   };
 }
 
 function redactDirectResourceTemplateList(result: ListResourceTemplatesResult): ListResourceTemplatesResult {
   return {
     ...result,
-    resourceTemplates: result.resourceTemplates.map(redactDirectResourceTemplate)
+    resourceTemplates: result.resourceTemplates.map(redactDirectResourceTemplate).sort(compareResourceTemplates)
   };
 }
 
 function redactDirectPromptList(result: ListPromptsResult): ListPromptsResult {
   return {
     ...result,
-    prompts: result.prompts.map(redactDirectPrompt)
+    prompts: result.prompts.map(redactDirectPrompt).sort(comparePrompts)
   };
+}
+
+function stripMcpParameterHeaderAnnotations(tool: Tool): Tool {
+  return {
+    ...tool,
+    inputSchema: stripJsonSchemaKeyword(tool.inputSchema, "x-mcp-header")
+  };
+}
+
+function stripJsonSchemaKeyword<T>(value: T, keyword: string): T {
+  if (Array.isArray(value)) return value.map((entry) => stripJsonSchemaKeyword(entry, keyword)) as T;
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([name, entry]) =>
+      name === keyword ? [] : [[name, stripJsonSchemaKeyword(entry, keyword)]]
+    )
+  ) as T;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareResources(left: Resource, right: Resource): number {
+  return compareText(left.uri, right.uri) || compareText(left.name, right.name);
+}
+
+function compareResourceTemplates(left: ResourceTemplateType, right: ResourceTemplateType): number {
+  return compareText(left.name, right.name) || compareText(left.uriTemplate, right.uriTemplate);
+}
+
+function comparePrompts(left: Prompt, right: Prompt): number {
+  return compareText(left.name, right.name);
 }
 
 function redactDirectReadResult(result: ReadResourceResult): ReadResourceResult {
