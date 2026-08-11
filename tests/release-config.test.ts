@@ -34,6 +34,14 @@ function readPackageDevelopmentDependencies(): Record<string, string> {
   return packageJson.devDependencies;
 }
 
+function readPackageDependencies(): Record<string, string> {
+  const packageJson = JSON.parse(readRepositoryFile("package.json")) as {
+    dependencies?: Record<string, string>;
+  };
+  if (!packageJson.dependencies) throw new Error("package.json does not define dependencies.");
+  return packageJson.dependencies;
+}
+
 function readLockedPackages(): Record<string, { version?: string; dev?: boolean }> {
   const lockfile = JSON.parse(readRepositoryFile("package-lock.json")) as {
     packages?: Record<string, { version?: string; dev?: boolean }>;
@@ -156,6 +164,7 @@ describe("continuous integration workflow contract", () => {
 
   it("pins patched transitive test-toolchain dependencies", () => {
     const overrides = readPackageOverrides();
+    const dependencies = readPackageDependencies();
     const developmentDependencies = readPackageDevelopmentDependencies();
     const lockedPackages = readLockedPackages();
 
@@ -181,10 +190,12 @@ describe("continuous integration workflow contract", () => {
     for (const name of ["glob", "postcss"]) {
       expect(overrides).not.toHaveProperty(name);
     }
-    expect(developmentDependencies).toMatchObject({
+    expect(dependencies).toMatchObject({
       "@hono/node-server": "2.0.10",
       hono: "4.12.34"
     });
+    expect(developmentDependencies).not.toHaveProperty("@hono/node-server");
+    expect(developmentDependencies).not.toHaveProperty("hono");
     expect(lockedPackages["node_modules/minimatch/node_modules/brace-expansion"]).toMatchObject({
       version: "5.0.9",
       dev: true
