@@ -209,6 +209,14 @@ describe("authenticated request context boundary", () => {
     expect(() => boundary({ bindingKey: Buffer.alloc(31) })).toThrowError(
       expect.objectContaining({ code: "AUTH_CONTEXT_INVALID" })
     );
+    const throwingKey = new Proxy(Buffer.alloc(32), {
+      get() {
+        throw new Error("private key access failure");
+      }
+    });
+    expect(() => boundary({ bindingKey: throwingKey })).toThrowError(
+      expect.objectContaining({ code: "AUTH_CONTEXT_INVALID", message: "AUTH_CONTEXT_INVALID" })
+    );
     expect(() => boundary({ auditKey: Buffer.alloc(4_097) })).toThrowError(
       expect.objectContaining({ code: "AUTH_CONTEXT_INVALID" })
     );

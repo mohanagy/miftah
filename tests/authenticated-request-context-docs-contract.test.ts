@@ -19,7 +19,8 @@ describe("authenticated request-context documentation contract", () => {
 
   it("records the additive security boundary under the next release", async () => {
     const changelog = await readFile(changelogPath, "utf8");
-    const unreleased = changelog.split("## [1.0.0]", 1)[0] ?? "";
+    const [, afterUnreleased = ""] = changelog.split(/^## \[Unreleased\]\s*$/mu);
+    const unreleased = afterUnreleased.split(/^## \[/mu, 1)[0] ?? "";
 
     expect(unreleased).toContain("[#376]");
     expect(unreleased).toContain("future modern stateless handling");

@@ -98,10 +98,14 @@ function isBoundedString(value: unknown): value is string {
 }
 
 function copyKey(value: Uint8Array): Buffer {
-  if (!(value instanceof Uint8Array) || value.byteLength < minimumKeyBytes || value.byteLength > maximumKeyBytes) {
+  try {
+    if (!(value instanceof Uint8Array) || value.byteLength < minimumKeyBytes || value.byteLength > maximumKeyBytes) {
+      throw invalid();
+    }
+    return Buffer.from(value);
+  } catch {
     throw invalid();
   }
-  return Buffer.from(value);
 }
 
 function areEqual(left: Buffer, right: Buffer): boolean {
