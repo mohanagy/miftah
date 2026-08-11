@@ -1947,9 +1947,10 @@ export class MiftahServer {
         profile,
         upstream: "profiles",
         operation: `profiles/${action}`,
+        requestCorrelation: authenticated.auditCorrelation,
         name: profile,
         displayName: `profile '${profile}'`,
-        arguments: { profile, requestCorrelation: authenticated.auditCorrelation }
+        arguments: { profile }
       },
       context,
       profileSwitchApprovalErrors
@@ -3085,6 +3086,7 @@ export class MiftahServer {
 
   /** Maps a safe domain error to its terminal audit outcome without exposing diagnostic detail. */
   private auditStatus(error: MiftahError): AuditStatus {
+    if (error.code === "REQUEST_CANCELLED") return "cancelled";
     if (
       error.code === "POLICY_BLOCKED" ||
       error.code === "ROUTING_BLOCKED" ||

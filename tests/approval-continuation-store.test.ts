@@ -40,8 +40,20 @@ describe("approval continuation store", () => {
       mechanism: "form"
     });
     expect(() => store.pending(continuation, binding({ name: "changed" }))).toThrow("APPROVAL_INVALID");
-    const changedLastCharacter = state.endsWith("A") ? "B" : "A";
-    expect(() => store.verify(`${state.slice(0, -1)}${changedLastCharacter}`)).toThrow("APPROVAL_INVALID");
+    const [payload, signature] = state.split(".") as [string, string];
+    const tamperedSignature = Buffer.from(signature, "base64url");
+    tamperedSignature[0] = tamperedSignature[0]! ^ 0x01;
+    const tamperedState = `${payload}.${tamperedSignature.toString("base64url")}`;
+    expect(() => store.verify(tamperedState)).toThrow("APPROVAL_INVALID");
+
+    const principalBound = { ...original, requestCorrelation: "principal-a" };
+    const principalState = store.mint(principalBound, approval("approval-principal"));
+    const principalContinuation = store.verify(principalState);
+    expect(() => store.pending(principalContinuation, {
+      ...principalBound,
+      requestCorrelation: "principal-b"
+    })).toThrow("APPROVAL_INVALID");
+    expect(store.pending(principalContinuation, principalBound).id).toBe("approval-principal");
 
     store.complete(continuation);
     expect(() => store.verify(state)).toThrow("APPROVAL_INVALID");

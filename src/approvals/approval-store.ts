@@ -15,6 +15,8 @@ export interface ApprovalBinding {
   readonly profile: string;
   readonly upstream: string;
   readonly operation: string;
+  /** Internal keyed correlation for the authenticated request context; never exposed as approval metadata. */
+  readonly requestCorrelation?: string;
   /** The actual target identifier, retained only inside the keyed binding digest. */
   readonly name: string;
   /** A safe target label suitable for management output and audit events. */
@@ -321,6 +323,7 @@ export class ApprovalStore {
           profile: binding.profile,
           upstream: binding.upstream,
           operation: binding.operation,
+          requestCorrelation: binding.requestCorrelation,
           name: binding.name,
           arguments: binding.arguments
         })

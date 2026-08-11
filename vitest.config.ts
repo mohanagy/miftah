@@ -10,6 +10,10 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     restoreMocks: true,
     clearMocks: true,
+    // Hosted runners can need more than Vitest's five-second default for
+    // filesystem, ACL, and audit tests; keep a finite CI cap while preserving
+    // the faster hang signal during local development.
+    testTimeout: process.env.GITHUB_ACTIONS === "true" ? 10_000 : 5_000,
     // Real upstream fixtures have one-second startup limits; run files serially to prevent contention.
     fileParallelism: false,
     // Replace the fork between serial files so process-backed tests cannot retain

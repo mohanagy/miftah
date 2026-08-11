@@ -1,13 +1,19 @@
 import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import type { AuthInfo, Transport, TransportSendOptions, JSONRPCMessage, Tool } from "@modelcontextprotocol/server";
-import { Client } from "@modelcontextprotocol/client";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  isInputRequiredResult,
+  withInputRequired
+} from "@modelcontextprotocol/client";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createAuthenticatedRequestContextBoundary } from "../src/http/authenticated-request-context.js";
+import { startMiftahHttpServer } from "../src/http/miftah-http-server.js";
 import { MiftahServer } from "../src/mcp/server/miftah-server.js";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
 import {
@@ -18,6 +24,7 @@ import {
   type ModernProfileContextRuntimeOptions
 } from "../src/profiles/profile-context-handle.js";
 import { validateConfig } from "../src/config/validate-config.js";
+import { createMiftahServerFactory } from "../src/runtime/create-miftah-runtime.js";
 import { UpstreamProcessManager } from "../src/upstream/upstream-process-manager.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
@@ -402,6 +409,159 @@ describe("modern stateless profile-context runtime", () => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
     }
   }, 30_000);
+
+  it("binds one-time MRTR approval state to the authenticated chat and exact profile handle", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-stateless-mrtr-binding-"));
+    const configPath = join(directory, "miftah.json");
+    const auditPath = join(directory, "audit.jsonl");
+    const createCountPath = join(directory, "create-count");
+    await writeFile(configPath, JSON.stringify({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } },
+        work: {
+          policy: "confirm",
+          env: { TEST_ACCOUNT_NAME: "work", TEST_CREATE_ITEM_COUNT_PATH: createCountPath }
+        }
+      },
+      policies: { confirm: { requireConfirmation: ["create_item"] } },
+      audit: { path: auditPath, includeArguments: true },
+      server: { http: { port: 0 } }
+    }));
+    const requestBoundary = createAuthenticatedRequestContextBoundary<unknown>({
+      deploymentId: "miftah.example/mrtr-binding",
+      bindingKey: Buffer.alloc(32, 0x51),
+      auditKey: Buffer.alloc(32, 0x52),
+      clock: () => nowMs,
+      verifiedClaimsProvider: (request) => {
+        const extra = (request as AuthInfo | undefined)?.extra;
+        return extra?.verifiedClaims as ReturnType<typeof claims> | undefined;
+      }
+    });
+    const modernProfileContext = {
+      handles: new ProfileContextHandleService({
+        deploymentId: "miftah.example/mrtr-binding",
+        profiles: ["personal", "work"],
+        keyringProvider: () => ({
+          activeEpoch: 1,
+          epochs: [{ epoch: 1, key: Buffer.alloc(32, 0x53), activatedAtMs: nowMs - 1_000 }]
+        }),
+        auditKey: Buffer.alloc(32, 0x54),
+        revocations: new InMemoryProfileContextRevocationStore(),
+        clock: () => nowMs
+      }),
+      authenticatedRequestContext: requestBoundary
+    };
+    let authentication: AuthInfo | undefined = authInfo("chat-a");
+    const server = await startMiftahHttpServer(configPath, {
+      modernServerFactory: createMiftahServerFactory(configPath, { modernProfileContext })
+    });
+    const nodeServer = (server as unknown as {
+      readonly server: {
+        prependListener(event: "request", listener: (request: { auth?: AuthInfo }) => void): void;
+      };
+    }).server;
+    nodeServer.prependListener("request", (request) => {
+      request.auth = authentication;
+    });
+    const client = new Client(
+      { name: "modern-mrtr-binding-client", version: "1.0.0" },
+      {
+        versionNegotiation: { mode: { pin: "2026-07-28" } },
+        capabilities: { elicitation: { form: {} } },
+        inputRequired: { autoFulfill: false }
+      }
+    );
+    const accepted = { approval: { action: "accept" as const, content: { approved: true } } };
+
+    const requestCreate = async (
+      handle: string,
+      continuation?: { readonly requestState: string; readonly inputResponses: typeof accepted }
+    ) => client.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "create_item",
+          arguments: { name: "principal-bound", [PROFILE_CONTEXT_ARGUMENT]: handle },
+          ...(continuation ?? {})
+        }
+      },
+      withInputRequired(CallToolResultSchema),
+      { allowInputRequired: true }
+    );
+
+    try {
+      await client.connect(new StreamableHTTPClientTransport(server.url));
+
+      const handleA = profileHandle(await client.callTool({
+        name: "miftah_use_profile",
+        arguments: { profile: "work" }
+      }));
+      authentication = authInfo("chat-b");
+      const handleB = profileHandle(await client.callTool({
+        name: "miftah_use_profile",
+        arguments: { profile: "work" }
+      }));
+
+      authentication = authInfo("chat-a");
+      const firstRound = await requestCreate(handleA);
+      if (!isInputRequiredResult(firstRound) || firstRound.requestState === undefined) {
+        throw new Error(`Expected an integrity-bound approval continuation: ${JSON.stringify(firstRound)}`);
+      }
+      expect(firstRound.inputRequests).toHaveProperty("approval");
+      const continuation = { requestState: firstRound.requestState, inputResponses: accepted };
+
+      authentication = authInfo("chat-b");
+      expect(await requestCreate(handleB, continuation)).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("APPROVAL_INVALID") }]
+      });
+
+      authentication = authInfo("chat-a");
+      expect(await requestCreate(handleA, continuation)).toMatchObject({
+        content: [{ type: "text", text: "created:principal-bound" }]
+      });
+      await expect(requestCreate(handleA, continuation)).rejects.toThrow(/requestState/u);
+      expect(await readFile(createCountPath, "utf8")).toBe("1\n");
+
+      const auditText = await readFile(auditPath, "utf8");
+      expect(auditText).not.toContain(handleA);
+      expect(auditText).not.toContain(handleB);
+      expect(auditText).not.toContain(firstRound.requestState);
+      expect(auditText).not.toContain('"requestState"');
+      expect(auditText).not.toContain('"inputResponses"');
+      const events = auditText
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const operationEvents = events.filter(
+        (event) => event.kind === "operation" && event.operation === "tools/call" && event.name === "create_item"
+      );
+      expect(operationEvents.length).toBeGreaterThanOrEqual(3);
+      for (const event of operationEvents) expect(event.arguments).toEqual({ name: "principal-bound" });
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "operation",
+          operation: "tools/call",
+          status: "confirmation-required",
+          errorCode: "POLICY_CONFIRMATION_REQUIRED"
+        }),
+        expect.objectContaining({
+          kind: "operation",
+          operation: "tools/call",
+          status: "failure",
+          errorCode: "APPROVAL_INVALID"
+        }),
+        expect.objectContaining({ kind: "operation", operation: "tools/call", status: "success" })
+      ]));
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
+    }
+  }, 20_000);
 
   it("enforces strict cross-profile tool discovery whenever modern mode is enabled", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-stateless-strict-discovery-"));
