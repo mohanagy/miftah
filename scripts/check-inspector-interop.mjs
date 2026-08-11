@@ -37,6 +37,21 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+async function terminateChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  await new Promise((resolve) => {
+    const forceKill = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, 5_000);
+    child.once("exit", () => {
+      clearTimeout(forceKill);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
+}
+
 async function startHttpServer(cliEntry, configPath, cwd) {
   const child = spawn(process.execPath, [cliEntry, "serve", "--transport", "http", "--config", configPath], {
     cwd,
@@ -51,22 +66,32 @@ async function startHttpServer(cliEntry, configPath, cwd) {
   child.stderr.on("data", (chunk) => { stderr += chunk; });
 
   const endpoint = await new Promise((resolve, reject) => {
+    let settled = false;
     const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`Timed out waiting for packaged Miftah HTTP startup: ${stderr || stdout}`));
+      if (settled) return;
+      settled = true;
+      const diagnostic = stderr || stdout;
+      void terminateChild(child).then(() => {
+        reject(new Error(`Timed out waiting for packaged Miftah HTTP startup: ${diagnostic}`));
+      }, reject);
     }, 30_000);
     const inspect = () => {
       const match = stdout.match(/http:\/\/127\.0\.0\.1:\d+\/mcp/u);
-      if (match === null) return;
+      if (match === null || settled) return;
+      settled = true;
       clearTimeout(timeout);
       resolve(match[0]);
     };
     child.stdout.on("data", inspect);
     child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       reject(error);
     });
     child.once("exit", (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       reject(new Error(`Packaged Miftah HTTP server exited with ${String(code)}: ${stderr || stdout}`));
     });
@@ -75,18 +100,7 @@ async function startHttpServer(cliEntry, configPath, cwd) {
   return {
     endpoint,
     async close() {
-      if (child.exitCode !== null) return;
-      child.kill("SIGTERM");
-      await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 5_000);
-        child.once("exit", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
+      await terminateChild(child);
     }
   };
 }
