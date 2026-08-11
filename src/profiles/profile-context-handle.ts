@@ -65,13 +65,17 @@ export interface ProfileContextKeyringSnapshot {
   readonly epochs: readonly ProfileContextKeyEpoch[];
 }
 
+/**
+ * Returns a short-TTL cached atomic snapshot with a host-enforced timeout.
+ * The service calls it once per mint, resolve, or revoke and twice per replace.
+ */
 export type ProfileContextKeyringProvider =
   () => ProfileContextKeyringSnapshot | Promise<ProfileContextKeyringSnapshot>;
 
 /** Deployment-wide bounded revocation state. Backend failures must reject. */
 export interface ProfileContextRevocationStore {
   isRevoked(id: string, atMs: number): boolean | Promise<boolean>;
-  revoke(id: string, expiresAtMs: number): void | Promise<void>;
+  revoke(id: string, expiresAtMs: number, atMs: number): void | Promise<void>;
 }
 
 export interface ProfileContextHandleServiceOptions {
@@ -317,7 +321,7 @@ export class ProfileContextHandleService {
 
   private async revokeOpened(opened: OpenedProfileContext): Promise<void> {
     try {
-      await this.revocations.revoke(opened.payload.id, opened.payload.expiresAtMs);
+      await this.revocations.revoke(opened.payload.id, opened.payload.expiresAtMs, this.nowMs());
     } catch {
       throw unavailable();
     }
@@ -438,9 +442,15 @@ export class InMemoryProfileContextRevocationStore implements ProfileContextRevo
     return expiresAtMs !== undefined && expiresAtMs > nowMs;
   }
 
-  revoke(id: string, expiresAtMs: number): void {
+  revoke(id: string, expiresAtMs: number, atMs: number): void {
     const safeId = internalIdentifier(id);
     const expiry = positiveSafeInteger(expiresAtMs);
+    const nowMs = nonNegativeSafeInteger(atMs);
+    this.prune(nowMs);
+    if (expiry <= nowMs) {
+      this.expirations.delete(safeId);
+      return;
+    }
     if (!this.expirations.has(safeId) && this.expirations.size >= this.maximumEntries) {
       throw new Error("Profile context revocation capacity is unavailable.");
     }

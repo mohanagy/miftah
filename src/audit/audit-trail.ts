@@ -21,8 +21,10 @@ export interface AuditOperationInput {
 }
 
 export interface AuditScopeUpdate {
+  sourceProfile?: string;
   name?: string;
   profile?: string;
+  arguments?: Record<string, unknown>;
   upstream?: string;
   routingReason?: string;
   routingSource?: AuditRoutingSource;

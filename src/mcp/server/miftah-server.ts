@@ -844,6 +844,7 @@ export class MiftahServer {
       };
     }
     if (extracted.handle === undefined) throw this.profileContextError("PROFILE_CONTEXT_INVALID");
+    if (name.includes(extracted.handle)) throw this.profileContextError("PROFILE_CONTEXT_INVALID");
     let resolved: ResolvedProfileContext;
     try {
       resolved = await this.modernProfileContext.handles.resolve(extracted.handle, authenticated);
@@ -943,6 +944,31 @@ export class MiftahServer {
     };
   }
 
+  private requestAuditFallbackProfileState(): Promise<ProfileStateSnapshot> | ProfileStateSnapshot {
+    return this.modernProfileContext === undefined
+      ? this.captureStableProfileState()
+      : this.modernCatalogProfileState();
+  }
+
+  private async prepareResourcePromptRequest<Params>(
+    rawParams: Params,
+    extra: ProxiedRequestExtra,
+    audit: AuditScope
+  ): Promise<{ readonly params: Params; readonly source: ProfileStateSnapshot }> {
+    const params = this.modernProfileContext === undefined
+      ? rawParams
+      : stripProfileContextMetadata(rawParams);
+    const source = await this.modernRequestProfileState(extra, params);
+    audit.update({
+      sourceProfile: source.activeProfile,
+      profile: source.activeProfile,
+      ...(source.profileContextCorrelation === undefined
+        ? {}
+        : { profileContextCorrelation: source.profileContextCorrelation })
+    });
+    return { params, source };
+  }
+
   private normalizeProfileContextError(error: unknown): MiftahError {
     if (error instanceof MiftahError) return error;
     let code: string | undefined;
@@ -958,7 +984,15 @@ export class MiftahServer {
       return this.profileContextError("PROFILE_CONTEXT_EXPIRED");
     }
     if (code === "PROFILE_CONTEXT_REVOKED") return this.profileContextError("PROFILE_CONTEXT_REVOKED");
-    return this.profileContextError("PROFILE_CONTEXT_INVALID");
+    if (
+      code === "AUTH_CONTEXT_INVALID" ||
+      code === "AUTH_CONTEXT_MISMATCH" ||
+      code === "PROFILE_CONTEXT_INVALID"
+    ) {
+      return this.profileContextError("PROFILE_CONTEXT_INVALID");
+    }
+    if (error instanceof ProfileContextHandleError) return this.profileContextError("PROFILE_CONTEXT_INVALID");
+    return this.profileContextError("PROFILE_CONTEXT_UNAVAILABLE");
   }
 
   private profileContextError(
@@ -980,11 +1014,11 @@ export class MiftahServer {
       const source = this.modernProfileContext === undefined
         ? await this.captureStableProfileState()
         : this.modernCatalogProfileState();
-      if (this.modernProfileContext !== undefined) await this.authenticateModernRequest(extra);
       const upstreamRequest = this.upstreamRequestContext(extra);
       return this.runAudited(
         { operation: "tools/list", name: "tools", sourceProfile: source.activeProfile },
         async (audit) => {
+          if (this.modernProfileContext !== undefined) await this.authenticateModernRequest(extra);
           const upstream = this.auditUpstreamName();
           if (upstream) audit.update({ upstream });
           const { profile, snapshot } = await this.runWithUpstreamRequest(
@@ -1006,28 +1040,31 @@ export class MiftahServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name;
-      let prepared: PreparedCall;
-      try {
-        prepared = await this.prepareCall(name, request.params.arguments ?? {}, extra);
-      } catch (error) {
-        return textResult(this.toSafeError(error).message, true);
-      }
-      const { args, source } = prepared;
       const isManagementTool = isManagementToolName(name);
       const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
+      const auditSource = this.modernProfileContext === undefined
+        ? await this.captureStableProfileState()
+        : this.modernCatalogProfileState();
       const upstreamRequest = this.upstreamRequestContext(extra);
       return this.runAudited(
         {
           operation: isManagementTool ? managementOperation(name) : "tools/call",
-          name: isManagementTool ? managementName(name, args) : name,
-          sourceProfile: source.activeProfile,
-          ...(source.profileContextCorrelation === undefined
-            ? {}
-            : { profileContextCorrelation: source.profileContextCorrelation }),
-          ...(isApprovalManagementTool ? {} : { arguments: args })
+          name: isManagementTool ? "management" : "tool",
+          sourceProfile: auditSource.activeProfile
         },
-        (audit) =>
-          isManagementTool
+        async (audit) => {
+          const prepared = await this.prepareCall(name, request.params.arguments ?? {}, extra);
+          const { args, source } = prepared;
+          audit.update({
+            sourceProfile: source.activeProfile,
+            profile: source.activeProfile,
+            name: isManagementTool ? managementName(name, args) : name,
+            ...(source.profileContextCorrelation === undefined
+              ? {}
+              : { profileContextCorrelation: source.profileContextCorrelation }),
+            ...(isApprovalManagementTool ? {} : { arguments: args })
+          });
+          return isManagementTool
             ? this.runWithUpstreamRequest(
                 upstreamRequest,
                 () =>
@@ -1048,7 +1085,8 @@ export class MiftahServer {
                 source,
                 { requestId: extra.requestId, signal: extra.signal },
                 upstreamRequest
-              ),
+              );
+        },
         (error) => textResult(error.message, true),
         (result) =>
           result.isError
@@ -1060,60 +1098,55 @@ export class MiftahServer {
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
       this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/templates/list",
             name: "resource-templates",
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: params?.cursor === undefined ? {} : { cursor: params.cursor }
+            sourceProfile: auditSource.activeProfile
           },
-          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
-            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
-            if (upstream) audit.update({ upstream });
-            if (this.resourcePromptRegistry) {
-              try {
-                return await this.resourcePromptRegistry.listResourceTemplates(
-                  source.activeProfile,
-                  params?.cursor,
-                  upstreamRequest.options
-                );
-              } finally {
-                await this.notifyResourceAvailabilityChange(source.activeProfile);
+          async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
+            return this.runWithUpstreamRequest(upstreamRequest, async () => {
+              const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+              if (upstream) audit.update({ upstream });
+              if (this.resourcePromptRegistry) {
+                try {
+                  return await this.resourcePromptRegistry.listResourceTemplates(
+                    source.activeProfile,
+                    params?.cursor,
+                    upstreamRequest.options
+                  );
+                } finally {
+                  await this.notifyResourceAvailabilityChange(source.activeProfile);
+                }
               }
-            }
-            return redactDirectResourceTemplateList(
-              await this.discoverResourceTemplates(source.activeProfile, upstreamName, params, upstreamRequest.options)
-            );
-          })
+              return redactDirectResourceTemplateList(
+                await this.discoverResourceTemplates(source.activeProfile, upstreamName, params, upstreamRequest.options)
+              );
+            });
+          }
         );
       });
 
       this.server.setRequestHandler(SubscribeRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/subscribe",
-            name: this.redactor.redactUri(params.uri),
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: { uri: this.redactor.redactUri(params.uri) }
+            name: "resource",
+            sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({
+              name: this.redactor.redactUri(params.uri),
+              arguments: { uri: this.redactor.redactUri(params.uri) }
+            });
             if (!this.resourceSubscriptionsAvailable) {
               throw new MiftahError(
                 "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
@@ -1127,23 +1160,21 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(UnsubscribeRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/unsubscribe",
-            name: this.redactor.redactUri(params.uri),
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: { uri: this.redactor.redactUri(params.uri) }
+            name: "resource",
+            sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({
+              name: this.redactor.redactUri(params.uri),
+              arguments: { uri: this.redactor.redactUri(params.uri) }
+            });
             if (!this.resourceSubscriptionsAvailable) {
               throw new MiftahError(
                 "RESOURCE_SUBSCRIPTION_UNSUPPORTED",
@@ -1157,60 +1188,55 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/list",
             name: "resources",
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: params?.cursor === undefined ? {} : { cursor: params.cursor }
+            sourceProfile: auditSource.activeProfile
           },
-          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
-            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
-            if (upstream) audit.update({ upstream });
-            if (this.resourcePromptRegistry) {
-              try {
-                return await this.resourcePromptRegistry.listResources(
-                  source.activeProfile,
-                  params?.cursor,
-                  upstreamRequest.options
-                );
-              } finally {
-                await this.notifyResourceAvailabilityChange(source.activeProfile);
+          async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
+            return this.runWithUpstreamRequest(upstreamRequest, async () => {
+              const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+              if (upstream) audit.update({ upstream });
+              if (this.resourcePromptRegistry) {
+                try {
+                  return await this.resourcePromptRegistry.listResources(
+                    source.activeProfile,
+                    params?.cursor,
+                    upstreamRequest.options
+                  );
+                } finally {
+                  await this.notifyResourceAvailabilityChange(source.activeProfile);
+                }
               }
-            }
-            return redactDirectResourceList(
-              await this.discoverResources(source.activeProfile, upstreamName, params, upstreamRequest.options)
-            );
-          })
+              return redactDirectResourceList(
+                await this.discoverResources(source.activeProfile, upstreamName, params, upstreamRequest.options)
+              );
+            });
+          }
         );
       });
 
       this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "resources/read",
-            name: this.redactor.redactUri(params.uri),
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: { uri: this.redactor.redactUri(params.uri) }
+            name: "resource",
+            sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({
+              name: this.redactor.redactUri(params.uri),
+              arguments: { uri: this.redactor.redactUri(params.uri) }
+            });
             if (this.resourcePromptRegistry) {
               try {
                 return await this.executeResourceRead(source, upstreamName, params, audit, approvalContext, upstreamRequest);
@@ -1224,60 +1250,52 @@ export class MiftahServer {
       });
 
       this.server.setRequestHandler(ListPromptsRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "prompts/list",
             name: "prompts",
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: params?.cursor === undefined ? {} : { cursor: params.cursor }
+            sourceProfile: auditSource.activeProfile
           },
-          async (audit) => this.runWithUpstreamRequest(upstreamRequest, async () => {
-            const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
-            if (upstream) audit.update({ upstream });
-            if (this.resourcePromptRegistry) {
-              try {
-                return await this.resourcePromptRegistry.listPrompts(
-                  source.activeProfile,
-                  params?.cursor,
-                  upstreamRequest.options
-                );
-              } finally {
-                await this.notifyPromptAvailabilityChange(source.activeProfile);
+          async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
+            return this.runWithUpstreamRequest(upstreamRequest, async () => {
+              const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
+              if (upstream) audit.update({ upstream });
+              if (this.resourcePromptRegistry) {
+                try {
+                  return await this.resourcePromptRegistry.listPrompts(
+                    source.activeProfile,
+                    params?.cursor,
+                    upstreamRequest.options
+                  );
+                } finally {
+                  await this.notifyPromptAvailabilityChange(source.activeProfile);
+                }
               }
-            }
-            return redactDirectPromptList(
-              await this.discoverPrompts(source.activeProfile, upstreamName, params, upstreamRequest.options)
-            );
-          })
+              return redactDirectPromptList(
+                await this.discoverPrompts(source.activeProfile, upstreamName, params, upstreamRequest.options)
+              );
+            });
+          }
         );
       });
 
       this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
-        const params = this.modernProfileContext === undefined
-          ? request.params
-          : stripProfileContextMetadata(request.params);
-        const source = await this.modernRequestProfileState(extra, params);
+        const auditSource = await this.requestAuditFallbackProfileState();
         const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
         const upstreamRequest = this.upstreamRequestContext(extra);
         return this.runAudited(
           {
             operation: "prompts/get",
-            name: params.name,
-            sourceProfile: source.activeProfile,
-            ...(source.profileContextCorrelation === undefined
-              ? {}
-              : { profileContextCorrelation: source.profileContextCorrelation }),
-            arguments: { ...(params.arguments ?? {}), name: params.name }
+            name: "prompt",
+            sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            audit.update({ name: params.name, arguments: { ...(params.arguments ?? {}), name: params.name } });
             if (this.resourcePromptRegistry) {
               try {
                 return await this.executePromptGet(source, upstreamName, params, audit, approvalContext, upstreamRequest);
@@ -1804,7 +1822,13 @@ export class MiftahServer {
     ) {
       throw new MiftahError("PROFILE_SWITCH_DISABLED", "PROFILE_SWITCH_DISABLED: profile switching is disabled");
     }
-    await this.requireModernProfileTransitionConfirmation(action, profile, source, approvalContext);
+    await this.requireModernProfileTransitionConfirmation(
+      action,
+      profile,
+      source,
+      modern.authenticated,
+      approvalContext
+    );
     const lifetimeMs = runtime.handleLifetimeMs ?? 15 * 60_000;
     let minted: MintedProfileContext;
     try {
@@ -1868,6 +1892,7 @@ export class MiftahServer {
     action: "switch" | "reset",
     profile: string,
     source: ProfileStateSnapshot,
+    authenticated: AuthenticatedRequestContext,
     context?: ApprovalRequestContext
   ): Promise<void> {
     if (this.config.security?.requireProfileSwitchConfirmation !== true) return;
@@ -1879,7 +1904,7 @@ export class MiftahServer {
         operation: `profiles/${action}`,
         name: profile,
         displayName: `profile '${profile}'`,
-        arguments: { profile }
+        arguments: { profile, requestCorrelation: authenticated.auditCorrelation }
       },
       context,
       profileSwitchApprovalErrors
@@ -2313,8 +2338,8 @@ export class MiftahServer {
   }
 
   private async discoverTools(profile: string, options?: UpstreamRequestOptions): Promise<ToolDiscoveryResult> {
-    const profiles =
-      this.config.tooling?.toolDiscoveryMode === "strict" ? Object.keys(this.config.profiles).sort() : [profile];
+    const strictDiscovery = this.strictToolDiscoveryEnabled();
+    const profiles = strictDiscovery ? Object.keys(this.config.profiles).sort() : [profile];
     const upstreamNames = this.upstreamNames();
     const optionsForUpstream = aggregateProgressOptions(
       options,
@@ -2334,7 +2359,7 @@ export class MiftahServer {
     const failures = outcomes.flatMap(([profileName, outcome]) =>
       outcome.failures.map((failure) => ({ profile: profileName, ...failure }))
     );
-    if (failures.length > 0 && this.config.tooling?.toolDiscoveryMode === "strict") {
+    if (failures.length > 0 && strictDiscovery) {
       const activeFailures = failures
         .filter((failure) => failure.profile === profile)
         .map((failure) => `upstream '${failure.upstreamName}' (${failure.code}: ${failure.message})`);
@@ -2349,7 +2374,7 @@ export class MiftahServer {
         ].join("; ")}`
       );
     }
-    if (this.config.tooling?.toolDiscoveryMode === "strict") {
+    if (strictDiscovery) {
       this.assertStrictToolSchemas(outcomes);
     }
     const selected = outcomes.find(([profileName]) => profileName === profile);
@@ -2366,6 +2391,10 @@ export class MiftahServer {
       discovered: selected[1].discovered,
       incomplete: selected[1].failures.length > 0
     };
+  }
+
+  private strictToolDiscoveryEnabled(): boolean {
+    return this.modernProfileContext !== undefined || this.config.tooling?.toolDiscoveryMode === "strict";
   }
 
   private async discoverToolsForProfile(
@@ -3105,7 +3134,7 @@ export class MiftahServer {
 
   private handleUpstreamHealthChange(health: UpstreamHealth): void {
     if (health.processState !== "failed" || this.restartingProfiles.has(health.profile)) return;
-    if (this.config.tooling?.toolDiscoveryMode === "strict") {
+    if (this.strictToolDiscoveryEnabled()) {
       const snapshots = Object.keys(this.config.profiles).map((profile) => [profile, this.toolRegistry.peek(profile)] as const);
       if (!snapshots.some(([, snapshot]) => snapshot?.isComplete())) return;
       for (const [profile, snapshot] of snapshots) {
@@ -3326,7 +3355,14 @@ function extractProfileContext(
   const handle = (argumentHandle ?? metadataHandle) as string | undefined;
   const args: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
-    if (key !== PROFILE_CONTEXT_ARGUMENT) args[key] = value;
+    if (key !== PROFILE_CONTEXT_ARGUMENT) {
+      Object.defineProperty(args, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
   }
   if (handle !== undefined && containsProfileContextBearer(args, handle)) {
     throw new ProfileContextHandleError("PROFILE_CONTEXT_INVALID");

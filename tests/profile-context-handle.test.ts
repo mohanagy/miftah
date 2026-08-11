@@ -112,8 +112,11 @@ describe("production profile-context handles", () => {
       new Proxy({}, { get: () => { throw new Error("private construction detail"); } })
     ];
 
-    for (const input of invalidInputs) {
-      expect(() => new ProfileContextHandleService(input as ProfileContextHandleServiceOptions)).toThrowError(
+    for (const [index, input] of invalidInputs.entries()) {
+      expect(
+        () => new ProfileContextHandleService(input as ProfileContextHandleServiceOptions),
+        `invalid construction input ${index}`
+      ).toThrowError(
         expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID", message: "Profile context is invalid." })
       );
     }
@@ -272,6 +275,25 @@ describe("production profile-context handles", () => {
     expect(String(auditFailure)).not.toContain(current.handle);
   });
 
+  it("keeps the prior handle valid when replacement revocation fails after audit commit", async () => {
+    const audited = vi.fn();
+    const instance = service({
+      revocations: {
+        isRevoked: () => false,
+        revoke: () => { throw new Error("store details"); }
+      }
+    });
+    const context = await authenticated("chat-work");
+    const current = await instance.mint("personal", context, 60_000);
+
+    await expect(instance.replace(current.handle, "work", context, 60_000, audited)).rejects.toMatchObject({
+      code: "PROFILE_CONTEXT_UNAVAILABLE",
+      message: "Profile context is unavailable."
+    });
+    expect(audited).toHaveBeenCalledOnce();
+    await expect(instance.resolve(current.handle, context)).resolves.toMatchObject({ profile: "personal" });
+  });
+
   it("supports bounded rotation overlap and rejects unknown, future, expired, and rollback epochs", async () => {
     let current = nowMs;
     const firstKey = Buffer.alloc(32, 0x61);
@@ -383,10 +405,12 @@ describe("production profile-context handles", () => {
       ] }
     ];
 
-    for (const snapshot of invalidSnapshots) {
+    for (const [index, snapshot] of invalidSnapshots.entries()) {
       await expect(new ProfileContextHandleService(profileContextOptions({
         keyringProvider: () => snapshot as ProfileContextKeyringSnapshot
-      })).mint("work", context, 60_000)).rejects.toMatchObject({ code: "PROFILE_CONTEXT_UNAVAILABLE" });
+      })).mint("work", context, 60_000), `invalid keyring snapshot ${index}`).rejects.toMatchObject({
+        code: "PROFILE_CONTEXT_UNAVAILABLE"
+      });
     }
 
     let snapshot = keyring(1, firstKey);
@@ -410,10 +434,12 @@ describe("production profile-context handles", () => {
       minted.handle.replace(/^mctx1/u, "wrong"),
       minted.handle.replace(/^mctx1\.1/u, "mctx1.01"),
       [parts[0], parts[1], "!", parts[3], parts[4]].join("."),
-      [parts[0], parts[1], parts[2], "!", parts[4]].join(".")
+      [parts[0], parts[1], parts[2], "!", parts[4]].join("."),
+      [parts[0], parts[1], Buffer.alloc(11, 0x55).toString("base64url"), parts[3], parts[4]].join("."),
+      [parts[0], parts[1], parts[2], parts[3], Buffer.alloc(15, 0x55).toString("base64url")].join(".")
     ];
-    for (const handle of malformed) {
-      await expect(instance.resolve(handle as string, context)).rejects.toMatchObject({
+    for (const [index, handle] of malformed.entries()) {
+      await expect(instance.resolve(handle as string, context), `malformed handle ${index}`).rejects.toMatchObject({
         code: "PROFILE_CONTEXT_INVALID",
         message: "Profile context is invalid."
       });
@@ -427,8 +453,11 @@ describe("production profile-context handles", () => {
       { binding: context.binding, expiresAtMs: nowMs },
       new Proxy({}, { get: () => { throw new Error("private request detail"); } })
     ];
-    for (const invalidContext of invalidContexts) {
-      await expect(instance.resolve(minted.handle, invalidContext as AuthenticatedRequestContext)).rejects.toBeInstanceOf(
+    for (const [index, invalidContext] of invalidContexts.entries()) {
+      await expect(
+        instance.resolve(minted.handle, invalidContext as AuthenticatedRequestContext),
+        `invalid authenticated context ${index}`
+      ).rejects.toBeInstanceOf(
         ProfileContextHandleError
       );
     }
@@ -474,8 +503,11 @@ describe("production profile-context handles", () => {
       { ...base, issuedAtMs: -1 },
       { ...base, expiresAtMs: nowMs }
     ];
-    for (const payload of invalidPayloads) {
-      await expect(instance.resolve(sealPayload(payload, sealingKey), context)).rejects.toMatchObject({
+    for (const [index, payload] of invalidPayloads.entries()) {
+      await expect(
+        instance.resolve(sealPayload(payload, sealingKey), context),
+        `invalid sealed payload ${index}`
+      ).rejects.toMatchObject({
         code: "PROFILE_CONTEXT_INVALID"
       });
     }
@@ -491,12 +523,13 @@ describe("production profile-context handles", () => {
   });
 
   it("normalizes tampering and never reports the bearer or plaintext account data", async () => {
-    const instance = service();
+    const instance = service({ randomBytes: (size) => Buffer.alloc(size, 0x5a) });
     const context = await authenticated("chat-work");
     const minted = await instance.mint("work", context, 60_000);
     const resolved = await instance.resolve(minted.handle, context);
+    const ciphertext = Buffer.from(minted.handle.split(".")[3]!, "base64url");
 
-    expect(minted.handle).not.toContain("work");
+    expect(ciphertext.includes(Buffer.from('"profile":"work"', "utf8"))).toBe(false);
     expect(minted.handle).not.toContain(context.binding);
     expect(JSON.stringify(resolved)).not.toContain(minted.handle);
     expect(resolved.auditCorrelation).toMatch(/^mctxc1\.[A-Za-z0-9_-]{22}$/u);
@@ -534,15 +567,18 @@ describe("production profile-context handles", () => {
     const store = new InMemoryProfileContextRevocationStore(1);
     const first = Buffer.alloc(16, 0x01).toString("base64url");
     const second = Buffer.alloc(16, 0x02).toString("base64url");
-    store.revoke(first, Date.now() + 60_000);
-    expect(() => store.revoke(second, Date.now() + 60_000)).toThrow("capacity is unavailable");
-    expect(store.isRevoked(first, Date.now())).toBe(true);
+    store.revoke(first, nowMs + 60_000, nowMs);
+    expect(() => store.revoke(second, nowMs + 60_000, nowMs)).toThrow("capacity is unavailable");
+    expect(store.isRevoked(first, nowMs)).toBe(true);
 
     const pruningStore = new InMemoryProfileContextRevocationStore(1);
-    pruningStore.revoke(first, Date.now() - 1);
-    expect(pruningStore.isRevoked(first, Date.now())).toBe(false);
-    pruningStore.revoke(second, Date.now() + 60_000);
-    expect(() => pruningStore.revoke("bad", Date.now() + 60_000)).toThrowError(
+    pruningStore.revoke(first, nowMs + 1, nowMs);
+    pruningStore.revoke(second, nowMs + 60_000, nowMs + 1);
+    expect(pruningStore.isRevoked(first, nowMs + 1)).toBe(false);
+    expect(pruningStore.isRevoked(second, nowMs + 1)).toBe(true);
+    pruningStore.revoke(second, nowMs + 1, nowMs + 1);
+    expect(pruningStore.isRevoked(second, nowMs + 1)).toBe(false);
+    expect(() => pruningStore.revoke("bad", nowMs + 60_000, nowMs)).toThrowError(
       expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID" })
     );
   });

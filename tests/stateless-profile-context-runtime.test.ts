@@ -153,7 +153,9 @@ describe("modern stateless profile-context runtime", () => {
       auditKey: Buffer.alloc(32, 0x42),
       clock: () => nowMs,
       verifiedClaimsProvider: (request) => {
-        const extra = (request as AuthInfo | undefined)?.extra;
+        const authenticatedRequest = request as AuthInfo | undefined;
+        if (authenticatedRequest?.clientId === "failing-host") throw new Error("private verifier failure");
+        const extra = authenticatedRequest?.extra;
         return extra?.verifiedClaims as ReturnType<typeof claims> | undefined;
       }
     });
@@ -252,6 +254,13 @@ describe("modern stateless profile-context runtime", () => {
         isError: true,
         content: [{ type: "text", text: "PROFILE_CONTEXT_UNAVAILABLE: Profile context is unavailable." }]
       });
+      firstAuthentication = {
+        ...authInfo("chat-work"),
+        extra: { verifiedClaims: { ...claims("chat-work"), issuedAtMs: "invalid" } }
+      };
+      await expect(firstClient.listTools()).rejects.toThrow(/PROFILE_CONTEXT_INVALID/u);
+      firstAuthentication = { ...authInfo("chat-work"), clientId: "failing-host" };
+      await expect(firstClient.listTools()).rejects.toThrow(/PROFILE_CONTEXT_UNAVAILABLE/u);
       firstAuthentication = authInfo("chat-work");
 
       const workHandle = profileHandle(await firstClient.callTool({
@@ -274,6 +283,20 @@ describe("modern stateless profile-context runtime", () => {
       });
       expect(parseText(echo)).toContain("safe");
       expect(JSON.stringify(echo)).not.toContain(workHandle);
+      const prototypeArguments = JSON.parse(
+        '{"message":"prototype-safe","__proto__":{"polluted":true}}'
+      ) as Record<string, unknown>;
+      prototypeArguments[PROFILE_CONTEXT_ARGUMENT] = workHandle;
+      expect(parseText(await firstClient.callTool({ name: "echo", arguments: prototypeArguments }))).toContain(
+        "prototype-safe"
+      );
+      await expect(firstClient.callTool({
+        name: `echo-${workHandle}`,
+        arguments: { [PROFILE_CONTEXT_ARGUMENT]: workHandle }
+      })).resolves.toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: "PROFILE_CONTEXT_INVALID: Profile context is invalid." }]
+      });
       await expect(firstClient.callTool({
         name: "echo",
         arguments: {
@@ -332,6 +355,41 @@ describe("modern stateless profile-context runtime", () => {
       expect(auditText).not.toContain(workHandle);
       expect(auditText).not.toContain(personalHandle);
       expect(auditText).toMatch(/"profileContextCorrelation":"mctxc1\.[A-Za-z0-9_-]{22}"/u);
+      const auditEvents = auditText
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(auditEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "operation",
+          operation: "tools/list",
+          sourceProfile: "personal",
+          status: "failure",
+          errorCode: "PROFILE_CONTEXT_INVALID"
+        }),
+        expect.objectContaining({
+          kind: "operation",
+          operation: "tools/list",
+          sourceProfile: "personal",
+          status: "failure",
+          errorCode: "PROFILE_CONTEXT_UNAVAILABLE"
+        }),
+        expect.objectContaining({
+          kind: "operation",
+          operation: "management/list-profiles",
+          sourceProfile: "personal",
+          status: "failure",
+          errorCode: "PROFILE_CONTEXT_UNAVAILABLE"
+        }),
+        expect.objectContaining({
+          kind: "operation",
+          operation: "prompts/get",
+          sourceProfile: "personal",
+          status: "failure",
+          errorCode: "PROFILE_CONTEXT_INVALID"
+        })
+      ]));
     } finally {
       await Promise.allSettled([
         firstClient.close(),
@@ -344,4 +402,78 @@ describe("modern stateless profile-context runtime", () => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
     }
   }, 30_000);
+
+  it("enforces strict cross-profile tool discovery whenever modern mode is enabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-stateless-strict-discovery-"));
+    const auditPath = join(directory, "audit.jsonl");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "personal",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        personal: { env: { TEST_ACCOUNT_NAME: "personal" } },
+        work: { env: { TEST_ACCOUNT_NAME: "work", TEST_WHOAMI_SCHEMA: "account" } }
+      },
+      audit: { path: auditPath }
+    });
+    const requestBoundary = createAuthenticatedRequestContextBoundary<unknown>({
+      deploymentId: "miftah.example/strict-discovery",
+      bindingKey: Buffer.alloc(32, 0x31),
+      auditKey: Buffer.alloc(32, 0x32),
+      clock: () => nowMs,
+      verifiedClaimsProvider: (request) => {
+        const extra = (request as AuthInfo | undefined)?.extra;
+        return extra?.verifiedClaims as ReturnType<typeof claims> | undefined;
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(
+      config,
+      new ProfileManager(config),
+      manager,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        handles: new ProfileContextHandleService({
+          deploymentId: "miftah.example/strict-discovery",
+          profiles: ["personal", "work"],
+          keyringProvider: () => ({
+            activeEpoch: 1,
+            epochs: [{ epoch: 1, key: Buffer.alloc(32, 0x33), activatedAtMs: nowMs - 1_000 }]
+          }),
+          auditKey: Buffer.alloc(32, 0x34),
+          revocations: new InMemoryProfileContextRevocationStore(),
+          clock: () => nowMs
+        }),
+        authenticatedRequestContext: requestBoundary
+      }
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "modern-strict-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([
+        wrapper.connect(serverTransport),
+        client.connect(new AuthenticatedClientTransport(clientTransport, () => authInfo("strict-chat")))
+      ]);
+      await expect(client.listTools()).rejects.toThrow(/TOOL_SCHEMA_MISMATCH: strict tools discovery/u);
+      const events = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: "operation",
+        operation: "tools/list",
+        status: "failure",
+        errorCode: "TOOL_SCHEMA_MISMATCH"
+      }));
+    } finally {
+      await Promise.allSettled([client.close(), wrapper.close(), manager.close()]);
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
+    }
+  }, 20_000);
 });
