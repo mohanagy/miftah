@@ -23,7 +23,7 @@ describe("MRTR and Tasks decision", () => {
     expect(decision).toContain("The `io.modelcontextprotocol/tasks` extension remains unimplemented");
     expect(decision).toContain("there is no selected Miftah task");
     expect(decision).toContain("durable opaque identifier");
-    expect(decision).toContain("`tasks/get`, `tasks/result`, `tasks/update`, and `tasks/cancel`");
+    expect(decision).toContain("`tasks/get`, `tasks/update`, and `tasks/cancel`");
     expect(decision).toContain("`inputResponses` updates");
     expect(decision).toContain("packaged reconnect evidence");
     expect(decision).toContain("Miftah makes no Tasks interoperability claim");
