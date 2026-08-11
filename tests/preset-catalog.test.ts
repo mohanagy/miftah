@@ -259,7 +259,8 @@ describe("preset catalog", () => {
     const localCommand = localExecutable();
     const args = ["fixtures/fake-local-mcp.mjs", "--stdio", "$pageview"];
 
-    expect(isAbsolute(args[0] ?? "")).toBe(false);
+    expect(args[0]).toBeDefined();
+    expect(isAbsolute(args[0]!)).toBe(false);
     expect(() => buildPresetConfig("local-tools", "local-stdio", { localCommand, args })).toThrow(PresetCatalogError);
 
     const config = buildPresetConfig("local-tools", "local-stdio", {
