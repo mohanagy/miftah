@@ -15,6 +15,7 @@ type ValueOptionName =
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "oauthClientMetadataUrl"
   | "localCommand"
   | "args"
   | "cwd"
@@ -65,6 +66,8 @@ export interface CliOptions {
   readonly headerName?: string;
   readonly headerPrefix?: string;
   readonly oauthClientSecretsFile?: string;
+  /** Reviewed HTTPS Client ID Metadata Document URL for native OAuth discovery. */
+  readonly oauthClientMetadataUrl?: string;
   /** One literal executable for the explicitly reviewed local stdio setup flow. */
   readonly localCommand?: string;
   /** Repeated literal argv elements for the explicitly reviewed local stdio setup flow. */
@@ -183,6 +186,7 @@ export const CLI_COMMANDS = {
       "headerName",
       "headerPrefix",
       "oauthClientSecretsFile",
+      "oauthClientMetadataUrl",
       "localCommand",
       "args",
       "cwd",
@@ -398,6 +402,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--oauth-client-secrets-file <file>",
     description: "Absolute Google OAuth client-secrets file for the GSC preset."
   },
+  oauthClientMetadataUrl: {
+    name: "oauthClientMetadataUrl",
+    takesValue: true,
+    usage: "--oauth-client-metadata-url <https-url>",
+    description: "Reviewed Client ID Metadata Document URL preferred by native OAuth discovery."
+  },
   localCommand: {
     name: "localCommand",
     takesValue: true,
@@ -585,6 +595,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
+  "--oauth-client-metadata-url": OPTION_DEFINITIONS.oauthClientMetadataUrl,
   "--local-command": OPTION_DEFINITIONS.localCommand,
   "--arg": OPTION_DEFINITIONS.args,
   "--cwd": OPTION_DEFINITIONS.cwd,

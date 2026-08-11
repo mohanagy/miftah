@@ -46,8 +46,10 @@ export interface OAuthCompatibilityProbe {
     readonly clientName: string;
     readonly redirectUri: string;
     readonly scope: string;
+    readonly applicationType: string;
   }[];
   authorizationRequests(): readonly {
+    readonly clientId: string;
     readonly redirectUri: string;
     readonly scope: string;
   }[];
@@ -69,6 +71,9 @@ export interface OAuthCompatibilityProbeOptions {
   /** Public HTTPS identity used by strict OAuth tests while requests remain loopback-only. */
   readonly publicBaseUrl?: string;
   readonly discoveryKind?: "oauth" | "oidc";
+  readonly clientMetadataDocumentSupported?: boolean;
+  readonly dynamicRegistrationSupported?: boolean;
+  readonly authorizationResponseIssuer?: "expected" | "missing" | "mismatch";
 }
 
 export interface FakeRemoteUpstreamOptions {
@@ -264,8 +269,13 @@ export async function startOAuthCompatibilityProbe(
   options: OAuthCompatibilityProbeOptions = {}
 ): Promise<OAuthCompatibilityProbe> {
   const discoveryRequests: string[] = [];
-  const registrationRequests: Array<{ clientName: string; redirectUri: string; scope: string }> = [];
-  const authorizationRequests: Array<{ redirectUri: string; scope: string }> = [];
+  const registrationRequests: Array<{
+    clientName: string;
+    redirectUri: string;
+    scope: string;
+    applicationType: string;
+  }> = [];
+  const authorizationRequests: Array<{ clientId: string; redirectUri: string; scope: string }> = [];
   const authorizationCodes = new Map<string, { codeChallenge: string; redirectUri: string }>();
   const tokenExchanges: Array<{
     clientId: string;
@@ -306,12 +316,14 @@ export async function startOAuthCompatibilityProbe(
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/oauth/register`,
+        ...(options.dynamicRegistrationSupported === false
+          ? {}
+          : { registration_endpoint: `${baseUrl}/oauth/register` }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        client_id_metadata_document_supported: true,
+        client_id_metadata_document_supported: options.clientMetadataDocumentSupported !== false,
         authorization_response_iss_parameter_supported: true
       });
       return;
@@ -328,7 +340,9 @@ export async function startOAuthCompatibilityProbe(
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/oauth/register`,
+        ...(options.dynamicRegistrationSupported === false
+          ? {}
+          : { registration_endpoint: `${baseUrl}/oauth/register` }),
         jwks_uri: `${baseUrl}/oauth/jwks`,
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
@@ -336,7 +350,7 @@ export async function startOAuthCompatibilityProbe(
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        client_id_metadata_document_supported: true,
+        client_id_metadata_document_supported: options.clientMetadataDocumentSupported !== false,
         authorization_response_iss_parameter_supported: true
       });
       return;
@@ -348,7 +362,8 @@ export async function startOAuthCompatibilityProbe(
       registrationRequests.push({
         clientName: typeof registration.client_name === "string" ? registration.client_name : "",
         redirectUri: typeof redirectUri === "string" ? redirectUri : "",
-        scope: typeof registration.scope === "string" ? registration.scope : ""
+        scope: typeof registration.scope === "string" ? registration.scope : "",
+        applicationType: typeof registration.application_type === "string" ? registration.application_type : ""
       });
       sendJson(response, 201, {
         client_id: "miftah-compatibility-client",
@@ -364,6 +379,7 @@ export async function startOAuthCompatibilityProbe(
       const codeChallenge = requestUrl.searchParams.get("code_challenge");
       const redirectUri = requestUrl.searchParams.get("redirect_uri");
       authorizationRequests.push({
+        clientId: requestUrl.searchParams.get("client_id") ?? "",
         redirectUri: redirectUri ?? "",
         scope: requestUrl.searchParams.get("scope") ?? ""
       });
@@ -378,7 +394,12 @@ export async function startOAuthCompatibilityProbe(
       callback.searchParams.set("code", authorizationCode);
       const state = requestUrl.searchParams.get("state");
       if (state) callback.searchParams.set("state", state);
-      callback.searchParams.set("iss", baseUrl);
+      if (options.authorizationResponseIssuer !== "missing") {
+        callback.searchParams.set(
+          "iss",
+          options.authorizationResponseIssuer === "mismatch" ? "https://other-issuer.example.test" : baseUrl
+        );
+      }
       response.writeHead(302, { location: callback.toString() });
       response.end();
       return;

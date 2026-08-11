@@ -25,7 +25,7 @@ import type { InitCommandContext } from "./init.js";
 
 export type NativeOAuthSetupOptions = Pick<
   CliOptions,
-  "config" | "name" | "description" | "profile" | "upstream" | "url" | "output" | "client" | "makeDefault"
+  "config" | "name" | "description" | "profile" | "upstream" | "url" | "output" | "client" | "makeDefault" | "oauthClientMetadataUrl"
 >;
 
 interface NativeOAuthSetupValues {
@@ -35,6 +35,7 @@ interface NativeOAuthSetupValues {
   readonly resource: string;
   readonly output: string;
   readonly client?: string;
+  readonly clientMetadataUrl?: string;
 }
 
 interface NativeOAuthExistingAccountValues {
@@ -43,6 +44,7 @@ interface NativeOAuthExistingAccountValues {
   readonly description?: string;
   readonly upstream: string;
   readonly makeDefault: boolean;
+  readonly clientMetadataUrl?: string;
 }
 
 function usageError(message: string): never {
@@ -88,7 +90,8 @@ async function collectValues(
       ...(options.description === undefined ? {} : { description: options.description }),
       resource: options.url,
       output: options.output ?? `${options.name}.miftah.json`,
-      client: options.client
+      client: options.client,
+      ...(options.oauthClientMetadataUrl === undefined ? {} : { clientMetadataUrl: options.oauthClientMetadataUrl })
     };
   }
   if (!isTty(context)) {
@@ -116,7 +119,8 @@ async function collectValues(
       ...(description === undefined ? {} : { description }),
       resource,
       output,
-      ...(client === undefined ? {} : { client })
+      ...(client === undefined ? {} : { client }),
+      ...(options.oauthClientMetadataUrl === undefined ? {} : { clientMetadataUrl: options.oauthClientMetadataUrl })
     };
   } catch (error) {
     if (error instanceof CliUsageError) throw error;
@@ -140,7 +144,8 @@ async function collectExistingAccountValues(
       profile: options.profile,
       ...(options.description === undefined ? {} : { description: options.description }),
       upstream: options.upstream ?? "default",
-      makeDefault: options.makeDefault === true
+      makeDefault: options.makeDefault === true,
+      ...(options.oauthClientMetadataUrl === undefined ? {} : { clientMetadataUrl: options.oauthClientMetadataUrl })
     };
   }
 
@@ -164,7 +169,8 @@ async function collectExistingAccountValues(
       profile,
       ...(description === undefined ? {} : { description }),
       upstream,
-      makeDefault: normalizedDefault === "yes" || normalizedDefault === "y"
+      makeDefault: normalizedDefault === "yes" || normalizedDefault === "y",
+      ...(options.oauthClientMetadataUrl === undefined ? {} : { clientMetadataUrl: options.oauthClientMetadataUrl })
     };
   } catch (error) {
     if (error instanceof CliUsageError) throw error;
@@ -246,7 +252,8 @@ export async function runNativeOAuthSetup(
       profile: values.profile,
       ...(values.description === undefined ? {} : { description: values.description }),
       upstream: values.upstream,
-      ...(values.makeDefault ? { makeDefault: true } : {})
+      ...(values.makeDefault ? { makeDefault: true } : {}),
+      ...(values.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: values.clientMetadataUrl })
     }, {
       ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch })
     });
@@ -264,7 +271,8 @@ export async function runNativeOAuthSetup(
     name: values.name,
     profile: values.profile,
     ...(values.description === undefined ? {} : { description: values.description }),
-    resource: values.resource
+    resource: values.resource,
+    ...(values.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: values.clientMetadataUrl })
   }, dependencies);
   context.output.write(`OAuth discovery completed for ${plan.discovery.resource}.\n`);
   context.output.write(

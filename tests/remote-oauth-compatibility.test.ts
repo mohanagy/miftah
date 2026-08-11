@@ -112,7 +112,8 @@ describe("standards-compatible remote OAuth probe", () => {
         {
           clientName: "Miftah deterministic OAuth compatibility probe",
           redirectUri: provider.redirectUrl,
-          scope: "mcp:tools"
+          scope: "mcp:tools",
+          applicationType: "native"
         }
       ]);
 

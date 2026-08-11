@@ -4,6 +4,7 @@ import { createOAuthConnectionBinding, type OAuthConnectionRef } from "./connect
 import { assertRemoteOAuthDiscovery } from "./remote-oauth-client-provider.js";
 import { OAuthMetadataFetchGuard } from "./oauth-metadata-fetch-guard.js";
 import { canonicalizeOAuthResource } from "./canonical-resource.js";
+import { isSafeOAuthHttpsUrl } from "./url-safety.js";
 import { MiftahError } from "../utils/errors.js";
 
 const discoveryConfigIdentity = "0".repeat(64);
@@ -15,13 +16,15 @@ export interface DiscoverNativeOAuthConnectionRequest {
   readonly profile: string;
   readonly upstream: string;
   readonly connectionRef: OAuthConnectionRef;
+  /** Reviewed HTTPS client identifier document used only when the authorization server advertises CIMD. */
+  readonly clientMetadataUrl?: string;
 }
 
 /** Non-secret result that a caller may show for review before publishing a configuration. */
 export interface DiscoveredNativeOAuthConnection {
   readonly resource: string;
   readonly issuer: string;
-  readonly clientRegistration: "dynamic";
+  readonly clientRegistration: "dynamic" | `client-id-metadata:${string}`;
   /** Server-advertised scopes. A later UI must make the authorization impact visible before connect. */
   readonly advertisedScopes: readonly string[];
 }
@@ -38,10 +41,10 @@ function discoveryUnsupported(): never {
   );
 }
 
-function dynamicRegistrationUnsupported(): never {
+function clientRegistrationUnsupported(): never {
   throw new MiftahError(
     "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED",
-    "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED: the remote MCP endpoint does not support dynamic client registration; use advanced OAuth setup with provider-supplied registration details"
+    "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED: the remote MCP endpoint does not support a reviewed Client ID Metadata Document or bounded dynamic registration fallback"
   );
 }
 
@@ -49,14 +52,20 @@ function dynamicRegistrationUnsupported(): never {
  * Discovers one native OAuth binding before any config, browser handoff, client registration, or credential is created.
  *
  * The endpoint is the trust anchor. Resource metadata must name exactly one authorization server so Miftah never
- * chooses an issuer on the user's behalf. Only dynamic registration is eligible for this endpoint-first flow;
- * pre-registered and client-metadata modes necessarily require provider input and remain the advanced path.
+ * chooses an issuer on the user's behalf. A reviewed client metadata URL is preferred when advertised; otherwise
+ * the flow uses only an explicitly advertised DCR endpoint as a bounded compatibility fallback.
  */
 export async function discoverNativeOAuthConnection(
   request: DiscoverNativeOAuthConnectionRequest,
   dependencies: NativeOAuthDiscoveryDependencies = {}
 ): Promise<DiscoveredNativeOAuthConnection> {
   const canonicalResource = canonicalizeOAuthResource(request.resource);
+  if (
+    request.clientMetadataUrl !== undefined &&
+    !isSafeOAuthHttpsUrl(request.clientMetadataUrl, { requirePath: true, allowSearch: false })
+  ) {
+    clientRegistrationUnsupported();
+  }
   const guard = new OAuthMetadataFetchGuard(dependencies.fetch);
   let server: Awaited<ReturnType<typeof discoverOAuthServerInfo>>;
   try {
@@ -73,9 +82,13 @@ export async function discoverNativeOAuthConnection(
   ) {
     discoveryUnsupported();
   }
-  if (server.authorizationServerMetadata?.registration_endpoint === undefined) {
-    dynamicRegistrationUnsupported();
-  }
+  const metadata = server.authorizationServerMetadata;
+  const clientRegistration = request.clientMetadataUrl !== undefined &&
+      metadata?.client_id_metadata_document_supported === true
+    ? `client-id-metadata:${request.clientMetadataUrl}` as const
+    : metadata?.registration_endpoint !== undefined
+      ? "dynamic" as const
+      : clientRegistrationUnsupported();
 
   const binding = createOAuthConnectionBinding({
     configIdentity: discoveryConfigIdentity,
@@ -84,7 +97,7 @@ export async function discoverNativeOAuthConnection(
     upstream: request.upstream,
     resource: canonicalResource,
     issuer: server.authorizationServerUrl,
-    clientRegistration: "dynamic",
+    clientRegistration,
     scopes: server.resourceMetadata?.scopes_supported ?? []
   });
   const state: OAuthDiscoveryState = {
@@ -102,7 +115,7 @@ export async function discoverNativeOAuthConnection(
   return {
     resource: binding.canonicalResource,
     issuer: binding.issuer,
-    clientRegistration: "dynamic",
+    clientRegistration,
     advertisedScopes: [...binding.scopes]
   };
 }

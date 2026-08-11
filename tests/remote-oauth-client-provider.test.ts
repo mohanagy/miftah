@@ -128,6 +128,25 @@ function providerForRegistration(clientRegistration: string) {
 }
 
 describe("remote OAuth client provider", () => {
+  it("declares the loopback desktop and CLI flow as a native OAuth application", () => {
+    expect(provider().clientMetadata).toMatchObject({
+      application_type: "native",
+      redirect_uris: ["http://127.0.0.1:43179/oauth/callback"]
+    });
+  });
+
+  it("rejects client registration state from another authorization-server issuer", async () => {
+    const exact = providerForRegistration("dynamic");
+    expect(() => exact.saveClientInformation({
+      client_id: "wrong-issuer-client",
+      issuer: "https://other-issuer.example.test"
+    })).toThrow(expect.objectContaining({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" }));
+    await expect(exact.clientInformation({ issuer: "https://other-issuer.example.test" })).rejects.toMatchObject({
+      code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED"
+    });
+    await expect(exact.tokens({ issuer: "https://other-issuer.example.test" })).resolves.toBeUndefined();
+  });
+
   it("returns a typed headless diagnostic before browser handoff", async () => {
     const { lifecycle } = service();
     const handoff = new CountingHandoff();
@@ -307,6 +326,10 @@ describe("remote OAuth client provider", () => {
       client_id: metadataUrl,
       issuer: "https://issuer.example.test"
     });
+    expect(() => metadataClient.saveClientInformation({
+      client_id: "https://other-client.example.test/miftah.json",
+      issuer: "https://issuer.example.test"
+    })).toThrow(expect.objectContaining({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" }));
 
     const dynamic = providerForRegistration("dynamic");
     await expect(dynamic.saveDiscoveryState(discovery())).rejects.toMatchObject({

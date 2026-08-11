@@ -591,6 +591,19 @@ describe("setup command", () => {
     })).rejects.toThrow("Adding an account profile requires --config.");
   });
 
+  it("rejects a CIMD URL outside endpoint-first native OAuth setup", async () => {
+    await expect(runSetupCommand({
+      addProfile: true,
+      config: resolve(outputRoot, "existing.json"),
+      oauthClientMetadataUrl: "https://client.example.test/oauth/miftah.json"
+    }, {
+      input: new PassThrough(),
+      output: new PassThrough(),
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Option '--oauth-client-metadata-url' is unavailable when adding an account profile.");
+  });
+
   it("adds a named environment-backed account to an existing standard configuration without launching its upstream", async () => {
     await mkdir(outputRoot, { recursive: true });
     const configPath = resolve(outputRoot, "sentry.json");
@@ -660,9 +673,13 @@ describe("setup command", () => {
     }
   });
 
-  it("creates a native OAuth configuration only after endpoint discovery without registering or storing a credential", async () => {
+  it("creates a native OAuth configuration with a reviewed CIMD URL without registering or storing a credential", async () => {
     const output = resolve(outputRoot, "posthog-work.json");
-    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      dynamicRegistrationSupported: false
+    });
+    const clientMetadataUrl = "https://client.example.test/oauth/miftah.json";
     const input = Object.assign(new PassThrough(), { isTTY: false });
     const transcript = new PassThrough();
     let contents = "";
@@ -674,6 +691,7 @@ describe("setup command", () => {
         name: "posthog-work",
         profile: "production",
         url: upstream.streamableHttpUrl,
+        oauthClientMetadataUrl: clientMetadataUrl,
         output: "posthog-work.json",
         client: "claude-desktop"
       }, {
@@ -688,12 +706,19 @@ describe("setup command", () => {
       });
 
       expect(result).toEqual({ verification: "not-applicable", exitCode: 0, reports: [] });
-      expect(validateConfig(JSON.parse(await readFile(output, "utf8")))).toMatchObject({
+      const parsedConfig = JSON.parse(await readFile(output, "utf8")) as {
+        oauth?: { connections?: Record<string, { clientRegistration?: string }> };
+      };
+      const config = validateConfig(parsedConfig);
+      expect(config).toMatchObject({
         version: "3",
         name: "posthog-work",
         defaultProfile: "production",
         upstream: { transport: "streamable-http", url: "https://mcp.example.test/mcp" }
       });
+      expect(Object.values(parsedConfig.oauth?.connections ?? {})).toEqual([
+        expect.objectContaining({ clientRegistration: `client-id-metadata:${clientMetadataUrl}` })
+      ]);
       expect(upstream.discoveryRequests()).toEqual([
         "/.well-known/oauth-protected-resource",
         "/.well-known/oauth-authorization-server"

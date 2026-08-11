@@ -32,6 +32,12 @@ describe("OAuth support documentation contract", () => {
     expect(oauthSupport).toContain("`pre-registered:<client-id>`");
     expect(oauthSupport).toContain("`client-id-metadata:<https-url>`");
     expect(oauthSupport).toContain("`dynamic`");
+    expect(oauthSupport).toContain("DCR is deprecated for new Miftah connections.");
+    expect(oauthSupport).toContain("no earlier than Miftah 2.0.0");
+    expect(oauthSupport).toContain("Miftah registers `application_type: native`");
+    expect(oauthSupport).toContain("rejected before the authorization code can reach the token endpoint");
+    expect(oauthSupport).toContain("do not edit the issuer in place or reuse the old connection reference or credential");
+    expect(oauthSupport).toContain("--oauth-client-metadata-url <https-url>");
     expect(oauthSupport).toContain("Credentials are stored only through the platform OS vault adapter");
     expect(oauthSupport).toContain("| Support class | Transport and current ownership | Operator fallback |");
 
