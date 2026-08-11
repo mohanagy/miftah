@@ -9,6 +9,9 @@
 | `MIFTAH_VERSION` | The package version compiled into Miftah's CLI and MCP metadata. |
 | `CURRENT_CONFIG_VERSION` | The canonical configuration format written by current Miftah presets and examples. |
 | `createMiftahRuntime` | Creates an MCP wrapper from a configuration file without exposing process, profile, or server internals. |
+| `createAuthenticatedRequestContextBoundary` | Derives an opaque deployment and chat binding only from claims verified by a trusted embedding host. |
+| `requireAuthenticatedRequestContext` | Fails closed when a modern request has no configured trusted authentication boundary. |
+| `AuthenticatedRequestContextError` | Fixed-code error class that carries no identity, provider, request, or key details. |
 | `MiftahError` | Error class with stable Miftah error codes and optional diagnostic details. |
 | `loadConfig` | Reads, validates, and resolves configuration-relative paths from a JSON file. |
 | `validateConfig` | Validates unknown input against Miftah's strict configuration contract. |
@@ -25,9 +28,19 @@ const runtime = await createMiftahRuntime("./miftah.json");
 await runtime.connect(new StdioServerTransport());
 ```
 
+## Authenticated request context
+
+The additive authenticated request-context API is the trust seam for future modern stateless handling. An embedding host supplies a verifier callback that returns `VerifiedHttpRequestClaims` only after it has authenticated the request. Miftah does not parse MCP `clientInfo`, arbitrary headers, request metadata, tool arguments, or a model-generated conversation ID into this boundary.
+
+`createAuthenticatedRequestContextBoundary` uses separate deployment-managed keys to derive an opaque `binding` and a non-sensitive `auditCorrelation` from the verified issuer, subject, audience, per-chat context, and deployment. Instances in one deployment receive the same binding when configured with the same keys. `assertBinding` fails with `AUTH_CONTEXT_MISMATCH` when any bound value changes. A valid replay within the same authenticated chat is allowed because the binding selects profile context; it is not an authorization credential and does not replace policy, approval, or operation idempotency checks.
+
+Claims are rejected at exact expiry. Provider failures and missing claims return only `AUTH_CONTEXT_UNAVAILABLE`; malformed claims return `AUTH_CONTEXT_INVALID`. Call `requireAuthenticatedRequestContext` in a modern account-sensitive path so an absent boundary cannot silently fall back to client metadata, a mutable default, or durable active-profile state.
+
+The current CLI-owned Streamable HTTP server remains the documented legacy session-aware path and does not synthesize these claims from its static bearer token. Until a supported host supplies a verified per-chat claim and the modern protocol path is enabled, deploy a profile-scoped or operator-locked endpoint and do not claim chat-scoped switching.
+
 ## Type exports
 
-The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `HttpServerConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `MiftahConfigVersion`, `OAuthConfig`, `OAuthConnectionConfig`, `OAuthConnectionRef`, `PluginConfig`, `PluginKind`, `PluginsConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingMatcherPluginConfig`, `RoutingRule`, `SecurityConfig`, `SecretProviderPluginConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `ServerConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
+The package root also exports `AuthenticatedRequestContext`, `AuthenticatedRequestContextBoundary`, `AuthenticatedRequestContextBoundaryOptions`, `AuthenticatedRequestContextErrorCode`, `VerifiedHttpRequestClaims`, and `VerifiedHttpRequestClaimsProvider` for the trusted host boundary. The configuration contract exposes `ActiveProfileStateScope`, `AuditConfig`, `AuditIntegrityConfig`, `AuditRotationConfig`, `GitHubProfileRoutingMatch`, `HttpServerConfig`, `IdentityConfig`, `IdentityFingerprint`, `IdentityProbeConfig`, `JiraProfileRoutingMatch`, `LinearProfileRoutingMatch`, `MiftahConfig`, `MiftahConfigVersion`, `OAuthConfig`, `OAuthConnectionConfig`, `OAuthConnectionRef`, `PluginConfig`, `PluginKind`, `PluginsConfig`, `PolicyConfig`, `PostHogProfileRoutingMatch`, `ProcessConfig`, `ProfileConfig`, `ProfileIsolationConfig`, `ProfileIsolationContainerVolume`, `ProfileIsolationFile`, `ProfileLeaseConfig`, `ProfileRoutingConfig`, `ProfileRoutingMatchConfig`, `ProfileUpstreamOverride`, `RiskLevel`, `RoutingConfig`, `RoutingMatcherPluginConfig`, `RoutingRule`, `SecurityConfig`, `SecretProviderPluginConfig`, `SentryProfileRoutingMatch`, `SecretsConfig`, `ServerConfig`, `StateConfig`, `ToolDiscoveryMode`, `ToolingConfig`, `TransportType`, `UnknownToolRisk`, `UpstreamConfig`, and `ValidatedRoutingConfig`.
 
 `MiftahConfigVersion` is the union of format versions accepted by this installed release. `CURRENT_CONFIG_VERSION` is the version generated by presets; it does not cause `loadConfig` to rewrite a legacy file. Use the explicit [configuration migration command](cli.md#migrate-config) when an on-disk upgrade is intended.
 

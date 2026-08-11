@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- [#376](https://github.com/mohanagy/miftah/issues/376) Added a public authenticated request-context boundary for future modern stateless handling. Trusted embedding hosts can provide verified issuer, subject, audience, per-chat, issuance, and expiry claims; Miftah derives only opaque deployment-bound and separately keyed audit correlations, fails closed on missing, malformed, expired, or mismatched context, and never falls back to MCP `clientInfo`, arbitrary headers, request metadata, tool arguments, or mutable profile state. The existing CLI-owned Streamable HTTP server remains the legacy session-aware path until a supported host supplies the trusted per-chat claim and modern protocol integration is enabled.
+
 ## [1.0.0] - 2026-08-11
 
 ### Changed
