@@ -6,15 +6,6 @@ const libraryApiPath = fileURLToPath(new URL("../docs/library-api.md", import.me
 const changelogPath = fileURLToPath(new URL("../CHANGELOG.md", import.meta.url));
 const packageManifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 
-/** Returns the dated changelog section for an exact package version. */
-function releaseNotes(changelog: string, version: string): string {
-  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const heading = changelog.match(new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
-  if (heading?.index === undefined) return "";
-  const end = changelog.indexOf("\n## ", heading.index + heading[0].length);
-  return changelog.slice(heading.index, end < 0 ? undefined : end);
-}
-
 describe("authenticated request-context documentation contract", () => {
   it("documents the trusted host boundary and the no-fallback compatibility path", async () => {
     const documentation = await readFile(libraryApiPath, "utf8");
@@ -31,7 +22,12 @@ describe("authenticated request-context documentation contract", () => {
   it("records the additive security boundary under the package release", async () => {
     const changelog = await readFile(changelogPath, "utf8");
     const manifest = JSON.parse(await readFile(packageManifestPath, "utf8")) as { version: string };
-    const currentRelease = releaseNotes(changelog, manifest.version);
+    const escapedVersion = manifest.version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const heading = changelog.match(new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
+    expect(heading?.index).toBeTypeOf("number");
+    const releaseStart = heading?.index ?? 0;
+    const releaseEnd = changelog.indexOf("\n## ", releaseStart + (heading?.[0].length ?? 0));
+    const currentRelease = changelog.slice(releaseStart, releaseEnd < 0 ? undefined : releaseEnd);
 
     expect(currentRelease).toContain("[#376]");
     expect(currentRelease).toContain("for modern stateless handling");
