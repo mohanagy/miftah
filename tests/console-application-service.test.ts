@@ -276,7 +276,11 @@ describe("Console application service", () => {
     temporaryDirectories.push(root);
     const privateParent = await createPrivateConsoleDirectory(root);
     const configPath = join(privateParent, "miftah", "miftah.json");
-    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      dynamicRegistrationSupported: false
+    });
+    const clientMetadataUrl = "https://client.example.test/oauth/miftah.json";
     oauthUpstreams.push(upstream);
     const service = new ConsoleApplicationService(configPath, {
       generateConnectionRef: () => "31cb3ef5-22cb-4bf7-9ebf-e4a2d32bf18c",
@@ -287,7 +291,8 @@ describe("Console application service", () => {
       name: "posthog-work",
       profile: "production",
       description: "Production account",
-      resource: upstream.streamableHttpUrl
+      resource: upstream.streamableHttpUrl,
+      clientMetadataUrl
     });
 
     expect(created).toMatchObject({
@@ -313,7 +318,7 @@ describe("Console application service", () => {
         connections: {
           [connectionRef]: {
             issuer: "https://mcp.example.test",
-            clientRegistration: "dynamic",
+            clientRegistration: `client-id-metadata:${clientMetadataUrl}`,
             scopes: ["mcp:tools"]
           }
         }

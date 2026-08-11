@@ -2,9 +2,41 @@
 export { MIFTAH_VERSION } from "./version.js";
 export { CURRENT_CONFIG_VERSION } from "./config/versions.js";
 export type { MiftahConfigVersion } from "./config/versions.js";
-export { createMiftahRuntime } from "./runtime/create-miftah-runtime.js";
-export type { MiftahRuntime } from "./runtime/create-miftah-runtime.js";
+export { createMiftahRuntime, createMiftahServerFactory } from "./runtime/create-miftah-runtime.js";
+export type { MiftahRuntime, MiftahRuntimeOptions } from "./runtime/create-miftah-runtime.js";
 export type { ConfigDiagnostic } from "./config/diagnostics.js";
+export {
+  AuthenticatedRequestContextError,
+  createAuthenticatedRequestContextBoundary,
+  requireAuthenticatedRequestContext
+} from "./http/authenticated-request-context.js";
+export {
+  InMemoryProfileContextRevocationStore,
+  PROFILE_CONTEXT_ARGUMENT,
+  PROFILE_CONTEXT_META_KEY,
+  ProfileContextHandleError,
+  ProfileContextHandleService
+} from "./profiles/profile-context-handle.js";
+export type {
+  MintedProfileContext,
+  ModernProfileContextRuntimeOptions,
+  ProfileContextHandleErrorCode,
+  ProfileContextHandleServiceOptions,
+  ProfileContextKeyEpoch,
+  ProfileContextKeyringProvider,
+  ProfileContextKeyringSnapshot,
+  ProfileContextReplacementAudit,
+  ProfileContextRevocationStore,
+  ResolvedProfileContext
+} from "./profiles/profile-context-handle.js";
+export type {
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary,
+  AuthenticatedRequestContextBoundaryOptions,
+  AuthenticatedRequestContextErrorCode,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider
+} from "./http/authenticated-request-context.js";
 export { loadConfig } from "./config/load-config.js";
 export { validateConfig } from "./config/validate-config.js";
 export { generateConfigSchema } from "./config/generate-json-schema.js";

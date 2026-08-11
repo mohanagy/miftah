@@ -1,19 +1,8 @@
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
+import { CallToolResultSchema, RootsListChangedNotificationSchema } from "@modelcontextprotocol/core";
+import { InMemoryTransport, Client, UriTemplate } from "@modelcontextprotocol/client";
+import type { Transport, TransportSendOptions, JSONRPCMessage } from "@modelcontextprotocol/client";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  CallToolResultSchema,
-  ListRootsRequestSchema,
-  PromptListChangedNotificationSchema,
-  ResourceListChangedNotificationSchema,
-  ResourceUpdatedNotificationSchema,
-  RootsListChangedNotificationSchema,
-  ToolListChangedNotificationSchema
-} from "@modelcontextprotocol/sdk/types.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -855,8 +844,7 @@ describe("Miftah MCP wrapper", () => {
       await client.callTool({ name: "miftah_verify_identity", arguments: { profile: "work" } });
 
       const profilesResult = await client.callTool(
-        { name: "miftah_list_profiles", arguments: {} },
-        CallToolResultSchema
+        { name: "miftah_list_profiles", arguments: {} }
       );
       if (!Array.isArray(profilesResult.content)) throw new Error("Expected profile list content.");
       const profilesContent = profilesResult.content[0];
@@ -1925,7 +1913,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let notifications = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifications += 1;
     });
 
@@ -1972,7 +1960,7 @@ describe("Miftah MCP wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      const pending = client.callTool({ name: "whoami", arguments: {} }, undefined, { signal: controller.signal });
+      const pending = client.callTool({ name: "whoami", arguments: {} }, { signal: controller.signal });
       await expect.poll(async () => access(startedPath).then(() => true, () => false)).toBe(true);
       controller.abort("test cancellation");
 
@@ -1991,7 +1979,7 @@ describe("Miftah MCP wrapper", () => {
       await expect.poll(toolCallOperations).toHaveLength(1);
       const operations = await toolCallOperations();
       expect(operations).toEqual([
-        expect.objectContaining({ status: "failure", errorCode: "UPSTREAM_CALL_FAILED", name: "whoami" })
+        expect.objectContaining({ status: "cancelled", errorCode: "REQUEST_CANCELLED", name: "whoami" })
       ]);
       expect((await readFile(cancelledPath, "utf8")).trim().split("\n")).toHaveLength(1);
     } finally {
@@ -2087,7 +2075,6 @@ describe("Miftah MCP wrapper", () => {
       toolListStarted = watchForPathArrival(startedPath);
       const pending = client.callTool(
         { name: "miftah_list_upstream_tools", arguments: {} },
-        undefined,
         { signal: controller.signal }
       );
       await Promise.race([
@@ -2336,7 +2323,6 @@ describe("Miftah MCP wrapper", () => {
       expect(
         await client.callTool(
           { name: "whoami", arguments: {} },
-          undefined,
           { onprogress: (progress) => progressUpdates.push(progress) }
         )
       ).toMatchObject({ content: [{ type: "text", text: "work" }] });
@@ -2505,7 +2491,7 @@ describe("Miftah MCP wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      await expect(client.listResourceTemplates()).rejects.toThrow(/^MCP error -32603: RESOURCE_TEMPLATES_UNAVAILABLE:/);
+      await expect(client.listResourceTemplates()).rejects.toThrow(/^RESOURCE_TEMPLATES_UNAVAILABLE:/);
     } finally {
       await client.close();
       await wrapper.close();
@@ -2538,7 +2524,7 @@ describe("Miftah MCP wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      await expect(client.listResourceTemplates()).rejects.toThrow(/^MCP error -32603: RESOURCE_TEMPLATES_UNAVAILABLE:/);
+      await expect(client.listResourceTemplates()).rejects.toThrow(/^RESOURCE_TEMPLATES_UNAVAILABLE:/);
     } finally {
       await client.close();
       await wrapper.close();
@@ -2586,7 +2572,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-test-client", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -2633,7 +2619,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-filter-test", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -2671,7 +2657,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "failed-resource-subscription-test-client", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -2717,7 +2703,7 @@ describe("Miftah MCP wrapper", () => {
     const client = new Client({ name: "cancelled-resource-subscription-test-client", version: "1.0.0" });
     const controller = new AbortController();
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -2879,7 +2865,7 @@ describe("Miftah MCP wrapper", () => {
     const controller = new AbortController();
     const updates: string[] = [];
     let subscribeStarted: PathArrivalWatch | undefined;
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -2938,7 +2924,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-fanout-test-client", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -3251,7 +3237,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-pre-candidate-switch-test", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -3300,7 +3286,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-idle-test", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -3338,7 +3324,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-switch-test", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -3386,7 +3372,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "resource-subscription-third-profile-test", version: "1.0.0" });
     const updates: string[] = [];
-    client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    client.setNotificationHandler('notifications/resources/updated', (notification) => {
       updates.push(notification.params.uri);
     });
 
@@ -3411,6 +3397,32 @@ describe("Miftah MCP wrapper", () => {
       await client.close();
       await wrapper.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a sanitized shutdown failure triggered by transport close", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const close = vi.spyOn(wrapper, "close").mockRejectedValueOnce(new Error("private shutdown detail"));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    try {
+      wrapper.server.onclose?.();
+      await expect.poll(() => emitWarning.mock.calls.length).toBe(1);
+      expect(emitWarning).toHaveBeenCalledWith("UPSTREAM_CALL_FAILED: private shutdown detail", {
+        code: "MIFTAH_SHUTDOWN_FAILED"
+      });
+    } finally {
+      close.mockRestore();
+      emitWarning.mockRestore();
+      await wrapper.close();
     }
   });
 
@@ -3624,13 +3636,13 @@ describe("Miftah MCP wrapper", () => {
     let toolsChanged = 0;
     let resourcesChanged = 0;
     let promptsChanged = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       toolsChanged += 1;
     });
-    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/resources/list_changed', () => {
       resourcesChanged += 1;
     });
-    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/prompts/list_changed', () => {
       promptsChanged += 1;
     });
 
@@ -3671,7 +3683,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "tool-discovery-list-change-test", version: "1.0.0" });
     let changes = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       changes += 1;
     });
 
@@ -3710,7 +3722,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "initial-tool-list-change-refresh-test", version: "1.0.0" });
     let changes = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       changes += 1;
     });
 
@@ -3788,7 +3800,7 @@ describe("Miftah MCP wrapper", () => {
     const toolListChanged = new Promise<void>((resolve) => {
       notifyToolListChanged = resolve;
     });
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifyToolListChanged?.();
     });
 
@@ -3830,7 +3842,7 @@ describe("Miftah MCP wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       const result = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_current_profile", arguments: {} }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_current_profile", arguments: {} })
       );
       const content = result.content[0];
       expect(content).toMatchObject({ type: "text" });
@@ -4284,7 +4296,7 @@ describe("Miftah MCP wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let notifications = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifications += 1;
     });
 
@@ -4439,7 +4451,7 @@ describe("Miftah MCP wrapper", () => {
       { capabilities: { roots: { listChanged: true } } }
     );
     let rootRequests = 0;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
+    client.setRequestHandler('roots/list', async () => {
       rootRequests += 1;
       return {
         roots: [{ uri: fixture.matchingRoot, name: "matching", _meta: { ignored: true } }]
@@ -4475,7 +4487,7 @@ describe("Miftah MCP wrapper", () => {
       { capabilities: { roots: { listChanged: true } } }
     );
     let rootRequests = 0;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
+    client.setRequestHandler('roots/list', async () => {
       rootRequests += 1;
       return { roots: [{ uri: fixture.matchingRoot }] };
     });
@@ -4489,7 +4501,7 @@ describe("Miftah MCP wrapper", () => {
       expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
       expect(rootRequests).toBe(0);
       expect(
-        await client.callTool({ name: "whoami", arguments: {} }, CallToolResultSchema, { timeout: 500 })
+        await client.callTool({ name: "whoami", arguments: {} }, { timeout: 500 })
       ).toMatchObject({ content: [{ type: "text", text: "work" }] });
       expect(rootRequests).toBe(0);
     } finally {
@@ -4534,7 +4546,7 @@ describe("Miftah MCP wrapper", () => {
         { name: "relative-runtime-config-client", version: "1.0.0" },
         { capabilities: { roots: {} } }
       );
-      client.setRequestHandler(ListRootsRequestSchema, async () => ({
+      client.setRequestHandler('roots/list', async () => ({
         roots: [{ uri: pathToFileURL(projectDirectory).toString() }]
       }));
 
@@ -4556,18 +4568,10 @@ describe("Miftah MCP wrapper", () => {
     const routingFixture = await createRuntimeRoutingFixture();
     const runtime = await createMiftahRuntime(routingFixture.configPath);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const capabilities: { roots?: Record<string, never> } = { roots: {} };
     const client = new Client(
       { name: "roots-disabled-client", version: "1.0.0" },
-      { capabilities }
+      { capabilities: {} }
     );
-    let rootRequests = 0;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
-      rootRequests += 1;
-      return { roots: [] };
-    });
-    delete capabilities.roots;
-
     const config = validateConfig({
       version: "1",
       name: "accounts",
@@ -4583,7 +4587,7 @@ describe("Miftah MCP wrapper", () => {
       { capabilities: { roots: { listChanged: true } } }
     );
     let directRootRequests = 0;
-    directClient.setRequestHandler(ListRootsRequestSchema, async () => {
+    directClient.setRequestHandler('roots/list', async () => {
       directRootRequests += 1;
       return { roots: [] };
     });
@@ -4593,8 +4597,6 @@ describe("Miftah MCP wrapper", () => {
       expect(await client.callTool({ name: "whoami", arguments: {} })).toMatchObject({
         content: [{ type: "text", text: "work" }]
       });
-      expect(rootRequests).toBe(0);
-
       await Promise.all([wrapper.connect(directServerTransport), directClient.connect(directClientTransport)]);
       expect(await directClient.callTool({ name: "whoami", arguments: {} })).toMatchObject({
         content: [{ type: "text", text: "work" }]
@@ -4620,7 +4622,7 @@ describe("Miftah MCP wrapper", () => {
       { capabilities: { roots: { listChanged: true } } }
     );
     let rootRequests = 0;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
+    client.setRequestHandler('roots/list', async () => {
       rootRequests += 1;
       throw new Error("roots unavailable");
     });
@@ -4654,7 +4656,7 @@ describe("Miftah MCP wrapper", () => {
     );
     let currentRoot = fixture.matchingRoot;
     let rootRequests = 0;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
+    client.setRequestHandler('roots/list', async () => {
       rootRequests += 1;
       return { roots: [{ uri: currentRoot }] };
     });
@@ -4668,7 +4670,7 @@ describe("Miftah MCP wrapper", () => {
     );
     let unchangedRoot = unchangedFixture.matchingRoot;
     let unchangedRootRequests = 0;
-    unchangedClient.setRequestHandler(ListRootsRequestSchema, async () => {
+    unchangedClient.setRequestHandler('roots/list', async () => {
       unchangedRootRequests += 1;
       return { roots: [{ uri: unchangedRoot }] };
     });
@@ -4735,7 +4737,7 @@ describe("Miftah MCP wrapper", () => {
     });
     let rootRequests = 0;
     let currentRoot = fixture.matchingRoot;
-    client.setRequestHandler(ListRootsRequestSchema, async () => {
+    client.setRequestHandler('roots/list', async () => {
       rootRequests += 1;
       const responseRoot = currentRoot;
       if (rootRequests === 1) {

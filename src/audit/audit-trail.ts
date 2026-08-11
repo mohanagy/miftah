@@ -17,11 +17,14 @@ export interface AuditOperationInput {
   sourceProfile: string;
   profile?: string;
   arguments?: Record<string, unknown>;
+  profileContextCorrelation?: string;
 }
 
 export interface AuditScopeUpdate {
+  sourceProfile?: string;
   name?: string;
   profile?: string;
+  arguments?: Record<string, unknown>;
   upstream?: string;
   routingReason?: string;
   routingSource?: AuditRoutingSource;
@@ -38,6 +41,7 @@ export interface AuditScopeUpdate {
   profileLeaseState?: AuditEvent["profileLeaseState"];
   profileLeaseExpiresAt?: AuditEvent["profileLeaseExpiresAt"];
   profileLockState?: AuditEvent["profileLockState"];
+  profileContextCorrelation?: AuditEvent["profileContextCorrelation"];
 }
 
 export interface AuditScopeResult {
@@ -81,6 +85,7 @@ export interface AuditProfileInput {
   profileLeaseState?: AuditEvent["profileLeaseState"];
   profileLeaseExpiresAt?: AuditEvent["profileLeaseExpiresAt"];
   profileLockState?: AuditEvent["profileLockState"];
+  profileContextCorrelation?: AuditEvent["profileContextCorrelation"];
   status?: AuditStatus;
 }
 
@@ -220,7 +225,10 @@ export class AuditTrail {
       ...(input.profileLeaseExpiresAt === undefined
         ? {}
         : { profileLeaseExpiresAt: input.profileLeaseExpiresAt }),
-      ...(input.profileLockState === undefined ? {} : { profileLockState: input.profileLockState })
+      ...(input.profileLockState === undefined ? {} : { profileLockState: input.profileLockState }),
+      ...(input.profileContextCorrelation === undefined
+        ? {}
+        : { profileContextCorrelation: input.profileContextCorrelation })
     };
   }
 
@@ -310,6 +318,9 @@ export class AuditScope {
         ? {}
         : { profileLeaseExpiresAt: this.event.profileLeaseExpiresAt }),
       ...(this.event.profileLockState === undefined ? {} : { profileLockState: this.event.profileLockState }),
+      ...(this.event.profileContextCorrelation === undefined
+        ? {}
+        : { profileContextCorrelation: this.event.profileContextCorrelation }),
       ...(this.event.arguments === undefined ? {} : { arguments: this.event.arguments }),
       ...(terminalResult.errorCode === undefined ? {} : { errorCode: terminalResult.errorCode })
     });

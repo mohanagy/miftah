@@ -1,24 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
-import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CancelledNotificationSchema,
-  CallToolRequestSchema,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
-  ReadResourceRequestSchema
-} from "@modelcontextprotocol/sdk/types.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
+import { Server as McpServer, ProtocolError } from "@modelcontextprotocol/server";
+import type { FetchLike, Tool } from "@modelcontextprotocol/server";
 
 interface StreamableSession {
   server: McpServer;
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
 }
 
 interface SseSession {
@@ -56,8 +46,10 @@ export interface OAuthCompatibilityProbe {
     readonly clientName: string;
     readonly redirectUri: string;
     readonly scope: string;
+    readonly applicationType: string;
   }[];
   authorizationRequests(): readonly {
+    readonly clientId: string;
     readonly redirectUri: string;
     readonly scope: string;
   }[];
@@ -79,6 +71,9 @@ export interface OAuthCompatibilityProbeOptions {
   /** Public HTTPS identity used by strict OAuth tests while requests remain loopback-only. */
   readonly publicBaseUrl?: string;
   readonly discoveryKind?: "oauth" | "oidc";
+  readonly clientMetadataDocumentSupported?: boolean;
+  readonly dynamicRegistrationSupported?: boolean;
+  readonly authorizationResponseIssuer?: "expected" | "missing" | "mismatch";
 }
 
 export interface FakeRemoteUpstreamOptions {
@@ -87,6 +82,7 @@ export interface FakeRemoteUpstreamOptions {
   readonly callToolError?: { code: number; message: string };
   readonly callToolDelayMs?: number;
   readonly emitCallToolProgress?: boolean;
+  readonly exposeMcpParameterHeader?: boolean;
 }
 
 interface FakeRemoteCallToolState {
@@ -167,7 +163,7 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
       }
 
       const server = createMcpServer(request.headers["x-profile"], options, callToolState);
-      const transport = new StreamableHTTPServerTransport({
+      const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: randomUUID,
         onsessioninitialized: (createdSessionId) => {
           streamableSessions.set(createdSessionId, { server, transport });
@@ -274,8 +270,13 @@ export async function startOAuthCompatibilityProbe(
   options: OAuthCompatibilityProbeOptions = {}
 ): Promise<OAuthCompatibilityProbe> {
   const discoveryRequests: string[] = [];
-  const registrationRequests: Array<{ clientName: string; redirectUri: string; scope: string }> = [];
-  const authorizationRequests: Array<{ redirectUri: string; scope: string }> = [];
+  const registrationRequests: Array<{
+    clientName: string;
+    redirectUri: string;
+    scope: string;
+    applicationType: string;
+  }> = [];
+  const authorizationRequests: Array<{ clientId: string; redirectUri: string; scope: string }> = [];
   const authorizationCodes = new Map<string, { codeChallenge: string; redirectUri: string }>();
   const tokenExchanges: Array<{
     clientId: string;
@@ -316,12 +317,14 @@ export async function startOAuthCompatibilityProbe(
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/oauth/register`,
+        ...(options.dynamicRegistrationSupported === false
+          ? {}
+          : { registration_endpoint: `${baseUrl}/oauth/register` }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        client_id_metadata_document_supported: true,
+        client_id_metadata_document_supported: options.clientMetadataDocumentSupported !== false,
         authorization_response_iss_parameter_supported: true
       });
       return;
@@ -338,7 +341,9 @@ export async function startOAuthCompatibilityProbe(
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/oauth/register`,
+        ...(options.dynamicRegistrationSupported === false
+          ? {}
+          : { registration_endpoint: `${baseUrl}/oauth/register` }),
         jwks_uri: `${baseUrl}/oauth/jwks`,
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
@@ -346,7 +351,7 @@ export async function startOAuthCompatibilityProbe(
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        client_id_metadata_document_supported: true,
+        client_id_metadata_document_supported: options.clientMetadataDocumentSupported !== false,
         authorization_response_iss_parameter_supported: true
       });
       return;
@@ -358,7 +363,8 @@ export async function startOAuthCompatibilityProbe(
       registrationRequests.push({
         clientName: typeof registration.client_name === "string" ? registration.client_name : "",
         redirectUri: typeof redirectUri === "string" ? redirectUri : "",
-        scope: typeof registration.scope === "string" ? registration.scope : ""
+        scope: typeof registration.scope === "string" ? registration.scope : "",
+        applicationType: typeof registration.application_type === "string" ? registration.application_type : ""
       });
       sendJson(response, 201, {
         client_id: "miftah-compatibility-client",
@@ -374,6 +380,7 @@ export async function startOAuthCompatibilityProbe(
       const codeChallenge = requestUrl.searchParams.get("code_challenge");
       const redirectUri = requestUrl.searchParams.get("redirect_uri");
       authorizationRequests.push({
+        clientId: requestUrl.searchParams.get("client_id") ?? "",
         redirectUri: redirectUri ?? "",
         scope: requestUrl.searchParams.get("scope") ?? ""
       });
@@ -388,7 +395,12 @@ export async function startOAuthCompatibilityProbe(
       callback.searchParams.set("code", authorizationCode);
       const state = requestUrl.searchParams.get("state");
       if (state) callback.searchParams.set("state", state);
-      callback.searchParams.set("iss", baseUrl);
+      if (options.authorizationResponseIssuer !== "missing") {
+        callback.searchParams.set(
+          "iss",
+          options.authorizationResponseIssuer === "mismatch" ? "https://other-issuer.example.test" : baseUrl
+        );
+      }
       response.writeHead(302, { location: callback.toString() });
       response.end();
       return;
@@ -498,7 +510,7 @@ export async function startOAuthCompatibilityProbe(
     }
 
     const server = createMcpServer(undefined, {}, callToolState);
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       onsessioninitialized: (createdSessionId) => {
         sessions.set(createdSessionId, { server, transport });
@@ -566,18 +578,27 @@ function createMcpServer(
     { capabilities: { tools: {}, resources: {}, prompts: {} } }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      { name: "whoami", description: "Return the request profile.", inputSchema: { type: "object", properties: {} } }
-    ]
+  const whoamiTool: Tool = {
+    name: "whoami",
+    description: "Return the request profile.",
+    inputSchema: {
+      type: "object",
+      properties: options.exposeMcpParameterHeader
+        ? { account: { type: "string", "x-mcp-header": "account" } }
+        : {}
+    }
+  };
+
+  server.setRequestHandler('tools/list', async () => ({
+    tools: [whoamiTool]
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler('tools/call', async (request, ctx) => {
     callToolState.toolCallRequests += 1;
     if (options.callToolError) {
-      throw new McpError(options.callToolError.code, options.callToolError.message);
+      throw new ProtocolError(options.callToolError.code, options.callToolError.message);
     }
     if (options.emitCallToolProgress && request.params._meta?.progressToken !== undefined) {
-      await extra.sendNotification({
+      await ctx.mcpReq.notify({
         method: "notifications/progress",
         params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
       });
@@ -585,19 +606,19 @@ function createMcpServer(
     if (options.callToolDelayMs && options.callToolDelayMs > 0) await delay(options.callToolDelayMs);
     return { content: [{ type: "text", text: profile }] };
   });
-  server.setNotificationHandler(CancelledNotificationSchema, () => {
+  server.setNotificationHandler('notifications/cancelled', () => {
     callToolState.cancelledNotifications += 1;
   });
-  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  server.setRequestHandler('resources/list', async () => ({
     resources: [{ uri: "account://current", name: "Current profile", mimeType: "text/plain" }]
   }));
-  server.setRequestHandler(ReadResourceRequestSchema, async () => ({
+  server.setRequestHandler('resources/read', async () => ({
     contents: [{ uri: "account://current", text: profile, mimeType: "text/plain" }]
   }));
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  server.setRequestHandler('prompts/list', async () => ({
     prompts: [{ name: "account_prompt", description: "Current profile prompt." }]
   }));
-  server.setRequestHandler(GetPromptRequestSchema, async () => ({
+  server.setRequestHandler('prompts/get', async () => ({
     messages: [{ role: "user", content: { type: "text", text: profile } }]
   }));
   return server;

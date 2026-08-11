@@ -1,10 +1,5 @@
-import {
-  discoverOAuthServerInfo,
-  refreshAuthorization,
-  type OAuthDiscoveryState
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { discoverOAuthServerInfo, refreshAuthorization } from "@modelcontextprotocol/client";
+import type { OAuthDiscoveryState, FetchLike, OAuthTokens } from "@modelcontextprotocol/client";
 import type { OAuthCredentialRefresher } from "./connection-lifecycle.js";
 import type { OAuthConnectionBinding } from "./connection-types.js";
 import type { OAuthCredential } from "./secure-credential-store.js";

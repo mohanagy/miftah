@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { AuditTrail } from "../audit/audit-trail.js";
 import {
@@ -23,6 +23,7 @@ export interface NativeOAuthFirstRunRequest {
   readonly profile: string;
   readonly description?: string;
   readonly resource: string;
+  readonly clientMetadataUrl?: string;
 }
 
 export interface NativeOAuthFirstRunPlan {
@@ -46,6 +47,7 @@ export interface NativeOAuthAccountAdditionRequest {
   readonly upstream?: string;
   /** Explicitly changes only the durable default; existing MCP sessions remain unchanged until restart. */
   readonly makeDefault?: boolean;
+  readonly clientMetadataUrl?: string;
 }
 
 /** A side-effect-free account-addition plan. The caller owns the guarded config transaction. */
@@ -100,7 +102,8 @@ export async function planNativeOAuthFirstRunConfiguration(
       resource: request.resource,
       profile: request.profile,
       upstream: "default",
-      connectionRef
+      connectionRef,
+      ...(request.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: request.clientMetadataUrl })
     },
     { fetch: dependencies.fetch }
   );
@@ -199,7 +202,8 @@ export async function planNativeOAuthAccountAddition(
     resource: selected.config.url,
     profile: request.profile,
     upstream: selected.name,
-    connectionRef
+    connectionRef,
+    ...(request.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: request.clientMetadataUrl })
   }, { fetch: dependencies.fetch });
   const oauth = candidate.oauth ?? { connections: {} };
   oauth.connections[connectionRef] = {

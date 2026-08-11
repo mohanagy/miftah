@@ -1,4 +1,4 @@
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import type { MiftahConfig } from "../config/types.js";
 import type { SecretRedactor } from "../secrets/redact.js";
 import { MiftahError } from "../utils/errors.js";

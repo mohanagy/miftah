@@ -42,7 +42,14 @@ export interface AuditHealth {
 }
 
 export type AuditEventKind = "operation" | "lifecycle" | "approval" | "profile";
-export type AuditStatus = "success" | "failure" | "blocked" | "denied" | "confirmation-required" | "ambiguous";
+export type AuditStatus =
+  | "success"
+  | "failure"
+  | "cancelled"
+  | "blocked"
+  | "denied"
+  | "confirmation-required"
+  | "ambiguous";
 export type AuditRoutingSource = "rule" | "matcher" | "active-profile" | "default-profile" | "setup-profile";
 export type ApprovalAuditAction = "requested" | "approved" | "denied" | "expired" | "consumed";
 export type ProfileAuditAction =
@@ -78,6 +85,8 @@ export interface AuditEvent {
   profileLeaseState?: ProfileLeaseStatus["state"];
   profileLeaseExpiresAt?: string;
   profileLockState?: ProfileLockStatus["state"];
+  /** Keyed non-capability correlation for a validated modern profile context. */
+  profileContextCorrelation?: string;
   operation: "tools/call" | "resources/read" | "prompts/get" | string;
   name: string;
   status: AuditStatus;

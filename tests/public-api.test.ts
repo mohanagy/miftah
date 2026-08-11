@@ -2,13 +2,16 @@ import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as api from "../src/index.js";
 import type {
   ActiveProfileStateScope,
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary,
+  AuthenticatedRequestContextBoundaryOptions,
+  AuthenticatedRequestContextErrorCode,
   AuditConfig,
   AuditIntegrityConfig,
   AuditRotationConfig,
@@ -25,12 +28,22 @@ import type {
   MiftahErrorCode,
   MiftahErrorDetails,
   MiftahRuntime,
+  MiftahRuntimeOptions,
+  MintedProfileContext,
+  ModernProfileContextRuntimeOptions,
   OAuthConfig,
   OAuthConnectionConfig,
   OAuthConnectionRef,
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileContextHandleErrorCode,
+  ProfileContextHandleServiceOptions,
+  ProfileContextKeyEpoch,
+  ProfileContextKeyringProvider,
+  ProfileContextKeyringSnapshot,
+  ProfileContextReplacementAudit,
+  ProfileContextRevocationStore,
   ProfileIsolationConfig,
   ProfileIsolationContainerVolume,
   ProfileIsolationFile,
@@ -40,6 +53,7 @@ import type {
   ProfileUpstreamOverride,
   PostHogProfileRoutingMatch,
   RiskLevel,
+  ResolvedProfileContext,
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
@@ -51,19 +65,30 @@ import type {
   TransportType,
   UnknownToolRisk,
   UpstreamConfig,
-  ValidatedRoutingConfig
+  ValidatedRoutingConfig,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider
 } from "../src/index.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
 const supportedRuntimeExports = [
+  "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
+  "InMemoryProfileContextRevocationStore",
   "MIFTAH_VERSION",
   "MiftahError",
+  "PROFILE_CONTEXT_ARGUMENT",
+  "PROFILE_CONTEXT_META_KEY",
+  "ProfileContextHandleError",
+  "ProfileContextHandleService",
+  "createAuthenticatedRequestContextBoundary",
   "createMiftahRuntime",
+  "createMiftahServerFactory",
   "generateConfigSchema",
   "loadConfig",
   "presetConfig",
+  "requireAuthenticatedRequestContext",
   "validateConfig"
 ] as const;
 
@@ -82,6 +107,10 @@ const internalRuntimeExports = [
 
 const supportedTypeExports = [
   "ActiveProfileStateScope",
+  "AuthenticatedRequestContext",
+  "AuthenticatedRequestContextBoundary",
+  "AuthenticatedRequestContextBoundaryOptions",
+  "AuthenticatedRequestContextErrorCode",
   "AuditConfig",
   "AuditIntegrityConfig",
   "AuditRotationConfig",
@@ -98,12 +127,22 @@ const supportedTypeExports = [
   "MiftahErrorCode",
   "MiftahErrorDetails",
   "MiftahRuntime",
+  "MiftahRuntimeOptions",
+  "MintedProfileContext",
+  "ModernProfileContextRuntimeOptions",
   "OAuthConfig",
   "OAuthConnectionConfig",
   "OAuthConnectionRef",
   "PolicyConfig",
   "ProcessConfig",
   "ProfileConfig",
+  "ProfileContextHandleErrorCode",
+  "ProfileContextHandleServiceOptions",
+  "ProfileContextKeyEpoch",
+  "ProfileContextKeyringProvider",
+  "ProfileContextKeyringSnapshot",
+  "ProfileContextReplacementAudit",
+  "ProfileContextRevocationStore",
   "ProfileIsolationConfig",
   "ProfileIsolationContainerVolume",
   "ProfileIsolationFile",
@@ -113,6 +152,7 @@ const supportedTypeExports = [
   "ProfileUpstreamOverride",
   "PostHogProfileRoutingMatch",
   "RiskLevel",
+  "ResolvedProfileContext",
   "RoutingConfig",
   "RoutingRule",
   "SecurityConfig",
@@ -124,11 +164,17 @@ const supportedTypeExports = [
   "TransportType",
   "UnknownToolRisk",
   "UpstreamConfig",
-  "ValidatedRoutingConfig"
+  "ValidatedRoutingConfig",
+  "VerifiedHttpRequestClaims",
+  "VerifiedHttpRequestClaimsProvider"
 ] as const;
 
 type PublicTypeImportCoverage = [
   ActiveProfileStateScope,
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary<unknown>,
+  AuthenticatedRequestContextBoundaryOptions<unknown>,
+  AuthenticatedRequestContextErrorCode,
   AuditConfig,
   AuditIntegrityConfig,
   AuditRotationConfig,
@@ -145,9 +191,19 @@ type PublicTypeImportCoverage = [
   MiftahErrorCode,
   MiftahErrorDetails,
   MiftahRuntime,
+  MiftahRuntimeOptions,
+  MintedProfileContext,
+  ModernProfileContextRuntimeOptions,
   PolicyConfig,
   ProcessConfig,
   ProfileConfig,
+  ProfileContextHandleErrorCode,
+  ProfileContextHandleServiceOptions,
+  ProfileContextKeyEpoch,
+  ProfileContextKeyringProvider,
+  ProfileContextKeyringSnapshot,
+  ProfileContextReplacementAudit,
+  ProfileContextRevocationStore,
   ProfileIsolationConfig,
   ProfileIsolationContainerVolume,
   ProfileIsolationFile,
@@ -157,6 +213,7 @@ type PublicTypeImportCoverage = [
   ProfileUpstreamOverride,
   PostHogProfileRoutingMatch,
   RiskLevel,
+  ResolvedProfileContext,
   RoutingConfig,
   RoutingRule,
   SecurityConfig,
@@ -168,7 +225,9 @@ type PublicTypeImportCoverage = [
   TransportType,
   UnknownToolRisk,
   UpstreamConfig,
-  ValidatedRoutingConfig
+  ValidatedRoutingConfig,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider<unknown>
 ];
 
 void (undefined as unknown as PublicTypeImportCoverage);

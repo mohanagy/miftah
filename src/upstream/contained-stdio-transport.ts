@@ -1,10 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { PassThrough, type Stream } from "node:stream";
-import { getDefaultEnvironment, type StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
+import {
+  deserializeMessage,
+  serializeMessage,
+  STDIO_DEFAULT_MAX_BUFFER_SIZE
+} from "@modelcontextprotocol/client";
+import type { Transport, TransportSendOptions, JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import type { StdioServerParameters } from "@modelcontextprotocol/client/stdio";
 import {
   resolveWindowsSecretCommand,
   spawnWindowsSecretCommand,
@@ -14,6 +18,31 @@ import {
 const gracefulShutdownDelayMs = 2_000;
 const containmentVerificationDelayMs = 25;
 const containmentVerificationTimeoutMs = 1_000;
+
+class ReportingReadBuffer {
+  private buffer: Buffer | undefined;
+
+  append(chunk: Buffer): void {
+    if ((this.buffer?.length ?? 0) + chunk.length > STDIO_DEFAULT_MAX_BUFFER_SIZE) {
+      this.clear();
+      throw new Error(`ReadBuffer exceeded maximum size of ${STDIO_DEFAULT_MAX_BUFFER_SIZE} bytes`);
+    }
+    this.buffer = this.buffer === undefined ? chunk : Buffer.concat([this.buffer, chunk]);
+  }
+
+  readMessage(): JSONRPCMessage | null {
+    if (this.buffer === undefined) return null;
+    const lineEnd = this.buffer.indexOf("\n");
+    if (lineEnd === -1) return null;
+    const line = this.buffer.toString("utf8", 0, lineEnd).replace(/\r$/u, "");
+    this.buffer = this.buffer.subarray(lineEnd + 1);
+    return deserializeMessage(line);
+  }
+
+  clear(): void {
+    this.buffer = undefined;
+  }
+}
 
 /** Resolves the Windows helper before Client.connect can race its child startup. */
 export async function createContainedStdioClientTransport(
@@ -45,7 +74,7 @@ export class ContainedStdioClientTransport implements Transport {
   onerror?: (error: Error) => void;
   onmessage?: <T extends JSONRPCMessage>(message: T, extra?: MessageExtraInfo) => void;
 
-  private readonly readBuffer = new ReadBuffer();
+  private readonly readBuffer = new ReportingReadBuffer();
   private readonly stderrStream: PassThrough | null;
   private child: ChildProcess | undefined;
   private containedPid: number | undefined;
@@ -110,7 +139,12 @@ export class ContainedStdioClientTransport implements Transport {
       });
       child.stdin?.on("error", (error) => this.onerror?.(error));
       child.stdout?.on("data", (chunk: Buffer) => {
-        this.readBuffer.append(chunk);
+        try {
+          this.readBuffer.append(chunk);
+        } catch (error) {
+          this.onerror?.(asError(error));
+          return;
+        }
         this.processReadBuffer();
       });
       child.stdout?.on("error", (error) => this.onerror?.(error));

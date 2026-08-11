@@ -1,12 +1,11 @@
-import {
-  type OAuthClientProvider,
-  type OAuthDiscoveryState
-} from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  OAuthClientProvider,
+  OAuthDiscoveryState,
   OAuthClientInformationMixed,
   OAuthClientMetadata,
-  OAuthTokens
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+  StoredOAuthClientInformation,
+  StoredOAuthTokens
+} from "@modelcontextprotocol/client";
 import { randomBytes } from "node:crypto";
 import { canonicalizeOAuthResource } from "./canonical-resource.js";
 import type { OAuthConnectionLifecycle } from "./connection-lifecycle.js";
@@ -18,12 +17,17 @@ import { isSafeOAuthHttpsUrl } from "./url-safety.js";
 const maximumTokenLifetimeSeconds = 365 * 24 * 60 * 60;
 
 /** Browser/callback boundary used by the SDK provider without exposing authorization data. */
+export interface OAuthAuthorizationResponse {
+  readonly authorizationCode: string;
+  readonly issuer: string;
+}
+
 export interface OAuthAuthorizationHandoff {
   readonly redirectUrl: URL;
   authorize(
     authorizationUrl: URL,
     expected: { readonly state: string; readonly issuer: string }
-  ): Promise<string>;
+  ): Promise<OAuthAuthorizationResponse>;
   close(): Promise<void>;
 }
 
@@ -145,7 +149,7 @@ export function remoteOAuthClientInformation(
   };
 }
 
-function cloneClientInformation(value: OAuthClientInformationMixed): OAuthClientInformationMixed {
+function cloneClientInformation(value: StoredOAuthClientInformation): StoredOAuthClientInformation {
   return structuredClone(value);
 }
 
@@ -171,10 +175,10 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
   private readonly registration: ClientRegistration;
   private readonly transactionState: string;
   private readonly now: () => Date;
-  private savedClient?: OAuthClientInformationMixed;
+  private savedClient?: StoredOAuthClientInformation;
   private savedVerifier?: string;
   private savedDiscovery?: OAuthDiscoveryState;
-  private authorization?: Promise<string>;
+  private authorization?: Promise<OAuthAuthorizationResponse>;
 
   constructor(private readonly options: RemoteOAuthClientProviderOptions) {
     this.registration = parseRegistration(options.binding.clientRegistration);
@@ -205,6 +209,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      application_type: "native",
       scope: this.options.binding.scopes.join(" ")
     };
   }
@@ -213,19 +218,29 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     return this.transactionState;
   }
 
-  async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+  async clientInformation(context?: { readonly issuer: string }): Promise<StoredOAuthClientInformation | undefined> {
+    if (context !== undefined && context.issuer !== this.options.binding.issuer) registrationUnsupported();
     if (this.savedClient !== undefined) return cloneClientInformation(this.savedClient);
     if (this.registration.kind === "pre-registered") {
-      return { client_id: this.registration.clientId };
+      return { client_id: this.registration.clientId, issuer: this.options.binding.issuer };
     }
     if (this.registration.kind === "client-id-metadata") {
-      return { client_id: this.registration.url };
+      return { client_id: this.registration.url, issuer: this.options.binding.issuer };
     }
     return undefined;
   }
 
-  saveClientInformation(value: OAuthClientInformationMixed): void {
-    if (this.registration.kind !== "dynamic" && value.client_id !== this.clientMetadataUrl) {
+  saveClientInformation(value: StoredOAuthClientInformation, context?: { readonly issuer: string }): void {
+    const expectedClientId = this.registration.kind === "pre-registered"
+      ? this.registration.clientId
+      : this.registration.kind === "client-id-metadata"
+        ? this.registration.url
+        : undefined;
+    if (
+      value.issuer !== this.options.binding.issuer ||
+      (context !== undefined && context.issuer !== this.options.binding.issuer) ||
+      (expectedClientId !== undefined && value.client_id !== expectedClientId)
+    ) {
       registrationUnsupported();
     }
     if (typeof value.client_id !== "string" || value.client_id.length === 0 || value.client_id.length > 2_048) {
@@ -234,7 +249,8 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     this.savedClient = cloneClientInformation(value);
   }
 
-  async tokens(): Promise<OAuthTokens | undefined> {
+  async tokens(context?: { readonly issuer: string }): Promise<StoredOAuthTokens | undefined> {
+    if (context !== undefined && context.issuer !== this.options.binding.issuer) return undefined;
     if (this.options.forceAuthorization === true) return undefined;
     let credential: OAuthCredential;
     try {
@@ -248,6 +264,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     if (credential.clientId !== undefined) {
       this.savedClient = {
         client_id: credential.clientId,
+        issuer: this.options.binding.issuer,
         ...(credential.clientSecret === undefined ? {} : { client_secret: credential.clientSecret })
       };
     }
@@ -258,13 +275,20 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     return {
       access_token: credential.accessToken,
       token_type: "Bearer",
+      issuer: this.options.binding.issuer,
       ...(credential.refreshToken === undefined ? {} : { refresh_token: credential.refreshToken }),
       ...(expiresIn === undefined ? {} : { expires_in: expiresIn }),
       ...(grantedScopes.length === 0 ? {} : { scope: grantedScopes.join(" ") })
     };
   }
 
-  async saveTokens(tokens: OAuthTokens): Promise<void> {
+  async saveTokens(tokens: StoredOAuthTokens, context?: { readonly issuer: string }): Promise<void> {
+    if (
+      (tokens.issuer !== undefined && tokens.issuer !== this.options.binding.issuer) ||
+      (context !== undefined && context.issuer !== this.options.binding.issuer)
+    ) {
+      authorizationFailed();
+    }
     if (tokens.token_type.toLowerCase() !== "bearer" || tokens.access_token.length === 0) authorizationFailed();
     const grantedScopes = tokens.scope === undefined ? this.options.binding.scopes : scopes(tokens.scope);
     if (
@@ -333,11 +357,18 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     return this.savedVerifier;
   }
 
-  async waitForAuthorizationCode(): Promise<string> {
+  async waitForAuthorizationResponse(): Promise<OAuthAuthorizationResponse> {
     if (this.authorization === undefined) authorizationFailed();
-    const code = await this.authorization;
-    if (typeof code !== "string" || code.length === 0 || code.length > 4_096) authorizationFailed();
-    return code;
+    const response = await this.authorization;
+    if (
+      typeof response.authorizationCode !== "string" ||
+      response.authorizationCode.length === 0 ||
+      response.authorizationCode.length > 4_096 ||
+      response.issuer !== this.options.binding.issuer
+    ) {
+      authorizationFailed();
+    }
+    return { ...response };
   }
 
   async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {

@@ -10,6 +10,10 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     restoreMocks: true,
     clearMocks: true,
+    // Hosted runners can need more than Vitest's five-second default for
+    // filesystem, ACL, and audit tests; keep a finite CI cap while preserving
+    // the faster hang signal during local development.
+    testTimeout: process.env.GITHUB_ACTIONS === "true" ? 10_000 : 5_000,
     // Real upstream fixtures have one-second startup limits; run files serially to prevent contention.
     fileParallelism: false,
     // Replace the fork between serial files so process-backed tests cannot retain
@@ -19,6 +23,8 @@ export default defineConfig({
       provider: "v8",
       include: [
         "src/config/**/*.ts",
+        "src/http/authenticated-request-context.ts",
+        "src/profiles/profile-context-handle.ts",
         "src/secrets/**/*.ts",
         "src/mcp/server/operation-pipeline.ts",
         "src/mcp/server/tool-registry.ts",
@@ -31,6 +37,8 @@ export default defineConfig({
       exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"],
       thresholds: {
         "src/config/**/*.ts": { lines: 95, functions: 95, branches: 85 },
+        "src/http/authenticated-request-context.ts": { lines: 95, functions: 100, branches: 90 },
+        "src/profiles/profile-context-handle.ts": { lines: 95, functions: 100, branches: 90 },
         "src/secrets/**/*.ts": { lines: 93, functions: 95, branches: 90 },
         "src/mcp/server/operation-pipeline.ts": { lines: 85, functions: 95, branches: 75 },
         "src/mcp/server/tool-registry.ts": { lines: 93, functions: 95, branches: 90 },

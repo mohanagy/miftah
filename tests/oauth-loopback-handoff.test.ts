@@ -45,7 +45,10 @@ describe("OAuth loopback authorization handoff", () => {
       const acceptedResponse = await fetch(callback);
       const page = await acceptedResponse.text();
 
-      await expect(code).resolves.toBe("fixture-authorization-code");
+      await expect(code).resolves.toEqual({
+        authorizationCode: "fixture-authorization-code",
+        issuer: "https://issuer.example.test"
+      });
       expect(acceptedResponse.status).toBe(200);
       expect(page).not.toContain("fixture-authorization-code");
       expect(page).not.toContain("fixture-state-value-that-is-long-enough");
@@ -55,7 +58,7 @@ describe("OAuth loopback authorization handoff", () => {
     }
   });
 
-  it("rejects duplicate issuer parameters without consuming the pending authorization", async () => {
+  it("rejects missing, mismatched, and duplicate issuer parameters without consuming the pending authorization", async () => {
     const handoff = await createLoopbackOAuthAuthorizationHandoff({ openExternal: async () => undefined });
     const state = "fixture-state-value-that-is-long-enough";
     const issuer = "https://issuer.example.test";
@@ -65,6 +68,18 @@ describe("OAuth loopback authorization handoff", () => {
 
     try {
       const code = handoff.authorize(authorizationUrl, { state, issuer });
+      for (const callbackIssuer of [undefined, "https://other-issuer.example.test"]) {
+        const rejected = new URL(handoff.redirectUrl);
+        rejected.searchParams.set("code", "must-not-be-redeemed");
+        rejected.searchParams.set("state", state);
+        if (callbackIssuer !== undefined) rejected.searchParams.set("iss", callbackIssuer);
+
+        const rejectedResponse = await fetch(rejected);
+        expect(rejectedResponse.status).toBe(400);
+        const body = await rejectedResponse.text();
+        expect(body).not.toContain("must-not-be-redeemed");
+        if (callbackIssuer !== undefined) expect(body).not.toContain(callbackIssuer);
+      }
       const duplicateIssuer = new URL(handoff.redirectUrl);
       duplicateIssuer.searchParams.set("code", "must-not-be-accepted");
       duplicateIssuer.searchParams.set("state", state);
@@ -80,7 +95,7 @@ describe("OAuth loopback authorization handoff", () => {
       callback.searchParams.set("state", state);
       callback.searchParams.set("iss", issuer);
       expect((await fetch(callback)).status).toBe(200);
-      await expect(code).resolves.toBe("accepted-code");
+      await expect(code).resolves.toEqual({ authorizationCode: "accepted-code", issuer });
     } finally {
       await handoff.close();
     }

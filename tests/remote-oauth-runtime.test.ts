@@ -1,5 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,15 +66,14 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
   async authorize(
     authorizationUrl: URL,
     expected: { readonly state: string; readonly issuer: string }
-  ): Promise<string> {
+  ): Promise<{ authorizationCode: string; issuer: string }> {
     this.onAuthorize();
     const response = await this.upstream.fetch(authorizationUrl, { redirect: "manual" });
     const callback = new URL(response.headers.get("location") ?? "invalid:");
     expect(callback.searchParams.get("state")).toBe(expected.state);
-    expect(callback.searchParams.get("iss")).toBe(expected.issuer);
     const code = callback.searchParams.get("code");
     if (code === null) throw new Error("fixture callback did not contain a code");
-    return code;
+    return { authorizationCode: code, issuer: callback.searchParams.get("iss") ?? "" };
   }
 
   async close(): Promise<void> {}
@@ -145,6 +143,119 @@ describe("remote OAuth runtime wiring", () => {
       expect.objectContaining({ name: "whoami" })
     ]);
     expect(upstream.authenticatedMcpRequests()).toBeGreaterThanOrEqual(2);
+    }
+  );
+
+  it("uses a reviewed Client ID Metadata Document without dynamic registration", async () => {
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      dynamicRegistrationSupported: false
+    });
+    upstreams.push(upstream);
+    const directory = await mkdtemp(join(tmpdir(), "miftah-oauth-cimd-runtime-"));
+    directories.push(directory);
+    const configPath = join(directory, "miftah.json");
+    const clientMetadataUrl = "https://client.example.test/oauth/miftah.json";
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: "3",
+        name: "oauth-cimd-runtime",
+        defaultProfile: "work",
+        upstream: { transport: "streamable-http", url: upstream.streamableHttpUrl },
+        profiles: { work: {} },
+        oauth: {
+          connections: {
+            "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5": {
+              profile: "work",
+              upstream: "default",
+              resource: upstream.streamableHttpUrl,
+              issuer: "https://mcp.example.test",
+              clientRegistration: `client-id-metadata:${clientMetadataUrl}`,
+              scopes: ["mcp:tools"]
+            }
+          }
+        }
+      }),
+      "utf8"
+    );
+
+    const runtime = await createRuntime(configPath, undefined, {
+      oauth: {
+        metadataStore: new MemoryMetadataStore(),
+        credentialStore: new MemoryCredentialStore(),
+        fetch: upstream.fetch,
+        createHandoff: async () => new SimulatedBrowserHandoff(upstream)
+      }
+    });
+    closeRuntime.push(() => runtime.manager.close());
+
+    await expect(runtime.manager.listTools("work")).resolves.toEqual([
+      expect.objectContaining({ name: "whoami" })
+    ]);
+    expect(upstream.registrationRequests()).toEqual([]);
+    expect(upstream.authorizationRequests()).toEqual([
+      expect.objectContaining({ clientId: clientMetadataUrl })
+    ]);
+    expect(upstream.tokenExchanges()).toEqual([
+      expect.objectContaining({ clientId: clientMetadataUrl, codeWasExpected: true, pkceVerified: true })
+    ]);
+  });
+
+  it.each(["missing", "mismatch"] as const)(
+    "rejects a %s authorization-response issuer before code redemption",
+    async (authorizationResponseIssuer) => {
+      const upstream = await startOAuthCompatibilityProbe({
+        publicBaseUrl: "https://mcp.example.test",
+        authorizationResponseIssuer
+      });
+      upstreams.push(upstream);
+      const directory = await mkdtemp(join(tmpdir(), `miftah-oauth-${authorizationResponseIssuer}-issuer-`));
+      directories.push(directory);
+      const configPath = join(directory, "miftah.json");
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          version: "3",
+          name: "oauth-issuer-validation",
+          defaultProfile: "work",
+          upstream: { transport: "streamable-http", url: upstream.streamableHttpUrl },
+          profiles: { work: {} },
+          oauth: {
+            connections: {
+              "oauthconn:8c08de29-46cc-4a70-8528-11b9da0382c5": {
+                profile: "work",
+                upstream: "default",
+                resource: upstream.streamableHttpUrl,
+                issuer: "https://mcp.example.test",
+                clientRegistration: "dynamic",
+                scopes: ["mcp:tools"]
+              }
+            }
+          }
+        }),
+        "utf8"
+      );
+      const runtime = await createRuntime(configPath, undefined, {
+        oauth: {
+          metadataStore: new MemoryMetadataStore(),
+          credentialStore: new MemoryCredentialStore(),
+          fetch: upstream.fetch,
+          createHandoff: async () => new SimulatedBrowserHandoff(upstream)
+        }
+      });
+      closeRuntime.push(() => runtime.manager.close());
+
+      let failure: unknown;
+      try {
+        await runtime.manager.listTools("work");
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeDefined();
+      expect(String(failure)).not.toContain("fixture-authorization-code");
+      expect(String(failure)).not.toContain("other-issuer.example.test");
+      expect(upstream.tokenExchanges()).toEqual([]);
     }
   );
 

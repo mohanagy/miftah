@@ -5,6 +5,7 @@ import { z } from "zod";
 import { loadConfig } from "../config/load-config.js";
 import { PRESET_CATALOG } from "../config/presets.js";
 import { MiftahError } from "../utils/errors.js";
+import { isSafeOAuthHttpsUrl } from "../oauth/url-safety.js";
 import { CLIENT_NAMES, type ClientLauncher, type ClientSelection } from "../cli/client-snippets.js";
 import { consoleAsset, type ConsoleAsset } from "./console-assets.js";
 import {
@@ -34,6 +35,9 @@ const sessionCookieName = "miftah_console_session";
 const maximumSupersededBootstrapDigests = 8;
 const bootstrapSchema = z.object({}).strict();
 const httpsUrlSchema = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:");
+const clientMetadataUrlSchema = z.string().max(2_048).refine((value) =>
+  isSafeOAuthHttpsUrl(value, { requirePath: true, allowSearch: false })
+);
 const connectionAddSchema = z.object({
   connectionRef: z.string().min(1).max(512).optional(),
   profile: z.string().min(1).max(256),
@@ -44,13 +48,15 @@ const connectionAddSchema = z.object({
 }).strict();
 const discoveredNativeOAuthConnectionSchema = z.object({
   profile: z.string().min(1).max(256),
-  upstream: z.string().min(1).max(256)
+  upstream: z.string().min(1).max(256),
+  clientMetadataUrl: clientMetadataUrlSchema.optional()
 }).strict();
 const discoveredNativeOAuthAccountSchema = z.object({
   profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
   description: z.string().max(1_024).optional(),
   upstream: z.string().min(1).max(256),
-  makeDefault: z.literal(true).optional()
+  makeDefault: z.literal(true).optional(),
+  clientMetadataUrl: clientMetadataUrlSchema.optional()
 }).strict();
 const providerAccountAdditionSchema = z.object({
   profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
@@ -112,7 +118,8 @@ const discoveredNativeOAuthOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
   profile: z.string().min(1).max(256),
   description: z.string().max(1_024).optional(),
-  resource: httpsUrlSchema
+  resource: httpsUrlSchema,
+  clientMetadataUrl: clientMetadataUrlSchema.optional()
 }).strict();
 const googleSearchConsoleProfileSchema = z.object({
   name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),

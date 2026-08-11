@@ -7,6 +7,9 @@ const REQUIRED_PATHS = [
   "dist/plugin-api.d.ts",
   "dist/plugin-api.js",
   "dist/plugin-host.js",
+  "dist/third-party/hono-node-server.LICENSE",
+  "dist/third-party/hono.LICENSE",
+  "dist/third-party/modelcontextprotocol-node.LICENSE",
   "dist/windows-secret-job.exe",
   "docs/cli.md",
   "docs/library-api.md",
@@ -19,6 +22,11 @@ const REQUIRED_PATHS = [
 ];
 
 const ALLOWED_ROOT_PATHS = new Set(["LICENSE", "README.md", "package.json"]);
+const ALLOWED_BUNDLED_LICENSE_PATHS = new Set([
+  "dist/third-party/hono-node-server.LICENSE",
+  "dist/third-party/hono.LICENSE",
+  "dist/third-party/modelcontextprotocol-node.LICENSE"
+]);
 const ALLOWED_PATH_PATTERNS = [
   /^dist\/windows-secret-job\.exe$/u,
   /^dist\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:d\.ts|d\.ts\.map|js|js\.map)$/u,
@@ -46,7 +54,11 @@ function isAllowedPath(path) {
   if (path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => part === "." || part === "..")) {
     return false;
   }
-  return ALLOWED_ROOT_PATHS.has(path) || ALLOWED_PATH_PATTERNS.some((pattern) => pattern.test(path));
+  return (
+    ALLOWED_ROOT_PATHS.has(path) ||
+    ALLOWED_BUNDLED_LICENSE_PATHS.has(path) ||
+    ALLOWED_PATH_PATTERNS.some((pattern) => pattern.test(path))
+  );
 }
 
 /**

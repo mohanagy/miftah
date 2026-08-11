@@ -3663,7 +3663,11 @@ describe("local Console control server", () => {
     });
 
     it("discovers endpoint-first OAuth before a CSRF-protected first-run setup and copy-only client snippets", async () => {
-    const upstream = await startOAuthCompatibilityProbe({ publicBaseUrl: "https://mcp.example.test" });
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      dynamicRegistrationSupported: false
+    });
+    const clientMetadataUrl = "https://client.example.test/oauth/miftah.json";
     const server = await startConsoleServer(configPath, {
       bootstrapCredential: "test-only-bootstrap-credential",
       allowMissingConfig: true,
@@ -3688,7 +3692,8 @@ describe("local Console control server", () => {
         name: "posthog-work",
         profile: "production",
         description: "Production account",
-        resource: upstream.streamableHttpUrl
+        resource: upstream.streamableHttpUrl,
+        clientMetadataUrl
       };
       const missingCsrf = await fetch(endpoint, {
         method: "POST",
@@ -3750,6 +3755,12 @@ describe("local Console control server", () => {
         "/.well-known/oauth-authorization-server"
       ]);
       expect(upstream.registrationRequests()).toEqual([]);
+      const writtenConfig = JSON.parse(await readFile(configPath, "utf8")) as {
+        oauth?: { connections?: Record<string, { clientRegistration?: string }> };
+      };
+      expect(Object.values(writtenConfig.oauth?.connections ?? {})).toEqual([
+        expect.objectContaining({ clientRegistration: `client-id-metadata:${clientMetadataUrl}` })
+      ]);
 
       const snippets = await fetch(new URL("/api/v1/client-snippets?client=claude-desktop", server.url), {
         headers: { origin: server.url.origin, cookie: session.cookie }

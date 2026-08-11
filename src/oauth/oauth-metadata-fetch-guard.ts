@@ -1,4 +1,4 @@
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 
 const maximumMetadataBytes = 64 * 1_024;
 

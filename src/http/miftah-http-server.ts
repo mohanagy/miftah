@@ -1,10 +1,20 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { type Socket } from "node:net";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  NodeStreamableHTTPServerTransport,
+  toNodeHandler,
+  toWebRequest,
+  type NodeMcpRequestHandler
+} from "@modelcontextprotocol/node";
+import { createMcpHandler, isLegacyRequest, type McpServerFactory } from "@modelcontextprotocol/server";
 import { isCanonicalHttpHost, isLiteralLoopbackBindHost } from "../config/schema.js";
 import { resolveRuntimeConfig } from "../runtime/resolve-runtime-config.js";
-import { createHttpSessionRuntime, type MiftahRuntime } from "../runtime/create-miftah-runtime.js";
+import {
+  createHttpRequestMiftahServerFactory,
+  createHttpSessionRuntime,
+  type MiftahRuntime
+} from "../runtime/create-miftah-runtime.js";
 import { MiftahError } from "../utils/errors.js";
 
 const endpointPath = "/mcp";
@@ -18,6 +28,7 @@ const decimalPattern = /^\d+$/u;
 const requestTimeoutMs = 60_000;
 const headersTimeoutMs = 10_000;
 const connectionsCheckingIntervalMs = 5_000;
+const mcpHeaderMismatchErrorCode = -32020;
 
 type SessionRuntimeFactory = (configPath: string) => Promise<MiftahRuntime>;
 
@@ -31,6 +42,8 @@ export interface MiftahHttpServer {
 /** Internal dependency injection points for lifecycle tests and embedding hosts. */
 export interface MiftahHttpServerOptions {
   readonly sessionRuntimeFactory?: SessionRuntimeFactory;
+  /** Supplies fresh request-scoped server instances for the modern protocol era. */
+  readonly modernServerFactory?: McpServerFactory;
   /** Receives fixed, non-sensitive operator warnings only. */
   readonly onWarning?: (message: string) => void;
   /** Receives a fixed message when asynchronous cleanup fails. */
@@ -54,7 +67,7 @@ interface SessionRecord {
   timer?: NodeJS.Timeout;
   cleanup?: Promise<void>;
   readonly runtime: MiftahRuntime;
-  readonly transport: StreamableHTTPServerTransport;
+  readonly transport: NodeStreamableHTTPServerTransport;
 }
 
 class HttpRequestError extends Error {
@@ -127,6 +140,34 @@ function isInitializeRequest(value: unknown): value is { readonly jsonrpc: "2.0"
   return message.jsonrpc === "2.0" && message.method === "initialize" && Object.hasOwn(message, "id");
 }
 
+function hasMcpParameterHeader(request: IncomingMessage): boolean {
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase().startsWith("mcp-param-")) return true;
+  }
+  return false;
+}
+
+function echoableRequestId(body: unknown): string | number | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const id = (body as Record<string, unknown>).id;
+  return typeof id === "string" || typeof id === "number" || id === null ? id : null;
+}
+
+function unsupportedMcpParameterHeader(body: unknown): HttpRequestError {
+  return new HttpRequestError(
+    400,
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: echoableRequestId(body),
+      error: {
+        code: mcpHeaderMismatchErrorCode,
+        message: "Bad Request: MCP parameter headers are not supported by this gateway."
+      }
+    }),
+    { "content-type": "application/json; charset=utf-8" }
+  );
+}
+
 function writeResponse(response: ServerResponse, error: HttpRequestError): void {
   if (response.headersSent || response.writableEnded) {
     response.destroy();
@@ -194,6 +235,7 @@ class HttpServerHost implements MiftahHttpServer {
   private readonly cleanupTasks = new Set<Promise<void>>();
   private readonly sockets = new Set<Socket>();
   private pendingInitializations = 0;
+  private modernRequests = 0;
   private cleanupFailed = false;
   private closed = false;
   private closePromise: Promise<void> | undefined;
@@ -204,6 +246,8 @@ class HttpServerHost implements MiftahHttpServer {
     private readonly configPath: string,
     private readonly settings: HttpServerSettings,
     private readonly sessionRuntimeFactory: SessionRuntimeFactory,
+    private readonly modernHandler: NodeMcpRequestHandler,
+    private readonly closeModernHandler: () => Promise<void>,
     private readonly onBackgroundFailure: (message: string) => void
   ) {
     this.server.on("connection", (socket) => {
@@ -242,6 +286,23 @@ class HttpServerHost implements MiftahHttpServer {
     }
 
     const body = request.method === "POST" ? await this.parsePostBody(request) : undefined;
+    const webRequest = await toWebRequest(request, body);
+    if (!await isLegacyRequest(webRequest, body)) {
+      // Miftah's low-level upstream proxy cannot validate x-mcp-header schemas
+      // before policy and audit. Reject the extension without reflecting names
+      // or values until schema-aware forwarding can be supported end to end.
+      if (hasMcpParameterHeader(request)) throw unsupportedMcpParameterHeader(body);
+      if (this.modernRequests >= this.settings.maxSessions) {
+        throw new HttpRequestError(429, "Too Many Requests");
+      }
+      this.modernRequests += 1;
+      try {
+        await this.modernHandler(request, response, body);
+      } finally {
+        this.modernRequests -= 1;
+      }
+      return;
+    }
     if (sessionId === undefined) {
       if (request.method !== "POST" || !isInitializeRequest(body)) throw new HttpRequestError(400, "Bad Request");
       await this.initializeSession(request, response, body);
@@ -314,7 +375,7 @@ class HttpServerHost implements MiftahHttpServer {
     }
     this.pendingInitializations += 1;
     let record: SessionRecord | undefined;
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       onsessioninitialized: (sessionId) => {
         if (record === undefined || record.cleanup !== undefined) return;
@@ -446,6 +507,9 @@ class HttpServerHost implements MiftahHttpServer {
     const listener = closeListener(this.server).catch(() => {
       throw new Error("Miftah HTTP server shutdown failed.");
     });
+    const modernHandler = this.closeModernHandler().catch(() => {
+      throw new Error("Miftah HTTP server shutdown failed.");
+    });
     const records = [...this.sessions.values(), ...this.pendingRecords];
     const results = await Promise.allSettled(records.map((record) => this.cleanupRecord(record, true)));
     const cleanupTaskResults = await Promise.allSettled([...this.cleanupTasks]);
@@ -456,9 +520,16 @@ class HttpServerHost implements MiftahHttpServer {
     } catch {
       listenerFailed = true;
     }
+    let modernHandlerFailed = false;
+    try {
+      await modernHandler;
+    } catch {
+      modernHandlerFailed = true;
+    }
     if (
       this.cleanupFailed ||
       listenerFailed ||
+      modernHandlerFailed ||
       results.some((result) => result.status === "rejected") ||
       cleanupTaskResults.some((result) => result.status === "rejected")
     ) {
@@ -524,13 +595,26 @@ export async function startMiftahHttpServer(
     throw new Error("Unable to start the Miftah HTTP server.");
   }
 
+  const backgroundFailure = options.onBackgroundFailure ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const modernMcpHandler = createMcpHandler(
+    options.modernServerFactory ?? createHttpRequestMiftahServerFactory(configPath),
+    {
+      legacy: "reject",
+      onerror: () => backgroundFailure("Miftah modern MCP request failed.")
+    }
+  );
+  const modernNodeHandler = toNodeHandler(modernMcpHandler, {
+    onerror: () => backgroundFailure("Miftah modern MCP request failed.")
+  });
   const hostServer = new HttpServerHost(
     endpointUrl(settings.host, address.port),
     server,
     configPath,
     settings,
     options.sessionRuntimeFactory ?? createHttpSessionRuntime,
-    options.onBackgroundFailure ?? ((message) => process.stderr.write(`${message}\n`))
+    modernNodeHandler,
+    modernMcpHandler.close,
+    backgroundFailure
   );
   server.on("request", (request, response) => {
     void hostServer.handle(request, response);

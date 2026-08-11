@@ -1,8 +1,5 @@
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { SseError } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { UnauthorizedError, SseError, ProtocolError, SdkHttpError } from "@modelcontextprotocol/client";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import type { TransportType } from "../config/types.js";
 import { MiftahError } from "../utils/errors.js";
 
@@ -36,11 +33,15 @@ export function asRemoteError(
   if (error instanceof MiftahError) return error;
   if (error instanceof RemoteHttpStatusError) return httpError(profile, transport, error.status);
   if (error instanceof UnauthorizedError) return httpError(profile, transport, 401);
-  if (error instanceof StreamableHTTPError || error instanceof SseError) {
+  if (error instanceof SdkHttpError) {
+    if (isHttpStatus(error.status)) return httpError(profile, transport, error.status);
+    return undefined;
+  }
+  if (error instanceof SseError) {
     if (isHttpStatus(error.code)) return httpError(profile, transport, error.code);
     return undefined;
   }
-  if (error instanceof McpError) {
+  if (error instanceof ProtocolError) {
     return new MiftahError(
       "UPSTREAM_PROTOCOL_ERROR",
       `UPSTREAM_PROTOCOL_ERROR: ${transport} upstream for profile '${profile}' returned MCP error ${error.code}`,

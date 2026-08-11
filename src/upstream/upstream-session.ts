@@ -1,26 +1,20 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import {
-  PromptListChangedNotificationSchema,
-  ResourceListChangedNotificationSchema,
-  ResourceUpdatedNotificationSchema,
-  ToolListChangedNotificationSchema
-} from "@modelcontextprotocol/sdk/types.js";
 import type {
   CallToolRequest,
   CallToolResult,
+  Client,
   GetPromptRequest,
-  ListPromptsResult,
   ListPromptsRequest,
-  ListResourceTemplatesResult,
-  ListResourceTemplatesRequest,
-  ListResourcesResult,
+  ListPromptsResult,
   ListResourcesRequest,
+  ListResourcesResult,
+  ListResourceTemplatesRequest,
+  ListResourceTemplatesResult,
   ListToolsResult,
   ReadResourceRequest,
+  RequestOptions,
   SubscribeRequest,
   UnsubscribeRequest
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/client";
 import { MiftahError } from "../utils/errors.js";
 
 /** Lets the process manager bracket upstream work so idle shutdown cannot interrupt an active request. */
@@ -50,16 +44,16 @@ export class UpstreamSession {
     private readonly activity?: UpstreamSessionActivity,
     private readonly mapRequestError?: UpstreamRequestErrorMapper
   ) {
-    this.client.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
+    this.client.setNotificationHandler("notifications/resources/updated", (notification) => {
       this.notifyResourceUpdated(notification.params.uri);
     });
-    this.client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    this.client.setNotificationHandler("notifications/resources/list_changed", () => {
       this.notifyListChanged("resources");
     });
-    this.client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    this.client.setNotificationHandler("notifications/prompts/list_changed", () => {
       this.notifyListChanged("prompts");
     });
-    this.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    this.client.setNotificationHandler("notifications/tools/list_changed", () => {
       this.notifyListChanged("tools");
     });
   }
@@ -90,25 +84,35 @@ export class UpstreamSession {
   }
 
   listTools(options?: UpstreamRequestOptions): Promise<ListToolsResult> {
-    return this.request((requestOptions) => this.client.listTools(undefined, requestOptions), options);
+    return this.request(
+      (requestOptions) => this.client.request({ method: "tools/list", params: {} }, requestOptions),
+      options
+    );
   }
 
   callTool(params: CallToolRequest["params"], options?: UpstreamRequestOptions): Promise<CallToolResult> {
     return this.request(
-      (requestOptions) => this.client.callTool(params, undefined, requestOptions) as Promise<CallToolResult>,
+      (requestOptions) => this.client.callTool(params, requestOptions) as Promise<CallToolResult>,
       options
     );
   }
 
   listResources(params?: ListResourcesRequest["params"], options?: UpstreamRequestOptions): Promise<ListResourcesResult> {
-    return this.request((requestOptions) => this.client.listResources(params, requestOptions), options);
+    return this.request(
+      (requestOptions) => this.client.request({ method: "resources/list", params: params ?? {} }, requestOptions),
+      options
+    );
   }
 
   listResourceTemplates(
     params?: ListResourceTemplatesRequest["params"],
     options?: UpstreamRequestOptions
   ): Promise<ListResourceTemplatesResult> {
-    return this.request((requestOptions) => this.client.listResourceTemplates(params, requestOptions), options);
+    return this.request(
+      (requestOptions) =>
+        this.client.request({ method: "resources/templates/list", params: params ?? {} }, requestOptions),
+      options
+    );
   }
 
   readResource(params: ReadResourceRequest["params"], options?: UpstreamRequestOptions) {
@@ -124,7 +128,10 @@ export class UpstreamSession {
   }
 
   listPrompts(params?: ListPromptsRequest["params"], options?: UpstreamRequestOptions): Promise<ListPromptsResult> {
-    return this.request((requestOptions) => this.client.listPrompts(params, requestOptions), options);
+    return this.request(
+      (requestOptions) => this.client.request({ method: "prompts/list", params: params ?? {} }, requestOptions),
+      options
+    );
   }
 
   getPrompt(params: GetPromptRequest["params"], options?: UpstreamRequestOptions) {

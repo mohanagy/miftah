@@ -84,6 +84,68 @@ describe("native OAuth first-run onboarding", () => {
     expect(JSON.stringify(plan)).not.toContain("fixture-access-token");
   });
 
+  it("prefers a reviewed Client ID Metadata Document when the authorization server advertises CIMD", async () => {
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      dynamicRegistrationSupported: false
+    });
+    upstreams.push(upstream);
+    const clientMetadataUrl = "https://client.example.test/oauth/miftah.json";
+
+    const plan = await planNativeOAuthFirstRunConfiguration(
+      {
+        name: "posthog-work",
+        profile: "production",
+        resource: upstream.streamableHttpUrl,
+        clientMetadataUrl
+      },
+      {
+        generateConnectionRef: () => connectionId,
+        fetch: upstream.fetch
+      }
+    );
+
+    expect(plan.discovery.clientRegistration).toBe(`client-id-metadata:${clientMetadataUrl}`);
+    expect(plan.config).toMatchObject({
+      oauth: {
+        connections: {
+          [connectionRef]: { clientRegistration: `client-id-metadata:${clientMetadataUrl}` }
+        }
+      }
+    });
+    expect(upstream.registrationRequests()).toEqual([]);
+  });
+
+  it("rejects an unsafe CIMD URL and uses bounded DCR only when CIMD is unavailable", async () => {
+    const upstream = await startOAuthCompatibilityProbe({
+      publicBaseUrl: "https://mcp.example.test",
+      clientMetadataDocumentSupported: false
+    });
+    upstreams.push(upstream);
+
+    await expect(planNativeOAuthFirstRunConfiguration(
+      {
+        name: "posthog-work",
+        profile: "production",
+        resource: upstream.streamableHttpUrl,
+        clientMetadataUrl: "https://client.example.test/"
+      },
+      { generateConnectionRef: () => connectionId, fetch: upstream.fetch }
+    )).rejects.toMatchObject({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" });
+
+    const fallback = await planNativeOAuthFirstRunConfiguration(
+      {
+        name: "posthog-work",
+        profile: "production",
+        resource: upstream.streamableHttpUrl,
+        clientMetadataUrl: "https://client.example.test/oauth/miftah.json"
+      },
+      { generateConnectionRef: () => connectionId, fetch: upstream.fetch }
+    );
+    expect(fallback.discovery.clientRegistration).toBe("dynamic");
+    expect(upstream.registrationRequests()).toEqual([]);
+  });
+
   it("refuses endpoint-first setup when the discovered server cannot dynamically register a public client", async () => {
     const requestPaths: string[] = [];
     const fetch: typeof globalThis.fetch = async (input) => {

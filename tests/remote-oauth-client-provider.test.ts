@@ -1,4 +1,4 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import { OAuthConnectionLifecycle } from "../src/oauth/connection-lifecycle.js";
 import { OAuthConnectionRegistry, type OAuthConnectionMetadataStore } from "../src/oauth/connection-registry.js";
@@ -42,8 +42,11 @@ class MemoryCredentialStore implements OAuthCredentialStore {
 class DeferredHandoff implements OAuthAuthorizationHandoff {
   readonly redirectUrl = new URL("http://127.0.0.1:43179/oauth/callback");
 
-  authorize(): Promise<string> {
-    return Promise.resolve("fixture-code");
+  authorize(): Promise<{ authorizationCode: string; issuer: string }> {
+    return Promise.resolve({
+      authorizationCode: "fixture-code",
+      issuer: "https://issuer.example.test"
+    });
   }
 
   async close(): Promise<void> {}
@@ -52,9 +55,9 @@ class DeferredHandoff implements OAuthAuthorizationHandoff {
 class CountingHandoff extends DeferredHandoff {
   authorizations = 0;
 
-  override authorize(): Promise<string> {
+  override authorize(): Promise<{ authorizationCode: string; issuer: string }> {
     this.authorizations += 1;
-    return Promise.resolve("fixture-code");
+    return super.authorize();
   }
 }
 
@@ -125,6 +128,25 @@ function providerForRegistration(clientRegistration: string) {
 }
 
 describe("remote OAuth client provider", () => {
+  it("declares the loopback desktop and CLI flow as a native OAuth application", () => {
+    expect(provider().clientMetadata).toMatchObject({
+      application_type: "native",
+      redirect_uris: ["http://127.0.0.1:43179/oauth/callback"]
+    });
+  });
+
+  it("rejects client registration state from another authorization-server issuer", async () => {
+    const exact = providerForRegistration("dynamic");
+    expect(() => exact.saveClientInformation({
+      client_id: "wrong-issuer-client",
+      issuer: "https://other-issuer.example.test"
+    })).toThrow(expect.objectContaining({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" }));
+    await expect(exact.clientInformation({ issuer: "https://other-issuer.example.test" })).rejects.toMatchObject({
+      code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED"
+    });
+    await expect(exact.tokens({ issuer: "https://other-issuer.example.test" })).resolves.toBeUndefined();
+  });
+
   it("returns a typed headless diagnostic before browser handoff", async () => {
     const { lifecycle } = service();
     const handoff = new CountingHandoff();
@@ -235,7 +257,8 @@ describe("remote OAuth client provider", () => {
     });
     first.saveClientInformation({
       client_id: "fixture-dynamic-client",
-      client_secret: "fixture-dynamic-client-secret"
+      client_secret: "fixture-dynamic-client-secret",
+      issuer: "https://issuer.example.test"
     });
     await first.saveTokens({
       access_token: "fixture-access-token",
@@ -254,7 +277,8 @@ describe("remote OAuth client provider", () => {
     await expect(restarted.tokens()).resolves.toMatchObject({ access_token: "fixture-access-token" });
     await expect(restarted.clientInformation()).resolves.toMatchObject({
       client_id: "fixture-dynamic-client",
-      client_secret: "fixture-dynamic-client-secret"
+      client_secret: "fixture-dynamic-client-secret",
+      issuer: "https://issuer.example.test"
     });
   });
 
@@ -298,7 +322,14 @@ describe("remote OAuth client provider", () => {
     await expect(
       metadataClient.saveDiscoveryState(discovery({ authorizationServerMetadata: metadata }))
     ).resolves.toBeUndefined();
-    await expect(metadataClient.clientInformation()).resolves.toEqual({ client_id: metadataUrl });
+    await expect(metadataClient.clientInformation()).resolves.toEqual({
+      client_id: metadataUrl,
+      issuer: "https://issuer.example.test"
+    });
+    expect(() => metadataClient.saveClientInformation({
+      client_id: "https://other-client.example.test/miftah.json",
+      issuer: "https://issuer.example.test"
+    })).toThrow(expect.objectContaining({ code: "OAUTH_CLIENT_REGISTRATION_UNSUPPORTED" }));
 
     const dynamic = providerForRegistration("dynamic");
     await expect(dynamic.saveDiscoveryState(discovery())).rejects.toMatchObject({

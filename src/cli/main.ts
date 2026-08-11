@@ -3,10 +3,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { generateConfigSchema } from "../config/generate-json-schema.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { redactSecrets } from "../secrets/redact.js";
 import { createRuntime } from "./create-runtime.js";
-import { createMiftahRuntime } from "../runtime/create-miftah-runtime.js";
+import { createMiftahServerFactory } from "../runtime/create-miftah-runtime.js";
 import { startMiftahHttpServer } from "../http/miftah-http-server.js";
 import { MIFTAH_VERSION } from "../version.js";
 import { runDoctor } from "./doctor.js";
@@ -72,14 +72,17 @@ async function serve(configPath: string, transportKind = "stdio"): Promise<void>
     process.once("SIGTERM", shutdown);
     return;
   }
-  const runtime = await createMiftahRuntime(configPath);
-  const transport = new StdioServerTransport();
+  const server = serveStdio(createMiftahServerFactory(configPath), {
+    onerror: (error) => {
+      process.stderr.write(`Miftah STDIO server error: ${redactSecrets(error.message)}\n`);
+      process.exitCode = 1;
+    }
+  });
   const shutdown = async () => {
-    await runtime.close();
+    await server.close();
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
-  await runtime.connect(transport);
 }
 
 function consolePort(value: string | undefined): number | undefined {

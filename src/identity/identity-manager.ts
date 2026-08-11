@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/server";
 import type { IdentityConfig, IdentityFingerprint, MiftahConfig, RiskLevel, ToolingConfig } from "../config/types.js";
 import { classifyRisk } from "../policy/risk-classifier.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../upstream/upstream-session.js";

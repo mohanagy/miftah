@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
 import { readConfigMigrationSource, type ConfigMigrationSource } from "../cli/migrate-config.js";
 import { planConfigMigration } from "../config/migrate-config.js";
@@ -148,12 +148,14 @@ export interface ConsoleDiscoveredNativeOAuthOnboardingRequest {
   readonly profile: string;
   readonly description?: string;
   readonly resource: string;
+  readonly clientMetadataUrl?: string;
 }
 
 /** Existing configurations derive the exact resource from their selected upstream, never from the browser request. */
 export interface ConsoleDiscoveredNativeOAuthConnectionRequest {
   readonly profile: string;
   readonly upstream: string;
+  readonly clientMetadataUrl?: string;
 }
 
 /** Adds a new, independently authorized account profile from an already configured HTTPS upstream. */
@@ -162,6 +164,7 @@ export interface ConsoleDiscoveredNativeOAuthAccountRequest {
   readonly description?: string;
   readonly upstream: string;
   readonly makeDefault?: boolean;
+  readonly clientMetadataUrl?: string;
 }
 
 /** Adds one account through a recognized upstream-owned provider adapter. */
@@ -1028,7 +1031,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       resource: selected.config.url,
       profile: request.profile,
       upstream: selected.name,
-      connectionRef
+      connectionRef,
+      ...(request.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: request.clientMetadataUrl })
     }, {
       ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch })
     });
@@ -1066,7 +1070,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       profile: request.profile,
       ...(request.description === undefined ? {} : { description: request.description }),
       upstream: request.upstream,
-      ...(request.makeDefault === true ? { makeDefault: true } : {})
+      ...(request.makeDefault === true ? { makeDefault: true } : {}),
+      ...(request.clientMetadataUrl === undefined ? {} : { clientMetadataUrl: request.clientMetadataUrl })
     }, {
       generateConnectionRef: this.generateConnectionRef,
       ...(this.nativeOAuthFetch === undefined ? {} : { fetch: this.nativeOAuthFetch }),

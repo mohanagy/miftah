@@ -26,6 +26,22 @@ function readPackageOverrides(): Record<string, PackageOverride> {
   return packageJson.overrides;
 }
 
+function readPackageDevelopmentDependencies(): Record<string, string> {
+  const packageJson = JSON.parse(readRepositoryFile("package.json")) as {
+    devDependencies?: Record<string, string>;
+  };
+  if (!packageJson.devDependencies) throw new Error("package.json does not define development dependencies.");
+  return packageJson.devDependencies;
+}
+
+function readPackageDependencies(): Record<string, string> {
+  const packageJson = JSON.parse(readRepositoryFile("package.json")) as {
+    dependencies?: Record<string, string>;
+  };
+  if (!packageJson.dependencies) throw new Error("package.json does not define dependencies.");
+  return packageJson.dependencies;
+}
+
 function readLockedPackages(): Record<string, { version?: string; dev?: boolean }> {
   const lockfile = JSON.parse(readRepositoryFile("package-lock.json")) as {
     packages?: Record<string, { version?: string; dev?: boolean }>;
@@ -148,12 +164,14 @@ describe("continuous integration workflow contract", () => {
 
   it("pins patched transitive test-toolchain dependencies", () => {
     const overrides = readPackageOverrides();
+    const dependencies = readPackageDependencies();
+    const developmentDependencies = readPackageDevelopmentDependencies();
     const lockedPackages = readLockedPackages();
 
     expect(overrides).toMatchObject({
+      "@hono/node-server": "2.0.10",
       "brace-expansion": "5.0.9",
       "fast-uri": "3.1.5",
-      hono: "4.12.34",
       "ip-address": "10.3.1",
       nanoid: "3.3.17",
       "@vitest/coverage-v8": {
@@ -172,11 +190,18 @@ describe("continuous integration workflow contract", () => {
     for (const name of ["glob", "postcss"]) {
       expect(overrides).not.toHaveProperty(name);
     }
+    expect(dependencies).toMatchObject({
+      "@hono/node-server": "2.0.10",
+      hono: "4.12.34"
+    });
+    expect(developmentDependencies).not.toHaveProperty("@hono/node-server");
+    expect(developmentDependencies).not.toHaveProperty("hono");
     expect(lockedPackages["node_modules/minimatch/node_modules/brace-expansion"]).toMatchObject({
       version: "5.0.9",
       dev: true
     });
-    expect(lockedPackages["node_modules/fast-uri"]).toMatchObject({ version: "3.1.5" });
+    const fastUri = lockedPackages["node_modules/fast-uri"];
+    if (fastUri !== undefined) expect(fastUri).toMatchObject({ version: "3.1.5" });
     expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
     expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.12.34" });
     expect(lockedPackages["node_modules/ip-address"]).toMatchObject({ version: "10.3.1" });

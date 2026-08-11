@@ -1,18 +1,18 @@
-import { randomUUID } from "node:crypto";
-import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
+import { createHash, randomUUID } from "node:crypto";
+import { UriTemplate } from "@modelcontextprotocol/server";
 import type {
   GetPromptResult,
   ListPromptsRequest,
   ListPromptsResult,
-  ListResourceTemplatesRequest,
-  ListResourceTemplatesResult,
   ListResourcesRequest,
   ListResourcesResult,
+  ListResourceTemplatesRequest,
+  ListResourceTemplatesResult,
   Prompt,
   ReadResourceResult,
   Resource,
-  ResourceTemplate
-} from "@modelcontextprotocol/sdk/types.js";
+  ResourceTemplateType
+} from "@modelcontextprotocol/server";
 import type { ToolDiscoveryMode } from "../../config/types.js";
 import { redactUri } from "../../secrets/redact.js";
 import type { UpstreamRequestOptions } from "../../upstream/upstream-session.js";
@@ -193,7 +193,7 @@ export class ResourcePromptRegistry {
         )
       )
     );
-    return { resources, ...(nextCursor ? { nextCursor } : {}) };
+    return { resources: resources.sort(compareResources), ...(nextCursor ? { nextCursor } : {}) };
   }
 
   async listResourceTemplates(
@@ -246,7 +246,7 @@ export class ResourcePromptRegistry {
     for (const route of routes.values()) {
       names.set(route.exposedName, route.exposedUriBase);
     }
-    const resourceTemplates: ResourceTemplate[] = [];
+    const resourceTemplates: ResourceTemplateType[] = [];
 
     for (const { upstreamName, result } of discovered) {
       for (const original of result.resourceTemplates) {
@@ -267,7 +267,8 @@ export class ResourcePromptRegistry {
           profile,
           upstreamName,
           original.uriTemplate,
-          exposedName
+          exposedName,
+          template.uriTemplate
         );
         names.set(exposedName, route.exposedUriBase);
         resourceTemplates.push({ ...template, uriTemplate: route.exposedUriTemplate, name: route.exposedName });
@@ -284,7 +285,10 @@ export class ResourcePromptRegistry {
         )
       )
     );
-    return { resourceTemplates, ...(nextCursor ? { nextCursor } : {}) };
+    return {
+      resourceTemplates: resourceTemplates.sort(compareResourceTemplates),
+      ...(nextCursor ? { nextCursor } : {})
+    };
   }
 
   async listPrompts(
@@ -364,7 +368,7 @@ export class ResourcePromptRegistry {
         )
       )
     );
-    return { prompts, ...(nextCursor ? { nextCursor } : {}) };
+    return { prompts: prompts.sort(comparePrompts), ...(nextCursor ? { nextCursor } : {}) };
   }
 
   resolveResource(profile: string, exposedUri: string): ResourceRoute | undefined {
@@ -713,10 +717,14 @@ export class ResourcePromptRegistry {
     profile: string,
     upstreamName: string,
     originalUriTemplate: string,
-    exposedName: string
+    exposedName: string,
+    exposedUriTemplate: string
   ): ResourceTemplateRoute {
     const variables = resourceTemplateVariables(originalUriTemplate);
-    const exposedUriBase = namespaceResourceTemplateBase(upstreamName, randomUUID());
+    const exposedUriBase = namespaceResourceTemplateBase(
+      upstreamName,
+      resourceTemplateRouteId(upstreamName, exposedName, exposedUriTemplate)
+    );
     const route: ResourceTemplateRoute = {
       profile,
       upstreamName,
@@ -802,6 +810,34 @@ function namespaceResourceTemplateBase(upstreamName: string, id: string): string
   return `miftah://template/${encodeURIComponent(upstreamName)}/${id}`;
 }
 
+function resourceTemplateRouteId(upstreamName: string, exposedName: string, exposedUriTemplate: string): string {
+  // Hash only catalog-visible, already-redacted values. A stable route must not
+  // turn a sensitive original template into an offline-guessing oracle.
+  return createHash("sha256")
+    .update(upstreamName)
+    .update("\0")
+    .update(exposedName)
+    .update("\0")
+    .update(exposedUriTemplate)
+    .digest("base64url");
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareResources(left: Resource, right: Resource): number {
+  return compareText(left.uri, right.uri) || compareText(left.name, right.name);
+}
+
+function compareResourceTemplates(left: ResourceTemplateType, right: ResourceTemplateType): number {
+  return compareText(left.name, right.name) || compareText(left.uriTemplate, right.uriTemplate);
+}
+
+function comparePrompts(left: Prompt, right: Prompt): number {
+  return compareText(left.name, right.name);
+}
+
 function namespaceResourceTemplateUri(base: string, variables: readonly string[]): string {
   return variables.length === 0 ? base : `${base}{?${variables.join(",")}}`;
 }
@@ -833,7 +869,7 @@ function redactResource(resource: Resource): Resource {
   };
 }
 
-function redactResourceTemplate(template: ResourceTemplate): ResourceTemplate {
+function redactResourceTemplate(template: ResourceTemplateType): ResourceTemplateType {
   return {
     ...template,
     uriTemplate: redactUri(template.uriTemplate),

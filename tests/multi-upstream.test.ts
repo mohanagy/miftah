@@ -1,15 +1,11 @@
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   CallToolResultSchema,
   GetPromptResultSchema,
   ListPromptsResultSchema,
   ListResourcesResultSchema,
-  PromptListChangedNotificationSchema,
-  ReadResourceResultSchema,
-  ResourceListChangedNotificationSchema,
-  ToolListChangedNotificationSchema
-} from "@modelcontextprotocol/sdk/types.js";
+  ReadResourceResultSchema
+} from "@modelcontextprotocol/core";
+import { InMemoryTransport, Client } from "@modelcontextprotocol/client";
 import { access, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -32,6 +28,14 @@ const promptCursorInvalidPattern = /PROMPT_CURSOR_INVALID/;
 const githubResourceRoutePattern = /^miftah:\/\/resource\/github\?/;
 const resourceNotFoundPattern = /RESOURCE_NOT_FOUND/;
 const promptNotFoundPattern = /PROMPT_NOT_FOUND/;
+
+function listResourcesPage(client: Client, cursor?: string) {
+  return client.request({ method: "resources/list", params: cursor === undefined ? {} : { cursor } });
+}
+
+function listPromptsPage(client: Client, cursor?: string) {
+  return client.request({ method: "prompts/list", params: cursor === undefined ? {} : { cursor } });
+}
 
 describe("multi-upstream wrapper", () => {
   it("does not proxy resources or prompts when no upstream is configured", async () => {
@@ -70,7 +74,7 @@ describe("multi-upstream wrapper", () => {
         await expect(client.request(request, resultSchema)).rejects.toMatchObject({ code: -32601 });
       }
 
-      const health = await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema);
+      const health = await client.callTool({ name: "miftah_health", arguments: {} });
       const text = CallToolResultSchema.parse(health).content[0];
       expect(text?.type).toBe("text");
       if (text?.type !== "text") throw new Error("Expected a text health result");
@@ -118,7 +122,7 @@ describe("multi-upstream wrapper", () => {
       expect(client.getServerCapabilities()).toMatchObject({ resources: {}, prompts: {} });
       expect(client.getInstructions()).not.toContain("multi-upstream");
 
-      const health = await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema);
+      const health = await client.callTool({ name: "miftah_health", arguments: {} });
       const text = CallToolResultSchema.parse(health).content[0];
       expect(text?.type).toBe("text");
       if (text?.type !== "text") throw new Error("Expected a text health result");
@@ -170,7 +174,7 @@ describe("multi-upstream wrapper", () => {
       expect((await client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual(["github__account_prompt"]);
 
       const health = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_health", arguments: {} })
       );
       const content = health.content[0];
       expect(content).toMatchObject({ type: "text" });
@@ -240,7 +244,7 @@ describe("multi-upstream wrapper", () => {
         "github__Current account"
       ]);
       const health = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_health", arguments: {} })
       );
       const content = health.content[0];
       expect(content).toMatchObject({ type: "text" });
@@ -588,10 +592,10 @@ describe("multi-upstream wrapper", () => {
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let resourceNotifications = 0;
     let promptNotifications = 0;
-    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/resources/list_changed', () => {
       resourceNotifications += 1;
     });
-    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/prompts/list_changed', () => {
       promptNotifications += 1;
     });
 
@@ -699,7 +703,7 @@ describe("multi-upstream wrapper", () => {
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
-      const firstResources = await client.listResources();
+      const firstResources = await listResourcesPage(client);
       expect(firstResources.resources.map((resource) => resource.name)).toEqual([
         "github__Current account",
         "sentry__Current account"
@@ -715,7 +719,7 @@ describe("multi-upstream wrapper", () => {
       ]);
       expect(secondResources.nextCursor).toBeUndefined();
 
-      const firstPrompts = await client.listPrompts();
+      const firstPrompts = await listPromptsPage(client);
       expect(firstPrompts.prompts.map((prompt) => prompt.name)).toEqual([
         "github__account_prompt",
         "sentry__account_prompt"
@@ -766,10 +770,10 @@ describe("multi-upstream wrapper", () => {
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let resourceNotifications = 0;
     let promptNotifications = 0;
-    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/resources/list_changed', () => {
       resourceNotifications += 1;
     });
-    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/prompts/list_changed', () => {
       promptNotifications += 1;
     });
 
@@ -780,8 +784,8 @@ describe("multi-upstream wrapper", () => {
         resources: { listChanged: true },
         prompts: { listChanged: true }
       });
-      const workResources = await client.listResources();
-      const workPrompts = await client.listPrompts();
+      const workResources = await listResourcesPage(client);
+      const workPrompts = await listPromptsPage(client);
       if (!workResources.nextCursor || !workPrompts.nextCursor) {
         throw new Error("Expected work-profile aggregate cursors.");
       }
@@ -985,7 +989,7 @@ describe("multi-upstream wrapper", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
 
       expect(client.getServerCapabilities()).toMatchObject({ resources: {}, prompts: {} });
-      const firstResources = await client.listResources();
+      const firstResources = await listResourcesPage(client);
       expect(firstResources).toMatchObject({
         resources: [{ uri: "account://current" }],
         nextCursor: "next"
@@ -996,7 +1000,7 @@ describe("multi-upstream wrapper", () => {
       expect(await client.readResource({ uri: "account://current" })).toMatchObject({
         contents: [{ text: "github-work" }]
       });
-      const firstPrompts = await client.listPrompts();
+      const firstPrompts = await listPromptsPage(client);
       expect(firstPrompts).toMatchObject({
         prompts: [{ name: "account_prompt" }],
         nextCursor: "next"
@@ -1215,13 +1219,13 @@ describe("multi-upstream wrapper", () => {
     let notifications = 0;
     let resourceNotifications = 0;
     let promptNotifications = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifications += 1;
     });
-    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/resources/list_changed', () => {
       resourceNotifications += 1;
     });
-    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/prompts/list_changed', () => {
       promptNotifications += 1;
     });
 
@@ -1234,7 +1238,7 @@ describe("multi-upstream wrapper", () => {
       expect(beforePids.every((pid): pid is number => typeof pid === "number")).toBe(true);
 
       const restarted = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } })
       );
       expect(restarted.isError).not.toBe(true);
       await client.listTools();
@@ -1284,7 +1288,7 @@ describe("multi-upstream wrapper", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
     let notifications = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifications += 1;
     });
 
@@ -1293,7 +1297,7 @@ describe("multi-upstream wrapper", () => {
 
       await client.listTools();
       const restarted = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_restart_profile", arguments: { profile: "work" } })
       );
       expect(restarted.isError).toBe(true);
       const partial = await client.listTools();
@@ -1348,13 +1352,13 @@ describe("multi-upstream wrapper", () => {
     let notifications = 0;
     let resourceNotifications = 0;
     let promptNotifications = 0;
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
       notifications += 1;
     });
-    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/resources/list_changed', () => {
       resourceNotifications += 1;
     });
-    client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    client.setNotificationHandler('notifications/prompts/list_changed', () => {
       promptNotifications += 1;
     });
 
@@ -1468,8 +1472,7 @@ describe("multi-upstream wrapper", () => {
         countFixtureStarts(sentryStartCountPath)
       ]);
       const restart = client.callTool(
-        { name: "miftah_restart_profile", arguments: { profile: "work" } },
-        CallToolResultSchema
+        { name: "miftah_restart_profile", arguments: { profile: "work" } }
       );
       try {
         await expect
