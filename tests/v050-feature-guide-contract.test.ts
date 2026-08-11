@@ -59,7 +59,7 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("Native OAuth and the optional Console first shipped in 0.4.0");
     expect(guide).toContain("0.5.0 makes them easier to discover, configure, and maintain");
     expect(guide).toContain(
-      "an implemented multi-account Google Search Console onboarding path, with external validation still in progress"
+      "an implemented multi-account Google Search Console onboarding path, with external validation still in progress at the time"
     );
     expect(guide).not.toContain("a complete multi-account Google Search Console onboarding path");
     expect(readme.split("\n").slice(0, 80).join("\n")).toContain(
@@ -102,7 +102,9 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("upstream-owned OAuth");
     expect(guide).toContain("API key or secret reference");
     expect(guide).toContain("restart the MCP client");
-    expect(guide).toContain("External multi-account and returning-user validation is still open");
+    expect(guide).toContain("External multi-account and returning-user validation was still open during 0.5");
+    expect(guide).toContain("later closed by maintainer attestation");
+    expect(guide).toContain("[#39]");
     expect(guide).toContain("[#25]");
     expect(guide).toContain("[#88]");
     expect(guide).toContain("[CLI reference](cli.md)");

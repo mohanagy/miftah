@@ -1,13 +1,13 @@
 # What is in Miftah 0.5
 
-Install `@lubab/miftah@0.5.8` when you want Miftah to guide setup instead of assembling a multi-account configuration by hand:
+Install `@lubab/miftah@1.0.0`, the current stable release, to use the guided setup and account-management capabilities introduced in 0.5 instead of assembling a multi-account configuration by hand:
 
 ```bash
-npm install -g @lubab/miftah@0.5.8
+npm install -g @lubab/miftah@1.0.0
 miftah version
 ```
 
-The short version of 0.5.0 compared with 0.4.0 is: Miftah now has guided and resumable setup, safer setup previews, account-profile maintenance commands, client-entry import, and an implemented multi-account Google Search Console onboarding path, with external validation still in progress.
+The short version of 0.5.0 compared with 0.4.0 is: Miftah added guided and resumable setup, safer setup previews, account-profile maintenance commands, client-entry import, and an implemented multi-account Google Search Console onboarding path, with external validation still in progress at the time.
 
 Native OAuth and the optional Console first shipped in 0.4.0. 0.5.0 makes them easier to discover, configure, and maintain; it does not introduce universal OAuth support or a hosted Miftah service.
 
@@ -162,8 +162,8 @@ If your configuration is still v1 or v2, use the dry-run-first migration path in
 
 ## What remains intentionally incomplete
 
-- External multi-account and returning-user validation is still open in [#25](https://github.com/mohanagy/miftah/issues/25) and [#88](https://github.com/mohanagy/miftah/issues/88).
-- Miftah is experimental and pre-1.0; minor releases can contain documented incompatible changes.
+- External multi-account and returning-user validation was still open during 0.5 in [#25](https://github.com/mohanagy/miftah/issues/25) and [#88](https://github.com/mohanagy/miftah/issues/88), and was later closed by maintainer attestation in [#39](https://github.com/mohanagy/miftah/issues/39). The underlying participant records are not published in this repository.
+- The 0.5 series described by this historical guide was experimental and pre-1.0. The current stable compatibility contract is documented in the [library API policy](library-api.md#compatibility-policy).
 - Native OAuth is deliberately narrow. Provider-specific and local OAuth often remains upstream-owned.
 - Miftah cannot prove an account identity unless the selected upstream exposes stable, bounded identity evidence.
 - Generated client snippets are manual handoff artifacts. Miftah does not silently edit client settings or replace a running MCP session.

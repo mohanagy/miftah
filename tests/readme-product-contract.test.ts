@@ -61,9 +61,10 @@ describe("product README", () => {
     expect(firstScreen).toContain("Miftah itself has no cloud service or telemetry");
     expect(firstScreen).toContain("## Is Miftah for you?");
     expect(firstScreen).toContain("Keep your direct MCP entry when you use one account");
-    expect(firstScreen).toContain("experimental and pre-1.0");
-    expect(firstScreen).toContain("validation in [#25]");
-    expect(firstScreen).toContain("[#88]");
+    expect(firstScreen).toContain("stable v1 release line");
+    expect(firstScreen).toContain("closed by maintainer attestation");
+    expect(firstScreen).toContain("[#39]");
+    expect(firstScreen).not.toContain("experimental and pre-1.0");
   });
 
   it("explains one connector with named profiles instead of duplicate entries", () => {
