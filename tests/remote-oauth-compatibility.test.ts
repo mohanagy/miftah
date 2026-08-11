@@ -1,14 +1,11 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-  UnauthorizedError,
-  type OAuthClientProvider
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, UnauthorizedError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type {
+  OAuthClientProvider,
   OAuthClientInformationMixed,
   OAuthClientMetadata,
+  OAuthDiscoveryState,
   OAuthTokens
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   startOAuthCompatibilityProbe,
@@ -21,6 +18,7 @@ class DeterministicOAuthClientProvider implements OAuthClientProvider {
   private savedTokens?: OAuthTokens;
   private verifier?: string;
   private redirect?: URL;
+  private discovery?: OAuthDiscoveryState;
 
   get clientMetadata(): OAuthClientMetadata {
     return {
@@ -63,6 +61,14 @@ class DeterministicOAuthClientProvider implements OAuthClientProvider {
   codeVerifier(): string {
     if (!this.verifier) throw new Error("The compatibility probe did not receive a PKCE verifier.");
     return this.verifier;
+  }
+
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    this.discovery = structuredClone(state);
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    return this.discovery === undefined ? undefined : structuredClone(this.discovery);
   }
 
   authorizationRedirect(): URL | undefined {
@@ -119,7 +125,7 @@ describe("standards-compatible remote OAuth probe", () => {
       expect(callback.searchParams.get("code")).toBe("fixture-authorization-code");
       expect(callback.searchParams.get("state")).toBe("miftah-compatibility-state");
 
-      await firstTransport.finishAuth("fixture-authorization-code");
+      await firstTransport.finishAuth(callback.searchParams);
       expect(upstream.tokenExchanges()).toEqual([
         {
           clientId: "miftah-compatibility-client",

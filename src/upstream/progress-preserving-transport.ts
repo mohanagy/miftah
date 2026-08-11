@@ -1,5 +1,4 @@
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport, TransportSendOptions, JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/server";
 
 /**
  * Lets the SDK dispatch an immediately preceding progress notification before

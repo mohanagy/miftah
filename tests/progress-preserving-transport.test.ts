@@ -1,5 +1,4 @@
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport, TransportSendOptions, JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/server";
 import { describe, expect, it } from "vitest";
 import { ProgressPreservingTransport } from "../src/upstream/progress-preserving-transport.js";
 

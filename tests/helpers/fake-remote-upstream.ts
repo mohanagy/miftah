@@ -1,24 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
-import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CancelledNotificationSchema,
-  CallToolRequestSchema,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
-  ReadResourceRequestSchema
-} from "@modelcontextprotocol/sdk/types.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
+import { Server as McpServer, ProtocolError } from "@modelcontextprotocol/server";
+import type { FetchLike } from "@modelcontextprotocol/server";
 
 interface StreamableSession {
   server: McpServer;
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
 }
 
 interface SseSession {
@@ -167,7 +157,7 @@ export async function startFakeRemoteUpstream(options: FakeRemoteUpstreamOptions
       }
 
       const server = createMcpServer(request.headers["x-profile"], options, callToolState);
-      const transport = new StreamableHTTPServerTransport({
+      const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: randomUUID,
         onsessioninitialized: (createdSessionId) => {
           streamableSessions.set(createdSessionId, { server, transport });
@@ -498,7 +488,7 @@ export async function startOAuthCompatibilityProbe(
     }
 
     const server = createMcpServer(undefined, {}, callToolState);
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       onsessioninitialized: (createdSessionId) => {
         sessions.set(createdSessionId, { server, transport });
@@ -566,18 +556,18 @@ function createMcpServer(
     { capabilities: { tools: {}, resources: {}, prompts: {} } }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler('tools/list', async () => ({
     tools: [
       { name: "whoami", description: "Return the request profile.", inputSchema: { type: "object", properties: {} } }
     ]
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler('tools/call', async (request, ctx) => {
     callToolState.toolCallRequests += 1;
     if (options.callToolError) {
-      throw new McpError(options.callToolError.code, options.callToolError.message);
+      throw new ProtocolError(options.callToolError.code, options.callToolError.message);
     }
     if (options.emitCallToolProgress && request.params._meta?.progressToken !== undefined) {
-      await extra.sendNotification({
+      await ctx.mcpReq.notify({
         method: "notifications/progress",
         params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2 }
       });
@@ -585,19 +575,19 @@ function createMcpServer(
     if (options.callToolDelayMs && options.callToolDelayMs > 0) await delay(options.callToolDelayMs);
     return { content: [{ type: "text", text: profile }] };
   });
-  server.setNotificationHandler(CancelledNotificationSchema, () => {
+  server.setNotificationHandler('notifications/cancelled', () => {
     callToolState.cancelledNotifications += 1;
   });
-  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  server.setRequestHandler('resources/list', async () => ({
     resources: [{ uri: "account://current", name: "Current profile", mimeType: "text/plain" }]
   }));
-  server.setRequestHandler(ReadResourceRequestSchema, async () => ({
+  server.setRequestHandler('resources/read', async () => ({
     contents: [{ uri: "account://current", text: profile, mimeType: "text/plain" }]
   }));
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  server.setRequestHandler('prompts/list', async () => ({
     prompts: [{ name: "account_prompt", description: "Current profile prompt." }]
   }));
-  server.setRequestHandler(GetPromptRequestSchema, async () => ({
+  server.setRequestHandler('prompts/get', async () => ({
     messages: [{ role: "user", content: { type: "text", text: profile } }]
   }));
   return server;

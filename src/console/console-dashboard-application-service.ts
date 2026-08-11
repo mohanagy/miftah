@@ -1,7 +1,7 @@
 import type { ClientLauncher, ClientSelection, ClientSnippet } from "../cli/client-snippets.js";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { resolvePath } from "../config/path-resolve.js";
 import { MiftahError } from "../utils/errors.js";
 import {

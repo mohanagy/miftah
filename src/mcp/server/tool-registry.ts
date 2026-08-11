@@ -1,4 +1,4 @@
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/server";
 import type { ToolRiskAnnotations } from "../../policy/policy-types.js";
 import type { UpstreamRequestOptions } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";

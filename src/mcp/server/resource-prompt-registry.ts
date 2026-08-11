@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
+import { UriTemplate } from "@modelcontextprotocol/server";
 import type {
   GetPromptResult,
   ListPromptsRequest,
   ListPromptsResult,
-  ListResourceTemplatesRequest,
-  ListResourceTemplatesResult,
   ListResourcesRequest,
   ListResourcesResult,
+  ListResourceTemplatesRequest,
+  ListResourceTemplatesResult,
   Prompt,
   ReadResourceResult,
   Resource,
-  ResourceTemplate
-} from "@modelcontextprotocol/sdk/types.js";
+  ResourceTemplateType
+} from "@modelcontextprotocol/server";
 import type { ToolDiscoveryMode } from "../../config/types.js";
 import { redactUri } from "../../secrets/redact.js";
 import type { UpstreamRequestOptions } from "../../upstream/upstream-session.js";
@@ -246,7 +246,7 @@ export class ResourcePromptRegistry {
     for (const route of routes.values()) {
       names.set(route.exposedName, route.exposedUriBase);
     }
-    const resourceTemplates: ResourceTemplate[] = [];
+    const resourceTemplates: ResourceTemplateType[] = [];
 
     for (const { upstreamName, result } of discovered) {
       for (const original of result.resourceTemplates) {
@@ -833,7 +833,7 @@ function redactResource(resource: Resource): Resource {
   };
 }
 
-function redactResourceTemplate(template: ResourceTemplate): ResourceTemplate {
+function redactResourceTemplate(template: ResourceTemplateType): ResourceTemplateType {
   return {
     ...template,
     uriTemplate: redactUri(template.uriTemplate),

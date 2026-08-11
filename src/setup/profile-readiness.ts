@@ -1,4 +1,4 @@
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/server";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { AuditTrail } from "../audit/audit-trail.js";
 import { loadConfig } from "../config/load-config.js";

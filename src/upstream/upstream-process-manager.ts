@@ -1,10 +1,6 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { Client, UnauthorizedError, StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
+import type { OAuthClientProvider, FetchLike, Transport, Tool } from "@modelcontextprotocol/client";
 import type { Stream } from "node:stream";
 import type { ProfileConfig, UpstreamConfig } from "../config/types.js";
 import { expandEnvironmentReferencesWithSecretValues } from "../config/env-expand.js";
@@ -131,7 +127,10 @@ export interface UpstreamManagerOptions {
 
 /** OAuth provider capabilities the upstream manager needs to finish an interactive SDK flow. */
 export interface ManagedOAuthClientProvider extends OAuthClientProvider {
-  waitForAuthorizationCode(): Promise<string>;
+  waitForAuthorizationResponse(): Promise<{
+    readonly authorizationCode: string;
+    readonly issuer: string;
+  }>;
   close(): Promise<void>;
 }
 
@@ -586,9 +585,9 @@ export class UpstreamProcessManager {
           throw oauthProvider === undefined ? error : this.oauthAuthorizationFailure(error);
         }
         try {
-          const authorizationCode = await oauthProvider.waitForAuthorizationCode();
+          const authorization = await oauthProvider.waitForAuthorizationResponse();
           await withTimeout(
-            streamableTransport.finishAuth(authorizationCode),
+            streamableTransport.finishAuth(authorization.authorizationCode, authorization.issuer),
             this.options.startupTimeoutMs,
             "OAUTH_AUTHORIZATION_FAILED",
             `OAUTH_AUTHORIZATION_FAILED: OAuth authorization could not be completed`

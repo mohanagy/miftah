@@ -1,6 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -348,7 +347,7 @@ describe("audit outcomes", () => {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
       expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("whoami");
       const health = CallToolResultSchema.parse(
-        await client.callTool({ name: "miftah_health", arguments: {} }, CallToolResultSchema)
+        await client.callTool({ name: "miftah_health", arguments: {} })
       );
       const content = health.content[0];
       if (content?.type !== "text") throw new Error("Expected a text health result");

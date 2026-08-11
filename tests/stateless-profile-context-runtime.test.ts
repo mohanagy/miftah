@@ -1,8 +1,7 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { CallToolResultSchema, type JSONRPCMessage, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
+import type { AuthInfo, Transport, TransportSendOptions, JSONRPCMessage, Tool } from "@modelcontextprotocol/server";
+import { Client } from "@modelcontextprotocol/client";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

@@ -9,6 +9,7 @@
 | `MIFTAH_VERSION` | The package version compiled into Miftah's CLI and MCP metadata. |
 | `CURRENT_CONFIG_VERSION` | The canonical configuration format written by current Miftah presets and examples. |
 | `createMiftahRuntime` | Creates an MCP wrapper from a configuration file without exposing process, profile, or server internals. |
+| `createMiftahServerFactory` | Creates fresh lifecycle-managed MCP server instances for the SDK v2 serving entries. |
 | `ProfileContextHandleService` | Mints, resolves, replaces, and revokes short-lived opaque profile selectors for a trusted modern stateless host. |
 | `ProfileContextHandleError` | Fixed-code error class that never includes a handle, decrypted payload, identity claim, or backend detail. |
 | `InMemoryProfileContextRevocationStore` | Bounded same-process implementation for tests and single-process hosts; it is not deployment-wide storage. |
@@ -23,15 +24,31 @@
 | `generateConfigSchema` | Generates the editor-facing JSON Schema for the configuration contract. |
 | `presetConfig` | Creates a supported configuration preset in memory. |
 
-`createMiftahRuntime` returns `MiftahRuntime`, which exposes the resolved `config`, `connect(transport)`, and `close()` methods. Its optional `MiftahRuntimeOptions` enables the modern profile-context boundary described below. Supply an MCP SDK transport such as `StdioServerTransport`; transport types are provided by the direct `@modelcontextprotocol/sdk` dependency.
+`createMiftahRuntime` returns `MiftahRuntime`, which exposes the resolved `config`, `connect(transport)`, and `close()` methods for hosts that own a specific transport lifecycle. `createMiftahServerFactory` is the preferred boundary for the SDK v2 serving entries because every factory invocation creates a fresh prepared Miftah server whose upstreams close with that server. Both functions accept `MiftahRuntimeOptions`, including the modern profile-context boundary described below. The removed monolithic `@modelcontextprotocol/sdk` package is not part of the supported dependency surface. Miftah's CLI bundles the v2 Node adapter with its patched Hono adapter because `@modelcontextprotocol/node@2.0.0` still advertises an unsafe 1.x adapter range; embedding hosts import and version their own `@modelcontextprotocol/node` package when adapting a custom Node HTTP server.
 
 ```ts
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createMiftahRuntime } from "@lubab/miftah";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { createMiftahServerFactory } from "@lubab/miftah";
 
-const runtime = await createMiftahRuntime("./miftah.json");
-await runtime.connect(new StdioServerTransport());
+const server = serveStdio(createMiftahServerFactory("./miftah.json"));
+
+// Later, during host shutdown:
+await server.close();
 ```
+
+For a custom HTTP host, pass the same factory to `createMcpHandler` from `@modelcontextprotocol/server` and adapt the web handler with `toNodeHandler` from `@modelcontextprotocol/node` when using Node's HTTP server.
+
+## MCP protocol compatibility matrix
+
+| Transport and era | Serving path | Lifecycle and compatibility |
+| --- | --- | --- |
+| STDIO, modern `2026-07-28` | CLI `miftah serve` or SDK v2 `serveStdio(createMiftahServerFactory(...))` | Negotiates with `server/discover`; there is no `initialize`/`initialized` handshake or session identifier. |
+| STDIO, legacy 2025-era | The same STDIO entry | Preserves the SDK-managed `initialize`/`initialized` path. Interop tests negotiate the SDK v2 preferred legacy revision, `2025-11-25`. |
+| Streamable HTTP, modern `2026-07-28` | CLI-owned `/mcp` endpoint or an embedding host's `createMcpHandler` | Creates one server per request, emits no `Mcp-Session-Id`, carries request metadata through the SDK v2 context, and propagates request cancellation upstream. |
+| Streamable HTTP, legacy 2025-era | CLI-owned `/mcp` endpoint | Preserves the existing sessionful path, including `initialize`/`initialized`, `Mcp-Session-Id`, idle expiry, and bounded session admission. |
+| Unsupported pinned modern revision | Modern HTTP or STDIO serving entry | Fails with a version-negotiation diagnostic containing the requested revision and the supported modern revisions; it does not silently enter the legacy path. |
+
+This matrix describes Miftah's tested serving boundary, not a promise that every optional feature added to any future MCP revision is implemented. The SDK v2 serving entry owns protocol-era negotiation; Miftah continues to own broker routing, policy, audit, OAuth, profile state, upstream lifecycle, and cancellation propagation.
 
 ## Authenticated request context
 
@@ -41,7 +58,7 @@ The additive authenticated request-context API is the trust seam for future mode
 
 Claims are rejected at exact expiry. Provider failures and missing claims return only `AUTH_CONTEXT_UNAVAILABLE`; malformed claims return `AUTH_CONTEXT_INVALID`. Call `requireAuthenticatedRequestContext` in a modern account-sensitive path so an absent boundary cannot silently fall back to client metadata, a mutable default, or durable active-profile state.
 
-The current CLI-owned Streamable HTTP server remains the documented legacy session-aware path and does not synthesize these claims from its static bearer token. Until a supported host supplies a verified per-chat claim and the modern protocol path is enabled, deploy a profile-scoped or operator-locked endpoint and do not claim chat-scoped switching.
+The CLI-owned Streamable HTTP server accepts both the modern request-scoped protocol path and the legacy session-aware path, but it does not synthesize verified per-chat claims from its static bearer token. Its modern requests therefore begin from configured/default profile state and do not claim authenticated chat-scoped switching. A host that needs that capability must verify its own per-chat identity claims and supply the resulting boundary through `createMiftahServerFactory(configPath, { modernProfileContext })`; otherwise deploy a profile-scoped or operator-locked endpoint.
 
 ## Stateless profile-context handles
 
@@ -55,7 +72,7 @@ In modern mode, account-sensitive tool schemas include the reserved model-visibl
 
 A valid handle selects a profile; it is not operation authorization or idempotency. Policy, approval, identity, lease, OAuth, and upstream checks still run for every request. Missing, malformed, tampered, expired, revoked, cross-principal, cross-chat, cross-deployment, and removed-profile handles return fixed `ProfileContextHandleErrorCode` failures. The modern runtime never reads or mutates `ProfileManager`'s legacy active profile.
 
-The package exports `ProfileContextHandleServiceOptions`, `ModernProfileContextRuntimeOptions`, `MintedProfileContext`, `ResolvedProfileContext`, `ProfileContextReplacementAudit`, `ProfileContextKeyringProvider`, `ProfileContextKeyringSnapshot`, `ProfileContextKeyEpoch`, and `ProfileContextRevocationStore` for host integration. The current CLI-owned Streamable HTTP entry point does not enable this option; protocol-era negotiation and transport selection remain separate work, so existing stdio and session-aware HTTP behavior stays unchanged.
+The package exports `ProfileContextHandleServiceOptions`, `ModernProfileContextRuntimeOptions`, `MintedProfileContext`, `ResolvedProfileContext`, `ProfileContextReplacementAudit`, `ProfileContextKeyringProvider`, `ProfileContextKeyringSnapshot`, `ProfileContextKeyEpoch`, and `ProfileContextRevocationStore` for host integration. The CLI-owned Streamable HTTP entry point negotiates modern and legacy eras but does not enable trusted `modernProfileContext` claims. An embedding host can pass that option to `createMiftahServerFactory`; existing legacy session-aware behavior remains available on the same endpoint.
 
 ## Type exports
 
@@ -83,7 +100,7 @@ The package root also exports `AuthenticatedRequestContext`, `AuthenticatedReque
 
 For identity configurations, format-dependent structural constraints, unique `requiredForRisk` tuples, and `selectionMode: "explicit" | "confirmed"` are static. A selection mode requires `requiredForRisk`. For text probes, `validateConfig` runtime-validates equality between `expected.provider` and a static `probe.provider`; JSON probes do not permit a static provider.
 
-Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. `MiftahErrorCode` includes the stable resource-template and resource-subscription protocol error categories. The wrapper factory exposes `MiftahRuntime`.
+Programmatic diagnostics expose `ConfigDiagnostic`, `MiftahErrorCode`, and `MiftahErrorDetails`. `MiftahErrorCode` includes the stable resource-template and resource-subscription protocol error categories. The wrapper factories expose `MiftahRuntime` and `createMiftahServerFactory`.
 
 ## Compatibility policy
 

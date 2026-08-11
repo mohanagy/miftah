@@ -14,7 +14,8 @@ describe("authenticated request-context documentation contract", () => {
     expect(documentation).toContain("does not parse MCP `clientInfo`, arbitrary headers");
     expect(documentation).toContain("profile-scoped or operator-locked endpoint");
     expect(documentation).toContain("it is not an authorization credential");
-    expect(documentation).toContain("remains the documented legacy session-aware path");
+    expect(documentation).toContain("accepts both the modern request-scoped protocol path and the legacy session-aware path");
+    expect(documentation).toContain("does not synthesize verified per-chat claims");
   });
 
   it("records the additive security boundary under the next release", async () => {
@@ -23,7 +24,8 @@ describe("authenticated request-context documentation contract", () => {
     const unreleased = afterUnreleased.split(/^## \[/mu, 1)[0] ?? "";
 
     expect(unreleased).toContain("[#376]");
-    expect(unreleased).toContain("future modern stateless handling");
+    expect(unreleased).toContain("for modern stateless handling");
     expect(unreleased).toContain("never falls back to MCP `clientInfo`");
+    expect(unreleased).toContain("embedding hosts supply them through the public server factory");
   });
 });

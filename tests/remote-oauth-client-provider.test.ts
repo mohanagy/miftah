@@ -1,4 +1,4 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import { OAuthConnectionLifecycle } from "../src/oauth/connection-lifecycle.js";
 import { OAuthConnectionRegistry, type OAuthConnectionMetadataStore } from "../src/oauth/connection-registry.js";
@@ -42,8 +42,11 @@ class MemoryCredentialStore implements OAuthCredentialStore {
 class DeferredHandoff implements OAuthAuthorizationHandoff {
   readonly redirectUrl = new URL("http://127.0.0.1:43179/oauth/callback");
 
-  authorize(): Promise<string> {
-    return Promise.resolve("fixture-code");
+  authorize(): Promise<{ authorizationCode: string; issuer: string }> {
+    return Promise.resolve({
+      authorizationCode: "fixture-code",
+      issuer: "https://issuer.example.test"
+    });
   }
 
   async close(): Promise<void> {}
@@ -52,9 +55,9 @@ class DeferredHandoff implements OAuthAuthorizationHandoff {
 class CountingHandoff extends DeferredHandoff {
   authorizations = 0;
 
-  override authorize(): Promise<string> {
+  override authorize(): Promise<{ authorizationCode: string; issuer: string }> {
     this.authorizations += 1;
-    return Promise.resolve("fixture-code");
+    return super.authorize();
   }
 }
 
@@ -235,7 +238,8 @@ describe("remote OAuth client provider", () => {
     });
     first.saveClientInformation({
       client_id: "fixture-dynamic-client",
-      client_secret: "fixture-dynamic-client-secret"
+      client_secret: "fixture-dynamic-client-secret",
+      issuer: "https://issuer.example.test"
     });
     await first.saveTokens({
       access_token: "fixture-access-token",
@@ -298,7 +302,10 @@ describe("remote OAuth client provider", () => {
     await expect(
       metadataClient.saveDiscoveryState(discovery({ authorizationServerMetadata: metadata }))
     ).resolves.toBeUndefined();
-    await expect(metadataClient.clientInformation()).resolves.toEqual({ client_id: metadataUrl });
+    await expect(metadataClient.clientInformation()).resolves.toEqual({
+      client_id: metadataUrl,
+      issuer: "https://issuer.example.test"
+    });
 
     const dynamic = providerForRegistration("dynamic");
     await expect(dynamic.saveDiscoveryState(discovery())).rejects.toMatchObject({

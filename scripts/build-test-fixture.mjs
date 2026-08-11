@@ -19,7 +19,9 @@ const result = await build({
   legalComments: "none",
   write: false
 });
-const bundledSource = result.outputFiles[0].text;
+// esbuild preserves whitespace-only lines inside dependency template literals.
+// They are behaviorally inert but fail `git diff --check` in the committed fixture.
+const bundledSource = result.outputFiles[0].text.replace(/^[\t ]+$/gm, "");
 
 if (process.argv.includes("--check")) {
   let currentSource;

@@ -1,22 +1,7 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { Server, UriTemplate } from "@modelcontextprotocol/server";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  CancelledNotificationSchema,
-  CallToolRequestSchema,
-  GetPromptRequestSchema,
-  InitializeRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-  SubscribeRequestSchema,
-  UnsubscribeRequestSchema
-} from "@modelcontextprotocol/sdk/types.js";
-
 const account = process.env.TEST_ACCOUNT_NAME ?? "unknown";
 const responseText =
   process.env.TEST_INCLUDE_RESPONSE_TOKEN === "true" ? `${account}:${process.env.API_TOKEN ?? ""}` : account;
@@ -251,7 +236,7 @@ function parseOptionalJson(value, variableName) {
 }
 
 if (failInitialize || clientInfoPath) {
-  server.setRequestHandler(InitializeRequestSchema, async (request) => {
+  server.setRequestHandler('initialize', async (request) => {
     if (clientInfoPath) {
       writeFileSync(clientInfoPath, JSON.stringify(request.params.clientInfo));
     }
@@ -266,7 +251,7 @@ if (failInitialize || clientInfoPath) {
   });
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+server.setRequestHandler('tools/list', async (request) => {
   toolListRequests += 1;
   const changedToolList = changeToolListAfterFirstRequest && toolListRequests > 1;
   if (listToolsStartDelayMs > 0) {
@@ -415,7 +400,7 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   };
 });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler('tools/call', async (request) => {
   if (callToolStartedPath) {
     writeFileSync(callToolStartedPath, "started");
   }
@@ -480,13 +465,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return { content: [{ type: "text", text: `created:${String(request.params.arguments?.name ?? "")}` }] };
 });
 
-server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
+server.setNotificationHandler('notifications/cancelled', (notification) => {
   if (cancelledPath) {
     appendFileSync(cancelledPath, `${notification.params.requestId}\n`);
   }
 });
 
-server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+server.setRequestHandler('resources/list', async (request) => {
   if (process.env.TEST_LIST_RESOURCES_COUNT_PATH) {
     appendFileSync(process.env.TEST_LIST_RESOURCES_COUNT_PATH, "1\n");
   }
@@ -523,7 +508,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
 });
 
 if (!resourceTemplatesUnsupported) {
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+  server.setRequestHandler('resources/templates/list', async (request) => {
     if (listResourceTemplatesProgress && request.params._meta?.progressToken !== undefined) {
       await server.notification({
         method: "notifications/progress",
@@ -539,7 +524,7 @@ if (!resourceTemplatesUnsupported) {
   });
 }
 
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+server.setRequestHandler('resources/read', async (request) => {
   if (process.env.TEST_READ_RESOURCE_COUNT_PATH) {
     appendFileSync(process.env.TEST_READ_RESOURCE_COUNT_PATH, "1\n");
   }
@@ -562,7 +547,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   };
 });
 
-server.setRequestHandler(SubscribeRequestSchema, async () => {
+server.setRequestHandler('resources/subscribe', async () => {
   if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
   if (subscribeStartDelayMs > 0) await delay(subscribeStartDelayMs);
   if (subscribeStartedPath) writeFileSync(subscribeStartedPath, "started");
@@ -590,7 +575,7 @@ server.setRequestHandler(SubscribeRequestSchema, async () => {
   return {};
 });
 
-server.setRequestHandler(UnsubscribeRequestSchema, async () => {
+server.setRequestHandler('resources/unsubscribe', async () => {
   if (!resourceSubscriptions) throw new Error("test upstream does not support resource subscriptions");
   if (unsubscribeCountPath) appendFileSync(unsubscribeCountPath, "1\n");
   if (unsubscribeDelayMs > 0) await delay(unsubscribeDelayMs);
@@ -601,7 +586,7 @@ server.setRequestHandler(UnsubscribeRequestSchema, async () => {
   return {};
 });
 
-server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+server.setRequestHandler('prompts/list', async (request) => {
   if (process.env.TEST_LIST_PROMPTS_COUNT_PATH) {
     appendFileSync(process.env.TEST_LIST_PROMPTS_COUNT_PATH, "1\n");
   }
@@ -636,7 +621,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
   };
 });
 
-server.setRequestHandler(GetPromptRequestSchema, async () => {
+server.setRequestHandler('prompts/get', async () => {
   if (process.env.TEST_GET_PROMPT_COUNT_PATH) {
     appendFileSync(process.env.TEST_GET_PROMPT_COUNT_PATH, "1\n");
   }

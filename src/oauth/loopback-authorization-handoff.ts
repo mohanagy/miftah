@@ -5,7 +5,10 @@ import { spawn } from "node:child_process";
 import { win32 } from "node:path";
 import { resolveExecutablePath } from "../secrets/executable-resolver.js";
 import { MiftahError } from "../utils/errors.js";
-import type { OAuthAuthorizationHandoff } from "./remote-oauth-client-provider.js";
+import type {
+  OAuthAuthorizationHandoff,
+  OAuthAuthorizationResponse
+} from "./remote-oauth-client-provider.js";
 
 const callbackPath = "/oauth/callback";
 const defaultTimeoutMs = 5 * 60_000;
@@ -22,7 +25,7 @@ export interface LoopbackOAuthAuthorizationHandoffOptions {
 interface PendingAuthorization {
   readonly state: string;
   readonly issuer: string;
-  readonly resolve: (code: string) => void;
+  readonly resolve: (response: OAuthAuthorizationResponse) => void;
   readonly reject: (error: MiftahError) => void;
   readonly timeout: ReturnType<typeof setTimeout>;
 }
@@ -84,12 +87,12 @@ class LoopbackOAuthAuthorizationHandoff implements OAuthAuthorizationHandoff {
   authorize(
     authorizationUrl: URL,
     expected: { readonly state: string; readonly issuer: string }
-  ): Promise<string> {
+  ): Promise<OAuthAuthorizationResponse> {
     if (this.closed || this.used || this.pending !== undefined || authorizationUrl.protocol !== "https:") {
       return Promise.reject(authorizationFailed());
     }
     this.used = true;
-    const authorization = new Promise<string>((resolve, reject) => {
+    const authorization = new Promise<OAuthAuthorizationResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (this.pending?.timeout !== timeout) return;
         this.pending = undefined;
@@ -154,7 +157,7 @@ class LoopbackOAuthAuthorizationHandoff implements OAuthAuthorizationHandoff {
     this.pending = undefined;
     clearTimeout(pending.timeout);
     fixedPage(response, 200, successPage);
-    pending.resolve(code);
+    pending.resolve({ authorizationCode: code, issuer });
     setImmediate(() => void this.closeServer());
   }
 

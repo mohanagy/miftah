@@ -45,7 +45,10 @@ describe("OAuth loopback authorization handoff", () => {
       const acceptedResponse = await fetch(callback);
       const page = await acceptedResponse.text();
 
-      await expect(code).resolves.toBe("fixture-authorization-code");
+      await expect(code).resolves.toEqual({
+        authorizationCode: "fixture-authorization-code",
+        issuer: "https://issuer.example.test"
+      });
       expect(acceptedResponse.status).toBe(200);
       expect(page).not.toContain("fixture-authorization-code");
       expect(page).not.toContain("fixture-state-value-that-is-long-enough");
@@ -80,7 +83,7 @@ describe("OAuth loopback authorization handoff", () => {
       callback.searchParams.set("state", state);
       callback.searchParams.set("iss", issuer);
       expect((await fetch(callback)).status).toBe(200);
-      await expect(code).resolves.toBe("accepted-code");
+      await expect(code).resolves.toEqual({ authorizationCode: "accepted-code", issuer });
     } finally {
       await handoff.close();
     }

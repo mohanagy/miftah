@@ -1,38 +1,25 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  GetPromptRequestSchema,
-  RootsListChangedNotificationSchema,
-  ListPromptsRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ListResourcesRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-  SubscribeRequestSchema,
-  UnsubscribeRequestSchema,
-  type CallToolResult,
-  type GetPromptRequest,
-  type GetPromptResult,
-  type ListPromptsRequest,
-  type ListPromptsResult,
-  type ListResourceTemplatesRequest,
-  type ListResourceTemplatesResult,
-  type ListResourcesRequest,
-  type ListResourcesResult,
-  type Prompt,
-  type ReadResourceResult,
-  type ReadResourceRequest,
-  type Resource,
-  type ResourceTemplate,
-  type ServerNotification,
-  type ServerRequest,
-  type SubscribeRequest,
-  type UnsubscribeRequest,
-  type Tool
-} from "@modelcontextprotocol/sdk/types.js";
+import { Server, ProtocolErrorCode } from "@modelcontextprotocol/server";
+import type {
+  CallToolResult,
+  GetPromptRequest,
+  GetPromptResult,
+  ListPromptsRequest,
+  ListPromptsResult,
+  ListResourcesRequest,
+  ListResourcesResult,
+  ListResourceTemplatesRequest,
+  ListResourceTemplatesResult,
+  Prompt,
+  ReadResourceRequest,
+  ReadResourceResult,
+  Resource,
+  ResourceTemplateType,
+  ServerContext,
+  SubscribeRequest,
+  Tool,
+  Transport,
+  UnsubscribeRequest
+} from "@modelcontextprotocol/server";
 import type { MiftahConfig, ToolingConfig, UpstreamConfig } from "../../config/types.js";
 import {
   requireAuthenticatedRequestContext,
@@ -210,10 +197,7 @@ interface ProfileTransitionConfirmationBinding {
   readonly revision: number;
 }
 
-type ProxiedRequestExtra = Pick<
-  RequestHandlerExtra<ServerRequest, ServerNotification>,
-  "_meta" | "authInfo" | "sendNotification" | "signal"
->;
+type ProxiedRequestExtra = Pick<ServerContext, "http" | "mcpReq">;
 
 interface ModernCallContext {
   readonly authenticated: AuthenticatedRequestContext;
@@ -349,6 +333,9 @@ export class MiftahServer {
   private mcpRootsRefreshRequested = false;
   private mcpRootsConnection = 0;
   private mcpRootsInitialized = false;
+  private preparation?: Promise<void>;
+  private startAudit?: Promise<void>;
+  private closePromise?: Promise<void>;
   private readonly provideRoutingContext = async (): Promise<RoutingContextSnapshot> => {
     if (this.routingContextCollector === undefined) return emptyRoutingContext;
     if (!this.mcpRootsInitialized) return this.routingContextCollector(EMPTY_MCP_ROOTS);
@@ -496,7 +483,7 @@ export class MiftahServer {
       }
     });
     this.server.oninitialized = () => this.handleClientInitialized();
-    this.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+    this.server.setNotificationHandler('notifications/roots/list_changed', () => {
       if (
         this.routingContextCollector === undefined ||
         !this.mcpRootsInitialized ||
@@ -510,9 +497,30 @@ export class MiftahServer {
       );
     });
     this.registerHandlers();
+    this.server.onclose = () => {
+      void this.close().catch(() => undefined);
+    };
   }
 
   async connect(transport: Transport): Promise<void> {
+    await this.prepare();
+    await this.server.connect(transport);
+    await this.recordStart();
+  }
+
+  /** Prepares a fresh wrapper for an SDK-owned serving entry and returns its low-level server. */
+  async prepareForServing(): Promise<Server> {
+    await this.prepare();
+    await this.recordStart();
+    return this.server;
+  }
+
+  private prepare(): Promise<void> {
+    this.preparation ??= this.prepareInternal();
+    return this.preparation;
+  }
+
+  private async prepareInternal(): Promise<void> {
     await this.profileTransitions;
     this.profileTransitionSession += 1;
     this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
@@ -526,18 +534,26 @@ export class MiftahServer {
     if (previousProfile !== activeProfile) await this.invalidateResourcePromptProfiles(previousProfile, activeProfile);
     this.resetMcpRoots();
     await this.configureResourceSubscriptionCapability();
-    await this.server.connect(transport);
-    await this.auditTrail.writeLifecycle({
+  }
+
+  private recordStart(): Promise<void> {
+    this.startAudit ??= this.auditTrail.writeLifecycle({
       operation: "wrapper/start",
       name: this.config.name,
       profile: this.profiles.current().activeProfile,
       lockToProfile: this.config.security?.lockToProfile ?? undefined,
       status: "success"
     }).catch(() => undefined);
+    return this.startAudit;
   }
 
   /** Closes subscriptions, the MCP server, and upstreams while preserving the first shutdown failure. */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeInternal();
+    return this.closePromise;
+  }
+
+  private async closeInternal(): Promise<void> {
     this.profileTransitionSession += 1;
     this.profileTransitionConfirmations = new WeakMap<object, ProfileTransitionConfirmationBinding>();
     let closeFailure: { readonly error: unknown } | undefined;
@@ -823,7 +839,7 @@ export class MiftahServer {
     }
     let extracted: ReturnType<typeof extractProfileContext>;
     try {
-      extracted = extractProfileContext(input, extra._meta);
+      extracted = extractProfileContext(input, extra.mcpReq._meta);
     } catch (error) {
       throw this.normalizeProfileContextError(error);
     }
@@ -865,7 +881,7 @@ export class MiftahServer {
     if (this.modernProfileContext === undefined) return this.captureStableProfileState();
     let extracted: ReturnType<typeof extractProfileContext>;
     try {
-      extracted = extractProfileContext({}, extra._meta);
+      extracted = extractProfileContext({}, extra.mcpReq._meta);
     } catch (error) {
       throw this.normalizeProfileContextError(error);
     }
@@ -887,7 +903,7 @@ export class MiftahServer {
     const runtime = this.modernProfileContext;
     if (runtime === undefined) throw this.profileContextError("PROFILE_CONTEXT_UNAVAILABLE");
     try {
-      return await requireAuthenticatedRequestContext(runtime.authenticatedRequestContext, extra.authInfo);
+      return await requireAuthenticatedRequestContext(runtime.authenticatedRequestContext, extra.http?.authInfo);
     } catch (error) {
       throw this.normalizeProfileContextError(error);
     }
@@ -1010,15 +1026,15 @@ export class MiftahServer {
 
   /** Registers the wrapper's MCP request handlers for the lifetime of this server instance. */
   private registerHandlers(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
+    this.server.setRequestHandler('tools/list', async (_request, ctx) => {
       const source = this.modernProfileContext === undefined
         ? await this.captureStableProfileState()
         : this.modernCatalogProfileState();
-      const upstreamRequest = this.upstreamRequestContext(extra);
+      const upstreamRequest = this.upstreamRequestContext(ctx);
       return this.runAudited(
         { operation: "tools/list", name: "tools", sourceProfile: source.activeProfile },
         async (audit) => {
-          if (this.modernProfileContext !== undefined) await this.authenticateModernRequest(extra);
+          if (this.modernProfileContext !== undefined) await this.authenticateModernRequest(ctx);
           const upstream = this.auditUpstreamName();
           if (upstream) audit.update({ upstream });
           const { profile, snapshot } = await this.runWithUpstreamRequest(
@@ -1038,14 +1054,14 @@ export class MiftahServer {
       );
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    this.server.setRequestHandler('tools/call', async (request, ctx) => {
       const name = request.params.name;
       const isManagementTool = isManagementToolName(name);
       const isApprovalManagementTool = name === "miftah_approve" || name === "miftah_deny";
       const auditSource = this.modernProfileContext === undefined
         ? await this.captureStableProfileState()
         : this.modernCatalogProfileState();
-      const upstreamRequest = this.upstreamRequestContext(extra);
+      const upstreamRequest = this.upstreamRequestContext(ctx);
       return this.runAudited(
         {
           operation: isManagementTool ? managementOperation(name) : "tools/call",
@@ -1053,7 +1069,7 @@ export class MiftahServer {
           sourceProfile: auditSource.activeProfile
         },
         async (audit) => {
-          const prepared = await this.prepareCall(name, request.params.arguments ?? {}, extra);
+          const prepared = await this.prepareCall(name, request.params.arguments ?? {}, ctx);
           const { args, source } = prepared;
           audit.update({
             sourceProfile: source.activeProfile,
@@ -1073,7 +1089,7 @@ export class MiftahServer {
                     args,
                     audit,
                     source,
-                    { requestId: extra.requestId, signal: extra.signal },
+                    { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal },
                     upstreamRequest,
                     prepared.modern
                   )
@@ -1083,7 +1099,7 @@ export class MiftahServer {
                 args,
                 audit,
                 source,
-                { requestId: extra.requestId, signal: extra.signal },
+                { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal },
                 upstreamRequest
               );
         },
@@ -1097,9 +1113,9 @@ export class MiftahServer {
 
     if (this.resourcePromptProxy.available) {
       const upstreamName = this.resourcePromptProxy.upstreamName;
-      this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('resources/templates/list', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "resources/templates/list",
@@ -1107,7 +1123,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
             return this.runWithUpstreamRequest(upstreamRequest, async () => {
               const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
@@ -1131,10 +1147,10 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(SubscribeRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('resources/subscribe', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "resources/subscribe",
@@ -1142,7 +1158,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({
               name: this.redactor.redactUri(params.uri),
               arguments: { uri: this.redactor.redactUri(params.uri) }
@@ -1159,10 +1175,10 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(UnsubscribeRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('resources/unsubscribe', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "resources/unsubscribe",
@@ -1170,7 +1186,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({
               name: this.redactor.redactUri(params.uri),
               arguments: { uri: this.redactor.redactUri(params.uri) }
@@ -1187,9 +1203,9 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('resources/list', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "resources/list",
@@ -1197,7 +1213,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
             return this.runWithUpstreamRequest(upstreamRequest, async () => {
               const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
@@ -1221,10 +1237,10 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('resources/read', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "resources/read",
@@ -1232,7 +1248,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({
               name: this.redactor.redactUri(params.uri),
               arguments: { uri: this.redactor.redactUri(params.uri) }
@@ -1249,9 +1265,9 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(ListPromptsRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('prompts/list', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "prompts/list",
@@ -1259,7 +1275,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({ arguments: params?.cursor === undefined ? {} : { cursor: params.cursor } });
             return this.runWithUpstreamRequest(upstreamRequest, async () => {
               const upstream = this.resourcePromptRegistry ? undefined : this.auditUpstreamName(upstreamName);
@@ -1283,10 +1299,10 @@ export class MiftahServer {
         );
       });
 
-      this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
+      this.server.setRequestHandler('prompts/get', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: extra.requestId, signal: extra.signal };
-        const upstreamRequest = this.upstreamRequestContext(extra);
+        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
             operation: "prompts/get",
@@ -1294,7 +1310,7 @@ export class MiftahServer {
             sourceProfile: auditSource.activeProfile
           },
           async (audit) => {
-            const { params, source } = await this.prepareResourcePromptRequest(request.params, extra, audit);
+            const { params, source } = await this.prepareResourcePromptRequest(request.params, ctx, audit);
             audit.update({ name: params.name, arguments: { ...(params.arguments ?? {}), name: params.name } });
             if (this.resourcePromptRegistry) {
               try {
@@ -1311,11 +1327,11 @@ export class MiftahServer {
   }
 
   private upstreamRequestContext(extra: ProxiedRequestExtra): UpstreamRequestContext {
-    const progressToken = extra._meta?.progressToken;
+    const progressToken = extra.mcpReq._meta?.progressToken;
     let forwardingFailure: unknown;
     let pending = Promise.resolve();
     const options: UpstreamRequestOptions = {
-      signal: extra.signal,
+      signal: extra.mcpReq.signal,
       ...(progressToken === undefined
         ? {}
         : {
@@ -1323,7 +1339,7 @@ export class MiftahServer {
               const safeMessage = message === undefined ? undefined : this.redactor.redactText(message);
               pending = pending
                 .then(() =>
-                  extra.sendNotification({
+                  extra.mcpReq.notify({
                     method: "notifications/progress",
                     params: {
                       progressToken,
@@ -3335,7 +3351,7 @@ export class MiftahServer {
 
 function extractProfileContext(
   input: Record<string, unknown>,
-  meta: ProxiedRequestExtra["_meta"]
+  meta: ProxiedRequestExtra["mcpReq"]["_meta"]
 ): { readonly args: Record<string, unknown>; readonly handle?: string } {
   let argumentHandle: unknown;
   let metadataHandle: unknown;
@@ -3488,7 +3504,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMethodNotFoundError(error: unknown): error is { readonly code: number } {
-  return isRecord(error) && error.code === ErrorCode.MethodNotFound;
+  return isRecord(error) && error.code === ProtocolErrorCode.MethodNotFound;
 }
 
 function upstreamRequestCancelled(): Error {
@@ -3598,7 +3614,7 @@ function redactDirectResource(resource: Resource): Resource {
   };
 }
 
-function redactDirectResourceTemplate(template: ResourceTemplate): ResourceTemplate {
+function redactDirectResourceTemplate(template: ResourceTemplateType): ResourceTemplateType {
   return {
     ...template,
     uriTemplate: redactSensitiveUri(template.uriTemplate),
