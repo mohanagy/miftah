@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -79,6 +79,71 @@ describe("MCP SDK v2 serving interoperability", () => {
     }
   });
 
+  it("continues a modern HTTP form approval across request-scoped server instances", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-v2-approval-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "miftah.json");
+    const auditPath = join(directory, "audit.jsonl");
+    const createCountPath = join(directory, "create-count");
+    const secretArgument = "modern-approval-secret";
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: "1",
+        name: "v2-approval-test",
+        defaultProfile: "work",
+        upstream: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [fixture]
+        },
+        profiles: {
+          work: {
+            policy: "confirm",
+            env: { TEST_CREATE_ITEM_COUNT_PATH: createCountPath }
+          }
+        },
+        policies: { confirm: { requireConfirmation: ["create_item"] } },
+        audit: { path: auditPath },
+        server: { http: { port: 0, maxSessions: 4, sessionIdleTimeoutMs: 1_000 } }
+      })
+    );
+    const server = await startMiftahHttpServer(path);
+    httpServers.push(server);
+    const transport = new StreamableHTTPClientTransport(server.url);
+    const client = new Client(
+      { name: "miftah-modern-approval-test", version: "1.0.0" },
+      {
+        versionNegotiation: { mode: "auto" },
+        capabilities: { elicitation: { form: {} } }
+      }
+    );
+    const elicitationRequests: unknown[] = [];
+    client.setRequestHandler('elicitation/create', async (request) => {
+      elicitationRequests.push(request);
+      return { action: "accept", content: { approved: true } };
+    });
+
+    try {
+      await client.connect(transport);
+      expect(await client.callTool({ name: "create_item", arguments: { name: secretArgument } })).toMatchObject({
+        content: [{ type: "text", text: `created:${secretArgument}` }]
+      });
+      expect(elicitationRequests).toHaveLength(1);
+      expect(JSON.stringify(elicitationRequests)).not.toContain(secretArgument);
+      expect(await readFile(createCountPath, "utf8")).toBe("1\n");
+      const approvalActions = (await readFile(auditPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "approval")
+        .map((event) => event.approvalAction);
+      expect(approvalActions).toEqual(["requested", "approved", "consumed"]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("does not probe or advertise connection-bound resource subscriptions for modern HTTP requests", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-v2-serving-probe-"));
     temporaryDirectories.push(directory);
@@ -127,7 +192,7 @@ describe("MCP SDK v2 serving interoperability", () => {
     ["modern", { versionNegotiation: { mode: "auto" as const } }, "modern"],
     ["legacy", undefined, "legacy"]
   ])("serves %s clients through the SDK v2 stdio entry", async (_era, clientOptions, expectedEra) => {
-    const path = await configPath();
+    const path = await configPath({ env: { TEST_RESOURCE_SUBSCRIPTIONS: "true" } });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const baseFactory = createMiftahServerFactory(path);
     const eras: string[] = [];
@@ -143,6 +208,11 @@ describe("MCP SDK v2 serving interoperability", () => {
     try {
       await client.connect(clientTransport);
       expect([...new Set(eras)]).toEqual([expectedEra]);
+      if (expectedEra === "legacy") {
+        expect(client.getServerCapabilities()?.resources?.subscribe).toBe(true);
+      } else {
+        expect(client.getServerCapabilities()?.resources?.subscribe).not.toBe(true);
+      }
       expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("whoami");
     } finally {
       await client.close();

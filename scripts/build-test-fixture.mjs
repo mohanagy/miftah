@@ -29,7 +29,8 @@ export function normalizeTemplateLiteralWhitespace(source) {
       ts.isTemplateTail(node)
     ) {
       const value = source.slice(node.getStart(sourceFile), node.getEnd());
-      if (/^[\t ]+$/mu.test(value)) {
+      const whitespaceOnlyLines = [...value.matchAll(/^[\t ]+$/gmu)];
+      if (whitespaceOnlyLines.length > 0) {
         const template = ts.isNoSubstitutionTemplateLiteral(node)
           ? node
           : ts.isTemplateExpression(node.parent)
@@ -38,11 +39,14 @@ export function normalizeTemplateLiteralWhitespace(source) {
         if (ts.isTaggedTemplateExpression(template.parent)) {
           throw new Error("Cannot safely normalize whitespace inside a tagged template literal.");
         }
-        replacements.push({
-          start: node.getStart(sourceFile),
-          end: node.getEnd(),
-          value: value.replace(/^[\t ]+$/gmu, escapedWhitespace)
-        });
+        for (const match of whitespaceOnlyLines) {
+          if (match.index === undefined) continue;
+          replacements.push({
+            start: node.getStart(sourceFile) + match.index,
+            end: node.getStart(sourceFile) + match.index + match[0].length,
+            value: escapedWhitespace(match[0])
+          });
+        }
       }
     }
     ts.forEachChild(node, visit);

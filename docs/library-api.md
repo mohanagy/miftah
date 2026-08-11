@@ -50,6 +50,8 @@ For a custom HTTP host, pass the same factory to `createMcpHandler` from `@model
 
 This matrix describes Miftah's tested serving boundary, not a promise that every optional feature added to any future MCP revision is implemented. The SDK v2 serving entry owns protocol-era negotiation; Miftah continues to own broker routing, policy, audit, OAuth, profile state, upstream lifecycle, and cancellation propagation.
 
+Confirmation-required tools, resource reads, prompt reads, and profile transitions return the MCP `input_required` result on the modern era. Miftah binds the continuation to the exact operation with bounded, integrity-protected, one-time state shared by the server factory, so a fresh request-scoped HTTP instance can safely finish the approval without retaining raw operation arguments. The SDK's legacy shim translates the same handler flow into form elicitation for initialized clients.
+
 ## Authenticated request context
 
 The additive authenticated request-context API is the trust seam for future modern stateless handling. An embedding host supplies a verifier callback that returns `VerifiedHttpRequestClaims` only after it has authenticated the request. Miftah does not parse MCP `clientInfo`, arbitrary headers, request metadata, tool arguments, or a model-generated conversation ID into this boundary.

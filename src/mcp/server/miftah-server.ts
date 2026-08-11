@@ -1,4 +1,4 @@
-import { Server, ProtocolErrorCode } from "@modelcontextprotocol/server";
+import { inputRequired, inputResponse, Server, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import type {
   CallToolResult,
   GetPromptRequest,
@@ -34,6 +34,11 @@ import {
   type ApprovalMechanism,
   type ApprovalSummary
 } from "../../approvals/approval-store.js";
+import {
+  ApprovalInputRequiredSignal,
+  ApprovalContinuationStore,
+  type ApprovalContinuation
+} from "../../approvals/approval-continuation-store.js";
 import { SecretRedactor, redactUri } from "../../secrets/redact.js";
 import {
   bindProfileTransitionConfirmationVerifier,
@@ -170,7 +175,7 @@ type ResourcePromptProxyAvailability = ResourcePromptProxyAvailable | ResourcePr
 type ApprovalResolution =
   | { readonly kind: "consumed" }
   | { readonly kind: "delegated-agent"; readonly token: string }
-  | { readonly kind: "form"; readonly token: string };
+  | { readonly kind: "form"; readonly state: string };
 
 interface ApprovalErrorFactory {
   required(binding: ApprovalBinding, token: string): MiftahError;
@@ -353,7 +358,8 @@ export class MiftahServer {
     identityManager?: IdentityManager,
     private readonly runtimeConfigPath?: string,
     private readonly modernProfileContext?: ModernProfileContextRuntimeOptions,
-    private readonly resourceSubscriptionsEnabled = true
+    private readonly resourceSubscriptionsEnabled = true,
+    private readonly approvalContinuations = new ApprovalContinuationStore()
   ) {
     if (
       modernProfileContext !== undefined &&
@@ -391,6 +397,7 @@ export class MiftahServer {
             ? { resources: { listChanged: true }, prompts: { listChanged: true } }
             : {})
         },
+        requestState: { verify: (state) => this.approvalContinuations.verify(state) },
         instructions: [
           "Miftah wraps an upstream MCP and routes requests through local credential profiles.",
           ...(this.resourcePromptProxy.available
@@ -499,7 +506,7 @@ export class MiftahServer {
     });
     this.registerHandlers();
     this.server.onclose = () => {
-      void this.close().catch(() => undefined);
+      void this.close().catch((error: unknown) => this.reportShutdownFailure(error));
     };
   }
 
@@ -1091,7 +1098,7 @@ export class MiftahServer {
                     args,
                     audit,
                     source,
-                    { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal },
+                    this.approvalRequestContext(ctx),
                     upstreamRequest,
                     prepared.modern
                   )
@@ -1101,7 +1108,7 @@ export class MiftahServer {
                 args,
                 audit,
                 source,
-                { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal },
+                this.approvalRequestContext(ctx),
                 upstreamRequest
               );
         },
@@ -1151,7 +1158,7 @@ export class MiftahServer {
 
       this.server.setRequestHandler('resources/subscribe', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const approvalContext = this.approvalRequestContext(ctx);
         const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
@@ -1179,7 +1186,7 @@ export class MiftahServer {
 
       this.server.setRequestHandler('resources/unsubscribe', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const approvalContext = this.approvalRequestContext(ctx);
         const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
@@ -1241,7 +1248,7 @@ export class MiftahServer {
 
       this.server.setRequestHandler('resources/read', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const approvalContext = this.approvalRequestContext(ctx);
         const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
@@ -1303,7 +1310,7 @@ export class MiftahServer {
 
       this.server.setRequestHandler('prompts/get', async (request, ctx) => {
         const auditSource = await this.requestAuditFallbackProfileState();
-        const approvalContext: ApprovalRequestContext = { requestId: ctx.mcpReq.id, signal: ctx.mcpReq.signal };
+        const approvalContext = this.approvalRequestContext(ctx);
         const upstreamRequest = this.upstreamRequestContext(ctx);
         return this.runAudited(
           {
@@ -1363,6 +1370,14 @@ export class MiftahServer {
         await pending;
         if (forwardingFailure !== undefined) throw forwardingFailure;
       }
+    };
+  }
+
+  private approvalRequestContext(extra: ProxiedRequestExtra): ApprovalRequestContext {
+    return {
+      signal: extra.mcpReq.signal,
+      ...(extra.mcpReq.inputResponses === undefined ? {} : { inputResponses: extra.mcpReq.inputResponses }),
+      requestState: extra.mcpReq.requestState
     };
   }
 
@@ -2049,6 +2064,11 @@ export class MiftahServer {
   ): Promise<void> {
     const supportsFormElicitation =
       context !== undefined && this.server.getClientCapabilities()?.elicitation?.form !== undefined;
+    const continuation = context?.requestState<ApprovalContinuation>();
+    if (continuation !== undefined) {
+      if (!supportsFormElicitation || context === undefined) throw errors.unavailable(binding);
+      return this.finishFormApproval(binding, context, continuation, errors);
+    }
     const approvalMechanism: ApprovalMechanism = supportsFormElicitation ? "form" : "delegated-agent";
     if (!supportsFormElicitation && !this.delegatedAgentApprovalEnabled()) {
       await this.enqueueApprovalTransition(async () => {
@@ -2084,82 +2104,97 @@ export class MiftahServer {
               ),
         (value) => this.approvals.revoke(value.approval.id)
       );
-      if (requested.created) {
+      let state: string | undefined;
+      if (supportsFormElicitation) {
         try {
-          await this.writeApproval("requested", requested.approval);
+          state = this.approvalContinuations.mint(binding, requested.approval);
         } catch (error) {
           this.approvals.revoke(requested.approval.id);
           throw error;
         }
       }
-      return supportsFormElicitation
-        ? { kind: "form", token: requested.token }
+      if (requested.created) {
+        try {
+          await this.writeApproval("requested", requested.approval);
+        } catch (error) {
+          this.approvals.revoke(requested.approval.id);
+          if (state !== undefined) {
+            this.approvalContinuations.complete({ approvalId: requested.approval.id });
+          }
+          throw error;
+        }
+      }
+      return supportsFormElicitation && state !== undefined
+        ? { kind: "form", state }
         : { kind: "delegated-agent", token: requested.token };
     });
     if (resolution.kind === "consumed") return;
     if (resolution.kind === "delegated-agent") {
       throw errors.required(binding, resolution.token);
     }
-    if (context === undefined) throw new Error("Form approval requires an MCP request context.");
-    let result;
-    try {
-      result = await this.server.elicitInput(
-        {
-          mode: "form",
-          message: "Approve this exact operation?",
-          requestedSchema: {
-            type: "object",
-            properties: { approved: { type: "boolean" } },
-            required: ["approved"]
-          }
-        },
-        { relatedRequestId: context.requestId, signal: context.signal, timeout: 60_000 }
-      );
-    } catch {
-      await this.finalizeNativeApproval(resolution.token, binding, false);
-      throw errors.notAccepted(binding);
-    }
-    if (result.action === "accept" && result.content?.approved === true) {
-      await this.finalizeNativeApproval(resolution.token, binding, true);
-      return;
-    }
-    await this.finalizeNativeApproval(resolution.token, binding, false);
-    throw errors.notAccepted(binding);
+    throw this.formApprovalRequired(resolution.state, errors.notAccepted(binding).code);
   }
 
-  private async finalizeNativeApproval(token: string, binding: ApprovalBinding, accepted: boolean): Promise<void> {
+  private async finishFormApproval(
+    binding: ApprovalBinding,
+    context: ApprovalRequestContext,
+    continuation: ApprovalContinuation,
+    errors: ApprovalErrorFactory
+  ): Promise<void> {
+    const approval = this.approvalContinuations.pending(continuation, binding);
+    const response = inputResponse(context.inputResponses, "approval");
+    if (response.kind !== "elicit") {
+      throw this.formApprovalRequired(
+        this.approvalContinuations.state(continuation),
+        errors.notAccepted(binding).code
+      );
+    }
+    const expired = Date.parse(approval.expiresAt) <= Date.now();
+    const accepted = !expired && response.action === "accept" && response.content?.approved === true;
     await this.enqueueApprovalTransition(async () => {
-      await this.expireApprovals();
-      if (accepted) {
-        const approval = await this.withApprovalExpiryAudit(
-          () => this.approvals.approveAndConsume(token, binding),
-          (value) => this.approvals.revoke(value.id)
-        );
-        try {
-          await this.writeApproval("approved", approval);
-          await this.writeApproval("consumed", approval);
-        } catch (error) {
-          this.approvals.revoke(approval.id);
-          throw error;
+      const expiredApprovals = await this.expireApprovals();
+      this.approvalContinuations.complete(continuation);
+      this.approvals.revoke(approval.id);
+      if (expired) {
+        if (!expiredApprovals.some((candidate) => candidate.id === approval.id)) {
+          await this.writeApproval("expired", approval);
         }
+        throw new MiftahError("APPROVAL_EXPIRED", "APPROVAL_EXPIRED: approval token has expired");
+      }
+      if (accepted) {
+        await this.writeApproval("approved", approval);
+        await this.writeApproval("consumed", approval);
         return;
       }
-      const approval = await this.withApprovalExpiryAudit(
-        () => this.approvals.deny(token),
-        (value) => this.approvals.revoke(value.id)
-      );
-      try {
-        await this.writeApproval("denied", approval);
-      } catch (error) {
-        this.approvals.revoke(approval.id);
-        throw error;
-      }
+      await this.writeApproval("denied", approval);
     });
+    if (!accepted) throw errors.notAccepted(binding);
   }
 
-  private async expireApprovals(): Promise<void> {
-    this.approvals.expire();
+  private formApprovalRequired(state: string, errorCode: MiftahError["code"]): ApprovalInputRequiredSignal {
+    return new ApprovalInputRequiredSignal(
+      inputRequired({
+        inputRequests: {
+          approval: inputRequired.elicit({
+            mode: "form",
+            message: "Approve this exact operation?",
+            requestedSchema: {
+              type: "object",
+              properties: { approved: { type: "boolean" } },
+              required: ["approved"]
+            }
+          })
+        },
+        requestState: state
+      }),
+      errorCode
+    );
+  }
+
+  private async expireApprovals(): Promise<readonly ApprovalSummary[]> {
+    const expired = this.approvals.expire();
     await this.writeExpiredApprovalTransitions();
+    return expired;
   }
 
   private async withApprovalExpiryAudit<Result>(
@@ -3013,6 +3048,16 @@ export class MiftahServer {
       await audit.finish(resultAudit?.(result) ?? { status: "success" });
       return this.redactor.redact(result);
     } catch (error) {
+      if (error instanceof ApprovalInputRequiredSignal) {
+        if (!audit.isFinalized) {
+          try {
+            await audit.finish({ status: "confirmation-required", errorCode: error.errorCode });
+          } catch (auditError) {
+            throw this.toSafeError(auditError);
+          }
+        }
+        return error.result as Result;
+      }
       let safeError = this.toSafeError(error);
       if (!audit.isFinalized) {
         try {
@@ -3348,6 +3393,11 @@ export class MiftahServer {
   private reportResourceSubscriptionCleanupFailure(error: unknown): void {
     const safeError = this.toSafeError(error);
     process.emitWarning(safeError.message, { code: "MIFTAH_RESOURCE_SUBSCRIPTION_CLEANUP_FAILED" });
+  }
+
+  private reportShutdownFailure(error: unknown): void {
+    const safeError = this.toSafeError(error);
+    process.emitWarning(safeError.message, { code: "MIFTAH_SHUTDOWN_FAILED" });
   }
 }
 

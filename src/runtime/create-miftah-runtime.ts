@@ -1,4 +1,5 @@
 import type { McpServerFactory, Transport } from "@modelcontextprotocol/server";
+import { ApprovalContinuationStore } from "../approvals/approval-continuation-store.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig } from "../config/types.js";
 import { MiftahServer } from "../mcp/server/miftah-server.js";
@@ -24,6 +25,7 @@ export interface MiftahRuntimeOptions {
 interface MiftahRuntimeFactoryOptions extends MiftahRuntimeOptions {
   readonly profileState?: { readonly persistActiveProfile?: false; readonly scope?: "process" | "session" };
   readonly resourceSubscriptionsEnabled?: boolean;
+  readonly approvalContinuations?: ApprovalContinuationStore;
 }
 
 async function createConfiguredMiftahServer(
@@ -50,7 +52,8 @@ async function createConfiguredMiftahServer(
     runtime.identities,
     runtimeConfigPath,
     options.modernProfileContext,
-    options.resourceSubscriptionsEnabled
+    options.resourceSubscriptionsEnabled,
+    options.approvalContinuations
   );
 
   return { config: runtime.config, server };
@@ -72,8 +75,16 @@ function configuredMiftahServerFactory(
   configPath: string,
   options: MiftahRuntimeFactoryOptions
 ): McpServerFactory {
-  return async () => {
-    const configured = await createConfiguredMiftahServer(configPath, options);
+  const approvalContinuations = new ApprovalContinuationStore();
+  return async (context) => {
+    const eraOptions: MiftahRuntimeFactoryOptions = context.era === "modern"
+      ? { ...options, resourceSubscriptionsEnabled: false, approvalContinuations }
+      : {
+          ...(options.profileState === undefined ? {} : { profileState: options.profileState }),
+          resourceSubscriptionsEnabled: true,
+          approvalContinuations
+        };
+    const configured = await createConfiguredMiftahServer(configPath, eraOptions);
     try {
       return await configured.server.prepareForServing();
     } catch (error) {

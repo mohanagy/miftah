@@ -3400,6 +3400,32 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("reports a sanitized shutdown failure triggered by transport close", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: { work: {} }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const close = vi.spyOn(wrapper, "close").mockRejectedValueOnce(new Error("private shutdown detail"));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    try {
+      wrapper.server.onclose?.();
+      await expect.poll(() => emitWarning.mock.calls.length).toBe(1);
+      expect(emitWarning).toHaveBeenCalledWith("UPSTREAM_CALL_FAILED: private shutdown detail", {
+        code: "MIFTAH_SHUTDOWN_FAILED"
+      });
+    } finally {
+      close.mockRestore();
+      emitWarning.mockRestore();
+      await wrapper.close();
+    }
+  });
+
   it("bounds resource subscription cleanup while switching profiles", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-resource-subscription-cleanup-"));
     const unsubscribeCountPath = join(directory, "unsubscribe-count");
