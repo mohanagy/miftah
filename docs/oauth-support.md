@@ -2,7 +2,7 @@
 
 Miftah is an MCP wrapper and credential-profile boundary. Version 3 enables a deliberately narrow standards-compatible remote OAuth flow while keeping every credential bound to one exact configuration, profile, upstream, resource, and issuer.
 
-Miftah performs protected-resource and authorization-server discovery, browser authorization, a literal-loopback callback, authorization-code exchange, refresh, and bearer injection only for an exact configured HTTPS Streamable HTTP connection. It requires PKCE `S256`, the OAuth `resource` parameter, and authorization-server support for the RFC 9207 `iss` response parameter. Discovery or callback data that does not match the configured resource and issuer fails closed.
+Miftah performs protected-resource and authorization-server discovery, browser authorization, a literal-loopback callback, authorization-code exchange, refresh, and bearer injection only for an exact configured HTTPS Streamable HTTP connection. It requires PKCE `S256`, the OAuth `resource` parameter, and authorization-server support for the RFC 9207 `iss` response parameter. A callback must contain exactly one `iss` equal to the discovered and configured issuer; a missing or mismatched value is rejected before the authorization code can reach the token endpoint. Discovery or callback data that does not match the configured resource and issuer fails closed.
 
 Miftah does not support OAuth for every MCP server or provider. It does not guess private endpoints, scrape provider caches, automate local STDIO providers' custom login flows, accept passwords or browser cookies as OAuth state, or treat a valid token as proof that the correct account was selected. Operator lifecycle commands manage only Miftah's exact local binding and vault credential; `auth disconnect` does not claim provider-side token revocation.
 
@@ -53,8 +53,10 @@ An OAuth connection is version-3 non-secret configuration. Its key is an opaque 
 `clientRegistration` must use exactly one reviewed mode:
 
 - `pre-registered:<client-id>` uses an operator-created public client identifier.
-- `client-id-metadata:<https-url>` uses that complete HTTPS metadata-document URL as the client identifier, and requires advertised Client ID Metadata Document support.
-- `dynamic` uses Dynamic Client Registration only when discovery advertises a secure registration endpoint.
+- `client-id-metadata:<https-url>` uses that complete HTTPS metadata-document URL as the client identifier, and requires advertised Client ID Metadata Document support. The URL must be public HTTPS with a non-root path and no query or fragment. The published document must identify that same URL as its `client_id`, include `client_name` and `redirect_uris`, use `token_endpoint_auth_method` `none`, and contain no client secret. Its redirect metadata must authorize Miftah's literal `127.0.0.1` loopback callback with the exact `/oauth/callback` path while the authorization server applies RFC 8252 native-loopback port matching.
+- `dynamic` uses Dynamic Client Registration only when discovery advertises a secure registration endpoint. Miftah registers `application_type: native` and sends no client secret.
+
+Registration preference follows the MCP 2026-07-28 model: use a provider-issued pre-registration when one exists; otherwise supply a reviewed CIMD URL and use it when the authorization server advertises support; otherwise use DCR only as a bounded compatibility fallback at the advertised registration endpoint. DCR is deprecated for new Miftah connections. It remains available throughout Miftah 1.x for compatible servers and will be considered for removal no earlier than Miftah 2.0.0, after compatibility evidence and a documented migration path.
 
 Configuration cannot contain an access token, refresh token, client secret, callback setting, or `Authorization` header for the same profile/upstream. Static `Authorization` headers on that exact profile/upstream are rejected rather than being merged with native OAuth.
 
@@ -85,11 +87,13 @@ miftah auth disconnect --config remote.json --connection oauthconn:<uuid>
 
 `connection list` and `connection status` expose only non-secret binding, credential-state, expiry, and coarse identity-state fields. `connection list --client <claude-desktop|claude-code|cursor|vscode|all>` additionally prints copyable client snippets and never edits a client configuration. `connection test` uses an existing credential and returns `OAUTH_INTERACTIVE_REQUIRED` instead of opening a browser. `auth connect` opens the system browser only if authorization is required. `auth reauth` deliberately ignores the old token for the new flow but retains it in the vault until replacement succeeds. Add `--non-interactive` to connect or reauth in headless automation; a required browser flow then fails with the same typed diagnostic.
 
+For endpoint-first setup, pass `--oauth-client-metadata-url <https-url>` with `miftah setup --native-oauth`. The CLI and Console persist that URL only when discovery advertises CIMD; when CIMD is unavailable, they use the deprecated DCR fallback only if discovery exposes a registration endpoint. Setup performs discovery and writes non-secret configuration only—it does not register, open a browser, exchange a code, or store a credential.
+
 `auth disconnect` deletes only the exact local vault credential and marks its local state disconnected. It does not call an undocumented provider revocation endpoint. Revoke provider access separately when the provider offers that control. An unavailable native vault returns `OAUTH_SECURE_STORE_UNAVAILABLE`; expired state is reported as `expired`; unsupported discovery/registration and identity mismatch retain their stable typed diagnostics. No command prints tokens, callback values, raw provider responses, or secret-bearing errors.
 
 ## Authorization and credential lifecycle
 
-On the first protected request, Miftah starts a single-use callback listener on literal `127.0.0.1` with a dynamic port and exact `/oauth/callback` path, then opens the system browser without a command shell. The callback accepts one exact state and issuer, returns fixed non-reflective pages, and closes after success, failure, cancellation, or its bounded timeout. Authorization URLs, callback parameters, codes, tokens, client secrets, and raw provider errors do not enter configuration, audit records, or diagnostics.
+On the first protected request, Miftah starts a single-use callback listener on literal `127.0.0.1` with a dynamic port and exact `/oauth/callback` path, then opens the system browser without a command shell. This is an OAuth native application loopback redirect: authorization servers must accept the runtime-selected port while matching the registered loopback host and path. The callback accepts one exact state and issuer, returns fixed non-reflective pages, and closes after success, failure, cancellation, or its bounded timeout. Authorization URLs, callback parameters, codes, tokens, client secrets, and raw provider errors do not enter configuration, audit records, or diagnostics.
 
 Credentials are stored only through the platform OS vault adapter. The local metadata file contains non-secret connection state and is written under the platform user-state directory:
 
@@ -98,6 +102,8 @@ Credentials are stored only through the platform OS vault adapter. The local met
 - Linux: `$XDG_STATE_HOME/miftah/oauth-connections.json`, or `~/.local/state/miftah/oauth-connections.json`
 
 Before reuse, Miftah refreshes an expiring credential against freshly validated discovery metadata. Refresh-token rotation and dynamic client registration remain in the same exact vault binding. A failed refresh or authorization does not fall through to another profile, reuse another connection's token, or expose provider output; it returns a stable OAuth error and requires a new authorization attempt.
+
+The configured issuer is part of the connection identity and OS-vault key. If an endpoint moves to another issuer, do not edit the issuer in place or reuse the old connection reference or credential. Run discovery again, review a new connection binding with a fresh `oauthconn:<uuid>`, authorize it separately, and retain or disconnect the old binding according to the provider's migration guidance. A CIMD URL may be portable across authorization servers, but Miftah's token and dynamic-registration state never is.
 
 The exact OAuth-bound Streamable HTTP transport receives the profile-bound OAuth client provider. Other remote transports continue to use only explicitly configured static headers. Existing environment, dotenv, keychain, 1Password, and explicit local secret-provider plugins do not become generic OAuth caches.
 

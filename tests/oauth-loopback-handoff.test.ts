@@ -58,7 +58,7 @@ describe("OAuth loopback authorization handoff", () => {
     }
   });
 
-  it("rejects duplicate issuer parameters without consuming the pending authorization", async () => {
+  it("rejects missing, mismatched, and duplicate issuer parameters without consuming the pending authorization", async () => {
     const handoff = await createLoopbackOAuthAuthorizationHandoff({ openExternal: async () => undefined });
     const state = "fixture-state-value-that-is-long-enough";
     const issuer = "https://issuer.example.test";
@@ -68,6 +68,16 @@ describe("OAuth loopback authorization handoff", () => {
 
     try {
       const code = handoff.authorize(authorizationUrl, { state, issuer });
+      for (const callbackIssuer of [undefined, "https://other-issuer.example.test"]) {
+        const rejected = new URL(handoff.redirectUrl);
+        rejected.searchParams.set("code", "must-not-be-redeemed");
+        rejected.searchParams.set("state", state);
+        if (callbackIssuer !== undefined) rejected.searchParams.set("iss", callbackIssuer);
+
+        const rejectedResponse = await fetch(rejected);
+        expect(rejectedResponse.status).toBe(400);
+        expect(await rejectedResponse.text()).not.toContain("must-not-be-redeemed");
+      }
       const duplicateIssuer = new URL(handoff.redirectUrl);
       duplicateIssuer.searchParams.set("code", "must-not-be-accepted");
       duplicateIssuer.searchParams.set("state", state);

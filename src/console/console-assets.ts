@@ -226,14 +226,15 @@ const page = `<!doctype html>
           <div>
             <h2 id="onboarding-title">Set up remote MCP with browser sign-in</h2>
           </div>
-          <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It uses standards-based OAuth with dynamic registration only when the server advertises it. No token, client secret, or browser authorization starts at this step.</p>
+          <p>Miftah checks this exact HTTPS endpoint for supported browser sign-in before it creates the configuration. It prefers a reviewed Client ID Metadata Document when supplied and advertised, with dynamic registration retained only as a compatibility fallback. No token, client secret, or browser authorization starts at this step.</p>
         </div>
         <form id="onboarding-form" class="form-grid">
           <label>Configuration name<input name="name" required maxlength="64" pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="posthog-work"></label>
           <label>Profile name<input name="profile" required maxlength="256" placeholder="production"></label>
           <label class="wide">Profile description<input name="description" maxlength="1024" placeholder="Production analytics account"></label>
           <label class="wide">Remote MCP resource URL<input name="resource" type="url" required maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
-          <p class="field-note wide">Miftah will stop without writing anything if this endpoint does not publish one supported OAuth authorization server with dynamic client registration. Advanced manual OAuth remains available for provider-specific registrations.</p>
+          <label class="wide">Client ID Metadata Document URL (optional)<input name="clientMetadataUrl" type="url" maxlength="2048" placeholder="https://client.example.com/oauth/miftah.json"></label>
+          <p class="field-note wide">When supplied, the URL must be a reviewed public HTTPS document with a non-root path. Miftah uses it only when the server advertises it; otherwise an explicitly advertised DCR endpoint is the deprecated compatibility fallback.</p>
           <div class="wide form-action"><button type="submit">Check sign-in and create profile</button></div>
         </form>
       </section>
@@ -407,6 +408,7 @@ const page = `<!doctype html>
               <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
               <label>Configured upstream<select name="upstream" id="native-oauth-account-upstream" required></select></label>
               <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal analytics account"></label>
+              <label class="wide">Client ID Metadata Document URL (optional)<input name="clientMetadataUrl" type="url" maxlength="2048" placeholder="https://client.example.com/oauth/miftah.json"></label>
               <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
               <p class="field-note wide">Miftah uses the exact HTTPS endpoint already configured for this upstream. It creates a separate profile and OAuth binding, while preserving your existing accounts. No browser authorization starts yet.</p>
               <div class="wide form-action"><button type="submit">Discover OAuth and add account</button></div>
@@ -417,6 +419,7 @@ const page = `<!doctype html>
             <form id="connection-form" class="form-grid compact">
               <label>Profile<select name="profile" id="connection-profile" required></select></label>
               <label>Upstream<select name="upstream" id="connection-upstream" required></select></label>
+              <label class="wide">Client ID Metadata Document URL (optional)<input name="clientMetadataUrl" type="url" maxlength="2048" placeholder="https://client.example.com/oauth/miftah.json"></label>
               <p class="field-note wide">Miftah uses the exact HTTPS endpoint already configured for this upstream. It discovers supported OAuth before it changes the configuration; no browser authorization starts yet.</p>
               <div class="wide form-action"><button type="submit">Discover OAuth from configured upstream</button></div>
             </form>
@@ -2319,7 +2322,8 @@ const script = `(() => {
             name: String(data.get("name") || "").trim(),
             profile: String(data.get("profile") || "").trim(),
             description: String(data.get("description") || "").trim() || undefined,
-            resource: String(data.get("resource") || "").trim()
+            resource: String(data.get("resource") || "").trim(),
+            clientMetadataUrl: String(data.get("clientMetadataUrl") || "").trim() || undefined
           }
         }));
         const completion = completionFromSetupResult(result, {
@@ -2538,7 +2542,8 @@ const script = `(() => {
           method: "POST",
           body: {
             profile: String(data.get("profile") || ""),
-            upstream: String(data.get("upstream") || "")
+            upstream: String(data.get("upstream") || ""),
+            clientMetadataUrl: String(data.get("clientMetadataUrl") || "").trim() || undefined
           }
         });
         connectionForm.reset();
@@ -2560,6 +2565,7 @@ const script = `(() => {
             profile: String(data.get("profile") || "").trim(),
             description: String(data.get("description") || "").trim() || undefined,
             upstream: String(data.get("upstream") || ""),
+            clientMetadataUrl: String(data.get("clientMetadataUrl") || "").trim() || undefined,
             ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
           }
         });

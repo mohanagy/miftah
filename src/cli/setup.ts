@@ -51,6 +51,7 @@ export type SetupCommandOptions = InitCommandOptions & Pick<
   | "profile"
   | "resume"
   | "discardDraft"
+  | "oauthClientMetadataUrl"
 >;
 
 export interface SetupCommandResult {
@@ -132,6 +133,7 @@ function hasExplicitNewConfigurationInput(options: SetupCommandOptions): boolean
     options.headerName,
     options.headerPrefix,
     options.oauthClientSecretsFile,
+    options.oauthClientMetadataUrl,
     options.localCommand,
     options.args,
     options.cwd,
@@ -482,6 +484,7 @@ function setupDraftIncompatibleOption(options: SetupCommandOptions): string | un
     "headerName",
     "headerPrefix",
     "oauthClientSecretsFile",
+    "oauthClientMetadataUrl",
     "localCommand",
     "args",
     "cwd",
@@ -566,7 +569,8 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "importEntry",
       "nativeOAuth",
       "addProfile",
-      "profile"
+      "profile",
+      "oauthClientMetadataUrl"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
     if (incompatible !== undefined) {
       throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when printing a setup plan.`);
@@ -702,9 +706,10 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
     options.description !== undefined ||
     options.makeDefault === true ||
     options.profile !== undefined ||
-    options.upstream !== undefined
+    options.upstream !== undefined ||
+    options.oauthClientMetadataUrl !== undefined
   ) {
-    throw new CliUsageError("Options '--config', '--profile', '--upstream', '--description', and '--make-default' require '--native-oauth' with guided setup.");
+    throw new CliUsageError("Options '--config', '--profile', '--upstream', '--description', '--make-default', and '--oauth-client-metadata-url' require '--native-oauth' with guided setup.");
   }
   if (options.importFile !== undefined || options.importEntry !== undefined) {
     if (options.verify === true) {

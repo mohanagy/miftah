@@ -209,6 +209,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      application_type: "native",
       scope: this.options.binding.scopes.join(" ")
     };
   }

@@ -236,6 +236,7 @@ describe("CLI parser", () => {
       "--name", "posthog-work",
       "--profile", "production",
       "--url", "https://mcp.example.test/mcp",
+      "--oauth-client-metadata-url", "https://client.example.test/oauth/miftah.json",
       "--output", "posthog-work.json"
     ])).toEqual({
       kind: "run",
@@ -245,6 +246,7 @@ describe("CLI parser", () => {
         name: "posthog-work",
         profile: "production",
         url: "https://mcp.example.test/mcp",
+        oauthClientMetadataUrl: "https://client.example.test/oauth/miftah.json",
         output: "posthog-work.json"
       }
     });
@@ -269,8 +271,10 @@ describe("CLI parser", () => {
       }
     });
     expect(renderCommandHelp("setup")).toContain("--native-oauth");
+    expect(renderCommandHelp("setup")).toContain("--oauth-client-metadata-url");
     expect(renderCommandHelp("setup")).toContain("--make-default");
     expectUsageError(["init", "--native-oauth"]);
+    expectUsageError(["init", "--oauth-client-metadata-url", "https://client.example.test/oauth/miftah.json"]);
   });
 
   it("offers safe provider-owned and environment-backed account addition only from guided setup", () => {
