@@ -104,6 +104,9 @@ describe("Miftah 0.5 owner guide", () => {
     expect(guide).toContain("restart the MCP client");
     expect(guide).toContain("External multi-account and returning-user validation was still open during 0.5");
     expect(guide).toContain("later closed by maintainer attestation");
+    expect(guide).toContain(
+      "underlying participant records are not published in this repository",
+    );
     expect(guide).toContain("[#39]");
     expect(guide).toContain("[#25]");
     expect(guide).toContain("[#88]");

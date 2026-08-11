@@ -4,7 +4,7 @@ This protocol turns external Miftah use into comparable, privacy-safe evidence f
 
 Evaluator baseline: `@lubab/miftah@0.5.8`. Stable release candidate: `@lubab/miftah@1.0.0`. Record the exact package version, upstream MCP version or immutable image reference, client, operating system, provider class, and authentication owner for every attempt. If the target changes, do not combine results until the participant repeats the affected steps or an explicitly documented delta assessment establishes why the result remains applicable.
 
-This document is the evidence protocol, not participant-level completed evidence. On 2026-08-11, the maintainer reported 5 completed workflows, 3 later returns, and 3 unaided evaluators and authorized closure of the related issues. That status is a maintainer attestation; the underlying participant records were not independently inspected during release preparation, and the pending public-rollup rows below must not be presented as completed records.
+This document is the evidence protocol, not participant-level completed evidence. On 2026-08-11, the maintainer reported 5 completed workflows, 3 later returns, and 3 unaided evaluators and authorized closure of the related issues. That status is a maintainer attestation; the underlying participant records were not independently inspected during release preparation. The attested counters apply to the 0.5.8 baseline only. Applying them to the 1.0.0 candidate requires complete linked records plus repeated affected steps or an accepted, documented delta assessment.
 
 ## Closure gates
 
@@ -135,4 +135,4 @@ Map the final evidence explicitly:
 - issue #290: three unaided participants achieve the README's safe first-use contract;
 - issue #39: at least three real providers are represented, the independent security review is closed, and the final v1 target is reconciled under the [independent review brief](independent-security-review.md); provider evidence alone cannot close this release gate.
 
-Failed attempts are learning, not completion. Future evidence updates should replace pending rows only with consented deidentified records and should not infer participant details from the maintainer-level counters.
+Failed attempts are learning, not completion. Complete linked records and accepted closure gates are required before replacing pending rows with completion evidence. Future evidence updates should not infer participant details from the maintainer-level counters.

@@ -10,7 +10,7 @@ The reviewer supplies an independence declaration covering employment, contribut
 
 ## Recorded review status
 
-On 2026-08-11, the maintainer reported that the security report was completed and explicitly authorized closure of #37. That statement is recorded as maintainer attestation. The completed report, reviewer attribution and independence declaration, target commit, severity counts, remediation or retest record, public completion summary, and v1 candidate delta acceptance were not supplied for this release-preparation session and therefore were not independently inspected. This status does not create or infer those missing facts; #39 must retain the exact protected-release evidence and any reviewer-approved final-candidate reconciliation used for publication.
+On 2026-08-11, the maintainer reported that the security report was completed and explicitly authorized closure of #37. That statement is recorded as maintainer attestation. The completed report, reviewer attribution and independence declaration, target commit, severity counts, remediation or retest record, public completion summary, and v1 candidate delta acceptance were not supplied for this release-preparation session and therefore were not independently inspected. Maintainer attestation or deidentified records alone do not close the independent-review criterion in #39. This status does not create or infer the missing facts; #39 must retain the exact protected-release evidence and any reviewer-approved final-candidate reconciliation used for publication.
 
 ## Review scope
 

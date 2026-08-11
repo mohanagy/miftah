@@ -63,6 +63,9 @@ describe("product README", () => {
     expect(firstScreen).toContain("Keep your direct MCP entry when you use one account");
     expect(firstScreen).toContain("stable v1 release line");
     expect(firstScreen).toContain("closed by maintainer attestation");
+    expect(firstScreen).toContain(
+      "source participant records and completed security report are not published",
+    );
     expect(firstScreen).toContain("[#39]");
     expect(firstScreen).not.toContain("experimental and pre-1.0");
   });

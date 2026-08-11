@@ -1,6 +1,6 @@
 # OAuth and Console validation
 
-This page records what Miftah's release gate proves for native remote OAuth and the optional local Console, what it deliberately does not prove, and how the external-evidence status was accepted. It is an evidence record, not a claim that every OAuth provider is supported.
+This page records what Miftah's release gate proves for native remote OAuth and the optional local Console, what it deliberately does not prove, and how maintainer-attested external evidence is recorded. It is an evidence record, not a claim that every OAuth provider is supported.
 
 ## Automated compatibility gate
 
@@ -37,7 +37,7 @@ For provider-adapter-backed or upstream-owned OAuth, follow the provider's own r
 
 ## Release status and limitations
 
-OAuth and Console are included in the stable v1 release. The automated gate remains required evidence, but it does not prove live-provider behavior, external adoption, or account intent by itself. The current support classes and manual fallbacks remain defined in the [OAuth support matrix](oauth-support.md#support-matrix).
+OAuth and Console are included in the `@lubab/miftah@1.0.0` release candidate. They become part of the stable v1 release only after exact-main protected publication and registry verification. The automated gate remains required evidence, but it does not prove live-provider behavior, external adoption, or account intent by itself. The current support classes and manual fallbacks remain defined in the [OAuth support matrix](oauth-support.md#support-matrix).
 
 ## External design-partner evidence
 

@@ -23,6 +23,15 @@ describe("v1 readiness documentation contract", () => {
 
     expect(guide).toContain(`@lubab/miftah@${packageVersion}`);
     expect(guide).toContain("Evaluator baseline: `@lubab/miftah@0.5.8`");
+    expect(guide).toContain(
+      `Stable release candidate: \`@lubab/miftah@${packageVersion}\``,
+    );
+    expect(guide).toContain(
+      "The attested counters apply to the 0.5.8 baseline only",
+    );
+    expect(guide).toContain(
+      "Complete linked records and accepted closure gates are required before replacing pending rows",
+    );
     expect(guide).toContain("maintainer attestation");
     expect(guide).toContain("not independently inspected");
     expect(guide).toMatch(/issues? #25, #88, #202, and #290/i);
@@ -62,6 +71,9 @@ describe("v1 readiness documentation contract", () => {
     expect(brief).toMatch(/no unresolved critical or high-severity finding/i);
     expect(brief).toContain("maintainer attestation");
     expect(brief).toContain("not independently inspected");
+    expect(brief).toContain(
+      "Maintainer attestation or deidentified records alone do not close the independent-review criterion in #39",
+    );
   });
 
   it("keeps status pages explicit about attested but uninspected external evidence", () => {
@@ -74,6 +86,15 @@ describe("v1 readiness documentation contract", () => {
     expect(validation).toContain("Recorded returning external users: 3");
     expect(validation).toContain("Recorded unaided README evaluators: 3");
     expect(validation).toContain("not independently inspected");
+    expect(validation).toContain(
+      "OAuth and Console are included in the `@lubab/miftah@1.0.0` release candidate",
+    );
+    expect(validation).toContain(
+      "how maintainer-attested external evidence is recorded",
+    );
+    expect(validation).not.toContain(
+      "OAuth and Console are included in the stable v1 release",
+    );
     expect(threatModel).toContain(
       "[independent security review brief](independent-security-review.md)",
     );
