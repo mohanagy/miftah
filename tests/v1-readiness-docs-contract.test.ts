@@ -6,6 +6,7 @@ function read(path: string): string {
 }
 
 const packageVersion = JSON.parse(read("package.json")).version as string;
+const stableV1EvidenceVersion = "1.0.0";
 
 describe("v1 readiness documentation contract", () => {
   it("links the evaluator and independent-review entry points from the README", () => {
@@ -21,10 +22,10 @@ describe("v1 readiness documentation contract", () => {
   it("defines version-pinned, privacy-safe external evaluation evidence", () => {
     const guide = read("docs/v1-evaluation.md");
 
-    expect(guide).toContain(`@lubab/miftah@${packageVersion}`);
+    expect(guide).toContain(`@lubab/miftah@${stableV1EvidenceVersion}`);
     expect(guide).toContain("Evaluator baseline: `@lubab/miftah@0.5.8`");
     expect(guide).toContain(
-      `Stable release candidate: \`@lubab/miftah@${packageVersion}\``,
+      `Stable release candidate: \`@lubab/miftah@${stableV1EvidenceVersion}\``,
     );
     expect(guide).toContain(
       "The attested counters apply to the 0.5.8 baseline only",
@@ -60,7 +61,7 @@ describe("v1 readiness documentation contract", () => {
   it("defines an independent security review with actionable closure gates", () => {
     const brief = read("docs/independent-security-review.md");
 
-    expect(brief).toContain(`@lubab/miftah@${packageVersion}`);
+    expect(brief).toContain(`@lubab/miftah@${stableV1EvidenceVersion}`);
     expect(brief).toMatch(/issues? #37 and #39/i);
     expect(brief).toContain("SECURITY.md");
     expect(brief).toContain("threat-model.md");
@@ -81,7 +82,7 @@ describe("v1 readiness documentation contract", () => {
     const threatModel = read("docs/threat-model.md");
 
     expect(validation).toContain("[v1 external evaluation](v1-evaluation.md)");
-    expect(validation).toContain(`@lubab/miftah@${packageVersion}`);
+    expect(validation).toContain(`@lubab/miftah@${stableV1EvidenceVersion}`);
     expect(validation).toContain("Recorded completed external workflows: 5");
     expect(validation).toContain("Recorded returning external users: 3");
     expect(validation).toContain("Recorded unaided README evaluators: 3");
