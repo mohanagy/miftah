@@ -19,6 +19,7 @@ export default defineConfig({
       provider: "v8",
       include: [
         "src/config/**/*.ts",
+        "src/http/authenticated-request-context.ts",
         "src/secrets/**/*.ts",
         "src/mcp/server/operation-pipeline.ts",
         "src/mcp/server/tool-registry.ts",
@@ -31,6 +32,7 @@ export default defineConfig({
       exclude: process.platform === "win32" ? [] : ["src/secrets/windows-secret-command.ts"],
       thresholds: {
         "src/config/**/*.ts": { lines: 95, functions: 95, branches: 85 },
+        "src/http/authenticated-request-context.ts": { lines: 95, functions: 100, branches: 90 },
         "src/secrets/**/*.ts": { lines: 93, functions: 95, branches: 90 },
         "src/mcp/server/operation-pipeline.ts": { lines: 85, functions: 95, branches: 75 },
         "src/mcp/server/tool-registry.ts": { lines: 93, functions: 95, branches: 90 },

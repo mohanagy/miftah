@@ -9,6 +9,10 @@ import { readFileSync } from "node:fs";
 import * as api from "../src/index.js";
 import type {
   ActiveProfileStateScope,
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary,
+  AuthenticatedRequestContextBoundaryOptions,
+  AuthenticatedRequestContextErrorCode,
   AuditConfig,
   AuditIntegrityConfig,
   AuditRotationConfig,
@@ -51,19 +55,24 @@ import type {
   TransportType,
   UnknownToolRisk,
   UpstreamConfig,
-  ValidatedRoutingConfig
+  ValidatedRoutingConfig,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider
 } from "../src/index.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-upstream.mjs");
 
 const supportedRuntimeExports = [
+  "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
   "MIFTAH_VERSION",
   "MiftahError",
+  "createAuthenticatedRequestContextBoundary",
   "createMiftahRuntime",
   "generateConfigSchema",
   "loadConfig",
   "presetConfig",
+  "requireAuthenticatedRequestContext",
   "validateConfig"
 ] as const;
 
@@ -82,6 +91,10 @@ const internalRuntimeExports = [
 
 const supportedTypeExports = [
   "ActiveProfileStateScope",
+  "AuthenticatedRequestContext",
+  "AuthenticatedRequestContextBoundary",
+  "AuthenticatedRequestContextBoundaryOptions",
+  "AuthenticatedRequestContextErrorCode",
   "AuditConfig",
   "AuditIntegrityConfig",
   "AuditRotationConfig",
@@ -124,11 +137,17 @@ const supportedTypeExports = [
   "TransportType",
   "UnknownToolRisk",
   "UpstreamConfig",
-  "ValidatedRoutingConfig"
+  "ValidatedRoutingConfig",
+  "VerifiedHttpRequestClaims",
+  "VerifiedHttpRequestClaimsProvider"
 ] as const;
 
 type PublicTypeImportCoverage = [
   ActiveProfileStateScope,
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary<unknown>,
+  AuthenticatedRequestContextBoundaryOptions<unknown>,
+  AuthenticatedRequestContextErrorCode,
   AuditConfig,
   AuditIntegrityConfig,
   AuditRotationConfig,
@@ -168,7 +187,9 @@ type PublicTypeImportCoverage = [
   TransportType,
   UnknownToolRisk,
   UpstreamConfig,
-  ValidatedRoutingConfig
+  ValidatedRoutingConfig,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider<unknown>
 ];
 
 void (undefined as unknown as PublicTypeImportCoverage);

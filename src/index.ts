@@ -5,6 +5,19 @@ export type { MiftahConfigVersion } from "./config/versions.js";
 export { createMiftahRuntime } from "./runtime/create-miftah-runtime.js";
 export type { MiftahRuntime } from "./runtime/create-miftah-runtime.js";
 export type { ConfigDiagnostic } from "./config/diagnostics.js";
+export {
+  AuthenticatedRequestContextError,
+  createAuthenticatedRequestContextBoundary,
+  requireAuthenticatedRequestContext
+} from "./http/authenticated-request-context.js";
+export type {
+  AuthenticatedRequestContext,
+  AuthenticatedRequestContextBoundary,
+  AuthenticatedRequestContextBoundaryOptions,
+  AuthenticatedRequestContextErrorCode,
+  VerifiedHttpRequestClaims,
+  VerifiedHttpRequestClaimsProvider
+} from "./http/authenticated-request-context.js";
 export { loadConfig } from "./config/load-config.js";
 export { validateConfig } from "./config/validate-config.js";
 export { generateConfigSchema } from "./config/generate-json-schema.js";
