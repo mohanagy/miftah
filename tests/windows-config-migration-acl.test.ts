@@ -15,8 +15,10 @@ const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
 // Hosted Windows runners can spend substantial time starting PowerShell before the first script instruction runs.
 const powerShellBootstrapTimeoutMs = 60_000;
-const powerShellProbeExecutionTimeoutMs = 5_000;
+// Functional descriptor work needs the same hosted-runner execution allowance as the private-directory probe.
+const powerShellProbeExecutionTimeoutMs = 15_000;
 const privateDirectoryProbeExecutionTimeoutMs = 15_000;
+// Keep the synthetic hang contract short and independent from functional integration-probe budgets.
 const hangingAclProbeTimeoutMs = 5_000;
 const powerShellProbeCloseFallbackMs = 2_000;
 const powerShellContractSlackMs = 30_000;
