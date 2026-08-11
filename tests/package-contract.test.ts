@@ -1247,6 +1247,45 @@ describe("packed artifact contract", () => {
           }
         });
 
+        const protocolConsumerPath = join(directory, "protocol-consumer.mjs");
+        await writeFile(
+          protocolConsumerPath,
+          [
+            'import * as api from "@lubab/miftah";',
+            'import { Client } from "@modelcontextprotocol/client";',
+            'import { InMemoryTransport } from "@modelcontextprotocol/server";',
+            'import { serveStdio } from "@modelcontextprotocol/server/stdio";',
+            "",
+            "const check = async (label, options) => {",
+            "  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();",
+            "  const eras = [];",
+            "  const factory = api.createMiftahServerFactory(process.argv[2]);",
+            "  const handle = serveStdio((context) => { eras.push(context.era); return factory(context); }, { transport: serverTransport });",
+            "  const client = new Client({ name: `packed-${label}-stdio`, version: \"1.0.0\" }, options);",
+            "  try {",
+            "    await client.connect(clientTransport);",
+            "    const tools = await client.listTools();",
+            "    return { era: [...new Set(eras)], protocol: client.getNegotiatedProtocolVersion(), hasWhoami: tools.tools.some((tool) => tool.name === \"whoami\") };",
+            "  } finally {",
+            "    await Promise.allSettled([client.close(), handle.close()]);",
+            "  }",
+            "};",
+            "const modern = await check(\"modern\", { versionNegotiation: { mode: \"auto\" } });",
+            "const legacy = await check(\"legacy\");",
+            "process.stdout.write(JSON.stringify({ modern, legacy }));"
+          ].join("\n")
+        );
+        const protocolConsumer = spawnSync(process.execPath, [protocolConsumerPath, configPath], {
+          cwd: directory,
+          encoding: "utf8",
+          timeout: npmCommandTimeoutMs
+        });
+        expect(protocolConsumer.status, protocolConsumer.stderr || protocolConsumer.stdout).toBe(0);
+        expect(JSON.parse(protocolConsumer.stdout)).toEqual({
+          modern: { era: ["modern"], protocol: "2026-07-28", hasWhoami: true },
+          legacy: { era: ["legacy"], protocol: "2025-11-25", hasWhoami: true }
+        });
+
         const typeConsumerPath = join(directory, "consumer.ts");
         await writeFile(
           typeConsumerPath,
@@ -1569,6 +1608,16 @@ describe("packed artifact contract", () => {
             })).toMatchObject({ content: [{ type: "text", text: `created:${packedMrtrArgument}` }] });
           } finally {
             await client.close();
+          }
+          const legacyTransport = new StreamableHTTPClientTransport(new URL(endpoint));
+          const legacyClient = new Client({ name: "packed-miftah-legacy-http-client", version: "1.0.0" });
+          try {
+            await legacyClient.connect(legacyTransport);
+            expect(legacyClient.getNegotiatedProtocolVersion()).toBe("2025-11-25");
+            expect(legacyTransport.sessionId).toEqual(expect.any(String));
+            expect((await legacyClient.listTools()).tools.some((tool) => tool.name === "whoami")).toBe(true);
+          } finally {
+            await legacyClient.close();
           }
           expect(elicitationRequests).toHaveLength(1);
           expect(JSON.stringify(elicitationRequests)).not.toContain(packedMrtrArgument);

@@ -130,6 +130,8 @@ Miftah does not yet support schema-aware `Mcp-Param-*` forwarding. Its modern HT
 
 Modern cacheable results use `ttlMs: 0` and `cacheScope: "private"`. This is deliberate: the request-scoped gateway has no positive-TTL cache keyed by authenticated principal, profile, policy, and configuration revision, so it never shares a catalog across principals or serves a stale catalog after those inputs change. Resource, resource-template, and prompt lists are canonically ordered. Proxied resource-template route identifiers are derived deterministically from the upstream name, exposed name, and already-redacted catalog-visible URI template; no sensitive original template is used as identifier input. Legacy responses do not receive the modern cache fields.
 
+The complete downstream era, deprecated-feature, extension, client-evidence, and stateless-application boundary is recorded in [MCP protocol and client compatibility](mcp-compatibility.md). Generated client JSON is configuration-shape evidence only; consult that matrix before claiming runtime compatibility for a named host.
+
 ## Profile credential isolation
 
 `profiles.<profile>.isolation` is an opt-in, POSIX-only filesystem boundary for a local STDIO target. Miftah derives a deterministic runtime tree from the canonical configuration file, profile, and upstream name; it never accepts an operator-selected runtime root. The tree contains `home`, `appdata`, `localappdata`, and `xdg/config`, `xdg/cache`, `xdg/data`, `xdg/state`, and `xdg/runtime`. On macOS and Linux, Miftah verifies owner control, uses restrictive `0700` directories and `0600` copied files where the platform supports those modes, and refuses a reused target without its matching Miftah marker.
