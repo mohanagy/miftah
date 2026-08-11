@@ -192,6 +192,9 @@ export class OperationPipeline {
           profile,
           upstream: target.upstreamName ?? "default",
           operation: operation.operation,
+          ...(operation.source.profileContextCorrelation === undefined
+            ? {}
+            : { requestCorrelation: operation.source.profileContextCorrelation }),
           name: target.name,
           displayName: this.auditName(operation, target.name),
           arguments: operation.args
@@ -214,6 +217,9 @@ export class OperationPipeline {
       return this.options.redactor.redact(target.redact(await target.execute(session, operation.upstreamRequestOptions)));
     } catch (error) {
       if (error instanceof ApprovalInputRequiredSignal) throw error;
+      if (operation.upstreamRequestOptions?.signal?.aborted || operation.approvalContext?.signal.aborted) {
+        throw new MiftahError("REQUEST_CANCELLED", "REQUEST_CANCELLED: request was cancelled");
+      }
       const safeError = this.toSafeError(error);
       const matcherEvidence = matcherEvidenceFromError(safeError);
       if (matcherEvidence !== undefined) {

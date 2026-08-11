@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { startFakeRemoteUpstream } from "./helpers/fake-remote-upstream.js";
 
 interface PackageManifest {
@@ -1520,15 +1521,67 @@ describe("packed artifact contract", () => {
             server: { http: { port: 0 } }
           })
         );
+        const httpServeAuditPath = join(cliContractDirectory, "http serve audit.jsonl");
+        const httpServeCreateCountPath = join(cliContractDirectory, "http serve create count");
+        const httpMrtrConfigPath = await writeCliConfig(
+          "http MRTR config.json",
+          cliConfig("packed-cli-http-serve", {
+            work: {
+              policy: "confirm",
+              env: { TEST_CREATE_ITEM_COUNT_PATH: httpServeCreateCountPath }
+            }
+          }, [fakeStdioUpstreamFixture], {
+            policies: { confirm: { requireConfirmation: ["create_item"] } },
+            audit: { path: httpServeAuditPath },
+            server: { http: { port: 0 } }
+          })
+        );
         const installedCliEntry = join(directory, "node_modules", "@lubab", "miftah", "dist", "cli", "main.js");
         const httpServe = await startInstalledCli(
           installedCliEntry,
-          ["serve", "--transport", "http", "--config", httpServeConfigPath],
+          ["serve", "--transport", "http", "--config", httpMrtrConfigPath],
           cliContractDirectory
         );
         try {
           expect(httpServe.stdout).toMatch(/^Miftah HTTP server listening on http:\/\/127\.0\.0\.1:\d+\/mcp\n$/u);
           expect(httpServe.stderr).toBe("");
+          const endpoint = httpServe.stdout.match(/http:\/\/127\.0\.0\.1:\d+\/mcp/u)?.[0];
+          if (endpoint === undefined) throw new Error("Installed HTTP CLI did not report its MCP endpoint.");
+          const client = new Client(
+            { name: "packed-miftah-mrtr-client", version: "1.0.0" },
+            {
+              versionNegotiation: { mode: "auto" },
+              capabilities: { elicitation: { form: {} } }
+            }
+          );
+          const elicitationRequests: unknown[] = [];
+          client.setRequestHandler("elicitation/create", async (request) => {
+            elicitationRequests.push(request);
+            return { action: "accept", content: { approved: true } };
+          });
+          const packedMrtrArgument = "packed-mrtr-sensitive-name";
+          try {
+            await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
+            expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
+            expect(await client.callTool({
+              name: "create_item",
+              arguments: { name: packedMrtrArgument }
+            })).toMatchObject({ content: [{ type: "text", text: `created:${packedMrtrArgument}` }] });
+          } finally {
+            await client.close();
+          }
+          expect(elicitationRequests).toHaveLength(1);
+          expect(JSON.stringify(elicitationRequests)).not.toContain(packedMrtrArgument);
+          expect(await readFile(httpServeCreateCountPath, "utf8")).toBe("1\n");
+          const httpServeAudit = await readFile(httpServeAuditPath, "utf8");
+          expect(httpServeAudit).not.toContain(packedMrtrArgument);
+          const approvalActions = httpServeAudit
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+            .filter((event) => event.kind === "approval")
+            .map((event) => event.approvalAction);
+          expect(approvalActions).toEqual(["requested", "approved", "consumed"]);
         } finally {
           await httpServe.stop();
         }

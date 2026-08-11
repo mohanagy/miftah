@@ -1979,7 +1979,7 @@ describe("Miftah MCP wrapper", () => {
       await expect.poll(toolCallOperations).toHaveLength(1);
       const operations = await toolCallOperations();
       expect(operations).toEqual([
-        expect.objectContaining({ status: "failure", errorCode: "UPSTREAM_CALL_FAILED", name: "whoami" })
+        expect.objectContaining({ status: "cancelled", errorCode: "REQUEST_CANCELLED", name: "whoami" })
       ]);
       expect((await readFile(cancelledPath, "utf8")).trim().split("\n")).toHaveLength(1);
     } finally {

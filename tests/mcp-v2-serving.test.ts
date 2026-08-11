@@ -25,6 +25,7 @@ afterEach(async () => {
 async function configPath(upstream?: {
   readonly url?: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly auditPath?: string;
 }): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "miftah-v2-serving-"));
   temporaryDirectories.push(directory);
@@ -44,6 +45,7 @@ async function configPath(upstream?: {
           }
         : { transport: "streamable-http", url: upstream.url },
       profiles: { work: {} },
+      ...(upstream?.auditPath === undefined ? {} : { audit: { path: upstream.auditPath } }),
       server: { http: { port: 0, maxSessions: 4, sessionIdleTimeoutMs: 1_000 } }
     })
   );
@@ -54,6 +56,29 @@ async function waitFor(condition: () => boolean, timeoutMs = 4_000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for the protocol condition.");
+    await delay(25);
+  }
+}
+
+async function waitForAuditEvent(
+  path: string,
+  matches: (event: Record<string, unknown>) => boolean,
+  timeoutMs = 4_000
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const event = (await readFile(path, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find(matches);
+      if (event !== undefined) return event;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for the audit event.");
     await delay(25);
   }
 }
@@ -413,9 +438,15 @@ describe("MCP SDK v2 serving interoperability", () => {
   });
 
   it("propagates modern HTTP request cancellation to the selected upstream", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-v2-cancellation-"));
+    temporaryDirectories.push(directory);
+    const auditPath = join(directory, "audit.jsonl");
     const upstream = await startFakeRemoteUpstream({ callToolDelayMs: 5_000 });
     remoteUpstreams.push(upstream);
-    const server = await startMiftahHttpServer(await configPath({ url: upstream.streamableHttpUrl }));
+    const server = await startMiftahHttpServer(await configPath({
+      url: upstream.streamableHttpUrl,
+      auditPath
+    }));
     httpServers.push(server);
     const transport = new StreamableHTTPClientTransport(server.url);
     const client = new Client(
@@ -425,12 +456,23 @@ describe("MCP SDK v2 serving interoperability", () => {
 
     try {
       await client.connect(transport);
+      const closedSessionsBeforeCall = upstream.closedStreamableSessionIds().length;
       const controller = new AbortController();
       const pending = client.callTool({ name: "whoami", arguments: {} }, { signal: controller.signal });
       await waitFor(() => upstream.toolCallRequests() === 1);
       controller.abort();
       await expect(pending).rejects.toBeDefined();
       await waitFor(() => upstream.cancelledNotifications() === 1);
+      await waitFor(() => upstream.closedStreamableSessionIds().length > closedSessionsBeforeCall);
+      await expect(waitForAuditEvent(
+        auditPath,
+        (event) => event.operation === "tools/call" && event.name === "whoami"
+      )).resolves.toMatchObject({
+        status: "cancelled",
+        errorCode: "REQUEST_CANCELLED",
+        profileLeaseState: "not-required",
+        profileLockState: "none"
+      });
     } finally {
       await client.close();
     }
