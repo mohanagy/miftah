@@ -2,6 +2,8 @@
 
 This is the compatibility source of truth for generated `miftah init` configurations and client snippets.
 
+For downstream protocol eras and real packaged-host evidence, see [MCP protocol and client compatibility](mcp-compatibility.md). The tables below validate generated configuration shapes; they do not by themselves establish a runtime exchange with Claude Desktop, Claude Code, Cursor, or VS Code.
+
 - Catalog version: `3`
 - Miftah package version: `1.0.0`
 - Last tested / validation boundary: the catalog builds strict Miftah configuration that `validateConfig` accepts. The docs contract test checks generated configuration only; it does **not** construct a runtime, start, authenticate to, or smoke-test external providers.

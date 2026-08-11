@@ -145,6 +145,7 @@ On Windows, `generic`, `sentry`, and `generic-npx` are unavailable. Miftah refus
 - `miftah init` is the optional scripted preset path shown in the quick start.
 - `miftah dashboard` opens the optional foreground-only local Console for reviewed setup, profiles, health, and OAuth lifecycle work. It is not required to run Miftah.
 - Client generation can print reviewable snippets for Claude Desktop, Claude Code, Cursor, and VS Code. Miftah never silently edits their settings.
+- Runtime protocol claims are narrower than snippet support; see the [tested MCP protocol and client matrix](docs/mcp-compatibility.md) for exact eras, transports, versions, and limitations.
 
 See [Setup paths](docs/presets-and-clients.md) for exact presets, client destinations, generated JSON shapes, upstream requirements, and platform support. See the [Console guide](docs/console-api.md) for its local authenticated control boundary.
 

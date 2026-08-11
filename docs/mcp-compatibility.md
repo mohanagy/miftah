@@ -1,0 +1,68 @@
+# MCP protocol and client compatibility
+
+This page is the compatibility source of truth for Miftah's downstream MCP server. It records protocol-era behavior separately from generated client-configuration support and from upstream MCP transport support. A generated snippet proves only that Miftah emitted the documented JSON shape; it does not prove that an untested host completed a protocol exchange.
+
+- Miftah baseline: `1.0.0` plus the current **Unreleased** changes
+- Locked MCP TypeScript packages: `@modelcontextprotocol/client`, `core`, `server`, `node`, and `server-legacy` `2.0.0`
+- Evidence date: 2026-08-11
+- Modern protocol era: `2026-07-28`
+- Supported initialized legacy era: `2025-11-25`
+
+## Protocol-era and transport matrix
+
+| Downstream path | Protocol contract | State and limitations | Executable evidence |
+| --- | --- | --- | --- |
+| STDIO, modern | SDK v2 negotiates `2026-07-28`; no `initialize`/`initialized` handshake or protocol session is required. | The serving factory creates a modern runtime for each SDK-selected modern exchange. Connection-bound resource subscriptions are not advertised. | `tests/mcp-v2-serving.test.ts` exercises the modern SDK v2 STDIO entry. The packaged Inspector gate runs `tools/list` through the installed tarball. |
+| STDIO, initialized legacy | SDK v2 selects the frozen legacy adapter and negotiates `2025-11-25`. | One client connection owns the initialized runtime. Roots and resource subscriptions remain capability-gated compatibility behavior. | `tests/mcp-v2-serving.test.ts` exercises the legacy SDK v2 STDIO entry. |
+| Streamable HTTP, modern | Each `2026-07-28` request is classified before broker construction and served by a fresh request-scoped Miftah server. `Mcp-Method` and `Mcp-Name` are validated against JSON-RPC; `Mcp-Session-Id` is absent. | Catalogs are private with `ttlMs: 0`; no connection-bound resource subscription or resumable protocol session is claimed. Application state uses explicit authenticated handles and bounded stores as described below. | Source and packed-artifact tests negotiate `2026-07-28`; the packaged Inspector gate runs `tools/list` over HTTP. |
+| Streamable HTTP, initialized legacy | The existing initialized `2025-11-25` path uses a bounded `Mcp-Session-Id` session. | Admission, idle timeout, shutdown, and reconnection stay within configured HTTP session limits. | `tests/mcp-v2-serving.test.ts` and `tests/http-server.test.ts` cover negotiation, session ownership, capacity, cleanup, and interrupted SSE response reconnection. |
+| Standalone downstream HTTP+SSE | Not supported and not newly adopted. | Miftah exposes STDIO or the single Streamable HTTP `/mcp` endpoint. It does not expose the retired standalone SSE server transport. | CLI and HTTP-server contract tests accept only the documented downstream transports. |
+| Upstream STDIO / Streamable HTTP | Supported independently of the downstream era. New remote configurations use `streamable-http`. | Upstream negotiation, lifecycle, cancellation, progress, and safe error mapping remain owned by Miftah's upstream session. | Cross-platform core, remote transport, and packaged CLI tests. |
+| Upstream legacy SSE | Deprecated compatibility input through `transport: "sse"`. | No new feature may depend on it. There is no remote session DELETE equivalent; migration is to `streamable-http`. | Configuration and remote-transport tests; any removal is gated by [#388](https://github.com/mohanagy/miftah/issues/388). |
+
+An unsupported pinned protocol revision receives a fixed negotiation failure whose data names the requested revision and the supported modern revision. A client that can fall back should retry through its initialized legacy path. Header validation failures return a generic HTTP 400 JSON-RPC error before routing, policy, audit, or upstream execution. Capability-dependent operations fail with stable Miftah codes and a concrete next action; for example, a client without form elicitation receives `POLICY_CONFIRMATION_REQUIRED` or `PROFILE_SWITCH_CONFIRMATION_REQUIRED`, and an unavailable resource subscription receives `RESOURCE_SUBSCRIPTION_UNSUPPORTED`.
+
+## Feature ownership and era contract
+
+| Feature | Owner | Modern `2026-07-28` | Initialized legacy | Adoption/removal rule |
+| --- | --- | --- | --- | --- |
+| Discovery and negotiation | MCP SDK v2 serving entry; Miftah chooses era-specific runtime options | `server/discover` and per-request metadata | `initialize` then `notifications/initialized` | Both eras remain supported. Unsupported pins return supported-version data. |
+| Protocol session / `Mcp-Session-Id` | SDK Node HTTP adapter and Miftah HTTP admission manager | Absent; every HTTP request is independently classified | Bounded sessionful HTTP compatibility | No mutable global may replace missing modern request context. |
+| Routing headers and cache hints | SDK request classifier plus Miftah catalog boundary | Validated `Mcp-Method`/`Mcp-Name`; `Mcp-Param-*` rejected; private zero-TTL catalogs | JSON-RPC arguments and existing uncached response shapes | Schema-aware parameter headers require a separate implementation and end-to-end validation. |
+| Roots | Client capability and Miftah routing-context collector | Not requested or advertised as a modern dependency | Capability-gated `roots/list` and list-changed refresh after initialization | Deprecated by SEP-2577. Retained only for compatible initialized clients; no new feature may depend on it. |
+| Sampling | Client/server protocol surface | Not implemented, proxied, or advertised | Not implemented, proxied, or advertised | Deprecated by SEP-2577; direct provider integration would require a separate product and security decision. |
+| Logging | Miftah stderr, audit JSONL, and lifecycle diagnostics | MCP Logging is not implemented or advertised | MCP Logging is not implemented or advertised | Deprecated by SEP-2577. Use stderr for STDIO diagnostics and Miftah's redacted audit journal for application events. |
+| Resource subscriptions and update notifications | Miftah subscription registry and selected upstream session | Not advertised because request-scoped servers cannot own a connection subscription | Advertised only when every selectable upstream supports it; profile changes and shutdown clean it up | Connection-bound compatibility behavior; not a modern application-state primitive. |
+| List-changed notifications | Miftah catalog registries and connected client | No durable subscription claim across requests | Tool, resource, and prompt list changes are forwarded after bounded refresh | A modern polling or subscription extension needs separate evidence. |
+| Progress and cancellation | Request context and selected upstream session | Request-scoped progress and cancellation are forwarded | Forwarded within the initialized connection | Cancellation must release the selected upstream and emit an explicit terminal audit outcome. |
+| Multi Round-Trip Requests | Miftah approval continuation store | Form confirmation uses `input_required`, `requestState`, and `inputResponses` | The SDK legacy shim exposes the same handler as form elicitation | Continuations are short-lived, integrity-bound, one-time, and never profile or operation authorization by themselves. The current store is shared by request-scoped servers from one factory process; cross-process continuation is not claimed. |
+| Tasks extension | No Miftah owner selected | Not implemented or advertised | Not implemented or advertised | Experimental and deferred by the [MRTR and Tasks decision](plans/2026-08-11-mrtr-tasks-decision.md). |
+| MCP Apps | No Miftah owner selected | Not implemented, hosted, transformed, or advertised | Not implemented, hosted, transformed, or advertised | A UI resource and host trust model requires a separate issue and real supported-host proof. |
+| Enterprise Managed Authorization | No Miftah protocol-extension owner selected | Not implemented or advertised | Not implemented or advertised | Miftah's local OAuth/Console controls are not an EMA interoperability claim. |
+
+## Client evidence matrix
+
+| Client | Exact observed or tested version | Transport and era evidence | Claim boundary |
+| --- | --- | --- | --- |
+| Official MCP TypeScript client | `2.0.0` from the lockfile | Automated source and installed-tarball tests cover modern and initialized STDIO/Streamable HTTP behavior, negotiation, MRTR, headers, caching, cancellation, and session cleanup. | This is the reference automated client and does not prove a named desktop host. |
+| MCP Inspector | `2.1.0` | CI installs the Miftah tarball into a clean consumer, then the pinned Inspector CLI runs `tools/list` over STDIO and modern Streamable HTTP on Linux Node 22. | Only those two operations/transports are claimed; Inspector UI workflows and OAuth are not covered. |
+| Claude Code | `2.1.228` observed on macOS | Generated project `.mcp.json` STDIO shape and permission guidance are contract-tested. | No packaged runtime exchange was completed for this audit; protocol compatibility remains unclaimed. |
+| Claude Desktop | `1.26832.0` observed on macOS | Generated `mcpServers` STDIO shape is contract-tested. | No headless packaged runtime exchange was completed; reconnect/restart remains a user action. |
+| VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64) observed on macOS | Generated `servers` STDIO shape is contract-tested; official documentation describes Streamable HTTP with SSE fallback for remote servers. | Miftah's generated snippet is STDIO only, and no packaged runtime exchange was completed in this audit. |
+| Cursor | Not installed in the audit environment | Generated `.cursor/mcp.json` STDIO shape is contract-tested against the documented schema. | No version or runtime compatibility claim. |
+
+The primary release gate is therefore the exact MCP TypeScript client plus MCP Inspector. Claude Desktop, Claude Code, Cursor, and VS Code remain supported snippet destinations, but their rows must not be promoted to runtime-verified until a deidentified packaged-host transcript names the exact host version, transport, protocol era, operation, and limitation.
+
+## Stateless protocol, stateful Miftah application
+
+The modern protocol is stateless at the protocol-session layer: a request does not rely on `initialize`, `notifications/initialized`, or `Mcp-Session-Id`, and it may land on a different Miftah instance. That does not make the Miftah application stateless.
+
+Profile selection, OAuth credentials, policy, approval, audit identity, and upstream lifecycle remain application state with explicit ownership. A trusted embedding host may enable short-lived profile-context handles bound to verified issuer, subject, audience, chat, and deployment claims. Every instance must share the required keyring and revocation state for cross-instance profile handles. The current approval-continuation store is shared only by request-scoped servers created from one in-process factory; Miftah does not claim that an MRTR continuation can resume in another process. The CLI-owned HTTP server does not invent trusted chat claims and does not silently replace a missing handle with a mutable global or durable default. Audit records retain only keyed non-sensitive correlation and the configured redacted operation fields.
+
+Legacy initialized connections may still own connection-local Roots, resource subscriptions, and active-profile state. Those compatibility objects are not reused as hidden state for modern requests.
+
+## Deprecation and removal policy
+
+MCP's deprecation clock is an ecosystem signal, not sufficient product evidence for removing Miftah behavior. Roots, Sampling, and Logging are deprecated by SEP-2577; Miftah does not newly adopt them, and only the existing capability-gated legacy Roots path remains. Standalone downstream SSE is not implemented. Upstream `sse`, initialized protocol handling, sessionful Streamable HTTP, Roots-derived routing context, and other legacy behavior stay until the separate [retirement gate #388](https://github.com/mohanagy/miftah/issues/388) has usage evidence, an exact migration, rollback proof, an implementation issue, and a major-version release plan under Miftah's post-1.0 Semantic Versioning policy.
+
+Primary protocol sources: the [MCP 2026-07-28 release candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28/), [SEP-2577 deprecations](https://modelcontextprotocol.io/seps/2577-deprecate-roots-sampling-and-logging), [Tasks overview](https://modelcontextprotocol.io/extensions/tasks/overview), [MCP Inspector](https://github.com/modelcontextprotocol/inspector), [Cursor MCP documentation](https://docs.cursor.com/context/model-context-protocol), and [VS Code MCP documentation](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
