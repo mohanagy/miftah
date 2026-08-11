@@ -14,13 +14,15 @@ The authenticated binding must include an unforgeable per-chat context claim in 
 
 The selected handle format is a short-lived, authenticated-encrypted token containing:
 
-- a version and deployment identifier;
+- a version, deployment identifier, and authenticated key epoch;
 - a random context identifier;
 - the selected named profile;
 - a keyed digest of issuer, subject, audience, and trusted chat context;
 - issuance and expiry times.
 
 Every production instance for one deployment must share the active sealing-key epoch and a bounded revocation backend. Resolution fails closed if required key or revocation state is unavailable. Audit records use a separate keyed correlation derived from the internal identifier; the bearer itself is never logged, exported, diagnosed, or forwarded upstream.
+
+The non-secret envelope carries the version and key-epoch identifier so an instance can select the candidate key before opening the authenticated ciphertext. Both values, plus the deployment identifier, are authenticated as additional data. A deployment keyring has exactly one active epoch for minting and may retain explicitly configured previous epochs for resolution only. The overlap lasts no longer than the maximum handle lifetime plus bounded clock skew; after that window the previous key is removed and its remaining handles fail closed. Unknown, disabled, future, or malformed epochs are invalid. Rotation changes the active epoch atomically across instances: new handles use only the new epoch, while unexpired old handles resolve only during the declared overlap. Rollback to an older minting epoch is forbidden.
 
 This keeps the one-connector, named-account experience for hosts that can provide the trusted chat binding. Until a host can do so, modern stateless mode must use an operator-locked/profile-scoped endpoint or require an explicit profile for each call. It must not claim chat-scoped switching. Legacy stdio and session-aware HTTP retain their current connection-bound behavior during the documented compatibility window.
 
@@ -73,7 +75,7 @@ Rejected. It cannot survive round-robin routing or an instance restart. A deploy
 1. The modern profile-selection operation authenticates the request and requires the trusted chat binding.
 2. Miftah mints a short-lived handle for one named profile. The handle is a profile selector, not proof that an operation is authorized.
 3. Every account-sensitive call carries the exact handle as a model-visible reserved argument or equivalent method parameter. Miftah strips it before forwarding upstream.
-4. The receiving instance authenticates first, opens the handle, checks deployment/key epoch, compares the full authenticated binding in constant time, checks profile existence, expiry, and revocation, and only then enters routing and policy evaluation.
+4. The receiving instance authenticates first, reads the bounded non-secret version/epoch envelope, selects an enabled resolution-only or active key from the deployment keyring, authenticates and opens the ciphertext, checks deployment/key epoch, compares the full authenticated binding in constant time, checks profile existence, expiry, and revocation, and only then enters routing and policy evaluation.
 5. A switch mints a replacement handle. The prior handle is revoked only after the profile-transition audit commits; an audit failure leaves the old context usable and does not disclose the replacement.
 6. Expiry is exact. Renewal requires the current valid handle and the same authenticated binding. Revocation is deployment-wide and bounded by the handle expiry.
 7. Missing, malformed, tampered, mismatched, expired, revoked, or unavailable context returns a fixed safe error. No error includes the handle, decrypted payload, identity claims, or private account data.

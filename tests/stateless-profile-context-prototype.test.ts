@@ -68,6 +68,12 @@ describe("stateless profile context prototype", () => {
     expect(() => first.resolve(handle, authenticatedContext("chat-work", "user-456"))).toThrowError(
       expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID" })
     );
+    expect(() => first.resolve(handle, { ...owner, issuer: "https://other-issuer.example" })).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID" })
+    );
+    expect(() => first.resolve(handle, { ...owner, audience: "other-miftah.example" })).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID" })
+    );
 
     const otherDeployment = new StatelessProfileContextPrototype({
       deploymentId: "miftah.example/deployment-b",
@@ -99,6 +105,63 @@ describe("stateless profile context prototype", () => {
     current = new Date("2026-08-11T08:00:10.000Z");
     expect(() => second.resolve(expiring, context)).toThrowError(
       expect.objectContaining({ code: "PROFILE_CONTEXT_EXPIRED" })
+    );
+  });
+
+  it("does not let another chat revoke a valid handle", () => {
+    const now = () => new Date("2026-08-11T08:00:00.000Z");
+    const { first, second } = instances(now);
+    const owner = authenticatedContext("chat-work");
+    const otherChat = authenticatedContext("chat-personal");
+    const handle = first.mint("work", owner, 60_000);
+
+    expect(() => second.revoke(handle, otherChat)).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID" })
+    );
+    expect(first.resolve(handle, owner).profile).toBe("work");
+  });
+
+  it("normalizes malformed authentication and revocation backend failures", () => {
+    const now = () => new Date("2026-08-11T08:00:00.000Z");
+    const { first, keys } = instances(now);
+    const owner = authenticatedContext("chat-work");
+    const handle = first.mint("work", owner, 60_000);
+
+    expect(() => first.resolve(handle, undefined as unknown as AuthenticatedProfileContext)).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID", message: "Profile context is invalid." })
+    );
+
+    const unavailableReadRevocations = {
+      isRevoked: () => {
+        throw new Error("backend details");
+      },
+      revoke: () => undefined
+    };
+    const unavailableRead = new StatelessProfileContextPrototype({
+      deploymentId,
+      profiles,
+      ...keys,
+      revocations: unavailableReadRevocations,
+      now
+    });
+    expect(() => unavailableRead.resolve(handle, owner)).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID", message: "Profile context is invalid." })
+    );
+
+    const unavailableWrite = new StatelessProfileContextPrototype({
+      deploymentId,
+      profiles,
+      ...keys,
+      revocations: {
+        isRevoked: () => false,
+        revoke: () => {
+          throw new Error("backend details");
+        }
+      },
+      now
+    });
+    expect(() => unavailableWrite.revoke(handle, owner)).toThrowError(
+      expect.objectContaining({ code: "PROFILE_CONTEXT_INVALID", message: "Profile context is invalid." })
     );
   });
 

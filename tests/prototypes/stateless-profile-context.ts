@@ -148,28 +148,36 @@ export class StatelessProfileContextPrototype {
   }
 
   revoke(handle: string, authenticated: AuthenticatedProfileContext): void {
-    const payload = this.resolvePayload(handle, authenticated);
-    this.revocations.revoke(payload.id, payload.expiresAtMs);
+    try {
+      const payload = this.resolvePayload(handle, authenticated);
+      this.revocations.revoke(payload.id, payload.expiresAtMs);
+    } catch (error) {
+      throw normalizedContextError(error);
+    }
   }
 
   private resolvePayload(handle: string, authenticated: AuthenticatedProfileContext): ProfileContextPayload {
-    assertAuthenticatedContext(authenticated);
-    const payload = this.open(handle);
-    if (
-      payload.deploymentId !== this.deploymentId ||
-      !this.profiles.has(payload.profile) ||
-      !safeEqual(payload.binding, this.binding(authenticated))
-    ) {
-      throw invalidContext();
+    try {
+      assertAuthenticatedContext(authenticated);
+      const payload = this.open(handle);
+      if (
+        payload.deploymentId !== this.deploymentId ||
+        !this.profiles.has(payload.profile) ||
+        !safeEqual(payload.binding, this.binding(authenticated))
+      ) {
+        throw invalidContext();
+      }
+      const nowMs = this.nowMs();
+      if (payload.expiresAtMs <= nowMs) {
+        throw new StatelessProfileContextError("PROFILE_CONTEXT_EXPIRED", "Profile context has expired.");
+      }
+      if (this.revocations.isRevoked(payload.id, nowMs)) {
+        throw new StatelessProfileContextError("PROFILE_CONTEXT_REVOKED", "Profile context has been revoked.");
+      }
+      return payload;
+    } catch (error) {
+      throw normalizedContextError(error);
     }
-    const nowMs = this.nowMs();
-    if (payload.expiresAtMs <= nowMs) {
-      throw new StatelessProfileContextError("PROFILE_CONTEXT_EXPIRED", "Profile context has expired.");
-    }
-    if (this.revocations.isRevoked(payload.id, nowMs)) {
-      throw new StatelessProfileContextError("PROFILE_CONTEXT_REVOKED", "Profile context has been revoked.");
-    }
-    return payload;
   }
 
   private seal(payload: ProfileContextPayload): string {
@@ -319,4 +327,14 @@ function lengthPrefixed(values: readonly string[]): Buffer {
 
 function invalidContext(): StatelessProfileContextError {
   return new StatelessProfileContextError("PROFILE_CONTEXT_INVALID", "Profile context is invalid.");
+}
+
+function normalizedContextError(error: unknown): StatelessProfileContextError {
+  if (
+    error instanceof StatelessProfileContextError &&
+    (error.code === "PROFILE_CONTEXT_EXPIRED" || error.code === "PROFILE_CONTEXT_REVOKED")
+  ) {
+    return error;
+  }
+  return invalidContext();
 }

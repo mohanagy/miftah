@@ -18,6 +18,8 @@ describe("stateless profile context decision", () => {
 
   it("defines expiry, revocation, redaction, UX fallback, and implementation follow-ups", () => {
     expect(decision).toContain("Revocation is deployment-wide");
+    expect(decision).toContain("exactly one active epoch for minting");
+    expect(decision).toContain("maximum handle lifetime plus bounded clock skew");
     expect(decision).toContain("No error includes the handle");
     expect(decision).toContain("one-connector, named-account experience");
     expect(decision).toContain("[#376]");
