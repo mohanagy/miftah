@@ -591,6 +591,19 @@ describe("setup command", () => {
     })).rejects.toThrow("Adding an account profile requires --config.");
   });
 
+  it("rejects a CIMD URL outside endpoint-first native OAuth setup", async () => {
+    await expect(runSetupCommand({
+      addProfile: true,
+      config: resolve(outputRoot, "existing.json"),
+      oauthClientMetadataUrl: "https://client.example.test/oauth/miftah.json"
+    }, {
+      input: new PassThrough(),
+      output: new PassThrough(),
+      cwd: outputRoot,
+      launcher: { command: process.execPath, args: [resolve(process.cwd(), "dist/cli/main.js"), "serve"] }
+    })).rejects.toThrow("Option '--oauth-client-metadata-url' is unavailable when adding an account profile.");
+  });
+
   it("adds a named environment-backed account to an existing standard configuration without launching its upstream", async () => {
     await mkdir(outputRoot, { recursive: true });
     const configPath = resolve(outputRoot, "sentry.json");

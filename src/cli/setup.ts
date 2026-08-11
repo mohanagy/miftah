@@ -600,7 +600,8 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "args",
       "cwd",
       "acceptLocalCommand",
-      "upstream"
+      "upstream",
+      "oauthClientMetadataUrl"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
     if (incompatible !== undefined) {
       throw new CliUsageError(`Option '--${flagName(incompatible)}' is unavailable when adding an account profile.`);

@@ -76,7 +76,9 @@ describe("OAuth loopback authorization handoff", () => {
 
         const rejectedResponse = await fetch(rejected);
         expect(rejectedResponse.status).toBe(400);
-        expect(await rejectedResponse.text()).not.toContain("must-not-be-redeemed");
+        const body = await rejectedResponse.text();
+        expect(body).not.toContain("must-not-be-redeemed");
+        if (callbackIssuer !== undefined) expect(body).not.toContain(callbackIssuer);
       }
       const duplicateIssuer = new URL(handoff.redirectUrl);
       duplicateIssuer.searchParams.set("code", "must-not-be-accepted");
