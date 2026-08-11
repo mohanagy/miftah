@@ -11,6 +11,7 @@ describe("MCP TypeScript SDK v2 migration contract", () => {
     const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as PackageManifest;
     const dependencies = manifest.dependencies ?? {};
 
+    expect(dependencies).not.toHaveProperty("@modelcontextprotocol/node");
     expect(dependencies).not.toHaveProperty("@modelcontextprotocol/server-legacy");
     expect(dependencies).toMatchObject({
       "@hono/node-server": "2.0.10",

@@ -804,6 +804,7 @@ describe("package metadata contract", () => {
       "@modelcontextprotocol/sdk": "^1.30.0",
       hono: "4.12.34"
     });
+    expect(manifest.dependencies).not.toHaveProperty("@modelcontextprotocol/node");
     expect(manifest.devDependencies).toMatchObject({
       "@modelcontextprotocol/node": "^2.0.0",
       "@modelcontextprotocol/server-legacy": "^2.0.0"
