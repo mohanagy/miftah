@@ -1,12 +1,16 @@
 # Independent security review brief
 
-This brief defines the external review required by issues #37 and #39. It turns the public [threat model](threat-model.md) into a reviewable engagement without claiming that a review has happened.
+This brief defines the external review required by issues #37 and #39 and records the evidence boundary for the maintainer's completion attestation. It turns the public [threat model](threat-model.md) into a reviewable engagement without inventing report details that were not supplied to the repository.
 
 ## Target and independence
 
-The engagement baseline is the current published release, `@lubab/miftah@0.5.8`. Before work starts, the maintainer and reviewer must record the exact commit and package version under review, the upstream dependencies or fixtures used, the operating systems exercised, and the review dates. The eventual v1 release candidate must receive either a final review at its exact commit or a reviewer-accepted delta review from the recorded baseline.
+The engagement baseline is the published `@lubab/miftah@0.5.8`; the stable release candidate is `@lubab/miftah@1.0.0`. The maintainer and reviewer must record the exact commit and package version under review, the upstream dependencies or fixtures used, the operating systems exercised, and the review dates. The v1 release candidate must receive either a final review at its exact commit or a reviewer-accepted delta review from the recorded baseline.
 
 The reviewer supplies an independence declaration covering employment, contribution, financial, and other material relationships with Miftah and its maintainers. A maintainer self-review, automated scanner, dependency report, or AI-only review is useful input but does not satisfy this independent gate.
+
+## Recorded review status
+
+On 2026-08-11, the maintainer reported that the security report was completed and explicitly authorized closure of #37. That statement is recorded as maintainer attestation. The completed report, reviewer attribution and independence declaration, target commit, severity counts, remediation or retest record, public completion summary, and v1 candidate delta acceptance were not supplied for this release-preparation session and therefore were not independently inspected. Maintainer attestation or deidentified records alone do not close the independent-review criterion in #39. This status does not create or infer the missing facts; #39 must retain the exact protected-release evidence and any reviewer-approved final-candidate reconciliation used for publication.
 
 ## Review scope
 

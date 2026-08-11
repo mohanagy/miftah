@@ -1,6 +1,6 @@
 {
   "name": "@lubab/miftah",
-  "version": "0.5.8",
+  "version": "1.0.0",
   "description": "Wrap any MCP. Use the right account without reconnecting.",
   "keywords": [
     "mcp",
@@ -86,23 +86,28 @@
         "glob": {
           ".": "13.0.6",
           "minimatch": {
-            "brace-expansion": "5.0.8"
+            "brace-expansion": "5.0.9"
           }
         },
         "minimatch": {
-          "brace-expansion": "5.0.8"
+          "brace-expansion": "5.0.9"
         }
       }
     },
+    "brace-expansion": "5.0.9",
     "esbuild": "0.28.1",
     "eslint": {
       "minimatch": {
-        "brace-expansion": "5.0.8"
+        "brace-expansion": "5.0.9"
       }
     },
+    "fast-uri": "3.1.5",
+    "hono": "4.12.34",
+    "ip-address": "10.3.1",
+    "nanoid": "3.3.17",
     "typescript-eslint": {
       "minimatch": {
-        "brace-expansion": "5.0.8"
+        "brace-expansion": "5.0.9"
       }
     },
     "vitest": {

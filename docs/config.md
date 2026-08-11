@@ -20,7 +20,7 @@ Version `"2"` is the prior canonical non-OAuth format. Version `"3"` keeps its e
 
 For version 1, the migrator changes only aliases with proven equivalent behavior: `"http"` becomes `"streamable-http"`, the plaintext opt-in moves to `secrets.allowPlaintextSecrets`, and redundant force-on redaction declarations are removed. It fails closed for conflicting plaintext options or unrelated unsupported fields rather than discarding them. A version-2 input preserves the existing configuration while changing only the format version; it never infers native OAuth from a static `Authorization` header. A version-3 input is validated and reported as unchanged; `--write` then creates no backup and performs no write.
 
-Versions 1 and 2 will remain accepted through at least the first published pre-1.0 minor release after version 3 ships. Removing either version requires a later minor release, an **Unreleased** changelog entry, and a documented explicit migration path. Keep a byte-for-byte historical fixture for every supported released format in release CI.
+Versions 1, 2, and 3 remain accepted throughout the Miftah 1.x release line. Removing version 1 or 2 requires a new major release, an **Unreleased** changelog entry, and a documented explicit migration path. Keep a byte-for-byte historical fixture for every supported released format in release CI.
 
 For strict starter configurations, use the versioned `init` catalog rather than treating generic command examples as trusted upstream recommendations. The [preset and client compatibility matrix](presets-and-clients.md) records exact pins, required inputs, upstream provenance, and the validation boundary for every catalog entry.
 

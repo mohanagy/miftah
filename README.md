@@ -19,9 +19,9 @@ Claude, Cursor, or VS Code
 
 Miftah itself has no cloud service or telemetry. It adds local profile selection, credential references, policy, approvals, redaction, diagnostics, and optional audit metadata around an upstream; it does not replace that upstream or widen what the upstream supports.
 
-> **Status:** Miftah is experimental and pre-1.0. Interfaces and security behavior may change between minor versions. External multi-account and returning-user validation in [#25](https://github.com/mohanagy/miftah/issues/25) and [#88](https://github.com/mohanagy/miftah/issues/88) remains open.
+> **Status:** Miftah 1.0 is the stable v1 release line. Documented public compatibility surfaces follow Semantic Versioning. The external workflow and security-review gates were closed by maintainer attestation in [#39](https://github.com/mohanagy/miftah/issues/39); the source participant records and completed security report are not published in this repository.
 
-Already using Miftah? See [What is in 0.5 and how to use it](docs/whats-new-in-0.5.md) for the release's guided setup, profile-management, Console, OAuth, and upgrade paths.
+Upgrading from Miftah 0.5? See [What is in 0.5 and how to use it](docs/whats-new-in-0.5.md) for the guided setup, profile-management, Console, OAuth, and upgrade paths introduced before the stable line.
 
 ## Is Miftah for you?
 
@@ -53,7 +53,7 @@ Install Miftah, then choose the terminal wizard or the browser Console. Both use
 ### 1. Install the current release
 
 ```bash
-npm install -g @lubab/miftah@0.5.8
+npm install -g @lubab/miftah@1.0.0
 miftah version
 ```
 

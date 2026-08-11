@@ -10,7 +10,7 @@ Usage: miftah [command] [options]
 
 The root command list includes `serve`, `dashboard`, `console`, `validate`, `doctor`, `schema`, `setup`, `init`, `migrate-config`, `profile list|set-default|set-description|rename|remove|test`, `connection add|list|status|test`, `auth connect|reauth|disconnect`, `list-tools`, `test-profile`, `logs`, `audit-export`, `audit-verify`, and `version`. With no command, Miftah runs `serve`.
 
-Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires the pre-1.0 deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
+Documented command names, options, JSON success forms, and exit categories are compatibility contracts. An incompatible CLI removal, rename, required-option change, or semantic output change requires a new major release and the deprecation/removal process in the [public compatibility policy](library-api.md#compatibility-policy).
 
 `--help` and `-h` print help and exit successfully. They can appear before or after a command. Help never reads configuration, resolves secrets, or starts an upstream.
 
