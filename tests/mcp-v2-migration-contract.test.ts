@@ -12,6 +12,7 @@ describe("MCP TypeScript SDK v2 migration contract", () => {
     const dependencies = manifest.dependencies ?? {};
 
     expect(dependencies).not.toHaveProperty("@modelcontextprotocol/sdk");
+    expect(dependencies).not.toHaveProperty("@modelcontextprotocol/server-legacy");
     expect(dependencies).toMatchObject({
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",

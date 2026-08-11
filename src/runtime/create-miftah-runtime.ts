@@ -23,6 +23,7 @@ export interface MiftahRuntimeOptions {
 
 interface MiftahRuntimeFactoryOptions extends MiftahRuntimeOptions {
   readonly profileState?: { readonly persistActiveProfile?: false; readonly scope?: "process" | "session" };
+  readonly resourceSubscriptionsEnabled?: boolean;
 }
 
 async function createConfiguredMiftahServer(
@@ -48,7 +49,8 @@ async function createConfiguredMiftahServer(
     runtime.oauth,
     runtime.identities,
     runtimeConfigPath,
-    options.modernProfileContext
+    options.modernProfileContext,
+    options.resourceSubscriptionsEnabled
   );
 
   return { config: runtime.config, server };
@@ -100,7 +102,8 @@ export function createMiftahServerFactory(
 /** Creates per-request modern HTTP servers whose mutable profile state cannot escape an exchange. */
 export function createHttpRequestMiftahServerFactory(configPath: string): McpServerFactory {
   return configuredMiftahServerFactory(configPath, {
-    profileState: { persistActiveProfile: false, scope: "session" }
+    profileState: { persistActiveProfile: false, scope: "session" },
+    resourceSubscriptionsEnabled: false
   });
 }
 

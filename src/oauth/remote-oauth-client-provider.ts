@@ -263,6 +263,7 @@ export class RemoteOAuthClientProvider implements OAuthClientProvider {
     if (credential.clientId !== undefined) {
       this.savedClient = {
         client_id: credential.clientId,
+        issuer: this.options.binding.issuer,
         ...(credential.clientSecret === undefined ? {} : { client_secret: credential.clientSecret })
       };
     }

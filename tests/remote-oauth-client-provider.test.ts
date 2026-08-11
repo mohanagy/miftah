@@ -258,7 +258,8 @@ describe("remote OAuth client provider", () => {
     await expect(restarted.tokens()).resolves.toMatchObject({ access_token: "fixture-access-token" });
     await expect(restarted.clientInformation()).resolves.toMatchObject({
       client_id: "fixture-dynamic-client",
-      client_secret: "fixture-dynamic-client-secret"
+      client_secret: "fixture-dynamic-client-secret",
+      issuer: "https://issuer.example.test"
     });
   });
 

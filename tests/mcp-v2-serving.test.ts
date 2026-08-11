@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,7 +22,10 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function configPath(upstream?: { readonly url: string }): Promise<string> {
+async function configPath(upstream?: {
+  readonly url?: string;
+  readonly env?: Readonly<Record<string, string>>;
+}): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "miftah-v2-serving-"));
   temporaryDirectories.push(directory);
   const path = join(directory, "miftah.json");
@@ -32,8 +35,13 @@ async function configPath(upstream?: { readonly url: string }): Promise<string> 
       version: "1",
       name: "v2-serving-test",
       defaultProfile: "work",
-      upstream: upstream === undefined
-        ? { transport: "stdio", command: process.execPath, args: [fixture] }
+      upstream: upstream?.url === undefined
+        ? {
+            transport: "stdio",
+            command: process.execPath,
+            args: [fixture],
+            ...(upstream?.env === undefined ? {} : { env: upstream.env })
+          }
         : { transport: "streamable-http", url: upstream.url },
       profiles: { work: {} },
       server: { http: { port: 0, maxSessions: 4, sessionIdleTimeoutMs: 1_000 } }
@@ -66,6 +74,34 @@ describe("MCP SDK v2 serving interoperability", () => {
       expect(transport.sessionId).toBeUndefined();
       expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("whoami");
       expect(transport.sessionId).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("does not probe or advertise connection-bound resource subscriptions for modern HTTP requests", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-v2-serving-probe-"));
+    temporaryDirectories.push(directory);
+    const startCountPath = join(directory, "upstream-start-count");
+    const server = await startMiftahHttpServer(await configPath({
+      env: {
+        TEST_RESOURCE_SUBSCRIPTIONS: "true",
+        TEST_START_COUNT_PATH: startCountPath
+      }
+    }));
+    httpServers.push(server);
+    const transport = new StreamableHTTPClientTransport(server.url);
+    const client = new Client(
+      { name: "miftah-modern-http-subscription-test", version: "1.0.0" },
+      { versionNegotiation: { mode: "auto" } }
+    );
+
+    try {
+      await client.connect(transport);
+      expect(client.getServerCapabilities()?.resources?.subscribe).not.toBe(true);
+      await expect(access(startCountPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("whoami");
+      await expect.poll(async () => access(startCountPath).then(() => true, () => false)).toBe(true);
     } finally {
       await client.close();
     }

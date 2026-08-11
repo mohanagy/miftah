@@ -352,7 +352,8 @@ export class MiftahServer {
     private readonly oauth?: RemoteOAuthRuntime,
     identityManager?: IdentityManager,
     private readonly runtimeConfigPath?: string,
-    private readonly modernProfileContext?: ModernProfileContextRuntimeOptions
+    private readonly modernProfileContext?: ModernProfileContextRuntimeOptions,
+    private readonly resourceSubscriptionsEnabled = true
   ) {
     if (
       modernProfileContext !== undefined &&
@@ -584,6 +585,7 @@ export class MiftahServer {
   private async configureResourceSubscriptionCapability(): Promise<void> {
     if (this.resourceSubscriptionCapabilityConfigured) return;
     this.resourceSubscriptionCapabilityConfigured = true;
+    if (!this.resourceSubscriptionsEnabled) return;
     if (!this.resourcePromptProxy.available) return;
     const upstreamNames =
       this.upstreams instanceof MultiUpstreamProcessManager

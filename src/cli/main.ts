@@ -72,7 +72,12 @@ async function serve(configPath: string, transportKind = "stdio"): Promise<void>
     process.once("SIGTERM", shutdown);
     return;
   }
-  const server = serveStdio(createMiftahServerFactory(configPath));
+  const server = serveStdio(createMiftahServerFactory(configPath), {
+    onerror: (error) => {
+      process.stderr.write(`Miftah STDIO server error: ${redactSecrets(error.message)}\n`);
+      process.exitCode = 1;
+    }
+  });
   const shutdown = async () => {
     await server.close();
   };
