@@ -51,7 +51,7 @@ Tasks may be reconsidered only when all of these gates are satisfied:
 1. the extension and Miftah's SDK line expose a supported end-to-end server and client contract;
 2. a supported real host demonstrates one concrete operation that routinely exceeds a normal request budget;
 3. the task store has a durable opaque identifier, authenticated principal/chat/profile ownership, bounded expiry, encrypted sensitive state, idempotent creation, and atomic terminal transitions;
-4. `tasks/get`, `tasks/result`, and `tasks/cancel` enforce the same ownership on every lookup and survive process or connection loss;
+4. `tasks/get`, `tasks/result`, `tasks/update`, and `tasks/cancel` enforce the same ownership for task lookup, result retrieval, `inputResponses` updates, and cancellation, and survive process or connection loss;
 5. cancellation proves no profile lock, lease, OAuth handoff, process reservation, or upstream child is left behind;
 6. packaged interoperability tests cover reconnect, duplicate creation, replay, expiry, cancellation, redaction, and audit outcomes.
 

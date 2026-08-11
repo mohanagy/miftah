@@ -72,7 +72,14 @@ async function waitForAuditEvent(
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as Record<string, unknown>];
+          } catch {
+            // A concurrent append can expose a partial trailing JSONL line.
+            return [];
+          }
+        })
         .find(matches);
       if (event !== undefined) return event;
     } catch (error) {
