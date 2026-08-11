@@ -24,7 +24,7 @@
 | `generateConfigSchema` | Generates the editor-facing JSON Schema for the configuration contract. |
 | `presetConfig` | Creates a supported configuration preset in memory. |
 
-`createMiftahRuntime` returns `MiftahRuntime`, which exposes the resolved `config`, `connect(transport)`, and `close()` methods for hosts that own a specific transport lifecycle. `createMiftahServerFactory` is the preferred boundary for the SDK v2 serving entries because every factory invocation creates a fresh prepared Miftah server whose upstreams close with that server. Both functions accept `MiftahRuntimeOptions`, including the modern profile-context boundary described below. The removed monolithic `@modelcontextprotocol/sdk` package is not part of the supported dependency surface. Miftah's CLI bundles the v2 Node adapter with its patched Hono adapter because `@modelcontextprotocol/node@2.0.0` still advertises an unsafe 1.x adapter range; embedding hosts import and version their own `@modelcontextprotocol/node` package when adapting a custom Node HTTP server.
+`createMiftahRuntime` returns `MiftahRuntime`, which exposes the resolved `config`, `connect(transport)`, and `close()` methods for hosts that own a specific transport lifecycle. The documented SDK v1 `StdioServerTransport` path remains supported through the 1.x line, and Miftah retains the compatible monolithic SDK dependency for that path. Its removal is deferred to the evidence-backed major-version gate [#388](https://github.com/mohanagy/miftah/issues/388). The package also pins patched `@hono/node-server` and Hono runtime releases so that retained SDK cannot select its unsafe 1.x adapter range. `createMiftahServerFactory` is the preferred boundary for SDK v2 serving because every factory invocation creates a fresh prepared Miftah server whose upstreams close with that server. Both functions accept `MiftahRuntimeOptions`, including the modern profile-context boundary described below. Miftah's CLI bundles the same patched Hono adapter; embedding hosts import and version their own `@modelcontextprotocol/node` package when adapting a custom Node HTTP server.
 
 ```ts
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
@@ -34,6 +34,16 @@ const server = serveStdio(createMiftahServerFactory("./miftah.json"));
 
 // Later, during host shutdown:
 await server.close();
+```
+
+Existing v1 library hosts may retain their 1.0 integration through the 1.x line:
+
+```ts
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createMiftahRuntime } from "@lubab/miftah";
+
+const runtime = await createMiftahRuntime("./miftah.json");
+await runtime.connect(new StdioServerTransport());
 ```
 
 For a custom HTTP host, pass the same factory to `createMcpHandler` from `@modelcontextprotocol/server` and adapt the web handler with `toNodeHandler` from `@modelcontextprotocol/node` when using Node's HTTP server.

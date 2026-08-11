@@ -787,7 +787,7 @@ describe("package metadata contract", () => {
       expect(manifest.overrides?.[packageName]).toBe(expectedVersion);
       assertPatchedTransitiveLockEntries(lock, packageName, expectedVersion);
     }
-    expect(manifest.devDependencies?.hono).toBe("4.12.34");
+    expect(manifest.dependencies?.hono).toBe("4.12.34");
     expect(manifest.overrides).not.toHaveProperty("hono");
     assertPatchedTransitiveLockEntries(lock, "hono", "4.12.34");
   });
@@ -796,17 +796,17 @@ describe("package metadata contract", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
-    expect(manifest.dependencies).not.toHaveProperty("@modelcontextprotocol/sdk");
     expect(manifest.dependencies).toMatchObject({
+      "@hono/node-server": "2.0.10",
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",
-      "@modelcontextprotocol/server": "^2.0.0"
+      "@modelcontextprotocol/server": "^2.0.0",
+      "@modelcontextprotocol/sdk": "^1.30.0",
+      hono: "4.12.34"
     });
     expect(manifest.devDependencies).toMatchObject({
-      "@hono/node-server": "2.0.10",
       "@modelcontextprotocol/node": "^2.0.0",
-      "@modelcontextprotocol/server-legacy": "^2.0.0",
-      hono: "4.12.34"
+      "@modelcontextprotocol/server-legacy": "^2.0.0"
     });
     expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
     assertPatchedHonoNodeServerLockEntries(lock);
@@ -1097,8 +1097,14 @@ describe("packed artifact contract", () => {
         ) as PackageManifest;
         expect(installedManifest.dependencies).toEqual(readPackageManifest().dependencies);
         expect(existsSync(join(directory, "node_modules", "@modelcontextprotocol", "node"))).toBe(false);
-        expect(existsSync(join(directory, "node_modules", "@hono", "node-server"))).toBe(false);
-        expect(existsSync(join(directory, "node_modules", "hono"))).toBe(false);
+        const installedHonoNodeServer = JSON.parse(
+          await readFile(join(directory, "node_modules", "@hono", "node-server", "package.json"), "utf8")
+        ) as PackageManifest;
+        const installedHono = JSON.parse(
+          await readFile(join(directory, "node_modules", "hono", "package.json"), "utf8")
+        ) as PackageManifest;
+        expect(installedHonoNodeServer.version).toBe("2.0.10");
+        expect(installedHono.version).toBe("4.12.34");
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");
@@ -1291,6 +1297,7 @@ describe("packed artifact contract", () => {
           typeConsumerPath,
           [
             'import { AuthenticatedRequestContextError, InMemoryProfileContextRevocationStore, PROFILE_CONTEXT_ARGUMENT, PROFILE_CONTEXT_META_KEY, ProfileContextHandleError, ProfileContextHandleService, createAuthenticatedRequestContextBoundary, createMiftahRuntime, createMiftahServerFactory, requireAuthenticatedRequestContext, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuthenticatedRequestContext, type AuthenticatedRequestContextBoundary, type AuthenticatedRequestContextBoundaryOptions, type AuthenticatedRequestContextErrorCode, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type MiftahRuntimeOptions, type MintedProfileContext, type ModernProfileContextRuntimeOptions, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileContextHandleErrorCode, type ProfileContextHandleServiceOptions, type ProfileContextKeyEpoch, type ProfileContextKeyringProvider, type ProfileContextKeyringSnapshot, type ProfileContextReplacementAudit, type ProfileContextRevocationStore, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type ResolvedProfileContext, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig, type VerifiedHttpRequestClaims, type VerifiedHttpRequestClaimsProvider } from "@lubab/miftah";',
+            'import { StdioServerTransport as LegacyStdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
             'import { MIFTAH_PLUGIN_API_VERSION, type MiftahPlugin, type RoutingMatcherPlugin, type RoutingMatcherPluginRequest, type RoutingMatcherPluginResult, type RoutingMatcherPluginSignal, type SecretProviderPlugin, type SecretProviderPluginRequest, type SecretProviderPluginResult } from "@lubab/miftah/plugin-api";',
             "",
             "type SupportedTypes = [",
@@ -1305,6 +1312,9 @@ describe("packed artifact contract", () => {
             "const version: string = MIFTAH_VERSION;",
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
+            "declare const legacyRuntime: MiftahRuntime;",
+            "declare const legacyStdioTransport: LegacyStdioServerTransport;",
+            "const legacyConnect: Promise<void> = legacyRuntime.connect(legacyStdioTransport);",
             'const serverFactory = createMiftahServerFactory("./miftah.json");',
             'const authError: AuthenticatedRequestContextError = new AuthenticatedRequestContextError("AUTH_CONTEXT_UNAVAILABLE");',
             'const profileContextError: ProfileContextHandleError = new ProfileContextHandleError("PROFILE_CONTEXT_UNAVAILABLE");',
@@ -1397,7 +1407,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, pluginApiVersion, runtime, authError, profileContextError, profileContextArgument, profileContextMetaKey, profileContextRevocations, profileContextServiceConstructor, authContext, secretPluginRequest, secretPluginResult, secretPlugin, routingSignal, routingPluginRequest, routingPluginResult, routingPlugin, plugin, pluginKind, secretPluginConfig, routingPluginConfig, pluginConfig, pluginsConfig, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, pluginApiVersion, runtime, legacyConnect, authError, profileContextError, profileContextArgument, profileContextMetaKey, profileContextRevocations, profileContextServiceConstructor, authContext, secretPluginRequest, secretPluginResult, secretPlugin, routingSignal, routingPluginRequest, routingPluginResult, routingPlugin, plugin, pluginKind, secretPluginConfig, routingPluginConfig, pluginConfig, pluginsConfig, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(
