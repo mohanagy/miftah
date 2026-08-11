@@ -24,7 +24,7 @@ export type ProxiedOperationType =
 export type CapturedProfileState = Pick<
   ReturnType<ProfileManager["current"]>,
   "activeProfile" | "revision" | "selectionSource" | "confirmation" | "lease" | "lock"
->;
+> & { readonly profileContextCorrelation?: string };
 
 export interface ApprovalRequestContext {
   readonly requestId: string | number;
@@ -263,6 +263,7 @@ export class OperationPipeline {
   private hasExplicitCurrentSessionSelection(source: CapturedProfileState, profile: string): boolean {
     if (source.activeProfile !== profile) return false;
     if (source.lock.state === "configured" && source.lock.profile === profile) return true;
+    if (source.selectionSource === "profile-context") return true;
     return (
       (source.selectionSource === "mcp-switch" || source.selectionSource === "reset") &&
       source.confirmation !== "not-confirmed"
@@ -335,6 +336,9 @@ export class OperationPipeline {
       profileConfirmation: source.confirmation,
       profileLeaseState: source.lease.state,
       profileLockState: source.lock.state,
+      ...(source.profileContextCorrelation === undefined
+        ? {}
+        : { profileContextCorrelation: source.profileContextCorrelation }),
       ...("expiresAt" in source.lease ? { profileLeaseExpiresAt: source.lease.expiresAt } : {})
     });
   }

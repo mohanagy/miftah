@@ -1,6 +1,6 @@
 # Stateless Profile Context Decision
 
-Status: Accepted for follow-up implementation; the executable model in `tests/prototypes` is non-shipping research.
+Status: Accepted. Issues #376 and #377 implement the trusted authentication and production profile-context primitives; transport negotiation and the remaining protocol-era integrations stay in the follow-ups below. The executable model in `tests/prototypes` remains non-shipping research.
 
 Issues: [#362](https://github.com/mohanagy/miftah/issues/362), [#364](https://github.com/mohanagy/miftah/issues/364), [#376](https://github.com/mohanagy/miftah/issues/376), [#377](https://github.com/mohanagy/miftah/issues/377)
 
@@ -22,7 +22,7 @@ The selected handle format is a short-lived, authenticated-encrypted token conta
 
 Every production instance for one deployment must share the active sealing-key epoch and a bounded revocation backend. Resolution fails closed if required key or revocation state is unavailable. Audit records use a separate keyed correlation derived from the internal identifier; the bearer itself is never logged, exported, diagnosed, or forwarded upstream.
 
-The non-secret envelope carries the version and key-epoch identifier so an instance can select the candidate key before opening the authenticated ciphertext. Both values, plus the deployment identifier, are authenticated as additional data. A deployment keyring has exactly one active epoch for minting and may retain explicitly configured previous epochs for resolution only. The overlap lasts no longer than the maximum handle lifetime plus bounded clock skew; after that window the previous key is removed and its remaining handles fail closed. Unknown, disabled, future, or malformed epochs are invalid. Rotation changes the active epoch atomically across instances: new handles use only the new epoch, while unexpired old handles resolve only during the declared overlap. Rollback to an older minting epoch is forbidden.
+The non-secret envelope carries the version and key-epoch identifier so an instance can select the candidate key before opening the authenticated ciphertext. Both values, plus the deployment identifier, are authenticated as additional data. A deployment keyring has exactly one active epoch for minting and may retain explicitly configured previous epochs for resolution only. The overlap lasts no longer than the maximum handle lifetime plus bounded clock skew; after that window the previous key is removed and its remaining handles fail closed. Unknown, disabled, future, or malformed epochs are invalid. Rotation changes the active epoch atomically across instances: new handles use only the new epoch, while unexpired old handles resolve only during the declared overlap. `ProfileContextHandleService` remembers the highest active epoch and its key only within one process, so restarts reset that defense. The deployment key manager must reject epoch rollback and same-epoch key replacement at the source, and operators must alert on any observed epoch regression.
 
 This keeps the one-connector, named-account experience for hosts that can provide the trusted chat binding. Until a host can do so, modern stateless mode must use an operator-locked/profile-scoped endpoint or require an explicit profile for each call. It must not claim chat-scoped switching. Legacy stdio and session-aware HTTP retain their current connection-bound behavior during the documented compatibility window.
 
@@ -95,12 +95,12 @@ The model proves:
 - the encrypted handle contains neither the profile nor subject in plaintext;
 - returned results and fixed errors contain only a keyed audit correlation, never the capability bearer.
 
-The prototype does not prove production key custody, distributed-store availability, real host chat claims, packaged SDK interoperability, or schema integration. Those remain release gates.
+The prototype alone does not prove production key custody, distributed-store availability, or real host chat claims. The production implementation and its real SDK integration tests now cover schema threading, two-instance handle use, chat isolation, transition revocation, deterministic tool discovery, and bearer stripping; a production host still owns trusted claim verification, key custody, and deployment-wide revocation availability.
 
 ## Implementation follow-ups
 
-- [#376](https://github.com/mohanagy/miftah/issues/376): establish the verified issuer/subject/audience/chat binding and safe host fallback.
-- [#377](https://github.com/mohanagy/miftah/issues/377): implement production sealing, key epochs, revocation, schema threading, request-scoped resolution, and legacy separation.
+- [#376](https://github.com/mohanagy/miftah/issues/376): completed the verified issuer/subject/audience/chat binding and safe host fallback.
+- [#377](https://github.com/mohanagy/miftah/issues/377): implements production sealing, key epochs, revocation, schema threading, request-scoped resolution, and legacy separation.
 - [#363](https://github.com/mohanagy/miftah/issues/363): negotiate modern stateless and legacy session-aware protocol eras before selecting either runtime path.
 - [#365](https://github.com/mohanagy/miftah/issues/365): validate standard MCP routing headers independently of profile-context resolution and make catalogs deterministic/cacheable.
 - [#366](https://github.com/mohanagy/miftah/issues/366): bind MRTR confirmations and cancellation to the exact authenticated context, profile handle, and request.

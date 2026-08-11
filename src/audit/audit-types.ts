@@ -78,6 +78,8 @@ export interface AuditEvent {
   profileLeaseState?: ProfileLeaseStatus["state"];
   profileLeaseExpiresAt?: string;
   profileLockState?: ProfileLockStatus["state"];
+  /** Keyed non-capability correlation for a validated modern profile context. */
+  profileContextCorrelation?: string;
   operation: "tools/call" | "resources/read" | "prompts/get" | string;
   name: string;
   status: AuditStatus;

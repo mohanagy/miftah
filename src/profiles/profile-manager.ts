@@ -51,7 +51,8 @@ export interface ProfileSelection {
     | "persisted-global"
     | "prior-session"
     | "mcp-switch"
-    | "reset";
+    | "reset"
+    | "profile-context";
   readonly selectedAt: string;
   readonly scope: ProfileStateScope;
   readonly confirmation: "not-required" | "not-confirmed" | "confirmed";
