@@ -151,24 +151,36 @@ describe("continuous integration workflow contract", () => {
     const lockedPackages = readLockedPackages();
 
     expect(overrides).toMatchObject({
+      "brace-expansion": "5.0.9",
+      "fast-uri": "3.1.5",
+      hono: "4.12.34",
+      "ip-address": "10.3.1",
+      nanoid: "3.3.17",
       "@vitest/coverage-v8": {
         "test-exclude": {
           glob: {
             ".": "13.0.6",
-            minimatch: { "brace-expansion": "5.0.8" }
+            minimatch: { "brace-expansion": "5.0.9" }
           },
-          minimatch: { "brace-expansion": "5.0.8" }
+          minimatch: { "brace-expansion": "5.0.9" }
         }
       },
-      eslint: { minimatch: { "brace-expansion": "5.0.8" } },
-      "typescript-eslint": { minimatch: { "brace-expansion": "5.0.8" } },
+      eslint: { minimatch: { "brace-expansion": "5.0.9" } },
+      "typescript-eslint": { minimatch: { "brace-expansion": "5.0.9" } },
       vitest: { vite: { postcss: "8.5.23" } }
     });
-    for (const name of ["brace-expansion", "glob", "postcss"]) {
+    for (const name of ["glob", "postcss"]) {
       expect(overrides).not.toHaveProperty(name);
     }
-    expect(lockedPackages["node_modules/brace-expansion"]).toMatchObject({ version: "5.0.8", dev: true });
+    expect(lockedPackages["node_modules/minimatch/node_modules/brace-expansion"]).toMatchObject({
+      version: "5.0.9",
+      dev: true
+    });
+    expect(lockedPackages["node_modules/fast-uri"]).toMatchObject({ version: "3.1.5" });
     expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
+    expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.12.34" });
+    expect(lockedPackages["node_modules/ip-address"]).toMatchObject({ version: "10.3.1" });
+    expect(lockedPackages["node_modules/nanoid"]).toMatchObject({ version: "3.3.17", dev: true });
     expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });
   });
 

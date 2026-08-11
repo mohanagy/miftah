@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runMigrateConfigCommand } from "../src/cli/migrate-config.js";
 import {
   createWindowsPrivateDirectoryInPrivateParent,
@@ -15,9 +15,12 @@ const requestEnvironmentName = "MIFTAH_TEST_CONFIG_ACL_REQUEST";
 const privateDirectoryRequestEnvironmentName = "MIFTAH_TEST_PRIVATE_DIRECTORY_ACL_REQUEST";
 // Hosted Windows runners can spend substantial time starting PowerShell before the first script instruction runs.
 const powerShellBootstrapTimeoutMs = 60_000;
-const powerShellProbeExecutionTimeoutMs = 5_000;
+// Functional descriptor work needs the same hosted-runner execution allowance as the private-directory probe.
+const powerShellProbeExecutionTimeoutMs = 15_000;
 const privateDirectoryProbeExecutionTimeoutMs = 15_000;
+// Keep the synthetic hang contract short and independent from functional integration-probe budgets.
 const hangingAclProbeTimeoutMs = 5_000;
+const powerShellProbeCloseFallbackMs = 2_000;
 const powerShellContractSlackMs = 30_000;
 const aclProbeBootstrapMarker = "MIFTAH_ACL_PROBE_BOOTSTRAP";
 const privateDirectoryProbeBootstrapMarker = "MIFTAH_ACL_PRIVATE_DIRECTORY_PROBE_BOOTSTRAP";
@@ -68,12 +71,12 @@ function createPowerShellProbeDeadline(
   const expire = (): void => {
     if (settled) return;
     settled = true;
+    onTimeout();
     try {
       child.kill();
     } catch {
       // The probe has no verified result after its bounded phase deadline.
     }
-    onTimeout();
   };
   const arm = (durationMs: number): void => {
     if (timeout !== undefined) clearTimeout(timeout);
@@ -98,6 +101,49 @@ function createPowerShellProbeDeadline(
       }
       markerTail = candidate.subarray(-Math.min(candidate.length, maximumMarkerBytes - 1));
     }
+  };
+}
+
+function createDeferredPowerShellProbeTimeout(
+  reject: (reason: Error) => void,
+  closeFallbackMs: number = powerShellProbeCloseFallbackMs
+): {
+  didTimeOut: () => boolean;
+  markTimedOut: (error: Error) => void;
+  rejectChildError: (error: Error) => void;
+  settleAfterClose: () => boolean;
+} {
+  let timeoutError: Error | undefined;
+  let timedOut = false;
+  let closeFallback: NodeJS.Timeout | undefined;
+
+  const settle = (): boolean => {
+    if (timeoutError === undefined) return false;
+    const error = timeoutError;
+    timeoutError = undefined;
+    if (closeFallback !== undefined) {
+      clearTimeout(closeFallback);
+      closeFallback = undefined;
+    }
+    reject(error);
+    return true;
+  };
+
+  return {
+    didTimeOut: () => timedOut,
+    markTimedOut: (error) => {
+      if (timedOut) return;
+      timedOut = true;
+      timeoutError = error;
+      closeFallback = setTimeout(() => {
+        closeFallback = undefined;
+        settle();
+      }, closeFallbackMs);
+    },
+    rejectChildError: (error) => {
+      if (!timedOut) reject(error);
+    },
+    settleAfterClose: settle
   };
 }
 
@@ -430,12 +476,15 @@ async function windowsAclSddl(
     );
     const output: Buffer[] = [];
     const errorOutput: Buffer[] = [];
+    const timeoutSettlement = createDeferredPowerShellProbeTimeout(reject);
     const deadline = createPowerShellProbeDeadline(
       child,
       isFunctionalProbe ? aclProbeBootstrapMarker : undefined,
       isFunctionalProbe ? powerShellProbeExecutionTimeoutMs : hangingAclProbeTimeoutMs,
       () => {
-        reject(new Error(`Windows ACL probe timed out: ${safeAclProbeStage([...output, ...errorOutput])}`));
+        timeoutSettlement.markTimedOut(
+          new Error(`Windows ACL probe timed out: ${safeAclProbeStage([...output, ...errorOutput])}`)
+        );
       }
     );
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -448,10 +497,14 @@ async function windowsAclSddl(
     });
     child.once("error", () => {
       deadline.clear();
-      reject(new Error("Windows ACL probe could not start"));
+      timeoutSettlement.rejectChildError(new Error("Windows ACL probe could not start"));
     });
     child.once("close", (code) => {
       deadline.clear();
+      if (timeoutSettlement.didTimeOut()) {
+        timeoutSettlement.settleAfterClose();
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`Windows ACL probe failed: ${safeAclProbeStage([...output, ...errorOutput])}`));
         return;
@@ -584,6 +637,76 @@ async function windowsCopyFileSecurityProbe(
 }
 
 describe("Windows migration ACL contract", () => {
+  it("records an ACL timeout before a synchronous kill error and settles it after close", () => {
+    vi.useFakeTimers();
+    try {
+      const rejections: Error[] = [];
+      const timeoutSettlement = createDeferredPowerShellProbeTimeout((error) => rejections.push(error), 100);
+      const timeoutError = new Error("probe timed out");
+      const laterTimeoutError = new Error("later timeout");
+      const childError = new Error("child error after timeout");
+      const deadline = createPowerShellProbeDeadline(
+        {
+          kill: () => {
+            timeoutSettlement.rejectChildError(childError);
+            return false;
+          }
+        },
+        undefined,
+        10,
+        () => {
+          timeoutSettlement.markTimedOut(timeoutError);
+          timeoutSettlement.markTimedOut(laterTimeoutError);
+        }
+      );
+
+      vi.advanceTimersByTime(10);
+
+      expect(timeoutSettlement.didTimeOut()).toBe(true);
+      expect(rejections).toEqual([]);
+      expect(timeoutSettlement.settleAfterClose()).toBe(true);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0]).toBe(timeoutError);
+      expect(timeoutSettlement.settleAfterClose()).toBe(false);
+      vi.advanceTimersByTime(100);
+      expect(rejections).toHaveLength(1);
+      deadline.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a timed-out ACL probe when child close never arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const rejections: Error[] = [];
+      const timeoutSettlement = createDeferredPowerShellProbeTimeout((error) => rejections.push(error), 100);
+      const timeoutError = new Error("probe timed out");
+
+      timeoutSettlement.markTimedOut(timeoutError);
+      vi.advanceTimersByTime(99);
+      expect(rejections).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0]).toBe(timeoutError);
+      expect(timeoutSettlement.settleAfterClose()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an ACL probe child error immediately when no timeout is pending", () => {
+    const rejections: Error[] = [];
+    const timeoutSettlement = createDeferredPowerShellProbeTimeout((error) => rejections.push(error));
+    const childError = new Error("probe could not start");
+
+    timeoutSettlement.rejectChildError(childError);
+
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]).toBe(childError);
+    expect(timeoutSettlement.settleAfterClose()).toBe(false);
+  });
+
   it.runIf(process.platform === "win32")(
     "streams an exact first-run config through the held private directory chain",
     async () => {

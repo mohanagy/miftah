@@ -1,6 +1,6 @@
 # OAuth and Console validation
 
-This page records what Miftah's release gate proves for native remote OAuth and the optional local Console, what it deliberately does not prove, and which external evidence is still missing. It is an evidence record, not a claim that every OAuth provider is supported.
+This page records what Miftah's release gate proves for native remote OAuth and the optional local Console, what it deliberately does not prove, and how maintainer-attested external evidence is recorded. It is an evidence record, not a claim that every OAuth provider is supported.
 
 ## Automated compatibility gate
 
@@ -37,14 +37,15 @@ For provider-adapter-backed or upstream-owned OAuth, follow the provider's own r
 
 ## Release status and limitations
 
-OAuth and Console are being validated for a pre-v1 feature release. Passing this automated gate is required release evidence, but it is not v1.0 readiness and does not close the demand or external-validation gates by itself. The current support classes and manual fallbacks remain defined in the [OAuth support matrix](oauth-support.md#support-matrix).
+OAuth and Console are included in the `@lubab/miftah@1.0.0` release candidate. They become part of the stable v1 release only after exact-main protected publication and registry verification. The automated gate remains required evidence, but it does not prove live-provider behavior, external adoption, or account intent by itself. The current support classes and manual fallbacks remain defined in the [OAuth support matrix](oauth-support.md#support-matrix).
 
 ## External design-partner evidence
 
-Snapshot date: 2026-07-22.
+Snapshot date: 2026-08-11. Evaluator baseline: `@lubab/miftah@0.5.8`. Stable release candidate: `@lubab/miftah@1.0.0`.
 
 - Interested external users: 5
-- Recorded completed external workflows: 0
-- Recorded returning external users: 0
+- Recorded completed external workflows: 5
+- Recorded returning external users: 3
+- Recorded unaided README evaluators: 3
 
-The external design-partner gate remains open. Closing it requires five external users to complete real multi-account workflows and at least three to return after setup. Record only deidentified workflow, setup friction, return behavior, and rejected assumptions; never record credentials, OAuth codes, tokens, provider payloads, or personal account identifiers.
+These counts are a maintainer attestation recorded on [#39](https://github.com/mohanagy/miftah/issues/39), not independently inspected participant evidence. The 5/3/3 attested counters apply only to the `@lubab/miftah@0.5.8` evaluator baseline, not to the 1.0.0 release candidate. The private participant records and public deidentified row-level rollup were not supplied during release preparation, so this page does not infer provider coverage, dates, clients, operating systems, or participant-specific outcomes beyond the three counters above. The [v1 external evaluation](v1-evaluation.md) protocol remains the definition of a completed real workflow, later-session return, unaided participation, version pinning, and safe deidentified record. Never record credentials, OAuth codes, tokens, provider payloads, or personal account identifiers.

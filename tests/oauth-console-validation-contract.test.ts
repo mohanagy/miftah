@@ -56,11 +56,13 @@ describe("OAuth and Console validation contract", () => {
       "Disconnect and cleanup",
       "Cancellation and callback timeout",
       "Configuration backup and recovery",
-      "pre-v1 feature release",
+      "stable v1 release",
       "Interested external users: 5",
-      "Recorded completed external workflows: 0",
-      "Recorded returning external users: 0",
-      "The external design-partner gate remains open"
+      "Recorded completed external workflows: 5",
+      "Recorded returning external users: 3",
+      "Recorded unaided README evaluators: 3",
+      "maintainer attestation",
+      "not independently inspected"
     ]) {
       expect(validation).toContain(requiredEvidence);
     }

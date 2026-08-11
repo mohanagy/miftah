@@ -107,7 +107,23 @@ function assertPatchedFastUriLockEntries(lock: PackageLock): void {
 
   expect(entries, "fast-uri must exist in the package lock").not.toHaveLength(0);
   for (const [packagePath, packageEntry] of entries) {
-    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.4");
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.5");
+  }
+}
+
+function assertPatchedTransitiveLockEntries(
+  lock: PackageLock,
+  packageName: string,
+  expectedVersion: string
+): void {
+  const suffix = `node_modules/${packageName}`;
+  const entries = Object.entries(lock.packages ?? {}).filter(
+    ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
+  );
+
+  expect(entries, `${packageName} must exist in the package lock`).not.toHaveLength(0);
+  for (const [packagePath, packageEntry] of entries) {
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe(expectedVersion);
   }
 }
 
@@ -737,10 +753,28 @@ describe("package metadata contract", () => {
     assertPatchedEsbuildLockEntries(lock);
   });
 
-  it("locks the patched fast-uri release for GHSA-v2hh-gcrm-f6hx", () => {
+  it("locks the patched fast-uri release for GHSA-7p8r-x3mc-p8w7", () => {
+    const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
+    expect(manifest.overrides?.["fast-uri"]).toBe("3.1.5");
     assertPatchedFastUriLockEntries(lock);
+  });
+
+  it("locks the patched transitive security releases tracked by #373", () => {
+    const manifest = readPackageManifest();
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
+    const expectedVersions = {
+      "brace-expansion": "5.0.9",
+      hono: "4.12.34",
+      "ip-address": "10.3.1",
+      nanoid: "3.3.17"
+    } as const;
+
+    for (const [packageName, expectedVersion] of Object.entries(expectedVersions)) {
+      expect(manifest.overrides?.[packageName]).toBe(expectedVersion);
+      assertPatchedTransitiveLockEntries(lock, packageName, expectedVersion);
+    }
   });
 
   it("locks the patched MCP SDK and Hono Node server releases for GHSA-frvp-7c67-39w9", () => {
@@ -766,12 +800,30 @@ describe("package metadata contract", () => {
   it("rejects stale nested fast-uri lock entries", () => {
     const lock: PackageLock = {
       packages: {
-        "node_modules/fast-uri": { version: "3.1.4" },
-        "node_modules/ajv/node_modules/fast-uri": { version: "3.1.3" }
+        "node_modules/fast-uri": { version: "3.1.5" },
+        "node_modules/ajv/node_modules/fast-uri": { version: "3.1.4" }
       }
     };
 
     expect(() => assertPatchedFastUriLockEntries(lock)).toThrow(/node_modules\/ajv\/node_modules\/fast-uri/);
+  });
+
+  it.each([
+    ["hono", "4.12.34", "4.12.33"],
+    ["ip-address", "10.3.1", "10.3.0"],
+    ["brace-expansion", "5.0.9", "5.0.8"],
+    ["nanoid", "3.3.17", "3.3.16"]
+  ])("rejects a stale nested %s lock entry", (packageName, patchedVersion, staleVersion) => {
+    const lock: PackageLock = {
+      packages: {
+        [`node_modules/${packageName}`]: { version: patchedVersion },
+        [`node_modules/example/node_modules/${packageName}`]: { version: staleVersion }
+      }
+    };
+
+    expect(() => assertPatchedTransitiveLockEntries(lock, packageName, patchedVersion)).toThrow(
+      new RegExp(`node_modules/example/node_modules/${packageName}`)
+    );
   });
 
   it("rejects stale nested Hono Node server lock entries", () => {

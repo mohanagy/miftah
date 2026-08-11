@@ -1,6 +1,6 @@
 # Threat model
 
-> **Status:** Maintainer-authored model for the current development branch. It is not an independent security assessment. The independent review tracked by [#37](https://github.com/mohanagy/miftah/issues/37) has not yet been commissioned; see [Independent review status](#independent-review-status).
+> **Status:** Maintainer-authored model for the current development branch. It is not an independent security assessment. The maintainer reports that the review tracked by [#37](https://github.com/mohanagy/miftah/issues/37) is complete; the report was not independently inspected during release preparation. See [Independent review status](#independent-review-status).
 
 Miftah is an MCP-aware credential broker. This document makes the security boundaries behind its defaults explicit: what is protected, who crosses each boundary, which controls are implemented, and which risks remain. It complements the operational [security model](security.md), implementation [architecture](architecture.md), and [security reporting policy with a private reporting channel](../SECURITY.md).
 
@@ -85,6 +85,8 @@ secret references, audit destination, and explicitly allowlisted plugins.
 | **Plugin, dependency, or source supply-chain compromise** gains same-user host access. | Local plugins are explicitly allowlisted, preflighted below the configuration directory, isolated in a child host, and given only limited routing signals. | These controls are not a substitute for dependency provenance, code review, signatures, host hardening, or separate OS identities. Treat configured plugin code and the package supply chain as operator trust decisions. |
 | **Denial of service and concurrency exhaustion** consumes processes, output buffers, HTTP sessions, audit capacity, or host resources. | Provider output and time are bounded; HTTP bodies and sessions are bounded before allocation; lifecycle management keeps a no-eviction capacity reservation through cleanup/recovery; failures are surfaced instead of silently admitting unlimited replacements. | Miftah does not provide a general host resource quota, distributed rate limit, or protection from a malicious same-user process, local administrator, upstream, or network. Operators must size and monitor the host and set appropriate deployment limits. |
 
+The [tool-description quarantine study](research/tool-description-quarantine.md) evaluates descriptor hashes and heuristic prompt-injection scanning. It is not a production security control: upstream tool descriptions and schemas remain untrusted input, and an operator-approved upstream remains able to receive the credentials intentionally supplied to it.
+
 ## Security-sensitive defaults and validation
 
 Security defaults deliberately favor refusal over convenience:
@@ -123,9 +125,9 @@ These are design boundaries, not permission to ignore them. Use separate OS iden
 
 ## Independent review status
 
-**Current project status (2026-07-14): not yet commissioned.** This document does not claim an independent review, an external finding count, or remediation of findings that have not been reported. The maintainer-authored controls above are implementation statements, not a substitute for external assurance.
+**Current project status (2026-08-11): completed by maintainer attestation.** The [independent security review brief](independent-security-review.md) defines the target, independence, scope, deliverables, disclosure path, and closure gate. The completed report, reviewer attribution, severity counts, remediation evidence, and final-candidate delta acceptance were not independently inspected during release preparation. This document therefore records the maintainer's status without claiming report facts that were not provided; the maintainer-authored controls above remain implementation statements, not a substitute for external assurance.
 
-The planned independent review scope is the security-critical implementation and its tests: configuration/schema parsing; secret resolution and redaction; child-process and Windows Job Object containment; profile/runtime and container isolation; local HTTP ingress/session handling; routing, policy, approval, and identity boundaries; audit confidentiality/integrity; local plugins and dependency/supply-chain controls; and denial-of-service/capacity behavior. Reviewers should test negative paths and trust-boundary crossings, not only happy-path configuration.
+The defined independent review scope is the security-critical implementation and its tests: configuration/schema parsing; secret resolution and redaction; child-process and Windows Job Object containment; profile/runtime and container isolation; local HTTP ingress/session handling; routing, policy, approval, and identity boundaries; audit confidentiality/integrity; local plugins and dependency/supply-chain controls; and denial-of-service/capacity behavior. Reviewers should test negative paths and trust-boundary crossings, not only happy-path configuration.
 
 The release target in [#37](https://github.com/mohanagy/miftah/issues/37) is to publish the review completion and a high-level remediation status before `1.0`, without publishing proof-of-concept details prematurely. Any critical or high finding must be remediated or have an explicit release-blocking decision; no unresolved critical/high finding may remain at release. Vulnerability disclosure timing follows the [security policy](../SECURITY.md).
 

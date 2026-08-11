@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-11
+
+### Changed
+
+- [#39](https://github.com/mohanagy/miftah/issues/39) Established the stable Semantic Versioning contract for documented configuration formats, CLI and MCP names, audit records, package exports, and the plugin API. The v1 candidate preserves the tested 0.5.8 runtime surface while promoting the compatibility, migration, documentation, security, and cross-platform gates accumulated across the pre-1.0 line.
+- [#36](https://github.com/mohanagy/miftah/issues/36) Added a repeatable, research-only evaluation of MCP tool-description quarantine: exact descriptor drift is detected with canonical hashes, while a deliberately small heuristic corpus records both false positives and missed malicious descriptions. The published recommendation defers runtime quarantine until representative design-partner evidence shows acceptable value, approval churn, and recovery behavior; this prototype is not a production security control and does not claim protection after credentials reach an operator-approved upstream.
+
+### Security
+
+- [#373](https://github.com/mohanagy/miftah/issues/373) Updated the exact transitive security resolutions to `fast-uri` 3.1.5, `ip-address` 10.3.1, `hono` 4.12.34, `brace-expansion` 5.0.9, and `nanoid` 3.3.17 after newly disclosed host-confusion, SSRF/trust-classification, ReDoS, and denial-of-service advisories. Package contracts reject stale nested copies, and both production-only and full npm audits report zero known vulnerabilities without changing Miftah's runtime API.
+
+### Validation
+
+- The maintainer reported **5/5 completed external workflows**, **3 returning participants**, **3 unaided evaluators**, and a completed security report, then authorized closure of the related v1 issues. This release record preserves that as maintainer attestation: the participant records and completed report were not independently inspected during release preparation, and no additional provider, reviewer, severity, or remediation facts are inferred here.
+- Publication remains protected: the finalized candidate is promoted from `development` to the exact current `main` commit, released as `v1.0.0`, and published only through protected OIDC publication with registry provenance, fresh-install, and signature verification recorded on #39.
+
 ## [0.5.8] - 2026-08-09
 
 ### Fixed
@@ -212,4 +228,4 @@ All notable changes to this project will be documented in this file. The format 
 
 ## Release policy
 
-Miftah is experimental and pre-1.0, so incompatible changes may occur between minor versions and must be called out here. For each release, maintainers move **Unreleased** entries into a dated version section, update `package.json` and `package-lock.json` together using npm tooling, and publish a GitHub release tagged `v<package-version>`. The release workflow publishes only after the tag, ancestry, tests, build, CLI smoke test, and package contents are verified.
+Miftah 1.x follows Semantic Versioning for the public compatibility surfaces documented in the library, CLI, configuration, audit, MCP-management, and plugin references. Compatible fixes use patch releases, additive compatible features use minor releases, and incompatible public changes require a new major release with an explicit **Unreleased** entry and migration guidance. For each release, maintainers move **Unreleased** entries into a dated version section, update `package.json` and `package-lock.json` together using npm tooling, and publish a GitHub release tagged `v<package-version>`. The release workflow publishes only after the tag, ancestry, tests, build, CLI smoke test, and package contents are verified.
