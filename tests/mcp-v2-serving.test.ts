@@ -19,7 +19,14 @@ const remoteUpstreams: FakeRemoteUpstream[] = [];
 afterEach(async () => {
   await Promise.all(httpServers.splice(0).map((server) => server.close()));
   await Promise.all(remoteUpstreams.splice(0).map((upstream) => upstream.close()));
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
+    recursive: true,
+    force: true,
+    // Keep cleanup bounded while tolerating a transient late filesystem entry
+    // after the server and upstream close boundaries have completed.
+    maxRetries: 5,
+    retryDelay: 50
+  })));
 });
 
 async function configPath(upstream?: {
