@@ -290,6 +290,7 @@ describe("modern stateless profile-context runtime", () => {
       expect(parseText(await firstClient.callTool({ name: "echo", arguments: prototypeArguments }))).toContain(
         "prototype-safe"
       );
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
       await expect(firstClient.callTool({
         name: `echo-${workHandle}`,
         arguments: { [PROFILE_CONTEXT_ARGUMENT]: workHandle }
