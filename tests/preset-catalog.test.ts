@@ -257,8 +257,10 @@ describe("preset catalog", () => {
 
   it("requires explicit acknowledgement before creating a restricted local stdio configuration", () => {
     const localCommand = localExecutable();
-    const args = [resolve("fixtures", "fake-local-mcp.mjs"), "--stdio", "$pageview"];
+    const args = ["fixtures/fake-local-mcp.mjs", "--stdio", "$pageview"];
 
+    expect(args[0]).toBeDefined();
+    expect(isAbsolute(args[0]!)).toBe(false);
     expect(() => buildPresetConfig("local-tools", "local-stdio", { localCommand, args })).toThrow(PresetCatalogError);
 
     const config = buildPresetConfig("local-tools", "local-stdio", {
