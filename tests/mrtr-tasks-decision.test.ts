@@ -29,6 +29,14 @@ describe("MRTR and Tasks decision", () => {
     expect(decision).toContain("Miftah makes no Tasks interoperability claim");
   });
 
+  it("applies the audit retention contract to every MRTR round", () => {
+    expect(decision).toContain("Every round applies the normal operation-argument policy");
+    expect(decision).toContain("arguments are omitted unless `audit.includeArguments` is enabled");
+    expect(decision).toContain("enabled arguments pass through the configured secret redaction");
+    expect(decision).toContain("Continuation state, input responses, profile-context handles, and approval bearers remain excluded");
+    expect(decision).toContain("Dedicated approval records never store operation arguments");
+  });
+
   it("links the primary protocol and extension sources", () => {
     expect(decision).toContain("https://blog.modelcontextprotocol.io/posts/2026-07-28/");
     expect(decision).toContain("https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322");

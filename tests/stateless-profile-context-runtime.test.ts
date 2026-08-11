@@ -428,7 +428,7 @@ describe("modern stateless profile-context runtime", () => {
         }
       },
       policies: { confirm: { requireConfirmation: ["create_item"] } },
-      audit: { path: auditPath },
+      audit: { path: auditPath, includeArguments: true },
       server: { http: { port: 0 } }
     }));
     const requestBoundary = createAuthenticatedRequestContextBoundary<unknown>({
@@ -530,10 +530,18 @@ describe("modern stateless profile-context runtime", () => {
       const auditText = await readFile(auditPath, "utf8");
       expect(auditText).not.toContain(handleA);
       expect(auditText).not.toContain(handleB);
+      expect(auditText).not.toContain(firstRound.requestState);
+      expect(auditText).not.toContain('"requestState"');
+      expect(auditText).not.toContain('"inputResponses"');
       const events = auditText
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const operationEvents = events.filter(
+        (event) => event.kind === "operation" && event.operation === "tools/call" && event.name === "create_item"
+      );
+      expect(operationEvents.length).toBeGreaterThanOrEqual(3);
+      for (const event of operationEvents) expect(event.arguments).toEqual({ name: "principal-bound" });
       expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({
           kind: "operation",

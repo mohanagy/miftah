@@ -335,10 +335,16 @@ describe("MCP SDK v2 serving interoperability", () => {
       expect(elicitationRequests).toHaveLength(1);
       expect(JSON.stringify(elicitationRequests)).not.toContain(secretArgument);
       expect(await readFile(createCountPath, "utf8")).toBe("1\n");
-      const approvalActions = (await readFile(auditPath, "utf8"))
+      const auditText = await readFile(auditPath, "utf8");
+      expect(auditText).not.toContain(secretArgument);
+      const auditEvents = auditText
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const operationEvents = auditEvents.filter((event) => event.kind === "operation");
+      expect(operationEvents.length).toBeGreaterThanOrEqual(2);
+      for (const event of operationEvents) expect(event).not.toHaveProperty("arguments");
+      const approvalActions = auditEvents
         .filter((event) => event.kind === "approval")
         .map((event) => event.approvalAction);
       expect(approvalActions).toEqual(["requested", "approved", "consumed"]);

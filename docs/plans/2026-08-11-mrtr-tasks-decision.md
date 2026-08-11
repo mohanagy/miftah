@@ -25,7 +25,7 @@ The `io.modelcontextprotocol/tasks` extension remains unimplemented. No evaluate
 
 ## Audit outcome vocabulary
 
-The audit journal distinguishes each workflow state without storing `requestState`, input responses, profile-context handles, or full operation arguments:
+The audit journal distinguishes each workflow state without storing `requestState`, `inputResponses`, profile-context handles, or approval bearers:
 
 | Workflow meaning | Audit representation |
 | --- | --- |
@@ -34,7 +34,7 @@ The audit journal distinguishes each workflow state without storing `requestStat
 | Failed or rejected | operation status `failure` with a stable redacted error code |
 | Completed | operation status `success`; an approved MRTR also records `approved` then `consumed` |
 
-Each request round has its own operation record. A confirmation-required first round is therefore complete as a protocol exchange but incomplete as the requested business operation.
+Each request round has its own operation record. A confirmation-required first round is therefore complete as a protocol exchange but incomplete as the requested business operation. Every round applies the normal operation-argument policy: arguments are omitted unless `audit.includeArguments` is enabled, and enabled arguments pass through the configured secret redaction before storage. Continuation state, input responses, profile-context handles, and approval bearers remain excluded in either mode. Dedicated approval records never store operation arguments.
 
 ## Tasks evaluation
 
