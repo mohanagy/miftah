@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#36](https://github.com/mohanagy/miftah/issues/36) Added a repeatable, research-only evaluation of MCP tool-description quarantine: exact descriptor drift is detected with canonical hashes, while a deliberately small heuristic corpus records both false positives and missed malicious descriptions. The published recommendation defers runtime quarantine until representative design-partner evidence shows acceptable value, approval churn, and recovery behavior; this prototype is not a production security control and does not claim protection after credentials reach an operator-approved upstream.
+
 ## [0.5.8] - 2026-08-09
 
 ### Fixed
