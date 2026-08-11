@@ -6,6 +6,7 @@ const libraryApiPath = fileURLToPath(new URL("../docs/library-api.md", import.me
 const changelogPath = fileURLToPath(new URL("../CHANGELOG.md", import.meta.url));
 const packageManifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 
+/** Returns the dated changelog section for an exact package version. */
 function releaseNotes(changelog: string, version: string): string {
   const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const heading = changelog.match(new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
