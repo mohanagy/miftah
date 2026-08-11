@@ -1,9 +1,9 @@
 # What is in Miftah 0.5
 
-Install `@lubab/miftah@1.0.0`, the current stable release, to use the guided setup and account-management capabilities introduced in 0.5 instead of assembling a multi-account configuration by hand:
+Install `@lubab/miftah@1.1.0`, the current stable release, to use the guided setup and account-management capabilities introduced in 0.5 instead of assembling a multi-account configuration by hand:
 
 ```bash
-npm install -g @lubab/miftah@1.0.0
+npm install -g @lubab/miftah@1.1.0
 miftah version
 ```
 

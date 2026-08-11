@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 
 const libraryApiPath = fileURLToPath(new URL("../docs/library-api.md", import.meta.url));
 const changelogPath = fileURLToPath(new URL("../CHANGELOG.md", import.meta.url));
+const packageManifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
+
+function releaseNotes(changelog: string, version: string): string {
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const heading = changelog.match(new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
+  if (heading?.index === undefined) return "";
+  const end = changelog.indexOf("\n## ", heading.index + heading[0].length);
+  return changelog.slice(heading.index, end < 0 ? undefined : end);
+}
 
 describe("profile-context handle documentation contract", () => {
   it("documents the trusted modern host and deployment-wide fail-closed boundary", async () => {
@@ -21,11 +30,11 @@ describe("profile-context handle documentation contract", () => {
 
   it("records the production boundary alongside protocol negotiation", async () => {
     const changelog = await readFile(changelogPath, "utf8");
-    const [, afterUnreleased = ""] = changelog.split(/^## \[Unreleased\]\s*$/mu);
-    const unreleased = afterUnreleased.split(/^## \[/mu, 1)[0] ?? "";
+    const manifest = JSON.parse(await readFile(packageManifestPath, "utf8")) as { version: string };
+    const currentRelease = releaseNotes(changelog, manifest.version);
 
-    expect(unreleased).toContain("[#377]");
-    expect(unreleased).toContain("opt-in production profile-context boundary");
-    expect(unreleased).toContain("an embedding host enables the boundary through `createMiftahServerFactory`");
+    expect(currentRelease).toContain("[#377]");
+    expect(currentRelease).toContain("opt-in production profile-context boundary");
+    expect(currentRelease).toContain("an embedding host enables the boundary through `createMiftahServerFactory`");
   });
 });

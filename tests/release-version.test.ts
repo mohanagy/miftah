@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.0.0";
+const releaseVersion = "1.1.0";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.0.0 release artifacts", () => {
+describe("v1.1.0 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.0.0] - 2026-8-11\n\n### Changed\n"
+      changelog: "## [1.1.0] - 2026-8-12\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.0.0] - 2026-08-11\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.0] - 2026-08-12\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,27 +71,25 @@ describe("v1.0.0 release artifacts", () => {
     }
   });
 
-  it("documents the stable v1 contract and its evidence boundary", () => {
+  it("documents the v1.1 MCP compatibility release and its evidence boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
+    expect(notes).toContain("### Added");
     expect(notes).toContain("### Changed");
-    expect(notes).toContain("[#39](https://github.com/mohanagy/miftah/issues/39)");
-    expect(notes).toContain("[#373](https://github.com/mohanagy/miftah/issues/373)");
-    expect(notes).toContain("stable Semantic Versioning contract");
-    for (const dependency of ["fast-uri", "ip-address", "hono", "brace-expansion", "nanoid"]) {
-      expect(notes).toContain(dependency);
+    expect(notes).toContain("### Fixed");
+    expect(notes).toContain("### Security");
+    for (const issue of [363, 365, 366, 367, 368, 376, 377, 391, 393]) {
+      expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("5/5 completed external workflows");
-    expect(notes).toContain("3 returning participants");
-    expect(notes).toContain("3 unaided evaluators");
-    expect(notes).toContain("maintainer attestation");
-    expect(notes).toContain("not independently inspected");
-    expect(notes).toContain("protected OIDC publication");
+    expect(notes).toContain("named desktop-host claims remain explicitly unverified");
+    expect(notes).toContain("protected OIDC trusted publishing");
+    expect(notes).toContain("registry provenance");
 
     const readme = readRepositoryFile("README.md");
     const compatibilityGuide = readRepositoryFile("docs/presets-and-clients.md");
     const libraryGuide = readRepositoryFile("docs/library-api.md");
+    const protocolCompatibilityGuide = readRepositoryFile("docs/mcp-compatibility.md");
 
     expect(readme).toContain("Use the right account with the MCP servers you already trust");
     expect(readme).toContain("stable v1 release line");
@@ -99,6 +97,8 @@ describe("v1.0.0 release artifacts", () => {
     expect(readme).not.toContain("experimental and pre-1.0");
     expect(readme).toContain(`npm install -g @lubab/miftah@${releaseVersion}`);
     expect(compatibilityGuide).toContain(`Miftah package version: \`${releaseVersion}\``);
+    expect(protocolCompatibilityGuide).toContain(`Miftah baseline: \`${releaseVersion}\``);
+    expect(protocolCompatibilityGuide).toContain("No packaged runtime exchange was completed for this audit");
     expect(libraryGuide).toContain("Starting with Miftah 1.0, these public surfaces follow Semantic Versioning");
     expect(libraryGuide).toContain("requires a new major release");
   });
