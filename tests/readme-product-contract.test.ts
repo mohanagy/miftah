@@ -64,7 +64,7 @@ describe("product README", () => {
     expect(firstScreen).toContain("stable v1 release line");
     expect(firstScreen).toContain("closed by maintainer attestation");
     expect(firstScreen).toContain(
-      "source participant records and completed security report are not published",
+      "source participant records and completed security report are not published in this repository",
     );
     expect(firstScreen).toContain("[#39]");
     expect(firstScreen).not.toContain("experimental and pre-1.0");

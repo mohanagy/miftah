@@ -85,6 +85,9 @@ describe("v1 readiness documentation contract", () => {
     expect(validation).toContain("Recorded completed external workflows: 5");
     expect(validation).toContain("Recorded returning external users: 3");
     expect(validation).toContain("Recorded unaided README evaluators: 3");
+    expect(validation).toContain(
+      "The 5/3/3 attested counters apply only to the `@lubab/miftah@0.5.8` evaluator baseline, not to the 1.0.0 release candidate",
+    );
     expect(validation).toContain("not independently inspected");
     expect(validation).toContain(
       "OAuth and Console are included in the `@lubab/miftah@1.0.0` release candidate",
