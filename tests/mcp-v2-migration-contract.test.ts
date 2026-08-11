@@ -16,12 +16,12 @@ describe("MCP TypeScript SDK v2 migration contract", () => {
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",
       "@modelcontextprotocol/server": "^2.0.0",
-      "@modelcontextprotocol/server-legacy": "^2.0.0",
       zod: "^4.2.0"
     });
     expect(manifest.devDependencies).toMatchObject({
       "@hono/node-server": "2.0.10",
       "@modelcontextprotocol/node": "^2.0.0",
+      "@modelcontextprotocol/server-legacy": "^2.0.0",
       hono: "4.12.34"
     });
   });

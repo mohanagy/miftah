@@ -799,12 +799,12 @@ describe("package metadata contract", () => {
     expect(manifest.dependencies).toMatchObject({
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",
-      "@modelcontextprotocol/server": "^2.0.0",
-      "@modelcontextprotocol/server-legacy": "^2.0.0"
+      "@modelcontextprotocol/server": "^2.0.0"
     });
     expect(manifest.devDependencies).toMatchObject({
       "@hono/node-server": "2.0.10",
       "@modelcontextprotocol/node": "^2.0.0",
+      "@modelcontextprotocol/server-legacy": "^2.0.0",
       hono: "4.12.34"
     });
     expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
