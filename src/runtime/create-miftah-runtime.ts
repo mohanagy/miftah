@@ -2,6 +2,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig } from "../config/types.js";
 import { MiftahServer } from "../mcp/server/miftah-server.js";
+import type { ModernProfileContextRuntimeOptions } from "../profiles/profile-context-handle.js";
 import { collectRoutingContext } from "../routing/context-collector.js";
 import { createRuntime } from "./create-runtime.js";
 
@@ -15,7 +16,12 @@ export interface MiftahRuntime {
   close(): Promise<void>;
 }
 
-interface MiftahRuntimeFactoryOptions {
+export interface MiftahRuntimeOptions {
+  /** Enables explicit request-scoped profile handles for a trusted modern host. */
+  readonly modernProfileContext?: ModernProfileContextRuntimeOptions;
+}
+
+interface MiftahRuntimeFactoryOptions extends MiftahRuntimeOptions {
   readonly profileState?: { readonly persistActiveProfile?: false; readonly scope?: "process" | "session" };
 }
 
@@ -41,7 +47,8 @@ async function createConfiguredMiftahRuntime(
     runtime.plugins,
     runtime.oauth,
     runtime.identities,
-    runtimeConfigPath
+    runtimeConfigPath,
+    options.modernProfileContext
   );
 
   return {
@@ -52,8 +59,11 @@ async function createConfiguredMiftahRuntime(
 }
 
 /** Creates an MCP wrapper runtime without exposing its internal manager or server classes. */
-export async function createMiftahRuntime(configPath: string): Promise<MiftahRuntime> {
-  return createConfiguredMiftahRuntime(configPath);
+export async function createMiftahRuntime(
+  configPath: string,
+  options: MiftahRuntimeOptions = {}
+): Promise<MiftahRuntime> {
+  return createConfiguredMiftahRuntime(configPath, options);
 }
 
 /** Creates a fresh MCP runtime whose profile state cannot escape its HTTP client session. */

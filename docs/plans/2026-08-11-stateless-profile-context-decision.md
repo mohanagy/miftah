@@ -1,6 +1,6 @@
 # Stateless Profile Context Decision
 
-Status: Accepted for follow-up implementation; the executable model in `tests/prototypes` is non-shipping research.
+Status: Accepted. Issues #376 and #377 implement the trusted authentication and production profile-context primitives; transport negotiation and the remaining protocol-era integrations stay in the follow-ups below. The executable model in `tests/prototypes` remains non-shipping research.
 
 Issues: [#362](https://github.com/mohanagy/miftah/issues/362), [#364](https://github.com/mohanagy/miftah/issues/364), [#376](https://github.com/mohanagy/miftah/issues/376), [#377](https://github.com/mohanagy/miftah/issues/377)
 
@@ -95,12 +95,12 @@ The model proves:
 - the encrypted handle contains neither the profile nor subject in plaintext;
 - returned results and fixed errors contain only a keyed audit correlation, never the capability bearer.
 
-The prototype does not prove production key custody, distributed-store availability, real host chat claims, packaged SDK interoperability, or schema integration. Those remain release gates.
+The prototype alone does not prove production key custody, distributed-store availability, or real host chat claims. The production implementation and its real SDK integration tests now cover schema threading, two-instance handle use, chat isolation, transition revocation, deterministic tool discovery, and bearer stripping; a production host still owns trusted claim verification, key custody, and deployment-wide revocation availability.
 
 ## Implementation follow-ups
 
-- [#376](https://github.com/mohanagy/miftah/issues/376): establish the verified issuer/subject/audience/chat binding and safe host fallback.
-- [#377](https://github.com/mohanagy/miftah/issues/377): implement production sealing, key epochs, revocation, schema threading, request-scoped resolution, and legacy separation.
+- [#376](https://github.com/mohanagy/miftah/issues/376): completed the verified issuer/subject/audience/chat binding and safe host fallback.
+- [#377](https://github.com/mohanagy/miftah/issues/377): implements production sealing, key epochs, revocation, schema threading, request-scoped resolution, and legacy separation.
 - [#363](https://github.com/mohanagy/miftah/issues/363): negotiate modern stateless and legacy session-aware protocol eras before selecting either runtime path.
 - [#365](https://github.com/mohanagy/miftah/issues/365): validate standard MCP routing headers independently of profile-context resolution and make catalogs deterministic/cacheable.
 - [#366](https://github.com/mohanagy/miftah/issues/366): bind MRTR confirmations and cancellation to the exact authenticated context, profile handle, and request.

@@ -56,8 +56,13 @@ const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream
 const publicRuntimeExports = [
   "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
+  "InMemoryProfileContextRevocationStore",
   "MIFTAH_VERSION",
   "MiftahError",
+  "PROFILE_CONTEXT_ARGUMENT",
+  "PROFILE_CONTEXT_META_KEY",
+  "ProfileContextHandleError",
+  "ProfileContextHandleService",
   "createAuthenticatedRequestContextBoundary",
   "createMiftahRuntime",
   "generateConfigSchema",
@@ -1076,18 +1081,20 @@ describe("packed artifact contract", () => {
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");
+        const packedAuditPath = join(directory, "packed-audit.jsonl");
         await writeFile(
           configPath,
           JSON.stringify({
             version: "1",
             name: "packed-public-api",
             defaultProfile: "work",
-            upstream: { transport: "stdio", command: process.execPath },
-            profiles: { work: {} },
-            // This package-entrypoint smoke deliberately uses an inert process
-            // instead of an external MCP fixture. Resource-subscription
-            // capability probing must therefore fail quickly and safely.
-            process: { startupTimeoutMs: 250 }
+            upstream: { transport: "stdio", command: process.execPath, args: [fakeStdioUpstreamFixture] },
+            profiles: {
+              personal: { env: { TEST_ACCOUNT_NAME: "personal" } },
+              work: { env: { TEST_ACCOUNT_NAME: "work" } }
+            },
+            audit: { path: packedAuditPath, includeArguments: true },
+            process: { startupTimeoutMs: 5_000 }
           })
         );
         await writeFile(
@@ -1097,11 +1104,12 @@ describe("packed artifact contract", () => {
             'import * as pluginApi from "@lubab/miftah/plugin-api";',
             'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
             'import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";',
+            'import { readFile } from "node:fs/promises";',
             "",
             "const runtime = await api.createMiftahRuntime(process.argv[2]);",
             "const authClock = Date.UTC(2026, 7, 11, 10, 0, 0);",
             'const verifiedClaims = { issuer: "https://issuer.example.test", subject: "packed-subject", audience: "packed-audience", chatContext: "packed-chat", issuedAtMs: authClock - 1_000, expiresAtMs: authClock + 60_000 };',
-            'const authOptions = { deploymentId: "packed-deployment", bindingKey: Uint8Array.from({ length: 32 }, () => 1), auditKey: Uint8Array.from({ length: 32 }, () => 2), clock: () => authClock, verifiedClaimsProvider: (request) => request.claims };',
+            'const authOptions = { deploymentId: "packed-deployment", bindingKey: Uint8Array.from({ length: 32 }, () => 1), auditKey: Uint8Array.from({ length: 32 }, () => 2), clock: () => authClock, verifiedClaimsProvider: (request) => request?.claims ?? request?.extra?.verifiedClaims };',
             "const firstAuthBoundary = api.createAuthenticatedRequestContextBoundary(authOptions);",
             "const secondAuthBoundary = api.createAuthenticatedRequestContextBoundary(authOptions);",
             "const firstAuthContext = await api.requireAuthenticatedRequestContext(firstAuthBoundary, { claims: verifiedClaims });",
@@ -1113,24 +1121,78 @@ describe("packed artifact contract", () => {
             "try { await api.createAuthenticatedRequestContextBoundary({ ...authOptions, clock: () => verifiedClaims.expiresAtMs }).resolve({ claims: verifiedClaims }); } catch (error) { expiryCode = error.code; }",
             "let unavailableCode;",
             "try { await api.requireAuthenticatedRequestContext(undefined, { clientInfo: { name: \"untrusted\" }, headers: { \"x-chat-id\": \"untrusted\" } }); } catch (error) { unavailableCode = error.code; }",
+            "class AuthenticatedClientTransport {",
+            "  constructor(delegate, authInfo) { this.delegate = delegate; this.authInfo = authInfo; }",
+            "  get onclose() { return this.delegate.onclose; }",
+            "  set onclose(handler) { this.delegate.onclose = handler; }",
+            "  get onerror() { return this.delegate.onerror; }",
+            "  set onerror(handler) { this.delegate.onerror = handler; }",
+            "  get onmessage() { return this.delegate.onmessage; }",
+            "  set onmessage(handler) { this.delegate.onmessage = handler; }",
+            "  get sessionId() { return this.delegate.sessionId; }",
+            "  set sessionId(value) { this.delegate.sessionId = value; }",
+            "  start() { return this.delegate.start(); }",
+            "  close() { return this.delegate.close(); }",
+            "  send(message, options) { return this.delegate.send(message, { ...options, authInfo: this.authInfo() }); }",
+            "}",
+            "const revocations = new api.InMemoryProfileContextRevocationStore();",
+            "const sealingKey = Uint8Array.from({ length: 32 }, () => 3);",
+            "const profileAuditKey = Uint8Array.from({ length: 32 }, () => 4);",
+            "const keyringProvider = () => ({ activeEpoch: 1, epochs: [{ epoch: 1, key: sealingKey, activatedAtMs: authClock - 1_000 }] });",
+            "const modernOptions = (authenticatedRequestContext) => ({ modernProfileContext: {",
+            '  handles: new api.ProfileContextHandleService({ deploymentId: "packed-deployment", profiles: ["personal", "work"], keyringProvider, auditKey: profileAuditKey, revocations, clock: () => authClock }),',
+            "  authenticatedRequestContext,",
+            "  handleLifetimeMs: 60_000",
+            "} });",
+            "const firstModernRuntime = await api.createMiftahRuntime(process.argv[2], modernOptions(firstAuthBoundary));",
+            "const secondModernRuntime = await api.createMiftahRuntime(process.argv[2], modernOptions(secondAuthBoundary));",
+            "let firstClaims = verifiedClaims;",
+            'const requestAuthInfo = (claims) => ({ token: "validated-token", clientId: "packed-host", scopes: ["mcp"], extra: { verifiedClaims: claims } });',
             "const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();",
+            "const [firstModernClientTransport, firstModernServerTransport] = InMemoryTransport.createLinkedPair();",
+            "const [secondModernClientTransport, secondModernServerTransport] = InMemoryTransport.createLinkedPair();",
             'const client = new Client({ name: "packed-artifact-test", version: "1.0.0" });',
+            'const firstModernClient = new Client({ name: "packed-modern-a", version: "1.0.0" });',
+            'const secondModernClient = new Client({ name: "packed-modern-b", version: "1.0.0" });',
             "try {",
-            "  await Promise.all([runtime.connect(serverTransport), client.connect(clientTransport)]);",
+            "  await Promise.all([",
+            "    runtime.connect(serverTransport),",
+            "    client.connect(clientTransport),",
+            "    firstModernRuntime.connect(firstModernServerTransport),",
+            "    firstModernClient.connect(new AuthenticatedClientTransport(firstModernClientTransport, () => requestAuthInfo(firstClaims))),",
+            "    secondModernRuntime.connect(secondModernServerTransport),",
+            "    secondModernClient.connect(new AuthenticatedClientTransport(secondModernClientTransport, () => requestAuthInfo(verifiedClaims)))",
+            "  ]);",
+            "  const modernToolsBefore = await firstModernClient.listTools();",
+            '  const selection = await firstModernClient.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });',
+            "  const personalHandle = JSON.parse(selection.content[0].text).profileContext.handle;",
+            '  const currentPersonal = await secondModernClient.callTool({ name: "miftah_current_profile", arguments: { [api.PROFILE_CONTEXT_ARGUMENT]: personalHandle } });',
+            '  firstClaims = { ...verifiedClaims, chatContext: "packed-other-chat" };',
+            '  const crossChat = await firstModernClient.callTool({ name: "miftah_current_profile", arguments: { [api.PROFILE_CONTEXT_ARGUMENT]: personalHandle } });',
+            "  firstClaims = verifiedClaims;",
+            '  const replacement = await secondModernClient.callTool({ name: "miftah_use_profile", arguments: { profile: "work", [api.PROFILE_CONTEXT_ARGUMENT]: personalHandle } });',
+            "  const workHandle = JSON.parse(replacement.content[0].text).profileContext.handle;",
+            '  const revoked = await firstModernClient.callTool({ name: "miftah_current_profile", arguments: { [api.PROFILE_CONTEXT_ARGUMENT]: personalHandle } });',
+            '  const echo = await secondModernClient.callTool({ name: "echo", arguments: { message: "packed-safe", [api.PROFILE_CONTEXT_ARGUMENT]: workHandle } });',
+            '  const resource = await secondModernClient.readResource({ uri: "account://current", _meta: { [api.PROFILE_CONTEXT_META_KEY]: workHandle } });',
+            "  let promptSmugglingRejected = false;",
+            '  try { await secondModernClient.getPrompt({ name: "account_prompt", arguments: { message: `embedded ${workHandle}` }, _meta: { [api.PROFILE_CONTEXT_META_KEY]: workHandle } }); } catch (error) { promptSmugglingRejected = String(error).includes("PROFILE_CONTEXT_INVALID"); }',
+            "  const modernToolsAfter = await secondModernClient.listTools();",
+            '  const packedAudit = await readFile(process.argv[3], "utf8");',
             "  process.stdout.write(JSON.stringify({",
             "    exports: Object.keys(api).sort(),",
             "    auth: { crossInstanceReplay: firstAuthContext.binding === replayedAuthContext.binding, crossChatIsolated: firstAuthContext.binding !== otherChatContext.binding, mismatchCode, expiryCode, unavailableCode, safe: !JSON.stringify(firstAuthContext).includes(verifiedClaims.subject) && !JSON.stringify(firstAuthContext).includes(verifiedClaims.chatContext) },",
+            '    profileContext: { crossInstance: JSON.stringify(currentPersonal).includes("personal"), crossChatRejected: crossChat.isError === true && JSON.stringify(crossChat).includes("PROFILE_CONTEXT_INVALID"), replaced: workHandle !== personalHandle, priorRevoked: revoked.isError === true && JSON.stringify(revoked).includes("PROFILE_CONTEXT_REVOKED"), resourceCrossInstance: JSON.stringify(resource).includes("work"), promptSmugglingRejected, catalogStable: JSON.stringify(modernToolsBefore.tools) === JSON.stringify(modernToolsAfter.tools), bearerAbsent: !packedAudit.includes(personalHandle) && !packedAudit.includes(workHandle) && !JSON.stringify(currentPersonal).includes(personalHandle) && !JSON.stringify(echo).includes(workHandle) && !JSON.stringify(resource).includes(workHandle) },',
             "    version: api.MIFTAH_VERSION,",
             "    pluginApiVersion: pluginApi.MIFTAH_PLUGIN_API_VERSION,",
             "    server: client.getServerVersion()",
             "  }));",
             "} finally {",
-            "  await client.close();",
-            "  await runtime.close();",
+            "  await Promise.allSettled([client.close(), firstModernClient.close(), secondModernClient.close(), runtime.close(), firstModernRuntime.close(), secondModernRuntime.close()]);",
             "}"
           ].join("\n")
         );
-        const entryPoint = spawnSync(process.execPath, [consumerPath, configPath], {
+        const entryPoint = spawnSync(process.execPath, [consumerPath, configPath, packedAuditPath], {
           cwd: directory,
           encoding: "utf8",
           timeout: npmCommandTimeoutMs
@@ -1146,6 +1208,16 @@ describe("packed artifact contract", () => {
             unavailableCode: "AUTH_CONTEXT_UNAVAILABLE",
             safe: true
           },
+          profileContext: {
+            crossInstance: true,
+            crossChatRejected: true,
+            replaced: true,
+            priorRevoked: true,
+            resourceCrossInstance: true,
+            promptSmugglingRejected: true,
+            catalogStable: true,
+            bearerAbsent: true
+          },
           version: readPackageManifest().version,
           pluginApiVersion: "1",
           server: {
@@ -1158,13 +1230,13 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { AuthenticatedRequestContextError, createAuthenticatedRequestContextBoundary, createMiftahRuntime, requireAuthenticatedRequestContext, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuthenticatedRequestContext, type AuthenticatedRequestContextBoundary, type AuthenticatedRequestContextBoundaryOptions, type AuthenticatedRequestContextErrorCode, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig, type VerifiedHttpRequestClaims, type VerifiedHttpRequestClaimsProvider } from "@lubab/miftah";',
+            'import { AuthenticatedRequestContextError, InMemoryProfileContextRevocationStore, PROFILE_CONTEXT_ARGUMENT, PROFILE_CONTEXT_META_KEY, ProfileContextHandleError, ProfileContextHandleService, createAuthenticatedRequestContextBoundary, createMiftahRuntime, requireAuthenticatedRequestContext, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuthenticatedRequestContext, type AuthenticatedRequestContextBoundary, type AuthenticatedRequestContextBoundaryOptions, type AuthenticatedRequestContextErrorCode, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type MiftahRuntimeOptions, type MintedProfileContext, type ModernProfileContextRuntimeOptions, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileContextHandleErrorCode, type ProfileContextHandleServiceOptions, type ProfileContextKeyEpoch, type ProfileContextKeyringProvider, type ProfileContextKeyringSnapshot, type ProfileContextReplacementAudit, type ProfileContextRevocationStore, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type ResolvedProfileContext, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig, type VerifiedHttpRequestClaims, type VerifiedHttpRequestClaimsProvider } from "@lubab/miftah";',
             'import { MIFTAH_PLUGIN_API_VERSION, type MiftahPlugin, type RoutingMatcherPlugin, type RoutingMatcherPluginRequest, type RoutingMatcherPluginResult, type RoutingMatcherPluginSignal, type SecretProviderPlugin, type SecretProviderPluginRequest, type SecretProviderPluginResult } from "@lubab/miftah/plugin-api";',
             "",
             "type SupportedTypes = [",
             "  ActiveProfileStateScope, AuthenticatedRequestContext, AuthenticatedRequestContextBoundary<unknown>, AuthenticatedRequestContextBoundaryOptions<unknown>, AuthenticatedRequestContextErrorCode, AuditConfig, AuditIntegrityConfig, AuditRotationConfig, ConfigDiagnostic, GitHubProfileRoutingMatch, IdentityConfig, IdentityFingerprint, IdentityProbeConfig, JiraProfileRoutingMatch, LinearProfileRoutingMatch, MiftahConfig, MiftahConfigVersion,",
-            "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime,",
-            "  PluginConfig, PluginKind, PluginsConfig, PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, RiskLevel, RoutingConfig, RoutingMatcherPluginConfig,",
+            "  MiftahErrorCode, MiftahErrorDetails, MiftahRuntime, MiftahRuntimeOptions, MintedProfileContext, ModernProfileContextRuntimeOptions,",
+            "  PluginConfig, PluginKind, PluginsConfig, PolicyConfig, PostHogProfileRoutingMatch, ProcessConfig, ProfileConfig, ProfileContextHandleErrorCode, ProfileContextHandleServiceOptions, ProfileContextKeyEpoch, ProfileContextKeyringProvider, ProfileContextKeyringSnapshot, ProfileContextReplacementAudit, ProfileContextRevocationStore, ProfileIsolationConfig, ProfileIsolationContainerVolume, ProfileIsolationFile, ProfileLeaseConfig, ProfileRoutingConfig, ProfileRoutingMatchConfig, ProfileUpstreamOverride, ResolvedProfileContext, RiskLevel, RoutingConfig, RoutingMatcherPluginConfig,",
             "  RoutingRule, SecurityConfig, SentryProfileRoutingMatch, SecretProviderPluginConfig, StateConfig, ToolDiscoveryMode, ToolingConfig, TransportType, UnknownToolRisk, UpstreamConfig,",
             "  ValidatedRoutingConfig, VerifiedHttpRequestClaims, VerifiedHttpRequestClaimsProvider<unknown>, MiftahPlugin, RoutingMatcherPlugin, RoutingMatcherPluginRequest, RoutingMatcherPluginResult, RoutingMatcherPluginSignal, SecretProviderPlugin, SecretProviderPluginRequest, SecretProviderPluginResult",
             "];",
@@ -1174,6 +1246,11 @@ describe("packed artifact contract", () => {
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
             'const authError: AuthenticatedRequestContextError = new AuthenticatedRequestContextError("AUTH_CONTEXT_UNAVAILABLE");',
+            'const profileContextError: ProfileContextHandleError = new ProfileContextHandleError("PROFILE_CONTEXT_UNAVAILABLE");',
+            "const profileContextArgument: string = PROFILE_CONTEXT_ARGUMENT;",
+            "const profileContextMetaKey: string = PROFILE_CONTEXT_META_KEY;",
+            "const profileContextRevocations: ProfileContextRevocationStore = new InMemoryProfileContextRevocationStore();",
+            "const profileContextServiceConstructor: typeof ProfileContextHandleService = ProfileContextHandleService;",
             'const authBoundary = createAuthenticatedRequestContextBoundary<{ readonly claims?: VerifiedHttpRequestClaims }>({ deploymentId: "consumer", bindingKey: new Uint8Array(32), auditKey: Uint8Array.from({ length: 32 }, () => 1), verifiedClaimsProvider: (request) => request.claims });',
             'const authContext: Promise<AuthenticatedRequestContext> = requireAuthenticatedRequestContext(authBoundary, {});',
             'const secretPluginRequest: SecretProviderPluginRequest = { reference: "secretref:consumer-secret://account" };',
@@ -1259,7 +1336,7 @@ describe("packed artifact contract", () => {
             '  tool: "identity", resultFormat: "json",',
             '  provider: "github"',
             "};",
-            "void [types, version, pluginApiVersion, runtime, authError, authContext, secretPluginRequest, secretPluginResult, secretPlugin, routingSignal, routingPluginRequest, routingPluginResult, routingPlugin, plugin, pluginKind, secretPluginConfig, routingPluginConfig, pluginConfig, pluginsConfig, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
+            "void [types, version, pluginApiVersion, runtime, authError, profileContextError, profileContextArgument, profileContextMetaKey, profileContextRevocations, profileContextServiceConstructor, authContext, secretPluginRequest, secretPluginResult, secretPlugin, routingSignal, routingPluginRequest, routingPluginResult, routingPlugin, plugin, pluginKind, secretPluginConfig, routingPluginConfig, pluginConfig, pluginsConfig, globalScope, validState, auditRotation, auditIntegrity, validSessionState, validProfileLease, isolatedFile, isolatedVolume, isolation, invalidDuplicateProfileLease, unknownRisk, invalidState, validTextIdentity, mismatchedTextProviderIdentity, validDestructiveIdentity, validWriteThenDestructiveIdentity, validDestructiveThenWriteIdentity, invalidDuplicateRiskIdentity, invalidTextIdentity, invalidTextOrganization, invalidTextProviderWithoutProbeProvider, invalidJsonStaticProvider, invalidJsonEmptyExpected, invalidJsonProbe];"
           ].join("\n")
         );
         const typecheck = spawnSync(
