@@ -28,6 +28,7 @@ const decimalPattern = /^\d+$/u;
 const requestTimeoutMs = 60_000;
 const headersTimeoutMs = 10_000;
 const connectionsCheckingIntervalMs = 5_000;
+const mcpHeaderMismatchErrorCode = -32020;
 
 type SessionRuntimeFactory = (configPath: string) => Promise<MiftahRuntime>;
 
@@ -137,6 +138,34 @@ function isInitializeRequest(value: unknown): value is { readonly jsonrpc: "2.0"
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const message = value as Record<string, unknown>;
   return message.jsonrpc === "2.0" && message.method === "initialize" && Object.hasOwn(message, "id");
+}
+
+function hasMcpParameterHeader(request: IncomingMessage): boolean {
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase().startsWith("mcp-param-")) return true;
+  }
+  return false;
+}
+
+function echoableRequestId(body: unknown): string | number | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const id = (body as Record<string, unknown>).id;
+  return typeof id === "string" || typeof id === "number" || id === null ? id : null;
+}
+
+function unsupportedMcpParameterHeader(body: unknown): HttpRequestError {
+  return new HttpRequestError(
+    400,
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: echoableRequestId(body),
+      error: {
+        code: mcpHeaderMismatchErrorCode,
+        message: "Bad Request: MCP parameter headers are not supported by this gateway."
+      }
+    }),
+    { "content-type": "application/json; charset=utf-8" }
+  );
 }
 
 function writeResponse(response: ServerResponse, error: HttpRequestError): void {
@@ -259,6 +288,10 @@ class HttpServerHost implements MiftahHttpServer {
     const body = request.method === "POST" ? await this.parsePostBody(request) : undefined;
     const webRequest = await toWebRequest(request, body);
     if (!await isLegacyRequest(webRequest, body)) {
+      // Miftah's low-level upstream proxy cannot validate x-mcp-header schemas
+      // before policy and audit. Reject the extension without reflecting names
+      // or values until schema-aware forwarding can be supported end to end.
+      if (hasMcpParameterHeader(request)) throw unsupportedMcpParameterHeader(body);
       if (this.modernRequests >= this.settings.maxSessions) {
         throw new HttpRequestError(429, "Too Many Requests");
       }

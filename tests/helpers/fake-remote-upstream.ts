@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
 import { Server as McpServer, ProtocolError } from "@modelcontextprotocol/server";
-import type { FetchLike } from "@modelcontextprotocol/server";
+import type { FetchLike, Tool } from "@modelcontextprotocol/server";
 
 interface StreamableSession {
   server: McpServer;
@@ -82,6 +82,7 @@ export interface FakeRemoteUpstreamOptions {
   readonly callToolError?: { code: number; message: string };
   readonly callToolDelayMs?: number;
   readonly emitCallToolProgress?: boolean;
+  readonly exposeMcpParameterHeader?: boolean;
 }
 
 interface FakeRemoteCallToolState {
@@ -577,10 +578,19 @@ function createMcpServer(
     { capabilities: { tools: {}, resources: {}, prompts: {} } }
   );
 
+  const whoamiTool: Tool = {
+    name: "whoami",
+    description: "Return the request profile.",
+    inputSchema: {
+      type: "object",
+      properties: options.exposeMcpParameterHeader
+        ? { account: { type: "string", "x-mcp-header": "account" } }
+        : {}
+    }
+  };
+
   server.setRequestHandler('tools/list', async () => ({
-    tools: [
-      { name: "whoami", description: "Return the request profile.", inputSchema: { type: "object", properties: {} } }
-    ]
+    tools: [whoamiTool]
   }));
   server.setRequestHandler('tools/call', async (request, ctx) => {
     callToolState.toolCallRequests += 1;

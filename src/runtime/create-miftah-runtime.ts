@@ -26,6 +26,7 @@ interface MiftahRuntimeFactoryOptions extends MiftahRuntimeOptions {
   readonly profileState?: { readonly persistActiveProfile?: false; readonly scope?: "process" | "session" };
   readonly resourceSubscriptionsEnabled?: boolean;
   readonly approvalContinuations?: ApprovalContinuationStore;
+  readonly stripMcpParameterHeaderAnnotations?: boolean;
 }
 
 async function createConfiguredMiftahServer(
@@ -53,7 +54,8 @@ async function createConfiguredMiftahServer(
     runtimeConfigPath,
     options.modernProfileContext,
     options.resourceSubscriptionsEnabled,
-    options.approvalContinuations
+    options.approvalContinuations,
+    options.stripMcpParameterHeaderAnnotations
   );
 
   return { config: runtime.config, server };
@@ -78,7 +80,12 @@ function configuredMiftahServerFactory(
   const approvalContinuations = new ApprovalContinuationStore();
   return async (context) => {
     const eraOptions: MiftahRuntimeFactoryOptions = context.era === "modern"
-      ? { ...options, resourceSubscriptionsEnabled: false, approvalContinuations }
+      ? {
+          ...options,
+          resourceSubscriptionsEnabled: false,
+          approvalContinuations,
+          stripMcpParameterHeaderAnnotations: context.requestInfo !== undefined
+        }
       : {
           ...(options.profileState === undefined ? {} : { profileState: options.profileState }),
           resourceSubscriptionsEnabled: true,

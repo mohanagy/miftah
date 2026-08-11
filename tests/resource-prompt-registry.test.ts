@@ -2,6 +2,54 @@ import { describe, expect, it } from "vitest";
 import { ResourcePromptRegistry } from "../src/mcp/server/resource-prompt-registry.js";
 
 describe("resource and prompt registry", () => {
+  it("returns deterministic catalogs when an upstream changes its discovery order", async () => {
+    const createRegistry = (reverse: boolean): ResourcePromptRegistry => {
+      const ordered = <T>(first: T, second: T): T[] => reverse ? [second, first] : [first, second];
+      return new ResourcePromptRegistry(
+        () => ["github"],
+        async () => ({
+          resources: ordered(
+            { uri: "account://zeta", name: "zeta", mimeType: "text/plain" },
+            { uri: "account://alpha", name: "alpha", mimeType: "text/plain" }
+          )
+        }),
+        async () => ({
+          prompts: ordered(
+            { name: "zeta", description: "zeta" },
+            { name: "alpha", description: "alpha" }
+          )
+        }),
+        (value) => value,
+        undefined,
+        "permissive",
+        async () => ({
+          resourceTemplates: ordered(
+            { uriTemplate: "account://zeta/{id}", name: "zeta", mimeType: "text/plain" },
+            { uriTemplate: "account://alpha/{id}", name: "alpha", mimeType: "text/plain" }
+          )
+        })
+      );
+    };
+    const firstRegistry = createRegistry(false);
+    const secondRegistry = createRegistry(true);
+
+    const first = {
+      resources: await firstRegistry.listResources("work"),
+      templates: await firstRegistry.listResourceTemplates("work"),
+      prompts: await firstRegistry.listPrompts("work")
+    };
+    const second = {
+      resources: await secondRegistry.listResources("work"),
+      templates: await secondRegistry.listResourceTemplates("work"),
+      prompts: await secondRegistry.listPrompts("work")
+    };
+
+    expect(second).toEqual(first);
+    expect(first.resources.resources.map((resource) => resource.name)).toEqual(["github__alpha", "github__zeta"]);
+    expect(first.templates.resourceTemplates.map((template) => template.name)).toEqual(["github__alpha", "github__zeta"]);
+    expect(first.prompts.prompts.map((prompt) => prompt.name)).toEqual(["github__alpha", "github__zeta"]);
+  });
+
   it("bounds opaque cursor storage with least-recently-used eviction", async () => {
     const registry = new ResourcePromptRegistry(
       () => ["github"],

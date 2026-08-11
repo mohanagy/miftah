@@ -50,6 +50,8 @@ For a custom HTTP host, pass the same factory to `createMcpHandler` from `@model
 
 This matrix describes Miftah's tested serving boundary, not a promise that every optional feature added to any future MCP revision is implemented. The SDK v2 serving entry owns protocol-era negotiation; Miftah continues to own broker routing, policy, audit, OAuth, profile state, upstream lifecycle, and cancellation propagation.
 
+For modern Streamable HTTP, the serving entry validates `Mcp-Method` and `Mcp-Name` against the parsed JSON-RPC request before constructing Miftah's per-request server. Miftah currently declines the optional `Mcp-Param-*` extension: its CLI-owned modern HTTP catalog strips `x-mcp-header` schema keywords and its ingress rejects parameter headers without reflecting or forwarding them. Modern cacheable results are explicitly private and immediately stale (`ttlMs: 0`); deterministic resource, resource-template, and prompt ordering makes repeated uncached catalogs stable. STDIO and legacy initialized HTTP behavior remain unchanged.
+
 Confirmation-required tools, resource reads, prompt reads, and profile transitions return the MCP `input_required` result on the modern era. Miftah binds the continuation to the exact operation with bounded, integrity-protected, one-time state shared by the server factory, so a fresh request-scoped HTTP instance can safely finish the approval without retaining raw operation arguments. The SDK's legacy shim translates the same handler flow into form elicitation for initialized clients.
 
 ## Authenticated request context
