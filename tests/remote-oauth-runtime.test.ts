@@ -1,5 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,7 +66,7 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
   async authorize(
     authorizationUrl: URL,
     expected: { readonly state: string; readonly issuer: string }
-  ): Promise<string> {
+  ): Promise<{ authorizationCode: string; issuer: string }> {
     this.onAuthorize();
     const response = await this.upstream.fetch(authorizationUrl, { redirect: "manual" });
     const callback = new URL(response.headers.get("location") ?? "invalid:");
@@ -75,7 +74,7 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
     expect(callback.searchParams.get("iss")).toBe(expected.issuer);
     const code = callback.searchParams.get("code");
     if (code === null) throw new Error("fixture callback did not contain a code");
-    return code;
+    return { authorizationCode: code, issuer: expected.issuer };
   }
 
   async close(): Promise<void> {}

@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { z } from "zod";
+import { z } from "zod/v3";
 import { canonicalizeOAuthResource } from "../oauth/canonical-resource.js";
 import { parseOAuthConnectionRef, validateOAuthIssuer } from "../oauth/connection-types.js";
 import { isSafeOAuthHttpsUrl } from "../oauth/url-safety.js";

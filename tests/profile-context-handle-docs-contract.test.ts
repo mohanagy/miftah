@@ -16,16 +16,16 @@ describe("profile-context handle documentation contract", () => {
     expect(documentation).toContain("provide shared revocation storage");
     expect(documentation).toContain("strips either form before audit argument capture");
     expect(documentation).toContain("is not operation authorization or idempotency");
-    expect(documentation).toContain("does not enable this option");
+    expect(documentation).toContain("does not enable trusted `modernProfileContext` claims");
   });
 
-  it("records the production boundary under the next release without claiming transport negotiation", async () => {
+  it("records the production boundary alongside protocol negotiation", async () => {
     const changelog = await readFile(changelogPath, "utf8");
     const [, afterUnreleased = ""] = changelog.split(/^## \[Unreleased\]\s*$/mu);
     const unreleased = afterUnreleased.split(/^## \[/mu, 1)[0] ?? "";
 
     expect(unreleased).toContain("[#377]");
     expect(unreleased).toContain("opt-in production profile-context boundary");
-    expect(unreleased).toContain("protocol-era negotiation is enabled separately");
+    expect(unreleased).toContain("an embedding host enables the boundary through `createMiftahServerFactory`");
   });
 });

@@ -13,6 +13,7 @@ interface PackageManifest {
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   repository?: unknown;
   homepage?: unknown;
   bugs?: unknown;
@@ -65,6 +66,7 @@ const publicRuntimeExports = [
   "ProfileContextHandleService",
   "createAuthenticatedRequestContextBoundary",
   "createMiftahRuntime",
+  "createMiftahServerFactory",
   "generateConfigSchema",
   "loadConfig",
   "presetConfig",
@@ -80,6 +82,9 @@ const requiredPackPaths = [
   "dist/plugin-api.d.ts",
   "dist/plugin-api.js",
   "dist/plugin-host.js",
+  "dist/third-party/hono-node-server.LICENSE",
+  "dist/third-party/hono.LICENSE",
+  "dist/third-party/modelcontextprotocol-node.LICENSE",
   "dist/windows-secret-job.exe",
   "docs/cli.md",
   "docs/library-api.md",
@@ -113,7 +118,6 @@ function assertPatchedFastUriLockEntries(lock: PackageLock): void {
     ([packagePath]) => packagePath === suffix || packagePath.endsWith(`/${suffix}`)
   );
 
-  expect(entries, "fast-uri must exist in the package lock").not.toHaveLength(0);
   for (const [packagePath, packageEntry] of entries) {
     expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.5");
   }
@@ -761,7 +765,7 @@ describe("package metadata contract", () => {
     assertPatchedEsbuildLockEntries(lock);
   });
 
-  it("locks the patched fast-uri release for GHSA-7p8r-x3mc-p8w7", () => {
+  it("locks any retained fast-uri resolution to the patched release for GHSA-7p8r-x3mc-p8w7", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
@@ -772,24 +776,37 @@ describe("package metadata contract", () => {
   it("locks the patched transitive security releases tracked by #373", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
-    const expectedVersions = {
+    const expectedOverrides = {
       "brace-expansion": "5.0.9",
-      hono: "4.12.34",
       "ip-address": "10.3.1",
       nanoid: "3.3.17"
     } as const;
 
-    for (const [packageName, expectedVersion] of Object.entries(expectedVersions)) {
+    for (const [packageName, expectedVersion] of Object.entries(expectedOverrides)) {
       expect(manifest.overrides?.[packageName]).toBe(expectedVersion);
       assertPatchedTransitiveLockEntries(lock, packageName, expectedVersion);
     }
+    expect(manifest.devDependencies?.hono).toBe("4.12.34");
+    expect(manifest.overrides).not.toHaveProperty("hono");
+    assertPatchedTransitiveLockEntries(lock, "hono", "4.12.34");
   });
 
   it("locks the patched MCP SDK and Hono Node server releases for GHSA-frvp-7c67-39w9", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
-    expect(manifest.dependencies?.["@modelcontextprotocol/sdk"]).toBe("^1.30.0");
+    expect(manifest.dependencies).not.toHaveProperty("@modelcontextprotocol/sdk");
+    expect(manifest.dependencies).toMatchObject({
+      "@modelcontextprotocol/client": "^2.0.0",
+      "@modelcontextprotocol/core": "^2.0.0",
+      "@modelcontextprotocol/server": "^2.0.0"
+    });
+    expect(manifest.devDependencies).toMatchObject({
+      "@hono/node-server": "2.0.10",
+      "@modelcontextprotocol/node": "^2.0.0",
+      "@modelcontextprotocol/server-legacy": "^2.0.0",
+      hono: "4.12.34"
+    });
     expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
     assertPatchedHonoNodeServerLockEntries(lock);
   });
@@ -838,12 +855,12 @@ describe("package metadata contract", () => {
     const lock: PackageLock = {
       packages: {
         "node_modules/@hono/node-server": { version: "2.0.10" },
-        "node_modules/@modelcontextprotocol/sdk/node_modules/@hono/node-server": { version: "1.19.9" }
+        "node_modules/@modelcontextprotocol/node/node_modules/@hono/node-server": { version: "1.19.9" }
       }
     };
 
     expect(() => assertPatchedHonoNodeServerLockEntries(lock)).toThrow(
-      /node_modules\/@modelcontextprotocol\/sdk\/node_modules\/@hono\/node-server/
+      /node_modules\/@modelcontextprotocol\/node\/node_modules\/@hono\/node-server/
     );
   });
 });
@@ -1078,6 +1095,9 @@ describe("packed artifact contract", () => {
           await readFile(join(directory, "node_modules", "@lubab", "miftah", "package.json"), "utf8")
         ) as PackageManifest;
         expect(installedManifest.dependencies).toEqual(readPackageManifest().dependencies);
+        expect(existsSync(join(directory, "node_modules", "@modelcontextprotocol", "node"))).toBe(false);
+        expect(existsSync(join(directory, "node_modules", "@hono", "node-server"))).toBe(false);
+        expect(existsSync(join(directory, "node_modules", "hono"))).toBe(false);
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");
@@ -1102,8 +1122,8 @@ describe("packed artifact contract", () => {
           [
             'import * as api from "@lubab/miftah";',
             'import * as pluginApi from "@lubab/miftah/plugin-api";',
-            'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
-            'import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";',
+            'import { Client } from "@modelcontextprotocol/client";',
+            'import { InMemoryTransport } from "@modelcontextprotocol/server";',
             'import { readFile } from "node:fs/promises";',
             "",
             "const runtime = await api.createMiftahRuntime(process.argv[2]);",
@@ -1230,7 +1250,7 @@ describe("packed artifact contract", () => {
         await writeFile(
           typeConsumerPath,
           [
-            'import { AuthenticatedRequestContextError, InMemoryProfileContextRevocationStore, PROFILE_CONTEXT_ARGUMENT, PROFILE_CONTEXT_META_KEY, ProfileContextHandleError, ProfileContextHandleService, createAuthenticatedRequestContextBoundary, createMiftahRuntime, requireAuthenticatedRequestContext, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuthenticatedRequestContext, type AuthenticatedRequestContextBoundary, type AuthenticatedRequestContextBoundaryOptions, type AuthenticatedRequestContextErrorCode, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type MiftahRuntimeOptions, type MintedProfileContext, type ModernProfileContextRuntimeOptions, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileContextHandleErrorCode, type ProfileContextHandleServiceOptions, type ProfileContextKeyEpoch, type ProfileContextKeyringProvider, type ProfileContextKeyringSnapshot, type ProfileContextReplacementAudit, type ProfileContextRevocationStore, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type ResolvedProfileContext, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig, type VerifiedHttpRequestClaims, type VerifiedHttpRequestClaimsProvider } from "@lubab/miftah";',
+            'import { AuthenticatedRequestContextError, InMemoryProfileContextRevocationStore, PROFILE_CONTEXT_ARGUMENT, PROFILE_CONTEXT_META_KEY, ProfileContextHandleError, ProfileContextHandleService, createAuthenticatedRequestContextBoundary, createMiftahRuntime, createMiftahServerFactory, requireAuthenticatedRequestContext, CURRENT_CONFIG_VERSION, MIFTAH_VERSION, type ActiveProfileStateScope, type AuthenticatedRequestContext, type AuthenticatedRequestContextBoundary, type AuthenticatedRequestContextBoundaryOptions, type AuthenticatedRequestContextErrorCode, type AuditConfig, type AuditIntegrityConfig, type AuditRotationConfig, type ConfigDiagnostic, type GitHubProfileRoutingMatch, type IdentityConfig, type IdentityFingerprint, type IdentityProbeConfig, type JiraProfileRoutingMatch, type LinearProfileRoutingMatch, type MiftahConfig, type MiftahConfigVersion, type MiftahErrorCode, type MiftahErrorDetails, type MiftahRuntime, type MiftahRuntimeOptions, type MintedProfileContext, type ModernProfileContextRuntimeOptions, type PluginConfig, type PluginKind, type PluginsConfig, type PolicyConfig, type PostHogProfileRoutingMatch, type ProcessConfig, type ProfileConfig, type ProfileContextHandleErrorCode, type ProfileContextHandleServiceOptions, type ProfileContextKeyEpoch, type ProfileContextKeyringProvider, type ProfileContextKeyringSnapshot, type ProfileContextReplacementAudit, type ProfileContextRevocationStore, type ProfileIsolationConfig, type ProfileIsolationContainerVolume, type ProfileIsolationFile, type ProfileLeaseConfig, type ProfileRoutingConfig, type ProfileRoutingMatchConfig, type ProfileUpstreamOverride, type ResolvedProfileContext, type RiskLevel, type RoutingConfig, type RoutingMatcherPluginConfig, type RoutingRule, type SecurityConfig, type SentryProfileRoutingMatch, type SecretProviderPluginConfig, type StateConfig, type ToolDiscoveryMode, type ToolingConfig, type TransportType, type UnknownToolRisk, type UpstreamConfig, type ValidatedRoutingConfig, type VerifiedHttpRequestClaims, type VerifiedHttpRequestClaimsProvider } from "@lubab/miftah";',
             'import { MIFTAH_PLUGIN_API_VERSION, type MiftahPlugin, type RoutingMatcherPlugin, type RoutingMatcherPluginRequest, type RoutingMatcherPluginResult, type RoutingMatcherPluginSignal, type SecretProviderPlugin, type SecretProviderPluginRequest, type SecretProviderPluginResult } from "@lubab/miftah/plugin-api";',
             "",
             "type SupportedTypes = [",
@@ -1245,6 +1265,7 @@ describe("packed artifact contract", () => {
             "const version: string = MIFTAH_VERSION;",
             'const pluginApiVersion: "1" = MIFTAH_PLUGIN_API_VERSION;',
             'const runtime: Promise<MiftahRuntime> = createMiftahRuntime("./miftah.json");',
+            'const serverFactory = createMiftahServerFactory("./miftah.json");',
             'const authError: AuthenticatedRequestContextError = new AuthenticatedRequestContextError("AUTH_CONTEXT_UNAVAILABLE");',
             'const profileContextError: ProfileContextHandleError = new ProfileContextHandleError("PROFILE_CONTEXT_UNAVAILABLE");',
             "const profileContextArgument: string = PROFILE_CONTEXT_ARGUMENT;",

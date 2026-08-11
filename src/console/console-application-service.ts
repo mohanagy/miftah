@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { readAuditJsonl } from "../cli/audit-jsonl.js";
 import { readConfigMigrationSource, type ConfigMigrationSource } from "../cli/migrate-config.js";
 import { planConfigMigration } from "../config/migrate-config.js";

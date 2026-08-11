@@ -1,7 +1,7 @@
 import { access, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/server";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { loadConfig } from "../config/load-config.js";
 import { resolvePath } from "../config/path-resolve.js";

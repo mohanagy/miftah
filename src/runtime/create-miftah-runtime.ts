@@ -1,4 +1,5 @@
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { McpServerFactory, Transport } from "@modelcontextprotocol/server";
+import { ApprovalContinuationStore } from "../approvals/approval-continuation-store.js";
 import { resolvePath } from "../config/path-resolve.js";
 import type { MiftahConfig } from "../config/types.js";
 import { MiftahServer } from "../mcp/server/miftah-server.js";
@@ -23,12 +24,14 @@ export interface MiftahRuntimeOptions {
 
 interface MiftahRuntimeFactoryOptions extends MiftahRuntimeOptions {
   readonly profileState?: { readonly persistActiveProfile?: false; readonly scope?: "process" | "session" };
+  readonly resourceSubscriptionsEnabled?: boolean;
+  readonly approvalContinuations?: ApprovalContinuationStore;
 }
 
-async function createConfiguredMiftahRuntime(
+async function createConfiguredMiftahServer(
   configPath: string,
   options: MiftahRuntimeFactoryOptions = {}
-): Promise<MiftahRuntime> {
+): Promise<{ readonly config: MiftahConfig; readonly server: MiftahServer }> {
   const runtimeConfigPath = resolvePath(configPath);
   const runtime = await createRuntime(runtimeConfigPath, undefined, { profileState: options.profileState });
   const server = new MiftahServer(
@@ -48,13 +51,46 @@ async function createConfiguredMiftahRuntime(
     runtime.oauth,
     runtime.identities,
     runtimeConfigPath,
-    options.modernProfileContext
+    options.modernProfileContext,
+    options.resourceSubscriptionsEnabled,
+    options.approvalContinuations
   );
 
+  return { config: runtime.config, server };
+}
+
+async function createConfiguredMiftahRuntime(
+  configPath: string,
+  options: MiftahRuntimeFactoryOptions = {}
+): Promise<MiftahRuntime> {
+  const configured = await createConfiguredMiftahServer(configPath, options);
   return {
-    config: runtime.config,
-    connect: (transport) => server.connect(transport),
-    close: () => server.close()
+    config: configured.config,
+    connect: (transport) => configured.server.connect(transport),
+    close: () => configured.server.close()
+  };
+}
+
+function configuredMiftahServerFactory(
+  configPath: string,
+  options: MiftahRuntimeFactoryOptions
+): McpServerFactory {
+  const approvalContinuations = new ApprovalContinuationStore();
+  return async (context) => {
+    const eraOptions: MiftahRuntimeFactoryOptions = context.era === "modern"
+      ? { ...options, resourceSubscriptionsEnabled: false, approvalContinuations }
+      : {
+          ...(options.profileState === undefined ? {} : { profileState: options.profileState }),
+          resourceSubscriptionsEnabled: true,
+          approvalContinuations
+        };
+    const configured = await createConfiguredMiftahServer(configPath, eraOptions);
+    try {
+      return await configured.server.prepareForServing();
+    } catch (error) {
+      await configured.server.close().catch(() => undefined);
+      throw error;
+    }
   };
 }
 
@@ -64,6 +100,22 @@ export async function createMiftahRuntime(
   options: MiftahRuntimeOptions = {}
 ): Promise<MiftahRuntime> {
   return createConfiguredMiftahRuntime(configPath, options);
+}
+
+/** Creates fresh lifecycle-managed server instances for SDK v2 serving entries. */
+export function createMiftahServerFactory(
+  configPath: string,
+  options: MiftahRuntimeOptions = {}
+): McpServerFactory {
+  return configuredMiftahServerFactory(configPath, options);
+}
+
+/** Creates per-request modern HTTP servers whose mutable profile state cannot escape an exchange. */
+export function createHttpRequestMiftahServerFactory(configPath: string): McpServerFactory {
+  return configuredMiftahServerFactory(configPath, {
+    profileState: { persistActiveProfile: false, scope: "session" },
+    resourceSubscriptionsEnabled: false
+  });
 }
 
 /** Creates a fresh MCP runtime whose profile state cannot escape its HTTP client session. */

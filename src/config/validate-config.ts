@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import type { z } from "zod/v3";
 import { miftahConfigSchema, miftahPublicConfigSchema } from "./schema.js";
 import type { MiftahConfig } from "./types.js";
 import { diagnosticsFromZodError, formatConfigDiagnostics } from "./diagnostics.js";

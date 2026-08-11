@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { AuditLogger } from "../audit/audit-logger.js";
 import { AuditTrail } from "../audit/audit-trail.js";
 import {

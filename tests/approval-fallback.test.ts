@@ -1,6 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -331,7 +329,7 @@ describe("approval fallback", () => {
       { capabilities: { elicitation: { form: {} } } }
     );
     const elicitationRequests: unknown[] = [];
-    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    client.setRequestHandler('elicitation/create', async (request) => {
       elicitationRequests.push(request);
       return { action: "accept", content: { approved: true } };
     });
@@ -378,7 +376,7 @@ describe("approval fallback", () => {
       { name: "profile-switch-decline-client", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } }
     );
-    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "accept", content: { approved: false } }));
+    client.setRequestHandler('elicitation/create', async () => ({ action: "accept", content: { approved: false } }));
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
@@ -421,7 +419,7 @@ describe("approval fallback", () => {
       formOpened = resolve;
     });
     let acceptForm: (() => void) | undefined;
-    client.setRequestHandler(ElicitRequestSchema, async () => {
+    client.setRequestHandler('elicitation/create', async () => {
       formOpened();
       return new Promise((resolve) => {
         acceptForm = () => resolve({ action: "accept", content: { approved: true } });
@@ -1114,7 +1112,7 @@ describe("approval fallback", () => {
       { capabilities: { elicitation: { form: {} } } }
     );
     let elicitationRequest: unknown;
-    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    client.setRequestHandler('elicitation/create', async (request) => {
       elicitationRequest = request;
       return { action: "accept", content: { approved: true } };
     });
@@ -1169,7 +1167,7 @@ describe("approval fallback", () => {
       { name: "approval-elicit-expiry-client", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } }
     );
-    client.setRequestHandler(ElicitRequestSchema, async () => {
+    client.setRequestHandler('elicitation/create', async () => {
       now = new Date("2026-07-12T00:00:01.000Z");
       return { action: "accept", content: { approved: true } };
     });
@@ -1214,7 +1212,7 @@ describe("approval fallback", () => {
       { capabilities: { elicitation: { form: {} } } }
     );
     const elicitationRequests: unknown[] = [];
-    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    client.setRequestHandler('elicitation/create', async (request) => {
       elicitationRequests.push(request);
       return { action: "accept", content: { approved: true } };
     });
@@ -1260,7 +1258,7 @@ describe("approval fallback", () => {
       { name: "approval-decline-client", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } }
     );
-    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "accept", content: { approved: false } }));
+    client.setRequestHandler('elicitation/create', async () => ({ action: "accept", content: { approved: false } }));
 
     try {
       await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);

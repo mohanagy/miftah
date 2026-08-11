@@ -49,7 +49,7 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
   async authorize(
     authorizationUrl: URL,
     expected: { readonly state: string; readonly issuer: string }
-  ): Promise<string> {
+  ): Promise<{ authorizationCode: string; issuer: string }> {
     const response = await this.upstream.fetch(authorizationUrl, { redirect: "manual" });
     const location = response.headers.get("location");
     if (location === null) throw new Error("fixture authorization did not redirect");
@@ -58,7 +58,7 @@ class SimulatedBrowserHandoff implements OAuthAuthorizationHandoff {
     expect(callback.searchParams.get("iss")).toBe(expected.issuer);
     const code = callback.searchParams.get("code");
     if (code === null) throw new Error("fixture callback did not contain a code");
-    return code;
+    return { authorizationCode: code, issuer: expected.issuer };
   }
 
   async close(): Promise<void> {
@@ -187,7 +187,10 @@ describe("profile-bound remote OAuth transport", () => {
       lifecycle,
       handoff: {
         redirectUrl: new URL("http://127.0.0.1:43179/oauth/callback"),
-        authorize: async () => "fixture-code",
+        authorize: async () => ({
+          authorizationCode: "fixture-code",
+          issuer: "https://mcp.example.test"
+        }),
         close: async () => {
           closeCount += 1;
         }

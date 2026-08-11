@@ -1,5 +1,6 @@
 import type { AuditScope } from "../../audit/audit-trail.js";
 import type { ApprovalBinding } from "../../approvals/approval-store.js";
+import { ApprovalInputRequiredSignal } from "../../approvals/approval-continuation-store.js";
 import { IdentityManager } from "../../identity/identity-manager.js";
 import { PolicyEngine } from "../../policy/policy-engine.js";
 import type { PolicyDecision } from "../../policy/policy-types.js";
@@ -27,8 +28,9 @@ export type CapturedProfileState = Pick<
 > & { readonly profileContextCorrelation?: string };
 
 export interface ApprovalRequestContext {
-  readonly requestId: string | number;
   readonly signal: AbortSignal;
+  readonly inputResponses?: Record<string, unknown>;
+  readonly requestState: <State = unknown>() => State | undefined;
 }
 
 export interface ResolvedOperation<Result> {
@@ -211,6 +213,7 @@ export class OperationPipeline {
       await this.assertProfileSelectionAllows(operation, profile, profileConfig.lease, decision.risk);
       return this.options.redactor.redact(target.redact(await target.execute(session, operation.upstreamRequestOptions)));
     } catch (error) {
+      if (error instanceof ApprovalInputRequiredSignal) throw error;
       const safeError = this.toSafeError(error);
       const matcherEvidence = matcherEvidenceFromError(safeError);
       if (matcherEvidence !== undefined) {

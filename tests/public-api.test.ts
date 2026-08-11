@@ -2,8 +2,7 @@ import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as api from "../src/index.js";
@@ -85,6 +84,7 @@ const supportedRuntimeExports = [
   "ProfileContextHandleService",
   "createAuthenticatedRequestContextBoundary",
   "createMiftahRuntime",
+  "createMiftahServerFactory",
   "generateConfigSchema",
   "loadConfig",
   "presetConfig",

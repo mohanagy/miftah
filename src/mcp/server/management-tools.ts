@@ -1,4 +1,4 @@
-import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONValue, Tool, ToolAnnotations } from "@modelcontextprotocol/server";
 
 export type ManagementToolInteraction = "observational" | "state-changing" | "external-probe";
 export type ManagementToolAvailability = "always" | "delegated-agent";
@@ -6,7 +6,7 @@ export type ManagementToolAvailability = "always" | "delegated-agent";
 export interface ManagementToolInput {
   readonly name: string;
   readonly required: boolean;
-  readonly schema: Readonly<Record<string, unknown>>;
+  readonly schema: JSONValue;
 }
 
 /** One authoritative management-tool contract for MCP, onboarding, and client guidance. */

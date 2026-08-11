@@ -1,8 +1,5 @@
-import {
-  discoverOAuthServerInfo,
-  type OAuthDiscoveryState
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { discoverOAuthServerInfo } from "@modelcontextprotocol/client";
+import type { OAuthDiscoveryState, FetchLike } from "@modelcontextprotocol/client";
 import { createOAuthConnectionBinding, type OAuthConnectionRef } from "./connection-types.js";
 import { assertRemoteOAuthDiscovery } from "./remote-oauth-client-provider.js";
 import { OAuthMetadataFetchGuard } from "./oauth-metadata-fetch-guard.js";
