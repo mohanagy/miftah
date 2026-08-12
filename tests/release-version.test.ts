@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.1.0";
+const releaseVersion = "1.1.1";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.1.0 release artifacts", () => {
+describe("v1.1.1 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.1.0] - 2026-8-12\n\n### Changed\n"
+      changelog: "## [1.1.1] - 2026-8-12\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.1.0] - 2026-08-12\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.1] - 2026-08-12\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,18 +71,17 @@ describe("v1.1.0 release artifacts", () => {
     }
   });
 
-  it("documents the v1.1 MCP compatibility release and its evidence boundary", () => {
+  it("documents the v1.1.1 Claude compatibility patch and its evidence boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
-    expect(notes).toContain("### Added");
     expect(notes).toContain("### Changed");
     expect(notes).toContain("### Fixed");
-    expect(notes).toContain("### Security");
-    for (const issue of [363, 365, 366, 367, 368, 376, 377, 391, 393]) {
+    for (const issue of [397, 399]) {
       expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("named desktop-host claims remain explicitly unverified");
+    expect(notes).toContain("Claude Desktop tool-catalog compatibility");
+    expect(notes).toContain("schema-valued `true`");
     expect(notes).toContain("protected OIDC trusted publishing");
     expect(notes).toContain("registry provenance");
 

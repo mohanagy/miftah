@@ -2,7 +2,7 @@
 
 This page is the compatibility source of truth for Miftah's downstream MCP server. It records protocol-era behavior separately from generated client-configuration support and from upstream MCP transport support. A generated snippet proves only that Miftah emitted the documented JSON shape; it does not prove that an untested host completed a protocol exchange.
 
-- Miftah baseline: `1.1.0`
+- Miftah baseline: `1.1.1`
 - Locked MCP TypeScript packages: `@modelcontextprotocol/client`, `core`, `server`, `node`, and `server-legacy` `2.0.0`
 - Evidence date: 2026-08-12
 - Modern protocol era: `2026-07-28`

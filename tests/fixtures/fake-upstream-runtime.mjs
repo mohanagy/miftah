@@ -71,6 +71,7 @@ const hangOnStartReadyPath = process.env.TEST_HANG_ON_START_READY_PATH;
 const shutdownDelayMs = Number(process.env.TEST_SHUTDOWN_DELAY_MS ?? "0");
 const shutdownEndPath = process.env.TEST_SHUTDOWN_END_PATH;
 const includeIdentityTool = process.env.TEST_INCLUDE_IDENTITY_TOOL === "true";
+const includeSchemaCompatibilityTools = process.env.TEST_INCLUDE_SCHEMA_COMPAT_TOOLS === "true";
 const oversizedIdentityResponseRepeat = Number(process.env.TEST_OVERSIZED_IDENTITY_RESPONSE_REPEAT ?? "0");
 const oversizedIdentityLogin =
   Number.isSafeInteger(oversizedIdentityResponseRepeat) && oversizedIdentityResponseRepeat > 0
@@ -374,6 +375,85 @@ server.setRequestHandler('tools/list', async (request) => {
               description: "Run the provider-declared empty-object readiness probe.",
               inputSchema: safeReadInputSchema,
               ...(safeReadAnnotations === undefined ? {} : { annotations: safeReadAnnotations })
+            }
+          ]
+        : []),
+      ...(includeSchemaCompatibilityTools && !secondPage
+        ? [
+            {
+              name: "vercel_schema_fixture",
+              description: "Expose Vercel-compatible input schemas.",
+              inputSchema: {
+                $schema: "https://json-schema.org/draft/2020-12/schema",
+                type: "object",
+                properties: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: {
+                    $ref: `#/$defs/${process.env.API_TOKEN ?? "missing-schema-secret"}`
+                  },
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: {
+                    $ref: "#/$defs/github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                  },
+                  tokens: {
+                    type: "integer",
+                    description: `Configured ${process.env.API_TOKEN}; Bearer not-a-real-bearer-value`
+                  },
+                  passwordProtection: {
+                    type: "boolean",
+                    default: true,
+                    description: "Provider github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                  }
+                },
+                $defs: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" },
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: { type: "integer" }
+                },
+                dependencies: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: [
+                    "github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                  ],
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: [
+                    process.env.API_TOKEN ?? "missing-schema-secret"
+                  ]
+                },
+                required: [
+                  process.env.API_TOKEN ?? "missing-schema-secret",
+                  "github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                ],
+                default: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key",
+                  "Bearer not-a-real-bearer-value": "bearer-key",
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: "provider-key"
+                },
+                examples: [
+                  {
+                    [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key",
+                    github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: "provider-key"
+                  }
+                ],
+                additionalProperties: false
+              }
+            },
+            {
+              name: "firebase_schema_fixture",
+              description: "Expose Firebase-compatible pagination schemas.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  page_token: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "stripe_schema_fixture",
+              description: "Expose Stripe-compatible open output schemas.",
+              inputSchema: { type: "object", properties: {} },
+              outputSchema: {
+                type: "object",
+                properties: {
+                  archived: { type: "boolean", default: true }
+                },
+                additionalProperties: true
+              }
             }
           ]
         : []),
