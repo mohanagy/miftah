@@ -387,6 +387,7 @@ server.setRequestHandler('tools/list', async (request) => {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 type: "object",
                 properties: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" },
                   tokens: {
                     type: "integer",
                     description: `Configured ${process.env.API_TOKEN}; Bearer not-a-real-bearer-value`
@@ -397,6 +398,18 @@ server.setRequestHandler('tools/list', async (request) => {
                     description: "Provider github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
                   }
                 },
+                $defs: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" }
+                },
+                dependencies: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: ["tokens"]
+                },
+                default: {
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key",
+                  "Bearer not-a-real-bearer-value": "bearer-key",
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: "provider-key"
+                },
+                examples: [{ [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key" }],
                 additionalProperties: false
               }
             },

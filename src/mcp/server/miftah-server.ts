@@ -3707,29 +3707,30 @@ function redactClientVisibleSchema<Schema>(schema: Schema, redactor: SecretRedac
 
   return Object.fromEntries(
     Object.entries(schema).map(([keyword, value]) => {
+      const redactedKeyword = redactor.redact(keyword);
       if (jsonSchemaMapKeywords.has(keyword) && isRecord(value)) {
         return [
-          keyword,
+          redactedKeyword,
           Object.fromEntries(
             Object.entries(value).map(([name, nestedSchema]) => [
-              name,
+              redactor.redact(name),
               redactClientVisibleSchema(nestedSchema, redactor)
             ])
           )
         ];
       }
       if (jsonSchemaArrayKeywords.has(keyword) && Array.isArray(value)) {
-        return [keyword, value.map((nestedSchema) => redactClientVisibleSchema(nestedSchema, redactor))];
+        return [redactedKeyword, value.map((nestedSchema) => redactClientVisibleSchema(nestedSchema, redactor))];
       }
       if (jsonSchemaValueKeywords.has(keyword)) {
-        return [keyword, redactClientVisibleSchema(value, redactor)];
+        return [redactedKeyword, redactClientVisibleSchema(value, redactor)];
       }
       if (keyword === "dependencies" && isRecord(value)) {
         return [
-          keyword,
+          redactedKeyword,
           Object.fromEntries(
             Object.entries(value).map(([name, dependency]) => [
-              name,
+              redactor.redact(name),
               Array.isArray(dependency)
                 ? redactSchemaLiteral(dependency, redactor)
                 : redactClientVisibleSchema(dependency, redactor)
@@ -3737,18 +3738,18 @@ function redactClientVisibleSchema<Schema>(schema: Schema, redactor: SecretRedac
           )
         ];
       }
-      return [keyword, redactSchemaLiteral(value, redactor)];
+      return [redactedKeyword, redactSchemaLiteral(value, redactor)];
     })
   ) as Schema;
 }
 
-/** Redacts strings inside non-schema keyword values without changing booleans or property names. */
+/** Redacts strings and object keys inside non-schema keyword values without changing booleans. */
 function redactSchemaLiteral<Value>(value: Value, redactor: SecretRedactor): Value {
   if (typeof value === "string") return redactor.redact(value) as Value;
   if (Array.isArray(value)) return value.map((entry) => redactSchemaLiteral(entry, redactor)) as Value;
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([name, entry]) => [name, redactSchemaLiteral(entry, redactor)])
+    Object.entries(value).map(([name, entry]) => [redactor.redact(name), redactSchemaLiteral(entry, redactor)])
   ) as Value;
 }
 

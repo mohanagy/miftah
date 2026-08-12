@@ -3895,6 +3895,7 @@ describe("Miftah MCP wrapper", () => {
       const stripe = result.tools.find((tool) => tool.name === "stripe_schema_fixture");
 
       expect(vercel?.inputSchema.properties).toMatchObject({
+        "[REDACTED]": { type: "string" },
         tokens: { type: "integer" },
         passwordProtection: { type: "boolean", default: true }
       });
