@@ -387,7 +387,12 @@ server.setRequestHandler('tools/list', async (request) => {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 type: "object",
                 properties: {
-                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" },
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: {
+                    $ref: `#/$defs/${process.env.API_TOKEN ?? "missing-schema-secret"}`
+                  },
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: {
+                    $ref: "#/$defs/github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                  },
                   tokens: {
                     type: "integer",
                     description: `Configured ${process.env.API_TOKEN}; Bearer not-a-real-bearer-value`
@@ -399,17 +404,32 @@ server.setRequestHandler('tools/list', async (request) => {
                   }
                 },
                 $defs: {
-                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" }
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: { type: "string" },
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: { type: "integer" }
                 },
                 dependencies: {
-                  [process.env.API_TOKEN ?? "missing-schema-secret"]: ["tokens"]
+                  [process.env.API_TOKEN ?? "missing-schema-secret"]: [
+                    "github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                  ],
+                  github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: [
+                    process.env.API_TOKEN ?? "missing-schema-secret"
+                  ]
                 },
+                required: [
+                  process.env.API_TOKEN ?? "missing-schema-secret",
+                  "github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+                ],
                 default: {
                   [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key",
                   "Bearer not-a-real-bearer-value": "bearer-key",
                   github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: "provider-key"
                 },
-                examples: [{ [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key" }],
+                examples: [
+                  {
+                    [process.env.API_TOKEN ?? "missing-schema-secret"]: "configured-key",
+                    github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP: "provider-key"
+                  }
+                ],
                 additionalProperties: false
               }
             },

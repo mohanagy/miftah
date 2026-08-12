@@ -3894,10 +3894,27 @@ describe("Miftah MCP wrapper", () => {
       const firebase = result.tools.find((tool) => tool.name === "firebase_schema_fixture");
       const stripe = result.tools.find((tool) => tool.name === "stripe_schema_fixture");
 
-      expect(vercel?.inputSchema.properties).toMatchObject({
-        "[REDACTED]": { type: "string" },
-        tokens: { type: "integer" },
-        passwordProtection: { type: "boolean", default: true }
+      expect(vercel?.inputSchema).toMatchObject({
+        properties: {
+          "[REDACTED]": { $ref: "#/$defs/[REDACTED]" },
+          "[REDACTED_2]": { $ref: "#/$defs/[REDACTED_2]" },
+          tokens: { type: "integer" },
+          passwordProtection: { type: "boolean", default: true }
+        },
+        $defs: {
+          "[REDACTED]": { type: "string" },
+          "[REDACTED_2]": { type: "integer" }
+        },
+        dependencies: {
+          "[REDACTED]": ["[REDACTED_2]"],
+          "[REDACTED_2]": ["[REDACTED]"]
+        },
+        required: ["[REDACTED]", "[REDACTED_2]"],
+        default: {
+          "[REDACTED]": "configured-key",
+          "[REDACTED_2]": "provider-key"
+        },
+        examples: [{ "[REDACTED]": "configured-key", "[REDACTED_2]": "provider-key" }]
       });
       expect(vercel?.inputSchema.additionalProperties).toBe(false);
       expect(firebase?.inputSchema.properties).toMatchObject({ page_token: { type: "string" } });

@@ -3697,59 +3697,143 @@ function redactClientVisibleTool(tool: Tool, redactor: SecretRedactor): Tool {
  * form for clients whose schema adapters require objects; `false` stays closed.
  */
 function redactClientVisibleSchema<Schema>(schema: Schema, redactor: SecretRedactor): Schema {
+  const context = createSchemaRedactionContext(schema, redactor);
+  return redactClientVisibleSchemaValue(schema, context);
+}
+
+interface SchemaRedactionContext {
+  aliases: ReadonlyMap<string, string>;
+  replacements: readonly (readonly [string, string])[];
+  redactor: SecretRedactor;
+}
+
+function createSchemaRedactionContext(schema: unknown, redactor: SecretRedactor): SchemaRedactionContext {
+  const names: string[] = [];
+  collectSchemaObjectKeys(schema, names, new Set());
+  const unchangedNames = new Set(names.filter((name) => redactor.redact(name) === name));
+  const usedAliases = new Set(unchangedNames);
+  const aliases = new Map<string, string>();
+
+  for (const name of names) {
+    if (aliases.has(name)) continue;
+    const redactedName = redactor.redact(name);
+    if (redactedName === name) {
+      aliases.set(name, name);
+      continue;
+    }
+
+    let alias = redactedName;
+    for (let suffix = 2; usedAliases.has(alias); suffix += 1) {
+      alias = suffixSchemaRedactionAlias(redactedName, suffix);
+    }
+    aliases.set(name, alias);
+    usedAliases.add(alias);
+  }
+
+  return {
+    aliases,
+    replacements: [...aliases]
+      .filter(([name, alias]) => name !== alias)
+      .sort(([left], [right]) => right.length - left.length),
+    redactor
+  };
+}
+
+function collectSchemaObjectKeys(value: unknown, names: string[], seen: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSchemaObjectKeys(entry, names, seen);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [name, entry] of Object.entries(value)) {
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+    collectSchemaObjectKeys(entry, names, seen);
+  }
+}
+
+function suffixSchemaRedactionAlias(alias: string, suffix: number): string {
+  return alias.endsWith("]") ? `${alias.slice(0, -1)}_${suffix}]` : `${alias}_${suffix}`;
+}
+
+function redactSchemaName(name: string, context: SchemaRedactionContext): string {
+  return context.aliases.get(name) ?? context.redactor.redact(name);
+}
+
+function redactSchemaString(value: string, context: SchemaRedactionContext): string {
+  let result = "";
+  for (let offset = 0; offset < value.length; ) {
+    const replacement = context.replacements.find(([name]) => value.startsWith(name, offset));
+    if (replacement) {
+      result += replacement[1];
+      offset += replacement[0].length;
+    } else {
+      result += value[offset];
+      offset += 1;
+    }
+  }
+  return context.redactor.redact(result);
+}
+
+function redactClientVisibleSchemaValue<Schema>(schema: Schema, context: SchemaRedactionContext): Schema {
   if (schema === true) return {} as Schema;
   if (schema === false || schema === null || typeof schema !== "object") {
-    return (typeof schema === "string" ? redactor.redact(schema) : schema) as Schema;
+    return (typeof schema === "string" ? redactSchemaString(schema, context) : schema) as Schema;
   }
   if (Array.isArray(schema)) {
-    return schema.map((entry) => redactClientVisibleSchema(entry, redactor)) as Schema;
+    return schema.map((entry) => redactClientVisibleSchemaValue(entry, context)) as Schema;
   }
 
   return Object.fromEntries(
     Object.entries(schema).map(([keyword, value]) => {
-      const redactedKeyword = redactor.redact(keyword);
+      const redactedKeyword = redactSchemaName(keyword, context);
       if (jsonSchemaMapKeywords.has(keyword) && isRecord(value)) {
         return [
           redactedKeyword,
           Object.fromEntries(
             Object.entries(value).map(([name, nestedSchema]) => [
-              redactor.redact(name),
-              redactClientVisibleSchema(nestedSchema, redactor)
+              redactSchemaName(name, context),
+              redactClientVisibleSchemaValue(nestedSchema, context)
             ])
           )
         ];
       }
       if (jsonSchemaArrayKeywords.has(keyword) && Array.isArray(value)) {
-        return [redactedKeyword, value.map((nestedSchema) => redactClientVisibleSchema(nestedSchema, redactor))];
+        return [redactedKeyword, value.map((nestedSchema) => redactClientVisibleSchemaValue(nestedSchema, context))];
       }
       if (jsonSchemaValueKeywords.has(keyword)) {
-        return [redactedKeyword, redactClientVisibleSchema(value, redactor)];
+        return [redactedKeyword, redactClientVisibleSchemaValue(value, context)];
       }
       if (keyword === "dependencies" && isRecord(value)) {
         return [
           redactedKeyword,
           Object.fromEntries(
             Object.entries(value).map(([name, dependency]) => [
-              redactor.redact(name),
+              redactSchemaName(name, context),
               Array.isArray(dependency)
-                ? redactSchemaLiteral(dependency, redactor)
-                : redactClientVisibleSchema(dependency, redactor)
+                ? redactSchemaLiteral(dependency, context)
+                : redactClientVisibleSchemaValue(dependency, context)
             ])
           )
         ];
       }
-      return [redactedKeyword, redactSchemaLiteral(value, redactor)];
+      return [redactedKeyword, redactSchemaLiteral(value, context)];
     })
   ) as Schema;
 }
 
 /** Redacts strings and object keys inside non-schema keyword values without changing booleans. */
-function redactSchemaLiteral<Value>(value: Value, redactor: SecretRedactor): Value {
-  if (typeof value === "string") return redactor.redact(value) as Value;
-  if (Array.isArray(value)) return value.map((entry) => redactSchemaLiteral(entry, redactor)) as Value;
+function redactSchemaLiteral<Value>(value: Value, context: SchemaRedactionContext): Value {
+  if (typeof value === "string") return redactSchemaString(value, context) as Value;
+  if (Array.isArray(value)) return value.map((entry) => redactSchemaLiteral(entry, context)) as Value;
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([name, entry]) => [redactor.redact(name), redactSchemaLiteral(entry, redactor)])
+    Object.entries(value).map(([name, entry]) => [
+      redactSchemaName(name, context),
+      redactSchemaLiteral(entry, context)
+    ])
   ) as Value;
 }
 
