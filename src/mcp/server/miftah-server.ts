@@ -1071,7 +1071,10 @@ export class MiftahServer {
               ? tools.map(stripMcpParameterHeaderAnnotations)
               : tools
           };
-        }
+        },
+        undefined,
+        undefined,
+        (result) => redactToolListResult(result, this.redactor)
       );
     });
 
@@ -3052,14 +3055,15 @@ export class MiftahServer {
     },
     operation: (audit: AuditScope) => Promise<Result>,
     errorResult?: (error: MiftahError) => Result,
-    resultAudit?: (result: Result) => AuditScopeResult
+    resultAudit?: (result: Result) => AuditScopeResult,
+    resultRedactor?: (result: Result) => Result
   ): Promise<Result> {
     const audit = this.auditTrail.beginOperation(input);
     try {
       await this.auditTrail.ensureWritable();
       const result = await operation(audit);
       await audit.finish(resultAudit?.(result) ?? { status: "success" });
-      return this.redactor.redact(result);
+      return resultRedactor === undefined ? this.redactor.redact(result) : resultRedactor(result);
     } catch (error) {
       if (error instanceof ApprovalInputRequiredSignal) {
         if (!audit.isFinalized) {
@@ -3639,6 +3643,113 @@ function stripMcpParameterHeaderAnnotations(tool: Tool): Tool {
     ...tool,
     inputSchema: stripJsonSchemaKeyword(tool.inputSchema, "x-mcp-header")
   };
+}
+
+const jsonSchemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties"
+]);
+const jsonSchemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+const jsonSchemaValueKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties"
+]);
+
+/** Redacts catalog metadata without mistaking JSON Schema property names for secret values. */
+function redactToolListResult<Result extends { tools: Tool[] }>(
+  result: Result,
+  redactor: SecretRedactor
+): Result {
+  const { tools, ...metadata } = result;
+  return {
+    ...redactor.redact(metadata),
+    tools: tools.map((tool) => redactClientVisibleTool(tool, redactor))
+  } as Result;
+}
+
+function redactClientVisibleTool(tool: Tool, redactor: SecretRedactor): Tool {
+  const { inputSchema, outputSchema, ...metadata } = tool;
+  return {
+    ...redactor.redact(metadata),
+    inputSchema: redactClientVisibleSchema(inputSchema, redactor),
+    ...(outputSchema === undefined
+      ? {}
+      : { outputSchema: redactClientVisibleSchema(outputSchema, redactor) })
+  };
+}
+
+/**
+ * Preserves schema structure while redacting known values from textual metadata.
+ * A boolean `true` in a schema position is normalized to its equivalent `{}`
+ * form for clients whose schema adapters require objects; `false` stays closed.
+ */
+function redactClientVisibleSchema<Schema>(schema: Schema, redactor: SecretRedactor): Schema {
+  if (schema === true) return {} as Schema;
+  if (schema === false || schema === null || typeof schema !== "object") {
+    return (typeof schema === "string" ? redactor.redact(schema) : schema) as Schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => redactClientVisibleSchema(entry, redactor)) as Schema;
+  }
+
+  return Object.fromEntries(
+    Object.entries(schema).map(([keyword, value]) => {
+      if (jsonSchemaMapKeywords.has(keyword) && isRecord(value)) {
+        return [
+          keyword,
+          Object.fromEntries(
+            Object.entries(value).map(([name, nestedSchema]) => [
+              name,
+              redactClientVisibleSchema(nestedSchema, redactor)
+            ])
+          )
+        ];
+      }
+      if (jsonSchemaArrayKeywords.has(keyword) && Array.isArray(value)) {
+        return [keyword, value.map((nestedSchema) => redactClientVisibleSchema(nestedSchema, redactor))];
+      }
+      if (jsonSchemaValueKeywords.has(keyword)) {
+        return [keyword, redactClientVisibleSchema(value, redactor)];
+      }
+      if (keyword === "dependencies" && isRecord(value)) {
+        return [
+          keyword,
+          Object.fromEntries(
+            Object.entries(value).map(([name, dependency]) => [
+              name,
+              Array.isArray(dependency)
+                ? redactSchemaLiteral(dependency, redactor)
+                : redactClientVisibleSchema(dependency, redactor)
+            ])
+          )
+        ];
+      }
+      return [keyword, redactSchemaLiteral(value, redactor)];
+    })
+  ) as Schema;
+}
+
+/** Redacts strings inside non-schema keyword values without changing booleans or property names. */
+function redactSchemaLiteral<Value>(value: Value, redactor: SecretRedactor): Value {
+  if (typeof value === "string") return redactor.redact(value) as Value;
+  if (Array.isArray(value)) return value.map((entry) => redactSchemaLiteral(entry, redactor)) as Value;
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([name, entry]) => [name, redactSchemaLiteral(entry, redactor)])
+  ) as Value;
 }
 
 function stripJsonSchemaKeyword<T>(value: T, keyword: string): T {
