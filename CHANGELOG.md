@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-12
+
+### Changed
+
+- [#399](https://github.com/mohanagy/miftah/issues/399) Prepared the compatible v1.1.1 patch release for Claude Desktop tool-catalog compatibility. Publication remains gated on exact `development`-to-`main` promotion and protected OIDC trusted publishing, registry provenance, a fresh install, and package-signature verification.
+
 ### Fixed
 
 - [#397](https://github.com/mohanagy/miftah/issues/397) Preserved valid JSON Schema objects when tool input names look credential-related, so Vercel and Firebase catalogs no longer fail MCP client validation after redaction. Client-visible schema-valued `true` is emitted as its equivalent `{}` form for Claude Desktop proxy compatibility, while `false` constraints, ordinary boolean values, configured-secret redaction, bearer redaction, and provider-token redaction remain unchanged.

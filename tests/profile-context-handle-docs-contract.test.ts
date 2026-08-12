@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const libraryApiPath = fileURLToPath(new URL("../docs/library-api.md", import.meta.url));
 const changelogPath = fileURLToPath(new URL("../CHANGELOG.md", import.meta.url));
-const packageManifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
+const protocolReleaseVersion = "1.1.0";
 
 describe("profile-context handle documentation contract", () => {
   it("documents the trusted modern host and deployment-wide fail-closed boundary", async () => {
@@ -22,16 +22,15 @@ describe("profile-context handle documentation contract", () => {
 
   it("records the production boundary alongside protocol negotiation", async () => {
     const changelog = await readFile(changelogPath, "utf8");
-    const manifest = JSON.parse(await readFile(packageManifestPath, "utf8")) as { version: string };
-    const escapedVersion = manifest.version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const escapedVersion = protocolReleaseVersion.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     const heading = changelog.match(new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
     expect(heading?.index).toBeTypeOf("number");
     const releaseStart = heading?.index ?? 0;
     const releaseEnd = changelog.indexOf("\n## ", releaseStart + (heading?.[0].length ?? 0));
-    const currentRelease = changelog.slice(releaseStart, releaseEnd < 0 ? undefined : releaseEnd);
+    const protocolRelease = changelog.slice(releaseStart, releaseEnd < 0 ? undefined : releaseEnd);
 
-    expect(currentRelease).toContain("[#377]");
-    expect(currentRelease).toContain("opt-in production profile-context boundary");
-    expect(currentRelease).toContain("an embedding host enables the boundary through `createMiftahServerFactory`");
+    expect(protocolRelease).toContain("[#377]");
+    expect(protocolRelease).toContain("opt-in production profile-context boundary");
+    expect(protocolRelease).toContain("an embedding host enables the boundary through `createMiftahServerFactory`");
   });
 });
