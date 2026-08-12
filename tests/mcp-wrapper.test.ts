@@ -3864,6 +3864,59 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("preserves valid secret-looking tool schemas and normalizes open boolean schemas", async () => {
+    const secret = "configured-schema-secret";
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: {
+            TEST_ACCOUNT_NAME: "work",
+            TEST_INCLUDE_SCHEMA_COMPAT_TOOLS: "true",
+            API_TOKEN: secret
+          }
+        }
+      }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "schema-compatibility-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const result = await client.listTools();
+      const vercel = result.tools.find((tool) => tool.name === "vercel_schema_fixture");
+      const firebase = result.tools.find((tool) => tool.name === "firebase_schema_fixture");
+      const stripe = result.tools.find((tool) => tool.name === "stripe_schema_fixture");
+
+      expect(vercel?.inputSchema.properties).toMatchObject({
+        "[REDACTED]": { type: "string" },
+        tokens: { type: "integer" },
+        passwordProtection: { type: "boolean", default: true }
+      });
+      expect(vercel?.inputSchema.additionalProperties).toBe(false);
+      expect(firebase?.inputSchema.properties).toMatchObject({ page_token: { type: "string" } });
+      expect(stripe?.outputSchema).toMatchObject({
+        properties: { archived: { type: "boolean", default: true } },
+        additionalProperties: {}
+      });
+
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain("not-a-real-bearer-value");
+      expect(serialized).not.toContain("github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP");
+      expect(serialized).toContain("[REDACTED]");
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("refreshes the advertised tool schema after a profile switch", async () => {
     const config = validateConfig({
       version: "1",

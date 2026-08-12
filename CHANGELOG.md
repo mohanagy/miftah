@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- [#397](https://github.com/mohanagy/miftah/issues/397) Preserved valid JSON Schema objects when tool input names look credential-related, so Vercel and Firebase catalogs no longer fail MCP client validation after redaction. Client-visible schema-valued `true` is emitted as its equivalent `{}` form for Claude Desktop proxy compatibility, while `false` constraints, ordinary boolean values, configured-secret redaction, bearer redaction, and provider-token redaction remain unchanged.
+
 ## [1.1.0] - 2026-08-12
 
 ### Added
