@@ -3912,6 +3912,7 @@ describe("Miftah MCP wrapper", () => {
         required: ["[REDACTED]", "[REDACTED_2]"],
         default: {
           "[REDACTED]": "configured-key",
+          "Bearer [REDACTED]": "bearer-key",
           "[REDACTED_2]": "provider-key"
         },
         examples: [{ "[REDACTED]": "configured-key", "[REDACTED_2]": "provider-key" }]
