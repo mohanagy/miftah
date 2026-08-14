@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const compatibilityUrl = new URL("../docs/mcp-compatibility.md", import.meta.url);
+const retirementEvidenceUrl = new URL("../docs/legacy-retirement-evidence.md", import.meta.url);
 const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const packageLockUrl = new URL("../package-lock.json", import.meta.url);
 const packageUrl = new URL("../package.json", import.meta.url);
@@ -74,5 +75,29 @@ describe("MCP compatibility documentation contract", () => {
     expect(documentation).toContain("major-version release plan");
     expect(changelog).toContain("[#368]");
     expect(changelog).toContain("[#388]");
+  });
+
+  it("keeps the retirement decision evidence-backed and explicitly deferred", async () => {
+    const [documentation, retirementEvidence] = await Promise.all([
+      readFile(compatibilityUrl, "utf8"),
+      readFile(retirementEvidenceUrl, "utf8")
+    ]);
+
+    expect(documentation).toContain("legacy compatibility retirement evidence ledger");
+    for (const contract of [
+      "No removal is authorized",
+      "@lubab/miftah@1.1.2",
+      "Initialized `2025-11-25` serving over STDIO",
+      "Initialized `2025-11-25` Streamable HTTP sessions",
+      "Roots-derived routing context",
+      "Resource subscriptions and list-changed notifications",
+      'Upstream `transport: "sse"`',
+      "Public SDK v1 `createMiftahRuntime` host path",
+      "Rollback status: pending",
+      "`named-host-runtime`",
+      "explicit maintainer approval"
+    ]) {
+      expect(retirementEvidence).toContain(contract);
+    }
   });
 });
