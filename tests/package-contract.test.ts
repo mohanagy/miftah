@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -55,6 +55,9 @@ const npmTerminationGraceMs = 250;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
+const legacyStdioArtifactConsumerFixture = fileURLToPath(
+  new URL("./fixtures/legacy-stdio-artifact-consumer.mjs", import.meta.url)
+);
 const publicRuntimeExports = [
   "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
@@ -1292,6 +1295,46 @@ describe("packed artifact contract", () => {
           modern: { era: ["modern"], protocol: "2026-07-28", hasWhoami: true },
           legacy: { era: ["legacy"], protocol: "2025-11-25", hasWhoami: true }
         });
+
+        const legacyStdioConsumerPath = join(directory, "legacy-stdio-artifact-consumer.mjs");
+        await copyFile(legacyStdioArtifactConsumerFixture, legacyStdioConsumerPath);
+        const legacyStdioConsumer = spawnSync(
+          process.execPath,
+          [legacyStdioConsumerPath, fakeStdioUpstreamFixture],
+          { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
+        );
+        expect(legacyStdioConsumer.status, legacyStdioConsumer.stderr || legacyStdioConsumer.stdout).toBe(0);
+        const legacyStdioEvidence = JSON.parse(legacyStdioConsumer.stdout) as Record<string, unknown>;
+        const { cancellation: legacyCancellation, ...stableLegacyStdioEvidence } = legacyStdioEvidence;
+        expect(stableLegacyStdioEvidence).toEqual({
+          protocol: "2025-11-25",
+          roots: { initialized: "personal", refreshed: "work", requests: 2 },
+          subscriptions: {
+            advertised: true,
+            updateForwarded: true,
+            subscribeCount: 1,
+            unsubscribeCount: 1
+          },
+          // The initialized SDK v2 adapter currently advertises list-change support but drops
+          // upstream list-change notifications. This compatibility defect is tracked by #413.
+          listChanges: { advertised: true, tools: false, resources: false, prompts: false },
+          cleanup: { personal: true, work: true },
+          stderrEmpty: true
+        });
+        const {
+          downstreamRejected,
+          upstreamNotifications,
+          ...legacyTerminalAudit
+        } = legacyCancellation as Record<string, unknown>;
+        expect({ downstreamRejected, upstreamNotifications }).toEqual({
+          downstreamRejected: true,
+          // Every tested OS drops notifications/cancelled before it reaches the selected upstream (#413).
+          upstreamNotifications: 0
+        });
+        expect([
+          { terminalAuditEvents: 0, lastAuditStatus: "failure", lastAuditErrorCode: "UPSTREAM_CALL_FAILED" },
+          { terminalAuditEvents: 1, lastAuditStatus: "cancelled", lastAuditErrorCode: "REQUEST_CANCELLED" }
+        ]).toContainEqual(legacyTerminalAudit);
 
         const typeConsumerPath = join(directory, "consumer.ts");
         await writeFile(

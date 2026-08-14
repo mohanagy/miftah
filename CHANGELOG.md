@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- [#388](https://github.com/mohanagy/miftah/issues/388) Added a deterministic exact-package legacy STDIO evidence consumer. Against published v1.1.2 it proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, and upstream shutdown, while recording that the initialized SDK v2 adapter advertises but does not deliver catalog list-change notifications and does not propagate downstream cancellation; those compatibility defects are tracked by [#413](https://github.com/mohanagy/miftah/issues/413).
 - [#388](https://github.com/mohanagy/miftah/issues/388) Added a v1.1.2 legacy-compatibility retirement evidence ledger that inventories every current candidate, grades source/package/host/usage evidence separately, defines migration and rollback proof requirements, and keeps all removal deferred until real usage, named-host runtime, state-safe rollback, a separate implementation issue, and explicit maintainer approval exist.
 
 ## [1.1.2] - 2026-08-14
