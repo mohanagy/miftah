@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -45,6 +46,26 @@ const readAuditEvents = async (path) => {
 
 const readToolCallOperations = async (path) =>
   (await readAuditEvents(path)).filter((event) => event.kind === "operation" && event.operation === "tools/call");
+
+const probeSessionStatus = (endpoint, sessionId) => new Promise((resolveProbe, rejectProbe) => {
+  const probe = httpRequest(endpoint, {
+    method: "GET",
+    headers: { "Mcp-Session-Id": sessionId }
+  }, (response) => {
+    const status = response.statusCode;
+    response.destroy();
+    if (status === undefined) {
+      rejectProbe(new Error("The terminated-session probe returned no HTTP status."));
+      return;
+    }
+    resolveProbe(status);
+  });
+  probe.once("error", rejectProbe);
+  probe.setTimeout(5_000, () => {
+    probe.destroy(new Error("Timed out probing the terminated MCP session."));
+  });
+  probe.end();
+});
 
 const resolveInstalledCliEntry = async () => {
   let packageDirectory = dirname(fileURLToPath(import.meta.resolve("@lubab/miftah")));
@@ -108,9 +129,11 @@ const startInstalledHttpCli = async (cliEntry, configPath, cwd) => {
           return;
         }
         const timeout = setTimeout(() => {
+          clearTimeout(timeout);
           child.kill("SIGKILL");
           rejectStop(new Error(`Installed Miftah HTTP CLI did not stop after SIGTERM: ${stderr || stdout || "no output"}`));
         }, 10_000);
+        timeout.unref();
         child.once("close", () => {
           clearTimeout(timeout);
           resolveStop();
@@ -216,6 +239,11 @@ try {
     "one upstream cancellation notification"
   );
 
+  await transport.terminateSession();
+  const terminationProbeStatus = await probeSessionStatus(httpCli.endpoint, mcpSessionId);
+  if (terminationProbeStatus !== 404) {
+    throw new Error(`Expected the terminated MCP session to return HTTP 404, got ${terminationProbeStatus}.`);
+  }
   await client.close();
   client = undefined;
   transport = undefined;
@@ -235,7 +263,11 @@ try {
 
   process.stdout.write(JSON.stringify({
     protocol: "2025-11-25",
-    session: { mcpSessionIdAssigned: true, closed: true },
+    session: {
+      mcpSessionIdAssigned: true,
+      terminationProbeStatus,
+      closed: terminationProbeStatus === 404
+    },
     approval: {
       elicitationCount: elicitationRequests.length,
       actions: approvalActions,

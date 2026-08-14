@@ -1344,10 +1344,11 @@ describe("packed artifact contract", () => {
           [legacyHttpConsumerPath, fakeStdioUpstreamFixture],
           { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
         );
+        expect(legacyHttpConsumer.error, String(legacyHttpConsumer.error)).toBeUndefined();
         expect(legacyHttpConsumer.status, legacyHttpConsumer.stderr || legacyHttpConsumer.stdout).toBe(0);
         expect(JSON.parse(legacyHttpConsumer.stdout)).toEqual({
           protocol: "2025-11-25",
-          session: { mcpSessionIdAssigned: true, closed: true },
+          session: { mcpSessionIdAssigned: true, terminationProbeStatus: 404, closed: true },
           approval: {
             elicitationCount: 1,
             actions: ["requested", "approved", "consumed"],
