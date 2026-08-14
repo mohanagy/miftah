@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#388](https://github.com/mohanagy/miftah/issues/388) Added a v1.1.2 legacy-compatibility retirement evidence ledger that inventories every current candidate, grades source/package/host/usage evidence separately, defines migration and rollback proof requirements, and keeps all removal deferred until real usage, named-host runtime, state-safe rollback, a separate implementation issue, and explicit maintainer approval exist.
+
 ## [1.1.2] - 2026-08-14
 
 ### Changed
