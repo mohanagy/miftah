@@ -4555,14 +4555,17 @@ describe("local Console control server", () => {
             {
               name: "google-govalidate",
               description: "GoValidate Google account",
-              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json"
+              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json",
+              expectedAccountId: "google-sub-govalidate"
             },
             {
               name: "google-craftmyletter",
               description: "CraftMyLetter Google account",
-              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
+              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json",
+              expectedAccountId: "google-sub-craftmyletter"
             }
           ],
+          identityProbeTool: "get_google_account_identity",
           defaultProfile: "google-craftmyletter",
           activeProfileLifetime: "workspace"
         };
@@ -4615,6 +4618,22 @@ describe("local Console control server", () => {
         expect(missingDefault.status).toBe(422);
         await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
+        const preview = await fetch(new URL("/api/v1/onboarding/preset/preview", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(preview.status).toBe(200);
+        expect(await preview.json()).toMatchObject({
+          data: { name: "gsc", defaultProfile: "google-craftmyletter", profileCount: 2 }
+        });
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
         const created = await fetch(endpoint, {
           method: "POST",
           headers: {
@@ -4636,12 +4655,28 @@ describe("local Console control server", () => {
               readonly GSC_CONFIG_DIR: string;
               readonly GSC_OAUTH_CLIENT_SECRETS_FILE?: string;
             };
+            readonly identity?: {
+              readonly expected: { readonly provider: string; readonly accountId: string };
+              readonly probe: { readonly tool: string; readonly resultFormat: string };
+            };
           }>;
         };
         expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
         expect(config.profiles).toMatchObject({
-          "google-govalidate": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" } },
-          "google-craftmyletter": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" } }
+          "google-govalidate": {
+            env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" },
+            identity: {
+              expected: { provider: "google", accountId: "google-sub-govalidate" },
+              probe: { tool: "get_google_account_identity", resultFormat: "json" }
+            }
+          },
+          "google-craftmyletter": {
+            env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" },
+            identity: {
+              expected: { provider: "google", accountId: "google-sub-craftmyletter" },
+              probe: { tool: "get_google_account_identity", resultFormat: "json" }
+            }
+          }
         });
         expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(2);
       } finally {

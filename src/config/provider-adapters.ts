@@ -291,8 +291,10 @@ export function buildProviderAdapterAccountIdentity(
   const probeTool = identityProbeTool ?? contract?.name;
   if (
     contract === undefined ||
+    typeof expectedAccountId !== "string" ||
     !opaqueProviderAccountId.test(expectedAccountId) ||
-    probeTool === undefined ||
+    (identityProbeTool !== undefined && typeof identityProbeTool !== "string") ||
+    typeof probeTool !== "string" ||
     !providerIdentityProbeTool.test(probeTool)
   ) {
     throw new ProviderAdapterAccountProfileError("identity");
