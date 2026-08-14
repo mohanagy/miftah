@@ -2212,7 +2212,7 @@ async function clearProfileReadinessStateWhenConfigurationIsUnselected(javascrip
 
 async function submitMultiAccountGscPresetForm(
   javascript: string,
-  options: { readonly firstProfileName?: string } = {}
+  options: { readonly firstProfileName?: string; readonly withIdentity?: true } = {}
 ): Promise<{ readonly request?: Record<string, unknown>; readonly status: string }> {
   type SubmitListener = (event: { readonly preventDefault: () => void }) => void | Promise<void>;
   class FakeElement {
@@ -2244,7 +2244,8 @@ async function submitMultiAccountGscPresetForm(
     constructor(
       private readonly name: FakeInput,
       private readonly description: FakeInput,
-      private readonly clientSecrets: FakeInput
+      private readonly clientSecrets: FakeInput,
+      private readonly expectedAccountId: FakeInput
     ) {
       super();
     }
@@ -2253,6 +2254,7 @@ async function submitMultiAccountGscPresetForm(
       if (selector === "[data-gsc-profile-name]") return this.name;
       if (selector === "[data-gsc-profile-description]") return this.description;
       if (selector === "[data-gsc-client-secrets-file]") return this.clientSecrets;
+      if (selector === "[data-gsc-expected-account-id]") return this.expectedAccountId;
       return undefined;
     }
   }
@@ -2271,7 +2273,8 @@ async function submitMultiAccountGscPresetForm(
       name: "gsc",
       preset: "google-search-console",
       defaultProfile: "google-craftmyletter",
-      activeProfileLifetime: "workspace"
+      activeProfileLifetime: "workspace",
+      identityProbeTool: options.withIdentity === true ? "get_google_account_identity" : ""
     };
 
     addEventListener(name: string, listener: SubmitListener): void {
@@ -2307,12 +2310,14 @@ async function submitMultiAccountGscPresetForm(
     new FakeProfileRow(
       new FakeInput(options.firstProfileName ?? "google-govalidate"),
       new FakeInput("GoValidate Google account"),
-      new FakeInput("/tmp/govalidate-client-secrets.json")
+      new FakeInput("/tmp/govalidate-client-secrets.json"),
+      new FakeInput(options.withIdentity === true ? "google-sub-govalidate" : "")
     ),
     new FakeProfileRow(
       new FakeInput("google-craftmyletter"),
       new FakeInput("CraftMyLetter Google account"),
-      new FakeInput("/tmp/craftmyletter-client-secrets.json")
+      new FakeInput("/tmp/craftmyletter-client-secrets.json"),
+      new FakeInput(options.withIdentity === true ? "google-sub-craftmyletter" : "")
     )
   ]);
   const requests: Array<{ readonly path: string; readonly body?: string }> = [];
@@ -3173,6 +3178,9 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah does not retain rejected arguments, headers, environment values, or credentials.");
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
+      expect(html).toContain("Expected opaque account ID (optional)");
+      expect(html).toContain("Identity probe tool (optional)");
+      expect(html).toContain("property access is never identity proof");
       expect(html).toContain('id="active-profile-lifetime"');
       expect(html).toContain("Temporary — reset to the configured default after a fresh Miftah process");
       expect(html).toContain("Durable workspace — restore the last switch for this configuration");
@@ -3492,6 +3500,23 @@ describe("local Console control server", () => {
           ],
           defaultProfile: "google-craftmyletter",
           activeProfileLifetime: "workspace"
+        }
+      });
+      await expect(submitMultiAccountGscPresetForm(javascript, { withIdentity: true })).resolves.toMatchObject({
+        request: {
+          name: "gsc",
+          preset: "google-search-console",
+          googleSearchConsoleProfiles: [
+            {
+              name: "google-govalidate",
+              expectedAccountId: "google-sub-govalidate"
+            },
+            {
+              name: "google-craftmyletter",
+              expectedAccountId: "google-sub-craftmyletter"
+            }
+          ],
+          identityProbeTool: "get_google_account_identity"
         }
       });
       await expect(submitMultiAccountGscPresetForm(javascript, {
@@ -4530,14 +4555,17 @@ describe("local Console control server", () => {
             {
               name: "google-govalidate",
               description: "GoValidate Google account",
-              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json"
+              oauthClientSecretsFile: "/tmp/govalidate-client-secrets.json",
+              expectedAccountId: "google-sub-govalidate"
             },
             {
               name: "google-craftmyletter",
               description: "CraftMyLetter Google account",
-              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
+              oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json",
+              expectedAccountId: "google-sub-craftmyletter"
             }
           ],
+          identityProbeTool: "get_google_account_identity",
           defaultProfile: "google-craftmyletter",
           activeProfileLifetime: "workspace"
         };
@@ -4590,6 +4618,22 @@ describe("local Console control server", () => {
         expect(missingDefault.status).toBe(422);
         await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
+        const preview = await fetch(new URL("/api/v1/onboarding/preset/preview", server.url), {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(request)
+        });
+        expect(preview.status).toBe(200);
+        expect(await preview.json()).toMatchObject({
+          data: { name: "gsc", defaultProfile: "google-craftmyletter", profileCount: 2 }
+        });
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
         const created = await fetch(endpoint, {
           method: "POST",
           headers: {
@@ -4611,12 +4655,28 @@ describe("local Console control server", () => {
               readonly GSC_CONFIG_DIR: string;
               readonly GSC_OAUTH_CLIENT_SECRETS_FILE?: string;
             };
+            readonly identity?: {
+              readonly expected: { readonly provider: string; readonly accountId: string };
+              readonly probe: { readonly tool: string; readonly resultFormat: string };
+            };
           }>;
         };
         expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
         expect(config.profiles).toMatchObject({
-          "google-govalidate": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" } },
-          "google-craftmyletter": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" } }
+          "google-govalidate": {
+            env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" },
+            identity: {
+              expected: { provider: "google", accountId: "google-sub-govalidate" },
+              probe: { tool: "get_google_account_identity", resultFormat: "json" }
+            }
+          },
+          "google-craftmyletter": {
+            env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" },
+            identity: {
+              expected: { provider: "google", accountId: "google-sub-craftmyletter" },
+              probe: { tool: "get_google_account_identity", resultFormat: "json" }
+            }
+          }
         });
         expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(2);
       } finally {
@@ -5271,10 +5331,11 @@ describe("local Console control server", () => {
     const thirdSecrets = join(directory, "google-third-client-secrets.json");
     await writeFile(configPath, `${JSON.stringify(buildPresetConfig("gsc", "google-search-console", {
       googleSearchConsoleProfiles: [
-        { name: "google-work", oauthClientSecretsFile: firstSecrets },
-        { name: "google-personal", oauthClientSecretsFile: secondSecrets }
+        { name: "google-work", oauthClientSecretsFile: firstSecrets, expectedAccountId: "google-sub-work" },
+        { name: "google-personal", oauthClientSecretsFile: secondSecrets, expectedAccountId: "google-sub-personal" }
       ],
-      defaultProfile: "google-work"
+      defaultProfile: "google-work",
+      identityProbeTool: "get_google_account_identity"
     }, { configurationPath: configPath }), null, 2)}\n`, { mode: 0o600 });
     const server = await startConsoleServer(configPath, { bootstrapCredential: "test-only-bootstrap-credential" });
 
@@ -5285,6 +5346,7 @@ describe("local Console control server", () => {
         profile: "google-third",
         description: "Third Google account",
         credentialFile: thirdSecrets,
+        expectedAccountId: "google-sub-third",
         makeDefault: true
       };
       const rejected = await fetch(endpoint, {
@@ -5323,10 +5385,22 @@ describe("local Console control server", () => {
       expect(JSON.stringify(payload)).not.toContain(thirdSecrets);
       const config = JSON.parse(await readFile(configPath, "utf8")) as {
         readonly defaultProfile: string;
-        readonly profiles: Record<string, { readonly env: { readonly GSC_CONFIG_DIR: string } }>;
+        readonly profiles: Record<string, {
+          readonly env: { readonly GSC_CONFIG_DIR: string };
+          readonly identity?: {
+            readonly expected: { readonly provider: string; readonly accountId: string };
+            readonly probe: { readonly tool: string; readonly resultFormat: string };
+          };
+        }>;
       };
       expect(config.defaultProfile).toBe("google-third");
       expect(new Set(Object.values(config.profiles).map((profile) => profile.env.GSC_CONFIG_DIR)).size).toBe(3);
+      expect(config.profiles["google-third"]?.identity).toEqual({
+        expected: { provider: "google", accountId: "google-sub-third" },
+        probe: { tool: "get_google_account_identity", resultFormat: "json" },
+        maxAgeMs: 3_600_000,
+        requiredForRisk: ["write", "destructive"]
+      });
     } finally {
       await server.close();
     }

@@ -13,6 +13,14 @@ export type IdentityVerificationStatus =
 /** Durable account-binding state, kept separate from live-session verification. */
 export type IdentityBindingState = "verified" | "unverified" | "changed" | "expired" | "unavailable";
 
+/** Bounded explanation of why a configured identity capability cannot be used. */
+export interface IdentityProbeCapabilityDiagnostic {
+  readonly status: "unsupported";
+  readonly tool: string;
+  readonly requirement: "read-only-no-required-input";
+  readonly reason: "tool-not-found" | "not-read-only" | "input-schema-not-safe";
+}
+
 /** A bounded, non-secret identity verification result safe for status and audit surfaces. */
 export interface IdentityStatus {
   status: IdentityVerificationStatus;
@@ -26,6 +34,8 @@ export interface IdentityStatus {
   /** Previously verified, bounded evidence loaded from or written to the binding store. */
   bound?: IdentityFingerprint;
   boundAt?: string;
+  /** Present only for a discovered capability mismatch; it never contains upstream output. */
+  capability?: IdentityProbeCapabilityDiagnostic;
   errorCode?:
     | "IDENTITY_MISMATCH"
     | "IDENTITY_BINDING_UNAVAILABLE"

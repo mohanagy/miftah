@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- [#405](https://github.com/mohanagy/miftah/issues/405) Added a bounded Google Search Console account-identity contract using non-email opaque IDs and read-only no-input JSON probes. Multi-profile setup can record distinct expected IDs, protected risky operations fail closed on mismatch or unsupported upstream capability, and status, audit, and persistence discard emails, properties, tokens, and raw responses. The pinned upstream does not yet expose the preferred probe, so Miftah reports an actionable unsupported reason without treating credential or property access as identity proof.
 - [#404](https://github.com/mohanagy/miftah/issues/404) Made active-profile lifetime explicit during multi-profile terminal and Console setup. Generated presets can select temporary `process` or durable `workspace` state, setup handoff and Console review explain the restart consequence, and current/switch/reset MCP results use the same scope terminology. Existing configurations without `state` retain process semantics. Focused integration coverage now verifies temporary and durable outcomes across two fresh STDIO processes.
 
 ## [1.1.1] - 2026-08-12

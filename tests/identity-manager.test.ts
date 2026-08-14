@@ -245,7 +245,16 @@ describe("identity verifier", () => {
     try {
       const result = await verifier.verify("work", undefined, await upstreams.get("work"));
 
-      expect(result).toMatchObject({ status: "unsupported", errorCode: "IDENTITY_PROBE_UNSUPPORTED" });
+      expect(result).toMatchObject({
+        status: "unsupported",
+        capability: {
+          status: "unsupported",
+          tool: "whoami",
+          requirement: "read-only-no-required-input",
+          reason: "input-schema-not-safe"
+        },
+        errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+      });
       await expect(readFile(countPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(directory, { force: true, recursive: true });
@@ -312,13 +321,56 @@ describe("identity verifier", () => {
       try {
         const result = await verifier.verify("work", undefined, await upstreams.get("work"));
 
-        expect(result).toMatchObject({ status: "unsupported", errorCode: "IDENTITY_PROBE_UNSUPPORTED" });
+        expect(result).toMatchObject({
+          status: "unsupported",
+          capability: {
+            tool: "identity",
+            requirement: "read-only-no-required-input",
+            reason: "input-schema-not-safe"
+          },
+          errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+        });
         await expect(readFile(countPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await rm(directory, { force: true, recursive: true });
       }
     }
   );
+
+  it("reports a bounded actionable capability diagnostic when the configured probe is absent", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "gsc-identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-work" },
+            probe: { tool: "get_account_identity", resultFormat: "json" },
+            maxAgeMs: 60_000
+          }
+        }
+      }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config);
+
+    const result = await verifier.verify("work", undefined, await upstreams.get("work"));
+
+    expect(result).toMatchObject({
+      status: "unsupported",
+      expected: { provider: "google", accountId: "google-sub-work" },
+      capability: {
+        status: "unsupported",
+        tool: "get_account_identity",
+        requirement: "read-only-no-required-input",
+        reason: "tool-not-found"
+      },
+      errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+    });
+  });
 
   it("verifies an identity probe with additionalProperties false exactly once", async () => {
     const directory = await mkdtemp(join(process.cwd(), ".miftah-identity-additional-properties-"));
@@ -778,6 +830,163 @@ describe("identity verifier", () => {
       actual: { provider: "github", login: "mona", organization: "octo", host: "github.com" }
     });
     expect(JSON.stringify(result)).not.toContain("must-not-be-retained");
+  });
+
+  it("distinguishes two GSC accounts by opaque account ID even when property access is identical", async () => {
+    const sharedProperty = "sc-domain:shared-example.test";
+    const privateEmail = "must-not-be-retained@example.test";
+    const config = validateConfig({
+      version: "1",
+      name: "gsc-identity-test",
+      defaultProfile: "google-work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        "google-work": {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({
+              provider: "google",
+              accountId: "google-sub-work",
+              email: privateEmail,
+              properties: [sharedProperty]
+            })
+          },
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write", "destructive"]
+          }
+        },
+        "google-client": {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({
+              provider: "google",
+              accountId: "google-sub-other",
+              email: privateEmail,
+              properties: [sharedProperty]
+            })
+          },
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-client" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write", "destructive"]
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config);
+
+    const work = await verifier.verify("google-work", undefined, await upstreams.get("google-work"));
+    const client = await verifier.verify("google-client", undefined, await upstreams.get("google-client"));
+
+    expect(work).toMatchObject({
+      status: "verified",
+      actual: { provider: "google", accountId: "google-sub-work" }
+    });
+    expect(client).toMatchObject({
+      status: "mismatch",
+      actual: { provider: "google", accountId: "google-sub-other" },
+      errorCode: "IDENTITY_MISMATCH"
+    });
+    const serialized = JSON.stringify({ work, client });
+    expect(serialized).not.toContain(privateEmail);
+    expect(serialized).not.toContain(sharedProperty);
+    expect(serialized).not.toContain("properties");
+  });
+
+  it("rejects an email-shaped upstream account ID without retaining it", async () => {
+    const privateEmail = "private-account@example.test";
+    const config = validateConfig({
+      version: "1",
+      name: "gsc-identity-test",
+      defaultProfile: "google-work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        "google-work": {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({ provider: "google", accountId: privateEmail })
+          },
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config);
+
+    const result = await verifier.verify("google-work", undefined, await upstreams.get("google-work"));
+
+    expect(result).toMatchObject({
+      status: "mismatch",
+      actual: { provider: "google" },
+      errorCode: "IDENTITY_MISMATCH"
+    });
+    expect(JSON.stringify(result)).not.toContain(privateEmail);
+  });
+
+  it("restores only bounded GSC account identity evidence after restart", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "gsc-identity-test",
+      defaultProfile: "google-work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        "google-work": {
+          env: {
+            TEST_INCLUDE_IDENTITY_TOOL: "true",
+            TEST_IDENTITY_RESPONSE: JSON.stringify({
+              provider: "google",
+              accountId: "google-sub-work",
+              email: "private@example.test",
+              properties: ["sc-domain:shared-example.test"]
+            })
+          },
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-work" },
+            probe: { tool: "identity", resultFormat: "json" },
+            maxAgeMs: 60_000
+          }
+        }
+      },
+      tooling: { toolRiskOverrides: { identity: "read" } }
+    });
+    let stored: readonly unknown[] = [];
+    const bindingStore = {
+      load: async () => structuredClone(stored),
+      save: async (records: readonly unknown[]) => {
+        stored = structuredClone(records);
+      }
+    };
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    const verifier = new IdentityManager(config, { bindingStore });
+    await verifier.initialize();
+
+    await expect(verifier.verify("google-work", undefined, await upstreams.get("google-work"))).resolves.toMatchObject({
+      status: "verified",
+      bound: { provider: "google", accountId: "google-sub-work" }
+    });
+    const restarted = new IdentityManager(config, { bindingStore });
+    await restarted.initialize();
+    expect(restarted.status("google-work")).toMatchObject({
+      status: "not-verified",
+      bindingState: "verified",
+      bound: { provider: "google", accountId: "google-sub-work" }
+    });
+    expect(JSON.stringify(stored)).not.toContain("private@example.test");
+    expect(JSON.stringify(stored)).not.toContain("sc-domain:shared-example.test");
   });
 
   it("retains only configured expected fields from a JSON identity response", async () => {

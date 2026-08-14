@@ -154,9 +154,15 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 const identityFieldSchema = z.string().trim().min(1).max(256);
+const opaqueIdentityAccountIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u, {
+    message: "Account identity must be an opaque identifier, not an email address or credential"
+  });
 const identityFingerprintSchema = z
   .object({
     provider: identityFieldSchema.optional(),
+    accountId: opaqueIdentityAccountIdSchema.optional(),
     login: identityFieldSchema.optional(),
     organization: identityFieldSchema.optional(),
     host: identityFieldSchema.optional()
@@ -221,7 +227,7 @@ const identitySchema = z
         message: "text identity probes require expected.login"
       });
     }
-    for (const field of ["organization", "host"] as const) {
+    for (const field of ["accountId", "organization", "host"] as const) {
       if (value.expected[field] !== undefined) {
         context.addIssue({
           code: z.ZodIssueCode.custom,

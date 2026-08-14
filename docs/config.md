@@ -269,7 +269,7 @@ Identity verification is opt-in. Add `identity` at `profiles.<profile>.identity`
 
 An identity configuration is strict and contains:
 
-- `expected`: a nonempty fingerprint with only optional `provider`, `login`, `organization`, and `host` string fields. Each identity fingerprint string, `probe.tool`, and any `probe.provider` is trimmed and must be nonempty, with a maximum 256 JavaScript characters;
+- `expected`: a nonempty fingerprint with only optional `provider`, `accountId`, `login`, `organization`, and `host` string fields. Ordinary fingerprint fields, `probe.tool`, and any `probe.provider` are trimmed and must be nonempty, with a maximum 256 JavaScript characters. `accountId` is stricter and is not normalized: it must be an exact opaque 1–256 character identifier containing only ASCII letters, digits, `.`, `_`, `:`, or `-`; email addresses, whitespace, paths, and credentials are rejected;
 - `probe`: `{ "tool": "<discovered-tool>", "resultFormat": "text" | "json" }`, with optional `provider` only for `"text"`;
 - positive integer `maxAgeMs`, with a maximum 86,400,000 ms (24 hours); and
 - optional nonempty, unique `requiredForRisk`, containing only `"write"` and/or `"destructive"`. `"read"` is not accepted; and
@@ -280,6 +280,7 @@ The expected fingerprint has exactly these fields:
 | Field | Meaning |
 | --- | --- |
 | `provider` | Provider identifier. |
+| `accountId` | Stable opaque provider account identifier. It must not be an email address, property, or credential. |
 | `login` | Account login. |
 | `organization` | Organization identifier. |
 | `host` | Provider host identifier. |
@@ -309,11 +310,11 @@ For example, this profile identity requires a GitHub login fingerprint before co
 }
 ```
 
-The probe must be a discovered read-risk tool with no required input fields; Miftah calls it with `{}`. A missing probe, a non-read probe, or a probe with required input is unsupported. A probe is an account-fingerprint observation only: it does not validate credentials, authentication, provider authorization, or token scopes.
+The probe must be a discovered read-risk tool with no required input fields; Miftah calls it with `{}`. A missing probe, a non-read probe, or a probe with required input is unsupported. The bounded status then includes only the expected tool name, requirement `read-only-no-required-input`, and one reason: `tool-not-found`, `not-read-only`, or `input-schema-not-safe`. It never includes the upstream schema or response. A probe is an account-fingerprint observation only: it does not validate credentials, authentication, provider authorization, or token scopes.
 
-Before parsing or normalization, a probe response must contain exactly one MCP text content item. Its text has a maximum 4,096 JavaScript characters; a response with another content shape or a longer text fails verification. For `"json"` probes, the text must parse to a JSON object, and Miftah retains only allowed string fields (`provider`, `login`, `organization`, and `host`) after their normal validation.
+Before parsing or normalization, a probe response must contain exactly one MCP text content item. Its text has a maximum 4,096 JavaScript characters; a response with another content shape or a longer text fails verification. For `"json"` probes, the text must parse to a JSON object, and Miftah retains only allowed string fields (`provider`, `accountId`, `login`, `organization`, and `host`) after their normal validation. An email-shaped or otherwise non-opaque `accountId` is discarded before status, audit, or persistence.
 
-For a `"text"` response, Miftah uses the response as `login` and adds the configured static `provider` when supplied. Text probes require `expected.login`, cannot verify `organization` or `host`, and their static provider must equal `expected.provider` when an expected provider is configured. For a `"json"` response, Miftah retains only allowed string `provider`, `login`, `organization`, and `host` fields; provider must come from that response, so a static probe provider is prohibited. Matching uses exact equality for every configured expected field. Miftah retains only actual fields that were configured in `expected`.
+For a `"text"` response, Miftah uses the response as `login` and adds the configured static `provider` when supplied. Text probes require `expected.login`, cannot verify `accountId`, `organization`, or `host`, and their static provider must equal `expected.provider` when an expected provider is configured. For a `"json"` response, Miftah retains only allowed string `provider`, `accountId`, `login`, `organization`, and `host` fields; provider must come from that response, so a static probe provider is prohibited. Matching uses exact equality for every configured expected field. Miftah retains only actual fields that were configured in `expected`.
 
 Identity gating is applied only after routing, policy, and target resolution and before the protected operation executes. It applies only when `requiredForRisk` explicitly names the selected write or destructive risk. Read discovery, resource reads, and prompt retrieval are not gated. Mismatch, unsupported, or failed required checks block the protected operation; an identity configuration without `requiredForRisk` never gates an operation.
 

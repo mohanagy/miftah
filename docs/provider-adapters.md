@@ -19,7 +19,7 @@ The initial pilot wraps the community [`mcp-search-console`](https://github.com/
 | Safe health evidence | The upstream `get_capabilities` tool is the only declared first-success probe. `setup --verify` and the explicit Console action can call it once with `{}` only after audit and policy preflight. It is health metadata, not verified Google-account identity. |
 | Reauthentication | The upstream owns the `reauthenticate` MCP tool. The generated read-only Miftah policy does not silently grant it. |
 | Disconnect and revoke | Manual-only. Remove/revoke access with the upstream and Google account controls; Miftah cannot promise provider-side revocation. |
-| Identity evidence | Unavailable by default. OAuth success and `get_capabilities` do not prove the intended Google account or property. |
+| Identity evidence | Unavailable in the pinned upstream. OAuth success, `get_capabilities`, and `list_properties` do not prove the intended Google account; two accounts may expose the same property. Miftah defines a future-compatible bounded probe contract below and reports actionable unsupported status until the selected upstream exposes it. |
 | Destructive tools | Disabled upstream by default. The preset never sets `GSC_ALLOW_DESTRUCTIVE`; enabling it is a separate manual review and still remains subject to Miftah policy. |
 
 Create the pilot configuration with an absolute path to a Google OAuth desktop client-secrets JSON file:
@@ -34,6 +34,8 @@ miftah init gsc \
 
 The generated profile passes that path as `GSC_OAUTH_CLIENT_SECRETS_FILE`, gives the upstream its own `GSC_CONFIG_DIR` namespaced by the generated configuration file and profile, pins `mcp-search-console@0.3.2`, applies Miftah's read-only policy, and does not create an `oauth.connections` entry. `init` prints the safe ownership summary but never echoes the configured client-secrets path. Use `miftah setup --verify` or the explicit Console action when you want Miftah to run the declared `get_capabilities` probe once; it reports only bounded status, never raw provider output. Complete the upstream browser flow on first use. Use the upstream's `reauthenticate` tool only after explicitly reviewing and authorizing that lifecycle operation.
 
+Credential availability, property access, and account identity are three separate claims. The reviewed identity contract is a discovered read-only tool named `get_account_identity` that accepts `{}` with no required fields and returns exactly one bounded JSON text result containing `{ "provider": "google", "accountId": "<opaque-id>" }`. The account ID must be stable, non-secret, non-email, and contain only letters, digits, `.`, `_`, `:`, or `-`; tokens, email addresses, raw responses, and property lists are never retained as identity evidence. The pinned `mcp-search-console@0.3.2` does not expose this tool, so configured identity reports `IDENTITY_PROBE_UNSUPPORTED` with reason `tool-not-found` and protected write or destructive operations fail closed. Do not substitute `list_properties` as the probe.
+
 That automatic check is intentionally narrower than normal manual configuration. It trusts only the reviewed `uvx` launch with its inherited working directory, no profile isolation, and the generated GSC environment keys (`GSC_OAUTH_CLIENT_SECRETS_FILE` and `GSC_CONFIG_DIR`), plus the documented service-account pair `GSC_CREDENTIALS_PATH` and `GSC_SKIP_OAUTH`. A configuration-controlled `PATH`, package-resolution setting, command, working directory, isolation setting, `GSC_ALLOW_DESTRUCTIVE`, or another environment key makes the check return `PROFILE_READINESS_UNSUPPORTED`; it does not start a provider process. This does not prevent a manually reviewed configuration from running. It prevents Miftah from guessing that a changed process is still the reviewed adapter.
 
 For more than one Google account, run the guided flow instead:
@@ -42,7 +44,7 @@ For more than one Google account, run the guided flow instead:
 miftah setup gsc --preset google-search-console
 ```
 
-It asks for each profile name, optional description, and client-secrets path, then asks which profile should be the durable default. It generates a distinct `GSC_CONFIG_DIR` for every generated configuration file and named profile. The upstream creates its own cache in that directory, and Miftah still never opens or manages it.
+It asks for each profile name, optional description, client-secrets path, and optional expected opaque account ID, then asks which profile should be the durable default. Identity is all-or-none across the generated profiles and expected IDs must be distinct. When IDs are supplied, setup records the reviewed `get_account_identity` contract; `--identity-probe-tool` may name a compatible reviewed upstream tool, but it does not make the current pinned upstream support identity. It generates a distinct `GSC_CONFIG_DIR` for every generated configuration file and named profile. The upstream creates its own cache in that directory, and Miftah still never opens or manages it.
 
 For a returning configuration, add one account without replaying first-run setup:
 
@@ -51,10 +53,11 @@ miftah setup --add-profile \
   --config ~/.config/miftah/gsc.json \
   --profile google-personal \
   --oauth-client-secrets-file "$HOME/.config/gsc/personal-client-secrets.json" \
+  --expected-account-id google-sub-personal \
   --verify
 ```
 
-`miftah setup --add-profile` is available only when every existing profile still matches the exact reviewed GSC launch and has an absolute literal client-secrets reference plus a distinct canonical `GSC_CONFIG_DIR`. It creates the new profile through the adapter contract, gives it a new isolated state directory, records a redacted lifecycle event, and never reads or copies the credential file or provider cache. `--verify` runs `get_capabilities` once for the new profile only. The Console exposes the same flow under **Add another provider account**; it is hidden rather than guessed for manual, mixed, changed, or shared-state configurations.
+`miftah setup --add-profile` is available only when every existing profile still matches the exact reviewed GSC launch and has an absolute literal client-secrets reference plus a distinct canonical `GSC_CONFIG_DIR`. It creates the new profile through the adapter contract, gives it a new isolated state directory, records a redacted lifecycle event, and never reads or copies the credential file or provider cache. If existing profiles use identity, the new profile must supply `--expected-account-id` and inherits the same probe tool; identity cannot be enabled for only the new profile. `--verify` runs `get_capabilities` once for the new profile only; it is readiness, not the account identity probe. The Console exposes the same flow under **Add another provider account**; it is hidden rather than guessed for manual, mixed, changed, or shared-state configurations.
 
 Manual configuration remains supported. If `uvx` is installed at an absolute path, or the upstream needs another documented environment value, edit the generated config and run `miftah validate` followed by `miftah doctor`. Do not add the upstream token-cache path as a Miftah secret provider and do not copy a cache between profiles.
 

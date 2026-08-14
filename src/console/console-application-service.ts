@@ -173,6 +173,8 @@ export interface ConsoleProviderAccountAdditionRequest {
   readonly description?: string;
   /** Non-secret credential-file path; the adapter retains its own token cache. */
   readonly credentialFile: string;
+  readonly expectedAccountId?: string;
+  readonly identityProbeTool?: string;
   readonly makeDefault?: boolean;
 }
 
@@ -516,6 +518,8 @@ function buildConsolePresetConfiguration(request: ConsolePresetOnboardingRequest
       headerName: request.headerName,
       headerPrefix: request.headerPrefix,
       oauthClientSecretsFile: request.oauthClientSecretsFile,
+      expectedAccountId: request.expectedAccountId,
+      identityProbeTool: request.identityProbeTool,
       localCommand: request.localCommand,
       args: request.args,
       cwd: request.cwd,
@@ -1103,6 +1107,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       profile: request.profile,
       ...(request.description === undefined ? {} : { description: request.description }),
       credentialFile: request.credentialFile,
+      ...(request.expectedAccountId === undefined ? {} : { expectedAccountId: request.expectedAccountId }),
+      ...(request.identityProbeTool === undefined ? {} : { identityProbeTool: request.identityProbeTool }),
       ...(request.makeDefault === true ? { makeDefault: true } : {})
     }, {
       trustedSource: source,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import {
+  buildProviderAdapterAccountIdentity,
   buildProviderAdapterAccountProfile,
   getProviderAdapterForAccountProvisioning,
   getProviderAdapterForProfileTarget,
@@ -117,7 +118,17 @@ describe("provider adapter contract", () => {
       reauth: { owner: "upstream", mechanism: "mcp-tool", name: "reauthenticate" },
       disconnect: { owner: "manual-only", mechanism: "provider-console" }
     });
-    expect(adapter.identity).toEqual({ evidence: "unavailable", assurance: "none" });
+    expect(adapter.identity).toEqual({
+      evidence: "unavailable",
+      assurance: "none",
+      preferredProbe: {
+        name: "get_account_identity",
+        input: "empty-object",
+        resultFormat: "json",
+        provider: "google",
+        fingerprintField: "accountId"
+      }
+    });
     expect(adapter.diagnostics).toEqual({
       mode: "metadata-only",
       tokenCacheAccess: "forbidden",
@@ -130,6 +141,20 @@ describe("provider adapter contract", () => {
       upstreamEnvironmentControl: "GSC_ALLOW_DESTRUCTIVE"
     });
     expect(adapter.manualSetup.supported).toBe(true);
+  });
+
+  it("rejects non-string account identity values at the JavaScript runtime boundary", () => {
+    const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
+    const runtimeBuilder = buildProviderAdapterAccountIdentity as (
+      definition: ProviderAdapterDefinition,
+      expectedAccountId?: unknown,
+      identityProbeTool?: unknown
+    ) => unknown;
+
+    expect(() => runtimeBuilder(adapter, 123)).toThrow(ProviderAdapterAccountProfileError);
+    expect(() => runtimeBuilder(adapter, null)).toThrow(ProviderAdapterAccountProfileError);
+    expect(() => runtimeBuilder(adapter, "google-sub-work", 123)).toThrow(ProviderAdapterAccountProfileError);
+    expect(() => runtimeBuilder(adapter, "google-sub-work", null)).toThrow(ProviderAdapterAccountProfileError);
   });
 
   it("trusts the GSC adapter only inside its declared execution envelope", () => {

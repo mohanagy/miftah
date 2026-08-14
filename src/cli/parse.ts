@@ -16,6 +16,8 @@ type ValueOptionName =
   | "headerPrefix"
   | "activeProfileLifetime"
   | "oauthClientSecretsFile"
+  | "expectedAccountId"
+  | "identityProbeTool"
   | "oauthClientMetadataUrl"
   | "localCommand"
   | "args"
@@ -69,6 +71,10 @@ export interface CliOptions {
   /** Lifetime of live profile switches in newly generated multi-profile configurations. */
   readonly activeProfileLifetime?: "process" | "workspace";
   readonly oauthClientSecretsFile?: string;
+  /** Opaque provider account ID expected from a compatible no-input identity probe. */
+  readonly expectedAccountId?: string;
+  /** Explicit MCP tool implementing the configured provider identity contract. */
+  readonly identityProbeTool?: string;
   /** Reviewed HTTPS Client ID Metadata Document URL for native OAuth discovery. */
   readonly oauthClientMetadataUrl?: string;
   /** One literal executable for the explicitly reviewed local stdio setup flow. */
@@ -163,6 +169,8 @@ export const CLI_COMMANDS = {
       "headerPrefix",
       "activeProfileLifetime",
       "oauthClientSecretsFile",
+      "expectedAccountId",
+      "identityProbeTool",
       "localCommand",
       "args",
       "cwd",
@@ -191,6 +199,8 @@ export const CLI_COMMANDS = {
       "headerPrefix",
       "activeProfileLifetime",
       "oauthClientSecretsFile",
+      "expectedAccountId",
+      "identityProbeTool",
       "oauthClientMetadataUrl",
       "localCommand",
       "args",
@@ -413,6 +423,18 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--oauth-client-secrets-file <file>",
     description: "Absolute Google OAuth client-secrets file for the GSC preset."
   },
+  expectedAccountId: {
+    name: "expectedAccountId",
+    takesValue: true,
+    usage: "--expected-account-id <opaque-id>",
+    description: "Expected opaque non-email account ID for a compatible GSC identity probe."
+  },
+  identityProbeTool: {
+    name: "identityProbeTool",
+    takesValue: true,
+    usage: "--identity-probe-tool <tool>",
+    description: "Read-only no-input GSC account identity tool; defaults to get_account_identity."
+  },
   oauthClientMetadataUrl: {
     name: "oauthClientMetadataUrl",
     takesValue: true,
@@ -607,6 +629,8 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
   "--active-profile-lifetime": OPTION_DEFINITIONS.activeProfileLifetime,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
+  "--expected-account-id": OPTION_DEFINITIONS.expectedAccountId,
+  "--identity-probe-tool": OPTION_DEFINITIONS.identityProbeTool,
   "--oauth-client-metadata-url": OPTION_DEFINITIONS.oauthClientMetadataUrl,
   "--local-command": OPTION_DEFINITIONS.localCommand,
   "--arg": OPTION_DEFINITIONS.args,
