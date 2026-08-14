@@ -44,16 +44,16 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 - **Owners:** `src/cli/main.ts`, `src/runtime/create-miftah-runtime.ts`, and the `@modelcontextprotocol/server-legacy` dependency.
 - **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` negotiates `2025-11-25`, exposes tools, distinguishes legacy subscription and cache behavior from the modern STDIO path, and forwards list changes plus cancellation through the SDK v2 initialized boundary. The corrected exact published-v1.1.2 `packaged-test` below drives the installed CLI process and proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup with the official client.
 - **Migration required:** the exact client must negotiate `2026-07-28` through the SDK v2 entry. A future failure must name the retained revision and give an actionable client-upgrade or pinned-baseline path.
-- **Missing evidence:** named-host STDIO transcripts, usage evidence for initialized-only clients, a packaged approval transcript, and proof that real profile, Roots, confirmation, resource, notification, and cancellation workflows survive migration.
+- **Missing evidence:** named-host STDIO transcripts, usage evidence for initialized-only clients, a packaged STDIO approval transcript, and proof that real profile, Roots, confirmation, resource, notification, and cancellation workflows survive migration.
 - **Decision:** defer.
 
 ### Initialized `2025-11-25` Streamable HTTP sessions
 
 - **Shipped contract:** legacy initialization creates a bounded runtime keyed by `Mcp-Session-Id`. Profile state is session-scoped. Admission limits, idle expiry, interrupted response-stream reconnection, client termination, initialization failure, and shutdown own cleanup of the runtime, upstream sessions, and transport.
 - **Owners:** `src/http/miftah-http-server.ts`, `src/runtime/create-miftah-runtime.ts`, and `src/profiles/profile-state.ts`.
-- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` proves legacy negotiation and session creation. `tests/http-server.test.ts` covers concurrent session isolation, reconnection, capacity, idle expiry, DELETE cleanup, retained upstream release, and shutdown failures.
+- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` proves legacy negotiation and session creation. `tests/http-server.test.ts` covers concurrent session isolation, reconnection, capacity, idle expiry, DELETE cleanup, retained upstream release, and shutdown failures. The exact published-v1.1.2 `packaged-test` below drives the installed HTTP CLI with the official client, receives a real `Mcp-Session-Id`, completes one redacted form-elicitation approval, forwards one cancellation with explicit terminal audit evidence, explicitly terminates the session, proves the retained ID returns HTTP 404, and proves retained-upstream cleanup.
 - **Migration required:** clients must use request-scoped `2026-07-28`, stop depending on initialization, GET reconnection, DELETE session lifecycle, or mutable session profile state, and use an authenticated application-state boundary where cross-request profile context is required.
-- **Missing evidence:** exact client-by-client behavior, an operator migration for every session-dependent workflow, and a named-host packaged transcript.
+- **Missing evidence:** named-host client behavior, real usage, an operator migration for every session-dependent workflow, and candidate rollback proof.
 - **Decision:** defer.
 
 ### Roots-derived routing context
@@ -78,7 +78,7 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 
 - **Shipped contract:** the legacy SDK shim exposes Miftah's integrity-bound, one-time approval continuation as form elicitation; the modern path uses `input_required`, `requestState`, and `inputResponses`.
 - **Owners:** `src/runtime/create-miftah-runtime.ts`, the approval continuation store, and the MCP server operation pipeline.
-- **Current evidence:** `source-test` proves modern continuation across request-scoped server instances and legacy fallback behavior. Cross-process continuation is not claimed.
+- **Current evidence:** `source-test` proves modern continuation across request-scoped server instances and legacy fallback behavior. The exact published-v1.1.2 initialized HTTP `packaged-test` records one form elicitation, the `requested` / `approved` / `consumed` lifecycle, exactly one upstream execution, a redacted `success` terminal audit, and no terminal error code. Cross-process continuation is not claimed.
 - **Migration required:** exact initialized clients must demonstrate the modern input-required flow, cancellation, expiry, replay rejection, and redacted audit results.
 - **Missing evidence:** packaged named-host UI/runtime transcripts and user recovery behavior when a host cannot render the modern flow.
 - **Decision:** defer with the initialized era; do not remove it independently without its own evidence.
@@ -111,7 +111,7 @@ Sampling, MCP Logging, standalone downstream HTTP+SSE, Tasks, MCP Apps, and Ente
 
 | Client or artifact | Version and evidence | Proven operations | Boundary |
 | --- | --- | --- | --- |
-| Official MCP TypeScript packages | `2.0.0`; broad `source-test` coverage, clean-tarball contracts, and the corrected exact published-v1.1.2 STDIO record below | Source tests cover modern and initialized STDIO/HTTP negotiation, tools, MRTR, headers, caching, cancellation, and session lifecycle. Published-package proof covers initialized Roots refresh, subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and shutdown | Reference client only; no named-host or usage evidence |
+| Official MCP TypeScript packages | `2.0.0`; broad `source-test` coverage, clean-tarball contracts, and exact published-v1.1.2 STDIO and Streamable HTTP records below | Source tests cover modern and initialized STDIO/HTTP negotiation, tools, MRTR, headers, caching, cancellation, and session lifecycle. Published-package proof covers initialized STDIO Roots, subscriptions, active-profile list changes, cancellation, and shutdown plus initialized HTTP session assignment, one redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup | Reference client only; no named-host, usage, migration, or rollback evidence |
 | MCP Inspector | `2.1.0`; `packaged-test` on Linux Node 22 | `tools/list` over installed-package STDIO and modern Streamable HTTP | No UI, OAuth, legacy HTTP, Roots, subscription, or notification claim |
 | Claude Code `2.1.228` observed on macOS | `configuration-shape` | Generated project STDIO configuration and permission guidance | No packaged runtime transcript |
 | Claude Desktop `1.26832.0` observed on macOS | `configuration-shape` | Generated `mcpServers` STDIO configuration | No headless packaged runtime transcript |
@@ -143,6 +143,28 @@ Deidentified transcript:
 ```
 
 The same corrected fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. The package contract requires the same exact positive list-change, cancellation, and audit outcome across supported CI operating systems and Node versions.
+
+### Initialized Streamable HTTP reference client — 2026-08-15
+
+| Field | Recorded value |
+| --- | --- |
+| Author and evidence class | Miftah maintainer; `packaged-test` |
+| Package | Exact `@lubab/miftah@1.1.2`; npm integrity `sha512-irvuGcic5EzsZc3cLEiw8+31Vnua5qjdU3l1gztl6q8I9RJQyCNLopVyolxRmmtoqHAoe+3803AvNy8V0ihvmw==`; SLSA provenance matches the immutable baseline above |
+| Environment | macOS 26.3 arm64 (`Darwin 25.3.0`), Node 22.9.0, npm 11.12.1; fresh exact npm install with lifecycle scripts disabled |
+| Downstream | Official `@modelcontextprotocol/client@2.0.0`, Streamable HTTP, negotiated `2025-11-25`, non-empty real `Mcp-Session-Id` retained only as a boolean in the deidentified transcript |
+| Upstream | Deterministic fake STDIO upstream `1.0.0`; no provider or named-host claim |
+| Reviewed fixture | `tests/fixtures/legacy-http-artifact-consumer.mjs`, SHA-256 `0354ae23f54a2eec27e9e7ab4a6741c5e10086ea16188e3aadcc1064ecbfd4c8`; embeds one non-secret work profile, form-elicitation policy, audit path, and bounded process/HTTP settings |
+| Positive result | One form elicitation was accepted; approval audit actions were exactly `requested`, `approved`, `consumed`; the tool executed once; its terminal audit was `success` with no error code; one downstream abort produced exactly one upstream cancellation and one `cancelled` / `REQUEST_CANCELLED` terminal; explicit session termination succeeded and a request with the retained ID returned HTTP 404; retained work upstream cleanup completed; stderr was empty; the synthetic argument was absent from both elicitation and audit records |
+| Known limitations | Reference client and deterministic fake upstream only; one profile, approval, cancellation, and close workflow; no named desktop host, provider, usage, reconnection, capacity, idle-expiry, migration, rollback, or retirement-approval claim. The broader lifecycle cases remain source-test evidence. |
+| Claim boundary | Exact published-package evidence for only the named client, transport, protocol, operations, environment, and fixture. It does not authorize removal. |
+
+Deidentified transcript:
+
+```json
+{"protocol":"2025-11-25","session":{"mcpSessionIdAssigned":true,"terminationProbeStatus":404,"closed":true},"approval":{"elicitationCount":1,"actions":["requested","approved","consumed"],"toolExecutions":1,"terminalAuditStatus":"success","terminalAuditErrorCode":null,"sensitiveArgumentRedacted":true},"cancellation":{"downstreamRejected":true,"upstreamNotifications":1,"terminalAuditEvents":1,"lastAuditStatus":"cancelled","lastAuditErrorCode":"REQUEST_CANCELLED"},"cleanup":{"work":true},"stderrEmpty":true}
+```
+
+The same reviewed fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. The package contract requires this exact approval, cancellation, audit, session-close, cleanup, redaction, and stderr outcome across supported CI operating systems and Node versions.
 
 ## Required evidence record
 
@@ -192,14 +214,14 @@ The current evidence supports **keep and collect**, not retire:
 - internal source and deterministic tests describe the shipped behavior;
 - the exact v1.1.2 artifact is published, reproducible, and signature/provenance verified;
 - corrected exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup;
+- exact published-package Streamable HTTP reference-client evidence proves one initialized session, redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup;
 - named desktop-host runtime evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
 
 Next evidence work:
 
-1. Add exact published-package legacy Streamable HTTP evidence beyond `tools/list`, including approval, cancellation, session cleanup, and known limitations.
-2. Collect deidentified exact-version transcripts for the named hosts that actually exercise Miftah, without upgrading a configuration-shape row into a runtime claim prematurely.
-3. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
-4. Write and test one exact migration per observed workflow.
-5. Run the rollback contract against a future incompatible candidate.
-6. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.
-7. Only then create a separate bounded retirement implementation issue and major-version release plan.
+1. Collect deidentified exact-version transcripts for the named hosts that actually exercise Miftah, without upgrading a configuration-shape row into a runtime claim prematurely.
+2. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
+3. Write and test one exact migration per observed workflow.
+4. Run the rollback contract against a future incompatible candidate.
+5. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.
+6. Only then create a separate bounded retirement implementation issue and major-version release plan.
