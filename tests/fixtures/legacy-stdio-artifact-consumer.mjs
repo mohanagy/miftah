@@ -97,7 +97,6 @@ try {
           TEST_RESOURCE_UPDATE_URI: "account://current",
           TEST_SUBSCRIBE_COUNT_PATH: subscribePath,
           TEST_UNSUBSCRIBE_COUNT_PATH: unsubscribePath,
-          TEST_NOTIFY_LIST_CHANGES_ON_CALL_TOOL: "true",
           TEST_SHUTDOWN_END_PATH: personalShutdownPath
         }
       },
@@ -108,6 +107,7 @@ try {
           TEST_CALL_TOOL_STARTED_PATH: callStartedPath,
           TEST_CALL_TOOL_DELAY_MS: "500",
           TEST_CANCELLED_PATH: cancelledPath,
+          TEST_NOTIFY_LIST_CHANGES_ON_CALL_TOOL: "true",
           TEST_SHUTDOWN_END_PATH: workShutdownPath
         }
       }
@@ -197,8 +197,6 @@ try {
 
   const echoed = readTextResult(await client.callTool({ name: "echo", arguments: { message: "packaged-list-change" } }));
   if (echoed !== "packaged-list-change") throw new Error(`Unexpected echo result: ${echoed}`);
-  // The fake upstream awaits all three notification sends before returning this tools/call response,
-  // so the successful response is the positive completion barrier for the zero downstream counts.
 
   currentRoot = changedRoot;
   await client.notification({ method: "notifications/roots/list_changed" });
@@ -207,7 +205,10 @@ try {
   if (refreshedProfile !== "work") {
     throw new Error(`Roots refresh did not return to the work profile: ${refreshedProfile}`);
   }
+  // The active work upstream awaits all three notification sends before returning this tools/call
+  // response, so the successful response is the positive completion barrier for the counts below.
 
+  await rm(callStartedPath, { force: true });
   const toolCallsBeforeCancellation = (await readToolCallOperations(auditPath)).length;
   const controller = new globalThis.AbortController();
   const pending = client.callTool({ name: "whoami", arguments: {} }, { signal: controller.signal });

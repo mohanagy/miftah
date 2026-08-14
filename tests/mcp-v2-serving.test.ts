@@ -439,6 +439,64 @@ describe("MCP SDK v2 serving interoperability", () => {
     }
   });
 
+  it("forwards initialized stdio list changes and cancellation to the selected upstream", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-v2-legacy-stdio-boundary-"));
+    temporaryDirectories.push(directory);
+    const auditPath = join(directory, "audit.jsonl");
+    const callStartedPath = join(directory, "call-started");
+    const cancelledPath = join(directory, "cancelled");
+    const path = await configPath({
+      auditPath,
+      env: {
+        TEST_CALL_TOOL_DELAY_MS: "2000",
+        TEST_CALL_TOOL_STARTED_PATH: callStartedPath,
+        TEST_CANCELLED_PATH: cancelledPath,
+        TEST_NOTIFY_LIST_CHANGES_ON_CALL_TOOL: "true"
+      }
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const handle = serveStdio(createMiftahServerFactory(path), { transport: serverTransport });
+    const client = new Client({ name: "miftah-legacy-stdio-boundary-test", version: "1.0.0" });
+    const listChanges = { tools: 0, resources: 0, prompts: 0 };
+    client.setNotificationHandler("notifications/tools/list_changed", () => {
+      listChanges.tools += 1;
+    });
+    client.setNotificationHandler("notifications/resources/list_changed", () => {
+      listChanges.resources += 1;
+    });
+    client.setNotificationHandler("notifications/prompts/list_changed", () => {
+      listChanges.prompts += 1;
+    });
+
+    try {
+      await client.connect(clientTransport);
+      expect(client.getNegotiatedProtocolVersion()).toBe("2025-11-25");
+      await expect(client.callTool({ name: "echo", arguments: { message: "list-change" } })).resolves.toMatchObject({
+        content: [{ type: "text", text: "list-change" }]
+      });
+      await expect.poll(() => listChanges).toEqual({ tools: 1, resources: 1, prompts: 1 });
+
+      await rm(callStartedPath, { force: true });
+      const controller = new AbortController();
+      const pending = client.callTool({ name: "whoami", arguments: {} }, { signal: controller.signal });
+      await expect.poll(async () => access(callStartedPath).then(() => true, () => false)).toBe(true);
+      controller.abort("legacy stdio cancellation regression");
+      await expect(pending).rejects.toBeDefined();
+      await expect.poll(async () => access(cancelledPath).then(() => true, () => false)).toBe(true);
+      await expect.poll(async () => (await readFile(cancelledPath, "utf8")).trim().split("\n").filter(Boolean)).toHaveLength(1);
+      await expect(waitForAuditEvent(
+        auditPath,
+        (event) => event.operation === "tools/call" && event.name === "whoami"
+      )).resolves.toMatchObject({
+        status: "cancelled",
+        errorCode: "REQUEST_CANCELLED"
+      });
+    } finally {
+      await client.close();
+      await handle.close();
+    }
+  });
+
   it("returns an explicit supported-version diagnostic for a pinned unsupported revision", async () => {
     const server = await startMiftahHttpServer(await configPath());
     httpServers.push(server);
