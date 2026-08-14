@@ -3,7 +3,11 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "../src/profiles/profile-manager.js";
-import { resolveProfileStatePath } from "../src/profiles/profile-state.js";
+import {
+  describeProfileStateLifetime,
+  profileStateLifetime,
+  resolveProfileStatePath
+} from "../src/profiles/profile-state.js";
 import { MiftahError } from "../src/utils/errors.js";
 
 const directories: string[] = [];
@@ -24,6 +28,25 @@ const profiles = {
 };
 
 describe("profile state", () => {
+  it("describes temporary and durable restart behavior with consistent scope terms", () => {
+    expect(profileStateLifetime("process")).toEqual({
+      persistence: "temporary",
+      survivesProcessRestart: false,
+      restartBehavior: "configured-default"
+    });
+    expect(describeProfileStateLifetime("process")).toBe(
+      "Scope: process. This selection ends with the current Miftah process; a fresh process starts from the configured default profile."
+    );
+    expect(profileStateLifetime("workspace")).toEqual({
+      persistence: "durable",
+      survivesProcessRestart: true,
+      restartBehavior: "restore-selection"
+    });
+    expect(describeProfileStateLifetime("workspace")).toBe(
+      "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+    );
+  });
+
   it("persists a workspace selection atomically and restores its source metadata", async () => {
     const directory = await createDirectory();
     const configPath = join(directory, "miftah.json");

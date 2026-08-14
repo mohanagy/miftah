@@ -498,7 +498,10 @@ function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
     surface: "console",
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
     clientHandoff: "available",
-    environment
+    environment,
+    ...(Object.keys(config.profiles).length > 1
+      ? { profileStateScope: config.state?.scope ?? "process" }
+      : {})
   });
 }
 
@@ -518,7 +521,8 @@ function buildConsolePresetConfiguration(request: ConsolePresetOnboardingRequest
       cwd: request.cwd,
       acceptLocalCommand: request.acceptLocalCommand,
       googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
-      defaultProfile: request.defaultProfile
+      defaultProfile: request.defaultProfile,
+      activeProfileLifetime: request.activeProfileLifetime
     }, {
       configurationPath: resolvePath(configPath)
     });

@@ -84,7 +84,7 @@ describe("product README", () => {
   it("keeps one literal, version-aligned GitHub first-success path", () => {
     expect(readme).toContain(`npm install -g ${packageJson.name}@${packageJson.version}`);
     expect(readme).toContain(
-      "miftah init github --preset github --output ~/.config/miftah/github.json --client claude-desktop"
+      "miftah init github --preset github --active-profile-lifetime workspace --output ~/.config/miftah/github.json --client claude-desktop"
     );
     expect(readme).toContain("miftah validate --config ~/.config/miftah/github.json");
     expect(readme).toContain("miftah doctor --config ~/.config/miftah/github.json");

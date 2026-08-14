@@ -1847,7 +1847,8 @@ describe("setup command", () => {
           oauthClientSecretsFile: craftmyletterSecrets
         }
       ],
-      defaultProfile: "google-craftmyletter"
+      defaultProfile: "google-craftmyletter",
+      activeProfileLifetime: "process"
     }, {
       input: streams.input,
       output: streams.output,
@@ -1905,7 +1906,8 @@ describe("setup command", () => {
         { name: "google-govalidate", oauthClientSecretsFile: govalidateSecrets },
         { name: "google-craftmyletter", oauthClientSecretsFile: craftmyletterSecrets }
       ],
-      defaultProfile: "google-craftmyletter"
+      defaultProfile: "google-craftmyletter",
+      activeProfileLifetime: "process"
     }, {
       input: streams.input,
       output: streams.output,
@@ -2210,6 +2212,7 @@ describe("setup command", () => {
     await answer(streams, "Google OAuth client-secrets file (absolute path)", craftmyletterSecrets, 2);
     await answer(streams, "Add another Google account? (yes/no) [no]", "no", 2);
     await answer(streams, "Default Google account profile [google-govalidate]", "google-craftmyletter");
+    await answer(streams, "Active profile lifetime (process/workspace) [process]", "workspace");
     await answer(streams, "Output location [gsc.miftah.json]", "gsc-interactive.json");
     await answer(streams, "Client", "");
     await answer(streams, "Run the reviewed safe readiness check for every account now? (yes/no) [no]", "no");
@@ -2218,6 +2221,7 @@ describe("setup command", () => {
 
     const config = JSON.parse(await readFile(output, "utf8")) as {
       readonly defaultProfile: string;
+      readonly state: { readonly persistActiveProfile: boolean; readonly scope: string };
       readonly profiles: Record<string, {
         readonly env: {
           readonly GSC_CONFIG_DIR: string;
@@ -2226,6 +2230,7 @@ describe("setup command", () => {
       }>;
     };
     expect(config.defaultProfile).toBe("google-craftmyletter");
+    expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
     expect(config.profiles).toMatchObject({
       "google-govalidate": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: govalidateSecrets } },
       "google-craftmyletter": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: craftmyletterSecrets } }
@@ -2234,5 +2239,8 @@ describe("setup command", () => {
     const completedOutput = streams.transcript.contents.slice(streams.transcript.contents.indexOf("Created "));
     expect(completedOutput).not.toContain(govalidateSecrets);
     expect(completedOutput).not.toContain(craftmyletterSecrets);
+    expect(completedOutput).toContain(
+      "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+    );
   });
 });

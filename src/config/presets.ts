@@ -42,7 +42,12 @@ const windowsUnsupportedNpxPresets = new Set(["generic", "generic-npx", "sentry"
 
 type CurrentMiftahConfig = Extract<MiftahConfig, { version: "3" }>;
 type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
-type SharedDefaults = Pick<CurrentMiftahConfig, "routing" | "security" | "secrets" | "process" | "audit" | "tooling">;
+type SharedDefaults = Pick<
+  CurrentMiftahConfig,
+  "routing" | "security" | "secrets" | "process" | "audit" | "tooling"
+> & Pick<Partial<CurrentMiftahConfig>, "state">;
+
+export type ActiveProfileLifetime = "process" | "workspace";
 
 export interface PresetBuildOptions {
   credentialEnv?: string;
@@ -54,6 +59,8 @@ export interface PresetBuildOptions {
   oauthClientSecretsFile?: string;
   googleSearchConsoleProfiles?: readonly GoogleSearchConsoleProfileOptions[];
   defaultProfile?: string;
+  /** Explicit lifetime choice for active-profile switches in a generated multi-profile configuration. */
+  activeProfileLifetime?: ActiveProfileLifetime;
   /** One literal executable for the explicitly-reviewed local stdio setup path. */
   localCommand?: string;
   /** Each item is one literal argv element; Miftah never parses a command line. */
@@ -118,7 +125,22 @@ function validateCredentialEnv(credentialEnv: unknown): void {
 }
 
 /** Builds fresh runtime defaults so generated configs never share mutable state. */
-function buildSharedDefaults(options: { multiProfile?: boolean } = {}): SharedDefaults {
+function requireActiveProfileLifetime(value: unknown): ActiveProfileLifetime | undefined {
+  if (value === undefined || value === "process" || value === "workspace") return value;
+  catalogError("Active profile lifetime must be 'process' or 'workspace'.");
+}
+
+function activeProfileState(lifetime: ActiveProfileLifetime | undefined): CurrentMiftahConfig["state"] | undefined {
+  if (lifetime === undefined) return undefined;
+  return lifetime === "workspace"
+    ? { persistActiveProfile: true, scope: "workspace" }
+    : { persistActiveProfile: false, scope: "process" };
+}
+
+function buildSharedDefaults(
+  options: { multiProfile?: boolean; activeProfileLifetime?: ActiveProfileLifetime } = {}
+): SharedDefaults {
+  const state = activeProfileState(requireActiveProfileLifetime(options.activeProfileLifetime));
   return {
     routing: { mode: "hybrid", fallback: "activeProfile", rules: [] },
     security: {
@@ -140,7 +162,8 @@ function buildSharedDefaults(options: { multiProfile?: boolean } = {}): SharedDe
       includeArguments: false,
       failureMode: "fail-closed"
     },
-    tooling: { collisionStrategy: "prefix-upstream" }
+    tooling: { collisionStrategy: "prefix-upstream" },
+    ...(state === undefined ? {} : { state })
   };
 }
 
@@ -359,12 +382,15 @@ function buildGoogleSearchConsolePreset(
     },
     profiles: accounts.profiles,
     policies: buildReadonlyPolicies(),
-    ...buildSharedDefaults({ multiProfile: Object.keys(accounts.profiles).length > 1 })
+    ...buildSharedDefaults({
+      multiProfile: Object.keys(accounts.profiles).length > 1,
+      activeProfileLifetime: options.activeProfileLifetime
+    })
   };
 }
 
 /** Builds the multi-profile GitHub preset and its referenced policies. */
-function buildGithubPreset(name: string): MiftahConfig {
+function buildGithubPreset(name: string, options: PresetBuildOptions): MiftahConfig {
   return {
     version: CURRENT_CONFIG_VERSION,
     name,
@@ -398,7 +424,7 @@ function buildGithubPreset(name: string): MiftahConfig {
       }
     },
     policies: buildReadonlyPolicies(),
-    ...buildSharedDefaults({ multiProfile: true })
+    ...buildSharedDefaults({ multiProfile: true, activeProfileLifetime: options.activeProfileLifetime })
   };
 }
 
@@ -649,7 +675,7 @@ export const PRESET_CATALOG = {
       build: buildGenericPreset
     },
     github: {
-      requirements: { credentialEnv: "provider-managed" },
+      requirements: { credentialEnv: "provider-managed", activeProfileLifetime: "optional" },
       build: buildGithubPreset
     },
     sentry: {
@@ -660,7 +686,8 @@ export const PRESET_CATALOG = {
       requirements: {
         oauthClientSecretsFile: "required",
         googleSearchConsoleProfiles: "optional",
-        defaultProfile: "optional"
+        defaultProfile: "optional",
+        activeProfileLifetime: "optional"
       },
       build: (name, options) => buildGoogleSearchConsolePreset(name, options, {})
     },

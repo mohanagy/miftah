@@ -57,7 +57,9 @@ describe("active profile state documentation contract", () => {
       expect(activeProfileState).toContain(claim);
     }
     expect(security).toContain("other MCP request data");
-    expect(cli).toContain("`selectionSource`, `selectedAt`, and `scope`");
+    expect(cli).toContain(
+      "`selectionSource`, `selectedAt`, `scope`, `persistence`, `survivesProcessRestart`, and `restartBehavior`"
+    );
     expect(changelogIssueEntry(changelog, 23)).toMatch(/active-profile persistence/iu);
   });
 });

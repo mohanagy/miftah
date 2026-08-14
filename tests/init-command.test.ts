@@ -104,6 +104,22 @@ describe("init command", () => {
     streams.input.end();
   });
 
+  it("writes the explicit workspace lifetime selected for a multi-profile preset", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "github-workspace.json");
+
+    await runInitCommand({
+      name: "github-workspace",
+      preset: "github",
+      output: "github-workspace.json",
+      activeProfileLifetime: "workspace"
+    }, commandContext(streams));
+    streams.input.end();
+
+    const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+    expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
+  });
+
   it("reports an existing output file as a usage error without changing it", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "existing.json");
