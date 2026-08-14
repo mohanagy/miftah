@@ -9,7 +9,7 @@ import type { InitCommandContext } from "./init.js";
 
 export type ProviderAccountSetupOptions = Pick<
   CliOptions,
-  "config" | "profile" | "description" | "oauthClientSecretsFile" | "makeDefault"
+  "config" | "profile" | "description" | "oauthClientSecretsFile" | "expectedAccountId" | "identityProbeTool" | "makeDefault"
 >;
 
 export interface ProviderAccountSetupResult {
@@ -22,6 +22,8 @@ interface ProviderAccountValues {
   readonly profile: string;
   readonly description?: string;
   readonly credentialFile: string;
+  readonly expectedAccountId?: string;
+  readonly identityProbeTool?: string;
   readonly makeDefault: boolean;
 }
 
@@ -62,6 +64,8 @@ async function collectValues(
       profile: options.profile,
       ...(options.description === undefined ? {} : { description: options.description }),
       credentialFile: options.oauthClientSecretsFile,
+      ...(options.expectedAccountId === undefined ? {} : { expectedAccountId: options.expectedAccountId }),
+      ...(options.identityProbeTool === undefined ? {} : { identityProbeTool: options.identityProbeTool }),
       makeDefault: options.makeDefault === true
     };
   }
@@ -71,6 +75,13 @@ async function collectValues(
     const profile = options.profile ?? await prompt(line, "New account profile name");
     const description = options.description ?? await prompt(line, "Account profile description (optional)");
     const credentialFile = options.oauthClientSecretsFile ?? await prompt(line, "Provider credential-file path (absolute)");
+    const expectedAccountId = options.expectedAccountId ?? await prompt(
+      line,
+      "Expected opaque account ID (optional; never email or token)"
+    );
+    const identityProbeTool = expectedAccountId === undefined
+      ? options.identityProbeTool
+      : options.identityProbeTool ?? await prompt(line, "Read-only no-input account identity tool", "get_account_identity");
     const defaultAnswer = options.makeDefault === true
       ? "yes"
       : await prompt(line, "Make this the durable default profile? (yes/no)", "no");
@@ -86,6 +97,8 @@ async function collectValues(
       profile,
       ...(description === undefined ? {} : { description }),
       credentialFile,
+      ...(expectedAccountId === undefined ? {} : { expectedAccountId }),
+      ...(identityProbeTool === undefined ? {} : { identityProbeTool }),
       makeDefault: normalizedDefault === "yes" || normalizedDefault === "y"
     };
   } catch (error) {
@@ -113,6 +126,8 @@ export async function runProviderAccountSetup(
     profile: values.profile,
     ...(values.description === undefined ? {} : { description: values.description }),
     credentialFile: values.credentialFile,
+    ...(values.expectedAccountId === undefined ? {} : { expectedAccountId: values.expectedAccountId }),
+    ...(values.identityProbeTool === undefined ? {} : { identityProbeTool: values.identityProbeTool }),
     ...(values.makeDefault ? { makeDefault: true } : {})
   });
   context.output.write(`Added provider-owned account profile '${report.profile}' to ${configPath}.\n`);

@@ -2206,10 +2206,12 @@ describe("setup command", () => {
     await answer(streams, "Google account profile name [google-account-1]", "google-govalidate");
     await answer(streams, "Google account description (optional)", "GoValidate Google account");
     await answer(streams, "Google OAuth client-secrets file (absolute path)", govalidateSecrets);
+    await answer(streams, "Expected opaque Google account ID (optional; never email or token)", "");
     await answer(streams, "Add another Google account? (yes/no) [no]", "yes");
     await answer(streams, "Google account profile name", "google-craftmyletter", 2);
     await answer(streams, "Google account description (optional)", "CraftMyLetter Google account", 2);
     await answer(streams, "Google OAuth client-secrets file (absolute path)", craftmyletterSecrets, 2);
+    await answer(streams, "Expected opaque Google account ID (optional; never email or token)", "", 2);
     await answer(streams, "Add another Google account? (yes/no) [no]", "no", 2);
     await answer(streams, "Default Google account profile [google-govalidate]", "google-craftmyletter");
     await answer(streams, "Active profile lifetime (process/workspace) [process]", "workspace");

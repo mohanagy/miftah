@@ -350,7 +350,8 @@ describe("init command", () => {
         name: "gsc",
         preset: "google-search-console",
         output: "gsc.json",
-        oauthClientSecretsFile: clientSecretsFile
+        oauthClientSecretsFile: clientSecretsFile,
+        expectedAccountId: "google-sub-work"
       },
       commandContext(streams)
     );
@@ -358,6 +359,10 @@ describe("init command", () => {
 
     const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
     expect(config.upstream?.args).toEqual(["mcp-search-console@0.3.2"]);
+    expect(config.profiles.default?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-work" },
+      probe: { tool: "get_account_identity", resultFormat: "json" }
+    });
     expect(streams.transcript.contents).toContain("Provider adapter: Google Search Console");
     expect(streams.transcript.contents).toContain("Credential ownership: upstream");
     expect(streams.transcript.contents).toContain("Browser handoff: upstream");
@@ -366,6 +371,8 @@ describe("init command", () => {
     expect(streams.transcript.contents).toContain("Reauthentication: upstream MCP tool 'reauthenticate'");
     expect(streams.transcript.contents).toContain("Disconnect/revocation: manual-only");
     expect(streams.transcript.contents).toContain("Miftah will not read or manage the upstream token cache.");
+    expect(streams.transcript.contents).toContain("Preferred identity probe: 'get_account_identity'");
+    expect(streams.transcript.contents).toContain("property access is not account identity");
     expect(streams.transcript.contents).not.toContain(clientSecretsFile);
   });
 

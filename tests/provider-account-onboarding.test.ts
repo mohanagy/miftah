@@ -57,6 +57,76 @@ describe("provider-owned account onboarding", () => {
     expect(input).toEqual(original);
   });
 
+  it("extends an existing GSC identity contract without creating a partially verified profile set", () => {
+    const configPath = join(tmpdir(), "miftah-provider-account-identity", "gsc.json");
+    const credentialFile = join(tmpdir(), "miftah-provider-account-identity", "client-secrets.json");
+    const input = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        {
+          name: "google-work",
+          oauthClientSecretsFile: credentialFile,
+          expectedAccountId: "google-sub-work"
+        },
+        {
+          name: "google-personal",
+          oauthClientSecretsFile: credentialFile,
+          expectedAccountId: "google-sub-personal"
+        }
+      ],
+      identityProbeTool: "get_google_account_identity",
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+
+    const plan = planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-client",
+      credentialFile,
+      expectedAccountId: "google-sub-client"
+    });
+
+    expect(plan.config.profiles["google-client"]?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-client" },
+      probe: { tool: "get_google_account_identity", resultFormat: "json" }
+    });
+    expect(() => planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-unverified",
+      credentialFile
+    })).toThrow("keep one opaque account identity contract across every provider profile");
+    expect(() => planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-duplicate",
+      credentialFile,
+      expectedAccountId: "google-sub-work"
+    })).toThrow("keep one opaque account identity contract across every provider profile");
+    expect(() => planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-other-tool",
+      credentialFile,
+      expectedAccountId: "google-sub-other-tool",
+      identityProbeTool: "another_identity_tool"
+    })).toThrow("keep one opaque account identity contract across every provider profile");
+  });
+
+  it("does not enable identity on only the newly added profile", () => {
+    const configPath = join(tmpdir(), "miftah-provider-account-mixed-identity", "gsc.json");
+    const credentialFile = join(tmpdir(), "miftah-provider-account-mixed-identity", "client-secrets.json");
+    const input = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "google-work", oauthClientSecretsFile: credentialFile },
+        { name: "google-personal", oauthClientSecretsFile: credentialFile }
+      ],
+      defaultProfile: "google-work"
+    }, { configurationPath: configPath });
+
+    expect(() => planProviderAccountAddition(input, {
+      configPath,
+      profile: "google-client",
+      credentialFile,
+      expectedAccountId: "google-sub-client"
+    })).toThrow("keep one opaque account identity contract across every provider profile");
+  });
+
   it("reports unsafe provider profile input without misdescribing it as credential input", () => {
     const configPath = join(tmpdir(), "miftah-provider-account-profile-input", "gsc.json");
     const credentialFile = join(tmpdir(), "miftah-provider-account-profile-input", "client-secrets.json");

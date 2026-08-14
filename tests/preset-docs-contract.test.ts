@@ -95,6 +95,8 @@ describe("preset documentation contract", () => {
       "--header-name",
       "--header-prefix",
       "--oauth-client-secrets-file",
+      "--expected-account-id",
+      "--identity-probe-tool",
       "--local-command",
       "--arg",
       "--cwd",
@@ -129,6 +131,10 @@ describe("preset documentation contract", () => {
     expect(providerAdapters).toContain("The upstream creates and maintains its token cache there");
     expect(providerAdapters).toContain("Miftah never creates, reads, copies, exports, or deletes that cache");
     expect(providerAdapters).toContain("This is cache isolation, not Google-account identity verification");
+    expect(providerAdapters).toContain("Credential availability, property access, and account identity are three separate claims");
+    expect(providerAdapters).toContain("get_account_identity");
+    expect(providerAdapters).toContain("IDENTITY_PROBE_UNSUPPORTED");
+    expect(providerAdapters).toContain("Do not substitute `list_properties` as the probe");
     expect(providerAdapters).toContain("GSC_CREDENTIALS_PATH");
     expect(providerAdapters).toContain("GSC_SKIP_OAUTH=true");
     expect(providerAdapters).toContain("get_capabilities");

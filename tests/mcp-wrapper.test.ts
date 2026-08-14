@@ -1140,6 +1140,12 @@ describe("Miftah MCP wrapper", () => {
             profile: "work",
             upstream: "default",
             expected: { provider: "github", login: "work" },
+            capability: {
+              status: "unsupported",
+              tool: "whoami",
+              requirement: "read-only-no-required-input",
+              reason: "input-schema-not-safe"
+            },
             errorCode: "IDENTITY_PROBE_UNSUPPORTED"
           }
         ]
@@ -1159,6 +1165,12 @@ describe("Miftah MCP wrapper", () => {
           {
             status: "unsupported",
             expected: { provider: "github", login: "work" },
+            capability: {
+              status: "unsupported",
+              tool: "whoami",
+              requirement: "read-only-no-required-input",
+              reason: "input-schema-not-safe"
+            },
             errorCode: "IDENTITY_PROBE_UNSUPPORTED"
           }
         ]

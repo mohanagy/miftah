@@ -56,6 +56,8 @@ export type InitCommandOptions = Pick<
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "expectedAccountId"
+  | "identityProbeTool"
   | "localCommand"
   | "args"
   | "cwd"
@@ -368,8 +370,10 @@ async function collectGoogleSearchConsoleOptions(
   if (options.googleSearchConsoleProfiles !== undefined) {
     return {
       oauthClientSecretsFile: options.oauthClientSecretsFile,
+      expectedAccountId: options.expectedAccountId,
       googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
-      defaultProfile: options.defaultProfile
+      defaultProfile: options.defaultProfile,
+      identityProbeTool: options.identityProbeTool
     };
   }
 
@@ -390,10 +394,22 @@ async function collectGoogleSearchConsoleOptions(
     if (name === undefined || oauthClientSecretsFile === undefined) {
       usageError("Google Search Console setup requires a profile name and OAuth client-secrets file.");
     }
+    const expectedAccountId = googleSearchConsoleProfiles.length === 0
+      ? options.expectedAccountId ?? (await prompt(
+          line,
+          cancellation,
+          "Expected opaque Google account ID (optional; never email or token)"
+        ))
+      : await prompt(
+          line,
+          cancellation,
+          "Expected opaque Google account ID (optional; never email or token)"
+        );
     googleSearchConsoleProfiles.push({
       name,
       ...(description === undefined ? {} : { description }),
-      oauthClientSecretsFile
+      oauthClientSecretsFile,
+      ...(expectedAccountId === undefined ? {} : { expectedAccountId })
     });
   } while (parseAdditionalGoogleSearchConsoleAccount(await prompt(
     line,
@@ -411,7 +427,20 @@ async function collectGoogleSearchConsoleOptions(
   if (defaultProfile === undefined) {
     usageError("Google Search Console setup requires an explicit default profile.");
   }
-  return { googleSearchConsoleProfiles, defaultProfile };
+  const hasExpectedAccountId = googleSearchConsoleProfiles.some((profile) => profile.expectedAccountId !== undefined);
+  const identityProbeTool = hasExpectedAccountId
+    ? options.identityProbeTool ?? await prompt(
+        line,
+        cancellation,
+        "Read-only no-input account identity tool",
+        "get_account_identity"
+      )
+    : options.identityProbeTool;
+  return {
+    googleSearchConsoleProfiles,
+    defaultProfile,
+    ...(identityProbeTool === undefined ? {} : { identityProbeTool })
+  };
 }
 
 async function collectPresetOptions(
@@ -447,6 +476,8 @@ async function collectPresetOptions(
         headerName: options.headerName,
         headerPrefix: options.headerPrefix,
         oauthClientSecretsFile: options.oauthClientSecretsFile,
+        expectedAccountId: options.expectedAccountId,
+        identityProbeTool: options.identityProbeTool,
         localCommand: options.localCommand,
         args: options.args,
         cwd: options.cwd,
@@ -525,6 +556,8 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     headerName: options.headerName,
     headerPrefix: options.headerPrefix,
     oauthClientSecretsFile: options.oauthClientSecretsFile,
+    expectedAccountId: options.expectedAccountId,
+    identityProbeTool: options.identityProbeTool,
     localCommand: options.localCommand,
     args: options.args,
     cwd: options.cwd,
@@ -572,6 +605,8 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       headerName: values.headerName,
       headerPrefix: values.headerPrefix,
       oauthClientSecretsFile: values.oauthClientSecretsFile,
+      expectedAccountId: values.expectedAccountId,
+      identityProbeTool: values.identityProbeTool,
       localCommand: values.localCommand,
       args: values.args,
       cwd: values.cwd,
@@ -647,6 +682,9 @@ function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapter
   const tokenCacheBoundary = adapter.authentication.tokenStore === "upstream-private"
     ? "Miftah will not read or manage the upstream token cache.\n"
     : "";
+  const identityCapabilityBoundary = adapter.identity.preferredProbe === undefined
+    ? ""
+    : `Preferred identity probe: '${adapter.identity.preferredProbe.name}' must be read-only, accept {}, and return only bounded '${adapter.identity.preferredProbe.fingerprintField}' evidence. Unsupported upstream versions remain unverified; property access is not account identity.\n`;
   output.write(
     `Provider adapter: ${adapter.displayName}\n` +
       `Credential ownership: ${adapter.authentication.credentialOwnership}\n` +
@@ -655,7 +693,8 @@ function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapter
       `Identity evidence: ${adapter.identity.evidence}\n` +
       `Reauthentication: ${reauthDescription}\n` +
       `Disconnect/revocation: ${adapter.lifecycle.disconnect.owner}\n` +
-      tokenCacheBoundary
+      tokenCacheBoundary +
+      identityCapabilityBoundary
   );
 }
 

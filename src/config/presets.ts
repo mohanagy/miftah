@@ -57,6 +57,10 @@ export interface PresetBuildOptions {
   headerName?: string;
   headerPrefix?: string;
   oauthClientSecretsFile?: string;
+  /** Opaque non-email account identifier expected from a compatible GSC identity probe. */
+  expectedAccountId?: string;
+  /** Safe no-input GSC identity tool; defaults to the reviewed provider contract. */
+  identityProbeTool?: string;
   googleSearchConsoleProfiles?: readonly GoogleSearchConsoleProfileOptions[];
   defaultProfile?: string;
   /** Explicit lifetime choice for active-profile switches in a generated multi-profile configuration. */
@@ -82,6 +86,8 @@ export interface GoogleSearchConsoleProfileOptions {
   readonly name: string;
   readonly description?: string;
   readonly oauthClientSecretsFile: string;
+  /** Opaque non-email account identifier; never an OAuth token or raw upstream response. */
+  readonly expectedAccountId?: string;
 }
 
 type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
@@ -280,22 +286,29 @@ function buildGoogleSearchConsoleProfile(
   profile: string,
   description: string | undefined,
   oauthClientSecretsFile: string,
+  expectedAccountId: string | undefined,
+  identityProbeTool: string | undefined,
   context: PresetBuildContext
 ): ProfileConfig {
+  const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
   try {
     return buildProviderAdapterAccountProfile(
-      PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"],
+      adapter,
       {
         configurationName,
         ...(context.configurationPath === undefined ? {} : { configurationPath: context.configurationPath }),
         profile,
         ...(description === undefined ? {} : { description }),
-        credentialFile: oauthClientSecretsFile
+        credentialFile: oauthClientSecretsFile,
+        ...(expectedAccountId === undefined ? {} : { expectedAccountId }),
+        ...(identityProbeTool === undefined ? {} : { identityProbeTool })
       }
     );
   } catch (error) {
     if (error instanceof ProviderAdapterAccountProfileError) {
-      catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
+      catalogError(error.reason === "identity"
+        ? "Google Search Console identity setup requires an opaque non-email account ID and a safe bounded MCP probe tool."
+        : "Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
     }
     throw error;
   }
@@ -314,6 +327,10 @@ function buildGoogleSearchConsoleProfiles(
     if (options.defaultProfile !== undefined) {
       catalogError("Preset 'google-search-console' accepts defaultProfile only with googleSearchConsoleProfiles.");
     }
+    const expectedAccountId = options.expectedAccountId;
+    if (expectedAccountId === undefined && options.identityProbeTool !== undefined) {
+      catalogError("Google Search Console identityProbeTool requires an expected account ID.");
+    }
     const profile = "default";
     return {
       defaultProfile: profile,
@@ -323,6 +340,8 @@ function buildGoogleSearchConsoleProfiles(
           profile,
           undefined,
           requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
+          expectedAccountId,
+          options.identityProbeTool,
           context
         )
       }
@@ -332,11 +351,16 @@ function buildGoogleSearchConsoleProfiles(
   if (options.oauthClientSecretsFile !== undefined) {
     catalogError("Preset 'google-search-console' accepts oauthClientSecretsFile or googleSearchConsoleProfiles, not both.");
   }
+  if (options.expectedAccountId !== undefined) {
+    catalogError("Preset 'google-search-console' accepts expectedAccountId only with the single-profile oauthClientSecretsFile shorthand.");
+  }
   if (!Array.isArray(configuredProfiles) || configuredProfiles.length === 0) {
     catalogError("Google Search Console setup requires at least one named profile.");
   }
 
   const profiles: Record<string, ProfileConfig> = Object.create(null) as Record<string, ProfileConfig>;
+  let configuredIdentityCount = 0;
+  const expectedAccountIds = new Set<string>();
   for (const configuredProfile of configuredProfiles) {
     if (typeof configuredProfile !== "object" || configuredProfile === null || Array.isArray(configuredProfile)) {
       catalogError("Google Search Console profiles must be objects with name and oauthClientSecretsFile.");
@@ -346,13 +370,30 @@ function buildGoogleSearchConsoleProfiles(
       catalogError(`Google Search Console profile '${profile}' is duplicated.`);
     }
     const description = requireGoogleSearchConsoleDescription(configuredProfile.description);
+    const expectedAccountId = configuredProfile.expectedAccountId;
+    if (expectedAccountId !== undefined) {
+      configuredIdentityCount += 1;
+      if (expectedAccountIds.has(expectedAccountId)) {
+        catalogError("Google Search Console identity setup requires a distinct expected account ID for every profile.");
+      }
+      expectedAccountIds.add(expectedAccountId);
+    }
     profiles[profile] = buildGoogleSearchConsoleProfile(
       configurationName,
       profile,
       description,
       requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
+      expectedAccountId,
+      options.identityProbeTool,
       context
     );
+  }
+
+  if (configuredIdentityCount > 0 && configuredIdentityCount !== configuredProfiles.length) {
+    catalogError("Google Search Console identity setup requires an expected account ID for every configured profile.");
+  }
+  if (configuredIdentityCount === 0 && options.identityProbeTool !== undefined) {
+    catalogError("Google Search Console identityProbeTool requires an expected account ID.");
   }
 
   if (configuredProfiles.length > 1 && options.defaultProfile === undefined) {
@@ -687,6 +728,8 @@ export const PRESET_CATALOG = {
     "google-search-console": {
       requirements: {
         oauthClientSecretsFile: "required",
+        expectedAccountId: "optional",
+        identityProbeTool: "optional",
         googleSearchConsoleProfiles: "optional",
         defaultProfile: "optional",
         activeProfileLifetime: "optional"

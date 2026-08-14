@@ -12,11 +12,13 @@ import {
   buildProviderAdapterAccountProfile,
   getProviderAdapterForAccountProvisioning,
   providerAdapterStateDirectoryKey,
+  type ProviderAdapterDefinition,
+  type ProviderIdentityProbeContract,
   ProviderAdapterAccountProfileError
 } from "../config/provider-adapters.js";
 import { planConfigMigration } from "../config/migrate-config.js";
 import { resolvePath } from "../config/path-resolve.js";
-import type { MiftahConfig } from "../config/types.js";
+import type { IdentityConfig, MiftahConfig } from "../config/types.js";
 import { validateConfig } from "../config/validate-config.js";
 import { MiftahError } from "../utils/errors.js";
 
@@ -25,6 +27,9 @@ export interface ProviderAccountAdditionRequest {
   readonly description?: string;
   /** A non-secret provider credential-file path. The upstream retains its token cache. */
   readonly credentialFile: string;
+  /** Opaque non-email identifier expected from the adapter's reviewed identity probe. */
+  readonly expectedAccountId?: string;
+  readonly identityProbeTool?: string;
   /** Changes only the durable default; running MCP clients must still restart. */
   readonly makeDefault?: boolean;
 }
@@ -82,8 +87,54 @@ function providerAccountInputInvalid(error: ProviderAdapterAccountProfileError):
     "PROVIDER_ACCOUNT_INPUT_INVALID",
     error.reason === "profile"
       ? "PROVIDER_ACCOUNT_INPUT_INVALID: choose a safe profile name"
+      : error.reason === "identity"
+        ? "PROVIDER_ACCOUNT_INPUT_INVALID: keep one opaque account identity contract across every provider profile"
       : "PROVIDER_ACCOUNT_INPUT_INVALID: choose an absolute literal credential-file path"
   );
+}
+
+function matchesReviewedIdentityContract(
+  identity: IdentityConfig,
+  contract: ProviderIdentityProbeContract
+): boolean {
+  const requiredRisks: readonly string[] = identity.requiredForRisk ?? [];
+  return (
+    identity.probe.resultFormat === contract.resultFormat &&
+    identity.expected.provider === contract.provider &&
+    Object.keys(identity.expected).every((field) => field === "provider" || field === "accountId") &&
+    identity.maxAgeMs === 3_600_000 &&
+    identity.selectionMode === undefined &&
+    new Set(requiredRisks).size === 2 &&
+    requiredRisks.includes("write") &&
+    requiredRisks.includes("destructive")
+  );
+}
+
+function existingProviderIdentityProbe(
+  config: MiftahConfig,
+  adapter: ProviderAdapterDefinition
+): string | undefined {
+  const identities = Object.values(config.profiles).map((profile) => profile.identity);
+  const configured = identities.filter(
+    (identity) => identity?.expected.accountId !== undefined
+  );
+  if (configured.length === 0) {
+    if (identities.some((identity) => identity !== undefined)) providerAccountAdditionUnavailable();
+    return undefined;
+  }
+  if (configured.length !== identities.length) providerAccountAdditionUnavailable();
+  const contract = adapter.identity.preferredProbe;
+  if (contract === undefined) providerAccountAdditionUnavailable();
+  const tools = new Set(configured.map((identity) => identity!.probe.tool));
+  const accountIds = new Set(configured.map((identity) => identity!.expected.accountId));
+  if (
+    tools.size !== 1 ||
+    accountIds.size !== configured.length ||
+    configured.some((identity) => !matchesReviewedIdentityContract(identity!, contract))
+  ) {
+    providerAccountAdditionUnavailable();
+  }
+  return configured[0]!.probe.tool;
 }
 
 /**
@@ -110,6 +161,17 @@ export function planProviderAccountAddition(
   if (Object.hasOwn(config.profiles, options.profile)) {
     throw new MiftahError("PROFILE_ALREADY_EXISTS", "PROFILE_ALREADY_EXISTS: account profile already exists");
   }
+  const existingIdentityProbe = existingProviderIdentityProbe(config, adapter);
+  if (
+    (existingIdentityProbe === undefined && options.expectedAccountId !== undefined) ||
+    (existingIdentityProbe !== undefined && options.expectedAccountId === undefined) ||
+    (options.identityProbeTool !== undefined && options.identityProbeTool !== existingIdentityProbe) ||
+    (options.expectedAccountId !== undefined && Object.values(config.profiles).some(
+      (profile) => profile.identity?.expected.accountId === options.expectedAccountId
+    ))
+  ) {
+    providerAccountInputInvalid(new ProviderAdapterAccountProfileError("identity"));
+  }
 
   // Validate the new profile name and durable-default choice before its name
   // can become part of an adapter-owned state-directory path.
@@ -125,7 +187,11 @@ export function planProviderAccountAddition(
       configurationPath: resolvePath(options.configPath),
       profile: options.profile,
       ...(options.description === undefined ? {} : { description: options.description }),
-      credentialFile: options.credentialFile
+      credentialFile: options.credentialFile,
+      ...(options.expectedAccountId === undefined ? {} : { expectedAccountId: options.expectedAccountId }),
+      ...((options.identityProbeTool ?? existingIdentityProbe) === undefined
+        ? {}
+        : { identityProbeTool: options.identityProbeTool ?? existingIdentityProbe })
     });
   } catch (error) {
     if (error instanceof ProviderAdapterAccountProfileError) {

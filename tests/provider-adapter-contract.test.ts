@@ -117,7 +117,17 @@ describe("provider adapter contract", () => {
       reauth: { owner: "upstream", mechanism: "mcp-tool", name: "reauthenticate" },
       disconnect: { owner: "manual-only", mechanism: "provider-console" }
     });
-    expect(adapter.identity).toEqual({ evidence: "unavailable", assurance: "none" });
+    expect(adapter.identity).toEqual({
+      evidence: "unavailable",
+      assurance: "none",
+      preferredProbe: {
+        name: "get_account_identity",
+        input: "empty-object",
+        resultFormat: "json",
+        provider: "google",
+        fingerprintField: "accountId"
+      }
+    });
     expect(adapter.diagnostics).toEqual({
       mode: "metadata-only",
       tokenCacheAccess: "forbidden",

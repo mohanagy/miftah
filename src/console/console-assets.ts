@@ -182,9 +182,10 @@ const page = `<!doctype html>
           <label class="wide" data-preset-field="streamable-http" hidden>Remote MCP URL<input name="url" type="url" maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
           <fieldset class="wide gsc-accounts" data-preset-field="google-search-console" hidden>
             <legend>Google Search Console accounts</legend>
-            <p class="field-note">Add one named profile per Google account. Miftah gives each profile an isolated upstream token directory; it never reads that token cache.</p>
+            <p class="field-note">Add one named profile per Google account. Miftah gives each profile an isolated upstream token directory; it never reads that token cache. An optional opaque account ID can be checked only when the upstream exposes the reviewed identity probe; property access is never identity proof.</p>
             <div id="gsc-account-list" class="gsc-account-list"></div>
             <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
+            <label>Identity probe tool (optional)<input name="identityProbeTool" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}" placeholder="get_account_identity"></label>
             <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
           </fieldset>
           <label class="wide" data-preset-field="github google-search-console" hidden>Active profile lifetime
@@ -393,8 +394,10 @@ const page = `<!doctype html>
               <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
               <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal provider account"></label>
               <label class="wide"><span id="provider-account-credential-label">Provider credential-file path</span><input id="provider-account-credential-file" name="credentialFile" required maxlength="4096" autocomplete="off"></label>
+              <label>Expected opaque account ID (optional)<input name="expectedAccountId" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,255}" autocomplete="off" placeholder="stable-non-email-id"></label>
+              <label>Identity probe tool (optional)<input name="identityProbeTool" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}" placeholder="get_account_identity"></label>
               <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
-              <p class="field-note wide">Miftah stores only the configured credential-file reference and a separate profile. The provider owns browser login and its private token cache; Miftah never reads, copies, or removes that cache.</p>
+              <p class="field-note wide">Miftah stores only the configured credential-file reference and an optional opaque expected account ID. The provider owns browser login and its private token cache; Miftah never reads, copies, or removes that cache. Existing identity-enabled profiles require the new profile to use the same probe contract.</p>
               <div class="wide form-action"><button type="submit">Add provider account</button></div>
             </form>
           </details>
@@ -1029,6 +1032,14 @@ const script = `(() => {
     clientSecrets.placeholder = "/Users/you/gsc-client-secrets.json";
     clientSecrets.dataset.gscClientSecretsFile = "true";
 
+    const expectedAccountId = document.createElement("input");
+    expectedAccountId.type = "text";
+    expectedAccountId.maxLength = 256;
+    expectedAccountId.pattern = "[A-Za-z0-9][A-Za-z0-9._:-]{0,255}";
+    expectedAccountId.placeholder = "stable-non-email-id";
+    expectedAccountId.autocomplete = "off";
+    expectedAccountId.dataset.gscExpectedAccountId = "true";
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "secondary";
@@ -1045,6 +1056,7 @@ const script = `(() => {
       googleSearchConsoleAccountLabel("Profile name", profileName),
       googleSearchConsoleAccountLabel("Description (optional)", description),
       googleSearchConsoleAccountLabel("Google OAuth client-secrets file", clientSecrets),
+      googleSearchConsoleAccountLabel("Expected opaque account ID (optional)", expectedAccountId),
       action
     );
     return row;
@@ -1064,6 +1076,7 @@ const script = `(() => {
       const name = googleSearchConsoleAccountInput(row, "[data-gsc-profile-name]")?.value.trim() || "";
       const description = googleSearchConsoleAccountInput(row, "[data-gsc-profile-description]")?.value.trim() || "";
       const oauthClientSecretsFile = googleSearchConsoleAccountInput(row, "[data-gsc-client-secrets-file]")?.value.trim() || "";
+      const expectedAccountId = googleSearchConsoleAccountInput(row, "[data-gsc-expected-account-id]")?.value.trim() || "";
       if (!/^[a-z0-9](?:[a-z0-9-]{0,63})$/u.test(name)) {
         throw new Error("Each Google Search Console profile name must use lowercase letters, digits, or hyphens.");
       }
@@ -1073,7 +1086,8 @@ const script = `(() => {
       return {
         name,
         ...(description ? { description } : {}),
-        oauthClientSecretsFile
+        oauthClientSecretsFile,
+        ...(expectedAccountId ? { expectedAccountId } : {})
       };
     });
     if (profiles.length === 0) throw new Error("Add at least one Google Search Console account.");
@@ -1994,6 +2008,13 @@ const script = `(() => {
       request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
       request.defaultProfile = defaultProfile;
       request.activeProfileLifetime = String(data.get("activeProfileLifetime") || "");
+      const configuredIdentityCount = googleSearchConsoleProfiles.filter((profile) => profile.expectedAccountId).length;
+      const identityProbeTool = String(data.get("identityProbeTool") || "").trim();
+      if (configuredIdentityCount > 0 && configuredIdentityCount !== googleSearchConsoleProfiles.length) {
+        throw new Error("Enter an expected opaque account ID for every Google Search Console profile, or leave all of them blank.");
+      }
+      if (configuredIdentityCount > 0) request.identityProbeTool = identityProbeTool || "get_account_identity";
+      else if (identityProbeTool) throw new Error("An identity probe tool requires an expected account ID for every profile.");
     } else if (preset === "local-stdio") {
       const localCommand = String(data.get("localCommand") || "").trim();
       const argumentText = String(data.get("args") || "");
@@ -2626,6 +2647,8 @@ const script = `(() => {
             profile: String(data.get("profile") || "").trim(),
             description: String(data.get("description") || "").trim() || undefined,
             credentialFile: String(data.get("credentialFile") || "").trim(),
+            expectedAccountId: String(data.get("expectedAccountId") || "").trim() || undefined,
+            identityProbeTool: String(data.get("identityProbeTool") || "").trim() || undefined,
             ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
           }
         });

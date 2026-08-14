@@ -62,6 +62,8 @@ const providerAccountAdditionSchema = z.object({
   profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
   description: z.string().max(1_024).optional(),
   credentialFile: z.string().min(1).max(4_096),
+  expectedAccountId: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u).optional(),
+  identityProbeTool: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9_.:/-]{0,255})$/u).optional(),
   makeDefault: z.literal(true).optional()
 }).strict();
 const environmentProfileAdditionSchema = z.object({
