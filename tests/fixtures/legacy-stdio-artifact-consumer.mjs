@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -29,6 +29,40 @@ const readTextResult = (result) => {
 };
 
 const countLines = async (path) => (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).length;
+
+const readToolCallOperations = async (path) => {
+  const audit = await readFile(path, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  });
+  return audit
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((event) => event.kind === "operation" && event.operation === "tools/call");
+};
+
+const resolveInstalledCliEntry = async () => {
+  let packageDirectory = dirname(fileURLToPath(import.meta.resolve("@lubab/miftah")));
+  for (;;) {
+    const manifestPath = join(packageDirectory, "package.json");
+    const manifest = await readFile(manifestPath, "utf8").then(JSON.parse, (error) => {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (manifest?.name === "@lubab/miftah") {
+      const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.miftah;
+      if (typeof bin !== "string") throw new Error("Installed Miftah package does not declare bin.miftah.");
+      const cliEntry = resolve(packageDirectory, bin);
+      if (!(await pathExists(cliEntry))) throw new Error("Installed Miftah bin.miftah entry does not exist.");
+      return cliEntry;
+    }
+    const parent = dirname(packageDirectory);
+    if (parent === packageDirectory) throw new Error("Could not locate the installed Miftah package manifest.");
+    packageDirectory = parent;
+  }
+};
 
 const directory = await mkdtemp(join(tmpdir(), "miftah-legacy-stdio-artifact-"));
 const matchingRootPath = join(directory, "matching-root");
@@ -89,8 +123,7 @@ try {
     process: { startupTimeoutMs: 5_000, shutdownTimeoutMs: 5_000 }
   }));
 
-  const packageEntry = fileURLToPath(import.meta.resolve("@lubab/miftah"));
-  const cliEntry = join(dirname(packageEntry), "cli", "main.js");
+  const cliEntry = await resolveInstalledCliEntry();
   transport = new StdioClientTransport({
     command: process.execPath,
     args: [cliEntry, "serve", "--transport", "stdio", "--config", configPath],
@@ -137,14 +170,15 @@ try {
     throw new Error(`Expected legacy protocol 2025-11-25, got ${String(client.getNegotiatedProtocolVersion())}.`);
   }
   const serverCapabilities = client.getServerCapabilities();
-  if (serverCapabilities?.resources?.subscribe !== true) {
+  const subscriptionsAdvertised = serverCapabilities?.resources?.subscribe === true;
+  if (!subscriptionsAdvertised) {
     throw new Error("Installed legacy server did not advertise resource subscriptions.");
   }
-  if (
-    serverCapabilities.tools?.listChanged !== true ||
-    serverCapabilities.resources?.listChanged !== true ||
-    serverCapabilities.prompts?.listChanged !== true
-  ) {
+  const listChangesAdvertised =
+    serverCapabilities.tools?.listChanged === true &&
+    serverCapabilities.resources?.listChanged === true &&
+    serverCapabilities.prompts?.listChanged === true;
+  if (!listChangesAdvertised) {
     throw new Error(`Installed legacy server did not advertise list changes: ${JSON.stringify(serverCapabilities)}.`);
   }
 
@@ -163,7 +197,8 @@ try {
 
   const echoed = readTextResult(await client.callTool({ name: "echo", arguments: { message: "packaged-list-change" } }));
   if (echoed !== "packaged-list-change") throw new Error(`Unexpected echo result: ${echoed}`);
-  await delay(100);
+  // The fake upstream awaits all three notification sends before returning this tools/call response,
+  // so the successful response is the positive completion barrier for the zero downstream counts.
 
   currentRoot = changedRoot;
   await client.notification({ method: "notifications/roots/list_changed" });
@@ -173,6 +208,7 @@ try {
     throw new Error(`Roots refresh did not return to the work profile: ${refreshedProfile}`);
   }
 
+  const toolCallsBeforeCancellation = (await readToolCallOperations(auditPath)).length;
   const controller = new globalThis.AbortController();
   const pending = client.callTool({ name: "whoami", arguments: {} }, { signal: controller.signal });
   await waitFor(() => pathExists(callStartedPath), "the cancellable upstream tool call");
@@ -184,37 +220,35 @@ try {
     cancellationRejected = true;
   }
   if (!cancellationRejected) throw new Error("The cancelled legacy tool call unexpectedly completed.");
-  await delay(750);
+  await waitFor(
+    async () => (await readToolCallOperations(auditPath)).length > toolCallsBeforeCancellation,
+    "the terminal cancellation audit event"
+  );
 
   await client.close();
   client = undefined;
   transport = undefined;
   await waitFor(() => pathExists(personalShutdownPath), "personal upstream shutdown");
   await waitFor(() => pathExists(workShutdownPath), "work upstream shutdown");
+  const cleanup = {
+    personal: await pathExists(personalShutdownPath),
+    work: await pathExists(workShutdownPath)
+  };
 
-  const auditEvents = (await readFile(auditPath, "utf8"))
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const toolCallOperations = auditEvents.filter(
-    (event) => event.kind === "operation" && event.operation === "tools/call"
-  );
-  const cancelledOperations = toolCallOperations.filter(
-    (event) => event.kind === "operation" && event.operation === "tools/call" && event.status === "cancelled"
-  );
+  const toolCallOperations = await readToolCallOperations(auditPath);
+  const cancelledOperations = toolCallOperations.filter((event) => event.status === "cancelled");
 
   process.stdout.write(JSON.stringify({
     protocol: "2025-11-25",
     roots: { initialized: initialProfile, refreshed: refreshedProfile, requests: rootRequests },
     subscriptions: {
-      advertised: true,
+      advertised: subscriptionsAdvertised,
       updateForwarded: resourceUpdates.includes(resource.uri),
       subscribeCount: await countLines(subscribePath),
       unsubscribeCount: await countLines(unsubscribePath)
     },
     listChanges: {
-      advertised: true,
+      advertised: listChangesAdvertised,
       tools: listChanges.tools > 0,
       resources: listChanges.resources > 0,
       prompts: listChanges.prompts > 0
@@ -223,10 +257,10 @@ try {
       downstreamRejected: cancellationRejected,
       upstreamNotifications: await pathExists(cancelledPath) ? await countLines(cancelledPath) : 0,
       terminalAuditEvents: cancelledOperations.length,
-      lastAuditStatus: toolCallOperations.at(-1)?.status,
+      lastAuditStatus: toolCallOperations.at(-1)?.status ?? null,
       lastAuditErrorCode: toolCallOperations.at(-1)?.errorCode ?? null
     },
-    cleanup: { personal: true, work: true },
+    cleanup,
     stderrEmpty: stderr === ""
   }));
 } finally {

@@ -131,7 +131,7 @@ This matrix inherits the named-host observation date and claim boundaries from [
 | Environment | macOS 26.3 arm64 (`Darwin 25.3.0`), Node 22.9.0, npm 11.12.1; exact npm install with lifecycle scripts disabled |
 | Downstream | Official `@modelcontextprotocol/client@2.0.0`, process STDIO, negotiated `2025-11-25` |
 | Upstream | Deterministic fake STDIO upstream `1.0.0`; no provider or named-host claim |
-| Reviewed fixture | `tests/fixtures/legacy-stdio-artifact-consumer.mjs`, SHA-256 `bd4e1fb6d14fe16574a9de3a0fe0de33ccb5233cd39d9b00c073838b3457d5f0`; embeds the redacted two-profile configuration shape |
+| Reviewed fixture | `tests/fixtures/legacy-stdio-artifact-consumer.mjs`, SHA-256 `8a0943f1e2c3f9a4891d74cc17c25f8fd5727c605251d9acbca7610c628db835`; embeds the redacted two-profile configuration shape |
 | Positive result | One initial Roots request selected `personal`; one list-changed Roots refresh selected `work`; one subscribe produced one update; one unsubscribe completed; both routed upstreams shut down; stderr was empty |
 | Limitation | Although all three list-change capabilities were advertised, the client received zero tools/resources/prompts list changes. A locally aborted request produced zero upstream cancellation notifications and zero cancelled audit events; the terminal audit result was `failure` / `UPSTREAM_CALL_FAILED`. Tracked by [#413](https://github.com/mohanagy/miftah/issues/413) |
 | Claim boundary | Reference-client packaged evidence only. Not a desktop-host transcript, usage attestation, approval/UI result, Streamable HTTP result, or migration proof |

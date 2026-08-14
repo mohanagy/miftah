@@ -4,7 +4,7 @@ This page is the compatibility source of truth for Miftah's downstream MCP serve
 
 - Miftah baseline: `1.1.2`
 - Locked MCP TypeScript packages: `@modelcontextprotocol/client`, `core`, `server`, `node`, and `server-legacy` `2.0.0`
-- Evidence date: 2026-08-12
+- Evidence date: 2026-08-14
 - Modern protocol era: `2026-07-28`
 - Supported initialized legacy era: `2025-11-25`
 
