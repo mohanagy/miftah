@@ -478,6 +478,39 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
   return { success, failure: { json: json.value, status: status.textContent } };
 }
 
+/** Executes the browser helper to verify lifetime guidance survives handoff composition. */
+function composeSetupCompletionHandoff(javascript: string): string {
+  class FakeElement {
+    addEventListener(): void {}
+  }
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById: () => undefined,
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: class {},
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: class {},
+    HTMLTextAreaElement: class {},
+    Element: FakeElement
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { setupCompletionHandoffText };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly setupCompletionHandoffText: (message: string, completion: Record<string, unknown>) => string;
+  };
+  return harness.setupCompletionHandoffText("Restart the selected client.", {
+    profileState: {
+      message: "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+    }
+  });
+}
+
 async function recoverSetupCompletionAfterUnlock(
   javascript: string,
   refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" | "control-recovery" = "none"
@@ -2237,7 +2270,8 @@ async function submitMultiAccountGscPresetForm(
     readonly values: Record<string, string> = {
       name: "gsc",
       preset: "google-search-console",
-      defaultProfile: "google-craftmyletter"
+      defaultProfile: "google-craftmyletter",
+      activeProfileLifetime: "workspace"
     };
 
     addEventListener(name: string, listener: SubmitListener): void {
@@ -2344,7 +2378,7 @@ async function submitMultiAccountGscPresetForm(
   };
 }
 
-function observePresetFieldConstraintState(javascript: string): {
+function observePresetFieldConstraintState(javascript: string, profileCount = 1): {
   readonly initial: Record<string, unknown>;
   readonly googleSearchConsole: Record<string, unknown>;
   readonly genericAfterGoogleSearchConsole: Record<string, unknown>;
@@ -2437,13 +2471,25 @@ function observePresetFieldConstraintState(javascript: string): {
   const description = new FakeInput("Work Google account");
   const clientSecrets = new FakeInput("/tmp/work-client-secrets.json");
   const defaultProfile = new FakeSelect("google-work");
+  const activeProfileLifetime = new FakeSelect("process");
   profileName.dataset.gscProfileName = "true";
   clientSecrets.dataset.gscClientSecretsFile = "true";
   defaultProfile.id = "gsc-default-profile";
-  const field = new FakePresetField([profileName, description, clientSecrets, defaultProfile]);
+  activeProfileLifetime.id = "active-profile-lifetime";
+  const field = new FakePresetField([
+    profileName,
+    description,
+    clientSecrets,
+    defaultProfile,
+    activeProfileLifetime
+  ]);
   const form = new FakeForm([field]);
   const selection = new FakeSelect("generic");
-  const accounts = new FakeAccountList([new FakeProfileRow(profileName, description, clientSecrets)]);
+  const accounts = new FakeAccountList(Array.from({ length: profileCount }, (_, index) => new FakeProfileRow(
+    index === 0 ? profileName : new FakeInput(`google-account-${index + 1}`),
+    index === 0 ? description : new FakeInput(""),
+    index === 0 ? clientSecrets : new FakeInput(`/tmp/account-${index + 1}-client-secrets.json`)
+  )));
   runInNewContext(javascript, {
     document: {
       getElementById(id: string): unknown {
@@ -2451,6 +2497,7 @@ function observePresetFieldConstraintState(javascript: string): {
         if (id === "preset-selection") return selection;
         if (id === "gsc-account-list") return accounts;
         if (id === "gsc-default-profile") return defaultProfile;
+        if (id === "active-profile-lifetime") return activeProfileLifetime;
         return undefined;
       },
       createElement: () => new FakeElement()
@@ -2469,7 +2516,11 @@ function observePresetFieldConstraintState(javascript: string): {
     profileName: { required: profileName.required, disabled: profileName.disabled },
     description: { required: description.required, disabled: description.disabled },
     clientSecrets: { required: clientSecrets.required, disabled: clientSecrets.disabled },
-    defaultProfile: { required: defaultProfile.required, disabled: defaultProfile.disabled }
+    defaultProfile: { required: defaultProfile.required, disabled: defaultProfile.disabled },
+    activeProfileLifetime: {
+      required: activeProfileLifetime.required,
+      disabled: activeProfileLifetime.disabled
+    }
   });
   const initial = controls();
   selection.value = "google-search-console";
@@ -2858,6 +2909,10 @@ describe("local Console control server", () => {
       expect(javascript).toContain("Open Manage connection");
       expect(javascript).toContain("use the named account action");
       expect(javascript).toContain("A generated entry does not prove that a credential works");
+      expect(javascript.match(/setupCompletionHandoffText\(/gu)).toHaveLength(3);
+      expect(composeSetupCompletionHandoff(javascript)).toBe(
+        "Restart the selected client. Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+      );
       expect(javascript).toContain("async function refreshAfterSetup(completion)");
       expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);
       expect(javascript).toContain("setupCompletionView.scrollIntoView");
@@ -3118,6 +3173,9 @@ describe("local Console control server", () => {
       expect(html).toContain("Miftah does not retain rejected arguments, headers, environment values, or credentials.");
       expect(html).toContain('id="gsc-account-list"');
       expect(html).toContain('id="gsc-default-profile"');
+      expect(html).toContain('id="active-profile-lifetime"');
+      expect(html).toContain("Temporary — reset to the configured default after a fresh Miftah process");
+      expect(html).toContain("Durable workspace — restore the last switch for this configuration");
       expect(html).toContain("Active vs durable:");
       expect(html).toContain('id="default-profile-editor"');
       expect(html).toContain('id="default-profile-selection"');
@@ -3348,6 +3406,7 @@ describe("local Console control server", () => {
       });
       expect(reviewedPreset.reviewText.join(" ")).toContain("Miftah will create 'analytics' with 1 account profile(s).");
       expect(reviewedPreset.reviewText.join(" ")).toContain("Publication: a new configuration file only");
+      expect(reviewedPreset.reviewText.join(" ")).not.toContain("Active profile lifetime:");
       expect(reviewedPreset.reviewText.join(" ")).not.toContain("ANALYTICS_TOKEN");
       expect(reviewedPreset.requests.map((request) => request.path)).toEqual([
         "/api/v1/onboarding/preset/preview",
@@ -3431,7 +3490,8 @@ describe("local Console control server", () => {
               oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
             }
           ],
-          defaultProfile: "google-craftmyletter"
+          defaultProfile: "google-craftmyletter",
+          activeProfileLifetime: "workspace"
         }
       });
       await expect(submitMultiAccountGscPresetForm(javascript, {
@@ -3445,22 +3505,28 @@ describe("local Console control server", () => {
           profileName: { required: false, disabled: true },
           description: { required: false, disabled: true },
           clientSecrets: { required: false, disabled: true },
-          defaultProfile: { required: false, disabled: true }
+          defaultProfile: { required: false, disabled: true },
+          activeProfileLifetime: { required: false, disabled: true }
         },
         googleSearchConsole: {
           fieldHidden: false,
           profileName: { required: true, disabled: false },
           description: { required: false, disabled: false },
           clientSecrets: { required: true, disabled: false },
-          defaultProfile: { required: true, disabled: false }
+          defaultProfile: { required: true, disabled: false },
+          activeProfileLifetime: { required: false, disabled: true }
         },
         genericAfterGoogleSearchConsole: {
           fieldHidden: true,
           profileName: { required: false, disabled: true },
           description: { required: false, disabled: true },
           clientSecrets: { required: false, disabled: true },
-          defaultProfile: { required: false, disabled: true }
+          defaultProfile: { required: false, disabled: true },
+          activeProfileLifetime: { required: false, disabled: true }
         }
+      });
+      expect(observePresetFieldConstraintState(javascript, 2).googleSearchConsole).toMatchObject({
+        activeProfileLifetime: { required: true, disabled: false }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain('byId("snippet-guidance")');
@@ -4472,7 +4538,8 @@ describe("local Console control server", () => {
               oauthClientSecretsFile: "/tmp/craftmyletter-client-secrets.json"
             }
           ],
-          defaultProfile: "google-craftmyletter"
+          defaultProfile: "google-craftmyletter",
+          activeProfileLifetime: "workspace"
         };
         const secretBearing = await fetch(endpoint, {
           method: "POST",
@@ -4490,6 +4557,21 @@ describe("local Console control server", () => {
         expect(secretBearing.status).toBe(422);
         await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
+        const { activeProfileLifetime: _omittedLifetime, ...withoutLifetime } = request;
+        void _omittedLifetime;
+        const missingLifetime = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            origin: server.url.origin,
+            cookie: session.cookie,
+            "x-miftah-csrf": session.csrfToken,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(withoutLifetime)
+        });
+        expect(missingLifetime.status).toBe(422);
+        await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
         const missingDefault = await fetch(endpoint, {
           method: "POST",
           headers: {
@@ -4501,7 +4583,8 @@ describe("local Console control server", () => {
           body: JSON.stringify({
             name: request.name,
             preset: request.preset,
-            googleSearchConsoleProfiles: request.googleSearchConsoleProfiles
+            googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
+            activeProfileLifetime: request.activeProfileLifetime
           })
         });
         expect(missingDefault.status).toBe(422);
@@ -4522,6 +4605,7 @@ describe("local Console control server", () => {
           data: { name: "gsc", defaultProfile: "google-craftmyletter", profileCount: 2 }
         });
         const config = JSON.parse(await readFile(configPath, "utf8")) as {
+          readonly state: { readonly persistActiveProfile: boolean; readonly scope: string };
           readonly profiles: Record<string, {
             readonly env: {
               readonly GSC_CONFIG_DIR: string;
@@ -4529,6 +4613,7 @@ describe("local Console control server", () => {
             };
           }>;
         };
+        expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
         expect(config.profiles).toMatchObject({
           "google-govalidate": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/govalidate-client-secrets.json" } },
           "google-craftmyletter": { env: { GSC_OAUTH_CLIENT_SECRETS_FILE: "/tmp/craftmyletter-client-secrets.json" } }

@@ -141,8 +141,20 @@ const presetOnboardingSchema = z.object({
   cwd: z.string().min(1).max(4_096).optional(),
   acceptLocalCommand: z.literal(true).optional(),
   googleSearchConsoleProfiles: z.array(googleSearchConsoleProfileSchema).min(1).optional(),
-  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional()
+  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional(),
+  activeProfileLifetime: z.enum(["process", "workspace"]).optional()
 }).strict().superRefine((request, context) => {
+  if (
+    (request.preset === "github" ||
+      (request.preset === "google-search-console" && (request.googleSearchConsoleProfiles?.length ?? 0) > 1)) &&
+    request.activeProfileLifetime === undefined
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["activeProfileLifetime"],
+      message: "Multi-profile setup requires an explicit active profile lifetime."
+    });
+  }
   if (
     request.preset === "google-search-console" &&
     (request.googleSearchConsoleProfiles?.length ?? 0) > 1 &&

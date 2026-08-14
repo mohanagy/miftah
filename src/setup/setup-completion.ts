@@ -1,4 +1,9 @@
 import type { MiftahConfig } from "../config/types.js";
+import {
+  describeProfileStateLifetime,
+  profileStateLifetime,
+  type ProfileStateScope
+} from "../profiles/profile-state.js";
 import { commandInstruction, quoteShellArgument } from "../utils/shell-command.js";
 
 /**
@@ -57,6 +62,16 @@ export interface SetupCompletionInput {
   readonly configPath?: string;
   /** Names-only environment readiness; secret values never enter the completion model. */
   readonly environment?: SetupEnvironmentReadiness;
+  /** Included for multi-profile handoffs so restart behavior is explicit at the decision boundary. */
+  readonly profileStateScope?: ProfileStateScope;
+}
+
+export interface SetupProfileStateCompletion {
+  readonly scope: ProfileStateScope;
+  readonly persistence: "temporary" | "durable";
+  readonly survivesProcessRestart: boolean;
+  readonly restartBehavior: "configured-default" | "restore-selection";
+  readonly message: string;
 }
 
 export interface SetupCompletion {
@@ -70,6 +85,7 @@ export interface SetupCompletion {
     readonly message: string;
   };
   readonly environment?: SetupEnvironmentCompletion;
+  readonly profileState?: SetupProfileStateCompletion;
 }
 
 const environmentReference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu;
@@ -359,6 +375,15 @@ export function createSetupCompletion(input: SetupCompletionInput): SetupComplet
   return {
     verification: verificationCompletion(input),
     clientHandoff: handoffCompletion(input),
-    ...(input.environment === undefined ? {} : { environment: environmentCompletion(input.environment) })
+    ...(input.environment === undefined ? {} : { environment: environmentCompletion(input.environment) }),
+    ...(input.profileStateScope === undefined
+      ? {}
+      : {
+          profileState: {
+            scope: input.profileStateScope,
+            ...profileStateLifetime(input.profileStateScope),
+            message: describeProfileStateLifetime(input.profileStateScope)
+          }
+        })
   };
 }

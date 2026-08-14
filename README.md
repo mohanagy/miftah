@@ -84,10 +84,12 @@ Follow the generated handoff to review one client connector, merge it into your 
 Use `miftah init` when you want a repeatable preset command instead of either human-first flow. This example creates one Claude Desktop connector with `work` and `personal` GitHub profiles. It requires Docker.
 
 ```bash
-miftah init github --preset github --output ~/.config/miftah/github.json --client claude-desktop
+miftah init github --preset github --active-profile-lifetime workspace --output ~/.config/miftah/github.json --client claude-desktop
 ```
 
 Miftah creates `~/.config/miftah/github.json` and prints a Claude Desktop `mcpServers` snippet. It does not edit Claude Desktop and does not ask for or write a token.
+
+`--active-profile-lifetime workspace` makes a successful live profile switch durable for this configuration, so a fresh Miftah process restores it. Choose `process` instead when every fresh process should return to the configured default profile. The terminal wizard and Console present this choice during multi-profile setup. Existing configurations without `state` keep temporary `process` behavior; `miftah_current_profile`, `miftah_use_profile`, and `miftah_reset_profile` report the effective scope and restart consequence.
 
 The generated profiles refer to `GITHUB_WORK_TOKEN` and `GITHUB_PERSONAL_TOKEN`. Provide least-privilege tokens through a supported [secret provider](docs/config.md#secret-providers), not as raw values in the Miftah or Claude JSON. OS keychain references use `secretref:keychain://`; 1Password references use `secretref:op://`. Claude Desktop is a GUI app and does not normally inherit variables from terminal startup files such as `~/.zshrc`.
 

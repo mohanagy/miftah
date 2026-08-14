@@ -58,7 +58,7 @@ const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] 
   },
   {
     name: "miftah_current_profile",
-    description: "Show the active and default profile.",
+    description: "Show the active and default profile, configured scope, and restart behavior.",
     inputs: [],
     interaction: "observational",
     availability: "always",
@@ -76,7 +76,7 @@ const MANAGEMENT_TOOL_DESCRIPTORS_INTERNAL: readonly ManagementToolDescriptor[] 
   },
   {
     name: "miftah_reset_profile",
-    description: "Reset the active profile to the configured default.",
+    description: "Reset the active profile to the configured default according to the configured state scope.",
     inputs: [],
     interaction: "state-changing",
     availability: "always",

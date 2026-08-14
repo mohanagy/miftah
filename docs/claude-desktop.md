@@ -3,7 +3,7 @@
 Generate a strict configuration and a Claude Desktop snippet:
 
 ```sh
-miftah init github --preset github --output ~/.config/miftah/github.json --client claude-desktop
+miftah init github --preset github --active-profile-lifetime workspace --output ~/.config/miftah/github.json --client claude-desktop
 ```
 
 Miftah writes only `~/.config/miftah/github.json` in this example. It prints JSON for you to copy and does not create or overwrite a Claude Desktop configuration file.
@@ -17,6 +17,6 @@ Use the installed app’s **Developer → Edit Config** flow as the source of tr
 
 Regenerate the snippet after moving or upgrading Miftah, or changing the Miftah config path. Keep credentials outside both JSON files; set only the generated `${ENV_NAME}` references in the environment that launches Claude Desktop.
 
-Claude Desktop generally provides one STDIO transport per configured server. With no `state` configuration, Miftah uses in-memory `process` scope; in this normal one-server topology it is session-like in practice. Set `state.scope` to `"session"` to reset at each transport connection, or explicitly opt into `workspace` or config-identity-namespaced `global` persistence. Miftah cannot infer every detail of a conversation; use `miftah_use_profile` for explicit switching and configure routing rules for stable tool arguments such as repositories, organizations, or projects.
+Claude Desktop generally provides one STDIO transport per configured server. With no `state` configuration, Miftah uses temporary in-memory `process` scope: a successful switch ends when that Miftah process ends, and a fresh process starts from the configured default. The example explicitly chooses durable `workspace` scope, which restores the last successful switch for this configuration after Claude Desktop reconnects. Use `--active-profile-lifetime process` for temporary behavior, set `state.scope` to `"session"` to reset at each transport connection, or configure config-identity-namespaced `global` persistence manually. Miftah cannot infer every detail of a conversation; use `miftah_use_profile` for explicit switching and configure routing rules for stable tool arguments such as repositories, organizations, or projects. The current-profile and switch/reset results state the effective scope and restart consequence.
 
 Do not configure every account as a separate Claude server. Give each wrapper one entry and keep account-specific credentials in profiles. For catalog pins, safety boundaries, and all client destinations, see [preset and client compatibility](presets-and-clients.md).

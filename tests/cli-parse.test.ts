@@ -179,6 +179,20 @@ describe("CLI parser", () => {
     expectUsageError(["init", "example", "--name", "named-example"]);
   });
 
+  it("parses the explicit active-profile lifetime for multi-profile setup", () => {
+    expect(parseCli([
+      "setup",
+      "--preset", "github",
+      "--active-profile-lifetime", "workspace"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { preset: "github", activeProfileLifetime: "workspace" }
+    });
+    expect(renderCommandHelp("setup")).toContain("--active-profile-lifetime <process|workspace>");
+    expectUsageError(["setup", "--active-profile-lifetime", "global"]);
+  });
+
   it("offers the opt-in provider readiness check only from guided setup", () => {
     expect(parseCli(["setup", "--verify"])).toEqual({
       kind: "run",

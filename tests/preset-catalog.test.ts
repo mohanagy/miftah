@@ -42,6 +42,8 @@ describe("preset catalog", () => {
     expect(PRESET_CATALOG.presets["local-stdio"].requirements.acceptLocalCommand).toBe("required");
     expect(PRESET_CATALOG.presets["streamable-http"].requirements.url).toBe("required");
     expect(PRESET_CATALOG.presets["google-search-console"].requirements.oauthClientSecretsFile).toBe("required");
+    expect(PRESET_CATALOG.presets.github.requirements.activeProfileLifetime).toBe("optional");
+    expect(PRESET_CATALOG.presets["google-search-console"].requirements.activeProfileLifetime).toBe("optional");
   });
 
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
@@ -103,6 +105,7 @@ describe("preset catalog", () => {
       work: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_WORK_TOKEN}" }, policy: "readonly" },
       personal: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_TOKEN}" }, policy: "readonly" }
     });
+    expect(github.state).toBeUndefined();
 
     if (process.platform === "win32") return;
 
@@ -114,6 +117,19 @@ describe("preset catalog", () => {
       env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
       policy: "readonly"
     });
+  });
+
+  it("maps explicit multi-profile lifetime choices to schema-valid state", () => {
+    const temporary = buildPresetConfig("github", "github", { activeProfileLifetime: "process" });
+    const durable = buildPresetConfig("github", "github", { activeProfileLifetime: "workspace" });
+
+    expect(temporary.state).toEqual({ persistActiveProfile: false, scope: "process" });
+    expect(durable.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
+    expect(() => validateConfig(temporary)).not.toThrow();
+    expect(() => validateConfig(durable)).not.toThrow();
+    expect(() => buildPresetConfig("github", "github", {
+      activeProfileLifetime: "global" as "workspace"
+    })).toThrow("Active profile lifetime must be 'process' or 'workspace'.");
   });
 
   it("builds the exact pinned GSC pilot without enabling destructive tools or Miftah native OAuth", () => {
@@ -153,10 +169,12 @@ describe("preset catalog", () => {
           oauthClientSecretsFile: gscClientSecretsFile
         }
       ],
-      defaultProfile: "google-govalidate"
+      defaultProfile: "google-govalidate",
+      activeProfileLifetime: "workspace"
     });
 
     expect(config.defaultProfile).toBe("google-govalidate");
+    expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
     expect(config.profiles).toMatchObject({
       "google-govalidate": {
         description: "GoValidate Google account",

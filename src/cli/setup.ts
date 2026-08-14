@@ -140,6 +140,7 @@ function hasExplicitNewConfigurationInput(options: SetupCommandOptions): boolean
     options.acceptLocalCommand,
     options.googleSearchConsoleProfiles,
     options.defaultProfile,
+    options.activeProfileLifetime,
     options.verify
   ].some((value) => value !== undefined);
 }
@@ -347,6 +348,7 @@ function writeCliSetupCompletion(
     readonly includeClientHandoff?: boolean;
     readonly environment?: SetupEnvironmentReadiness;
     readonly deferredClientHandoff?: string;
+    readonly profileStateScope?: "process" | "session" | "workspace" | "global";
   }
 ): void {
   const completion = createSetupCompletion({
@@ -355,7 +357,8 @@ function writeCliSetupCompletion(
     clientHandoff: input.clientHandoff,
     ...(input.profile === undefined ? {} : { profile: input.profile }),
     ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
-    ...(input.environment === undefined ? {} : { environment: input.environment })
+    ...(input.environment === undefined ? {} : { environment: input.environment }),
+    ...(input.profileStateScope === undefined ? {} : { profileStateScope: input.profileStateScope })
   });
   context.output.write(`${completion.verification.message}\n`);
   if (completion.verification.nextAction !== undefined) {
@@ -366,6 +369,9 @@ function writeCliSetupCompletion(
     if (completion.environment.nextAction !== undefined) {
       context.output.write(`${completion.environment.nextAction}\n`);
     }
+  }
+  if (completion.profileState !== undefined) {
+    context.output.write(`${completion.profileState.message}\n`);
   }
   if (input.deferredClientHandoff !== undefined) {
     context.output.write(input.deferredClientHandoff);
@@ -381,6 +387,9 @@ async function finishCreatedSetup(
   created: InitCommandResult
 ): Promise<SetupCommandResult> {
   const environment = inspectConfigEnvironment(created.config);
+  const profileStateScope = Object.keys(created.config.profiles).length > 1
+    ? created.config.state?.scope ?? "process"
+    : undefined;
   if (
     created.config.version === "3" &&
     created.config.upstream?.transport === "streamable-http" &&
@@ -396,6 +405,7 @@ async function finishCreatedSetup(
       clientHandoff: created.clientHandoff ?? "not-generated",
       configPath: created.output,
       environment,
+      ...(profileStateScope === undefined ? {} : { profileStateScope }),
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -411,6 +421,7 @@ async function finishCreatedSetup(
       profile: created.config.defaultProfile,
       configPath: created.output,
       environment,
+      ...(profileStateScope === undefined ? {} : { profileStateScope }),
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -425,6 +436,7 @@ async function finishCreatedSetup(
       profile: created.config.defaultProfile,
       configPath: created.output,
       environment,
+      ...(profileStateScope === undefined ? {} : { profileStateScope }),
       ...(created.deferredClientHandoff === undefined
         ? {}
         : { deferredClientHandoff: created.deferredClientHandoff })
@@ -452,6 +464,7 @@ async function finishCreatedSetup(
     ...(incomplete ? { profile: created.config.defaultProfile } : {}),
     configPath: created.output,
     environment,
+    ...(profileStateScope === undefined ? {} : { profileStateScope }),
     ...(created.deferredClientHandoff === undefined
       ? {}
       : { deferredClientHandoff: created.deferredClientHandoff })
@@ -490,7 +503,8 @@ function setupDraftIncompatibleOption(options: SetupCommandOptions): string | un
     "cwd",
     "acceptLocalCommand",
     "googleSearchConsoleProfiles",
-    "defaultProfile"
+    "defaultProfile",
+    "activeProfileLifetime"
   ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
 }
 
@@ -600,6 +614,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "args",
       "cwd",
       "acceptLocalCommand",
+      "activeProfileLifetime",
       "upstream",
       "oauthClientMetadataUrl"
     ].find((name) => options[name as keyof SetupCommandOptions] !== undefined);
@@ -688,6 +703,7 @@ export async function runSetupCommand(options: SetupCommandOptions, context: Ini
       "dockerImage",
       "headerName",
       "headerPrefix",
+      "activeProfileLifetime",
       "oauthClientSecretsFile",
       "localCommand",
       "args",

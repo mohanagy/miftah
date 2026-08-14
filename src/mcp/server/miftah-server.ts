@@ -45,6 +45,7 @@ import {
   ProfileManager,
   type ProfileTransitionOptions
 } from "../../profiles/profile-manager.js";
+import { describeProfileStateLifetime, profileStateLifetime } from "../../profiles/profile-state.js";
 import { matcherEvidenceFromError, RoutingEngine } from "../../routing/routing-engine.js";
 import type {
   RoutingContextMcpRoot,
@@ -1556,7 +1557,9 @@ export class MiftahServer {
         await this.invalidateResourcePromptProfiles(switched.previousProfile, switched.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(switched.activeProfile));
         await this.notifyResourcePromptListChanged();
-        return textResult(`Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}.`);
+        return textResult(
+          `Active profile changed from ${switched.previousProfile} to ${switched.activeProfile}. ${describeProfileStateLifetime(this.profiles.current().scope)}`
+        );
       });
     }
     if (name === "miftah_lock_profile") {
@@ -1645,7 +1648,9 @@ export class MiftahServer {
         await this.invalidateResourcePromptProfiles(reset.previousProfile, reset.activeProfile);
         await this.notifyToolListChanged(previousSnapshot, this.toolRegistry.peek(reset.activeProfile));
         await this.notifyResourcePromptListChanged();
-        return textResult(`Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}.`);
+        return textResult(
+          `Active profile reset from ${reset.previousProfile} to ${reset.activeProfile}. ${describeProfileStateLifetime(this.profiles.current().scope)}`
+        );
       });
     }
     if (name === "miftah_profile_info") {
@@ -1846,6 +1851,7 @@ export class MiftahServer {
       selectionSource: current.selectionSource,
       selectedAt: current.selectedAt,
       scope: current.scope,
+      ...profileStateLifetime(current.scope),
       confirmation: current.confirmation,
       lease: current.lease,
       lock: current.lock,
@@ -1922,12 +1928,18 @@ export class MiftahServer {
       throw this.normalizeProfileContextError(error);
     }
     const replacement = modernResolved(minted);
+    const profileState = this.currentProfileState(this.modernProfileState(replacement));
+    const lifetimeMessage = describeProfileStateLifetime(profileState.scope);
     audit.update({
       name: profile,
       profile,
       profileContextCorrelation: replacement.auditCorrelation
     });
     return textResult(JSON.stringify({
+      message: action === "switch"
+        ? `Active profile changed from ${source.activeProfile} to ${profile}. ${lifetimeMessage}`
+        : `Active profile reset from ${source.activeProfile} to ${profile}. ${lifetimeMessage}`,
+      profileState,
       profileContext: {
         handle: minted.handle,
         profile: minted.profile,

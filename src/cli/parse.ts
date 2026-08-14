@@ -14,6 +14,7 @@ type ValueOptionName =
   | "url"
   | "headerName"
   | "headerPrefix"
+  | "activeProfileLifetime"
   | "oauthClientSecretsFile"
   | "oauthClientMetadataUrl"
   | "localCommand"
@@ -65,6 +66,8 @@ export interface CliOptions {
   readonly url?: string;
   readonly headerName?: string;
   readonly headerPrefix?: string;
+  /** Lifetime of live profile switches in newly generated multi-profile configurations. */
+  readonly activeProfileLifetime?: "process" | "workspace";
   readonly oauthClientSecretsFile?: string;
   /** Reviewed HTTPS Client ID Metadata Document URL for native OAuth discovery. */
   readonly oauthClientMetadataUrl?: string;
@@ -158,6 +161,7 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
+      "activeProfileLifetime",
       "oauthClientSecretsFile",
       "localCommand",
       "args",
@@ -185,6 +189,7 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
+      "activeProfileLifetime",
       "oauthClientSecretsFile",
       "oauthClientMetadataUrl",
       "localCommand",
@@ -396,6 +401,12 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--header-prefix <prefix>",
     description: "Credential header prefix for the streamable-http preset."
   },
+  activeProfileLifetime: {
+    name: "activeProfileLifetime",
+    takesValue: true,
+    usage: "--active-profile-lifetime <process|workspace>",
+    description: "Choose whether generated multi-profile switches reset with the process or persist for this workspace."
+  },
   oauthClientSecretsFile: {
     name: "oauthClientSecretsFile",
     takesValue: true,
@@ -594,6 +605,7 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--url": OPTION_DEFINITIONS.url,
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
+  "--active-profile-lifetime": OPTION_DEFINITIONS.activeProfileLifetime,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
   "--oauth-client-metadata-url": OPTION_DEFINITIONS.oauthClientMetadataUrl,
   "--local-command": OPTION_DEFINITIONS.localCommand,
@@ -720,6 +732,13 @@ function validateCommandOptions(command: CliCommand, options: CliOptions): void 
     options.transport !== "http"
   ) {
     usageError("Option '--transport' must be either 'stdio' or 'http'.");
+  }
+  if (
+    options.activeProfileLifetime !== undefined &&
+    options.activeProfileLifetime !== "process" &&
+    options.activeProfileLifetime !== "workspace"
+  ) {
+    usageError("Option '--active-profile-lifetime' must be either 'process' or 'workspace'.");
   }
 }
 

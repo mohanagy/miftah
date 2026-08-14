@@ -389,7 +389,7 @@ Miftah rejects settings without a runtime implementation with `UNSUPPORTED_CONFI
 
 ### Active profile state
 
-Active-profile persistence is disabled by default. With no `state` section, Miftah uses in-memory `process` scope. To opt in to a durable selection, configure one of the durable scopes explicitly:
+Active-profile persistence is disabled by default. With no `state` section, Miftah keeps backward-compatible in-memory `process` scope: a successful live switch ends with the current Miftah process, and a fresh process starts from `defaultProfile`. Existing configurations are never silently migrated. To opt in to a durable selection, configure one of the durable scopes explicitly:
 
 ```json
 {
@@ -404,16 +404,16 @@ Active-profile persistence is disabled by default. With no `state` section, Mift
 
 | Scope | Lifetime and boundary |
 | --- | --- |
-| `process` | In memory for the lifetime of this Miftah runtime. |
-| `session` | In memory and reset to the configured default (or lock) when a new MCP transport connects. The current STDIO runtime accepts one client transport at a time. |
-| `workspace` | Durable beside the resolved configuration file at `.miftah/state/<config-identity>.json`. |
-| `global` | Durable in the platform user-state directory under `miftah/state/<config-identity>.json`: `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS, or absolute `$XDG_STATE_HOME` / `~/.local/state` elsewhere. |
+| `process` | Temporary in memory for the lifetime of this Miftah runtime. A fresh process starts from the configured default. |
+| `session` | Temporary in memory and reset to the configured default (or lock) when a new MCP transport connects. The current STDIO runtime accepts one client transport at a time. |
+| `workspace` | Durable beside the resolved configuration file at `.miftah/state/<config-identity>.json`; a fresh process restores the last successful switch for this configuration. |
+| `global` | Durable in the platform user-state directory under `miftah/state/<config-identity>.json`: `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS, or absolute `$XDG_STATE_HOME` / `~/.local/state` elsewhere. A fresh process restores the selection for the same configuration identity. |
 
 `workspace` and `global` require `persistActiveProfile: true`; setting persistence for `process` or `session`, or choosing a durable scope without that opt-in, is invalid. Custom `state.path` values are rejected. The config-identity component is a hash of the resolved configuration path: global state is deliberately shared only by the same configuration, so one workspace or client cannot silently alter another configuration's active profile.
 
 Only safe selection metadata is stored: a format version, scope, config identity, profile name, and ISO timestamp. No secret, raw configuration path, provider output, or other MCP request input is persisted. Writes use a unique same-directory temporary file, sync it, then atomically rename it; state directories and files use owner-only permissions where the platform supports them. Concurrent writers can replace a completed selection, but never leave a partial state record.
 
-At startup, Miftah validates a stored profile against the current configuration. A `security.lockToProfile` always wins. Corrupt state, an unknown profile, or an unreadable state file falls back safely to the configured default; `miftah_current_profile` reports its `selectionSource`, `selectedAt`, `scope`, and, when applicable, `stateDiagnostic` (`PROFILE_STATE_INVALID`, `PROFILE_STATE_STALE`, or `PROFILE_STATE_UNAVAILABLE`). `miftah_reset_profile` persists the configured default for a durable scope.
+At startup, Miftah validates a stored profile against the current configuration. A `security.lockToProfile` always wins. Corrupt state, an unknown profile, or an unreadable state file falls back safely to the configured default; `miftah_current_profile` reports its `selectionSource`, `selectedAt`, `scope`, `persistence`, `survivesProcessRestart`, `restartBehavior`, and, when applicable, `stateDiagnostic` (`PROFILE_STATE_INVALID`, `PROFILE_STATE_STALE`, or `PROFILE_STATE_UNAVAILABLE`). `miftah_use_profile` and `miftah_reset_profile` state the same effective scope and restart consequence in their successful result; reset also persists the configured default for a durable scope. For an existing multi-profile config that intentionally needs cross-process restoration, add the exact durable block above, validate it with `miftah validate --config <file>`, and restart or reconnect the MCP client. Leave `state` absent to retain temporary process behavior.
 
 ### Profile confirmation, locks, and leases
 

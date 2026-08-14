@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- [#404](https://github.com/mohanagy/miftah/issues/404) Made active-profile lifetime explicit during multi-profile terminal and Console setup. Generated presets can select temporary `process` or durable `workspace` state, setup handoff and Console review explain the restart consequence, and current/switch/reset MCP results use the same scope terminology. Existing configurations without `state` retain process semantics. Focused integration coverage now verifies temporary and durable outcomes across two fresh STDIO processes.
+
 ## [1.1.1] - 2026-08-12
 
 ### Changed
