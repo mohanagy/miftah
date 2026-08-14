@@ -1928,12 +1928,18 @@ export class MiftahServer {
       throw this.normalizeProfileContextError(error);
     }
     const replacement = modernResolved(minted);
+    const profileState = this.currentProfileState(this.modernProfileState(replacement));
+    const lifetimeMessage = describeProfileStateLifetime(profileState.scope);
     audit.update({
       name: profile,
       profile,
       profileContextCorrelation: replacement.auditCorrelation
     });
     return textResult(JSON.stringify({
+      message: action === "switch"
+        ? `Active profile changed from ${source.activeProfile} to ${profile}. ${lifetimeMessage}`
+        : `Active profile reset from ${source.activeProfile} to ${profile}. ${lifetimeMessage}`,
+      profileState,
       profileContext: {
         handle: minted.handle,
         profile: minted.profile,

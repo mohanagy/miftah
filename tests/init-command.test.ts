@@ -120,6 +120,37 @@ describe("init command", () => {
     expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
   });
 
+  it("rejects non-interactive multi-profile presets without an explicit lifetime", async () => {
+    const githubStreams = createStreams(false);
+    const githubOutput = resolve(outputRoot, "github-missing-lifetime.json");
+    await expect(runInitCommand({
+      name: "github-missing-lifetime",
+      preset: "github",
+      output: "github-missing-lifetime.json"
+    }, commandContext(githubStreams))).rejects.toThrow(
+      "Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'."
+    );
+    await expectNoPath(githubOutput);
+    githubStreams.input.end();
+
+    const gscStreams = createStreams(false);
+    const gscOutput = resolve(outputRoot, "gsc-missing-lifetime.json");
+    await expect(runInitCommand({
+      name: "gsc-missing-lifetime",
+      preset: "google-search-console",
+      output: "gsc-missing-lifetime.json",
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: "/tmp/work-client-secrets.json" },
+        { name: "personal", oauthClientSecretsFile: "/tmp/personal-client-secrets.json" }
+      ],
+      defaultProfile: "work"
+    }, commandContext(gscStreams))).rejects.toThrow(
+      "Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'."
+    );
+    await expectNoPath(gscOutput);
+    gscStreams.input.end();
+  });
+
   it("reports an existing output file as a usage error without changing it", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "existing.json");

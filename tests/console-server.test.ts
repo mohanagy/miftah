@@ -478,6 +478,39 @@ async function supersedeSetupCompletionClientRequests(javascript: string): Promi
   return { success, failure: { json: json.value, status: status.textContent } };
 }
 
+/** Executes the browser helper to verify lifetime guidance survives handoff composition. */
+function composeSetupCompletionHandoff(javascript: string): string {
+  class FakeElement {
+    addEventListener(): void {}
+  }
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById: () => undefined,
+      querySelectorAll: () => []
+    },
+    HTMLFormElement: class {},
+    HTMLSelectElement: class {},
+    HTMLElement: FakeElement,
+    HTMLInputElement: class {},
+    HTMLButtonElement: class {},
+    HTMLTextAreaElement: class {},
+    Element: FakeElement
+  };
+  const instrumented = javascript.replace(
+    "\n})();",
+    "\nglobalThis.__miftahTest = { setupCompletionHandoffText };\n})();"
+  );
+  runInNewContext(instrumented, sandbox);
+  const harness = sandbox.__miftahTest as {
+    readonly setupCompletionHandoffText: (message: string, completion: Record<string, unknown>) => string;
+  };
+  return harness.setupCompletionHandoffText("Restart the selected client.", {
+    profileState: {
+      message: "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+    }
+  });
+}
+
 async function recoverSetupCompletionAfterUnlock(
   javascript: string,
   refreshFailure: "none" | "config" | "late" | "racing-recovery" | "overlapping-reauth" | "setup-origin-overlap" | "current-setup-failure" | "control-recovery" = "none"
@@ -2345,7 +2378,7 @@ async function submitMultiAccountGscPresetForm(
   };
 }
 
-function observePresetFieldConstraintState(javascript: string): {
+function observePresetFieldConstraintState(javascript: string, profileCount = 1): {
   readonly initial: Record<string, unknown>;
   readonly googleSearchConsole: Record<string, unknown>;
   readonly genericAfterGoogleSearchConsole: Record<string, unknown>;
@@ -2452,7 +2485,11 @@ function observePresetFieldConstraintState(javascript: string): {
   ]);
   const form = new FakeForm([field]);
   const selection = new FakeSelect("generic");
-  const accounts = new FakeAccountList([new FakeProfileRow(profileName, description, clientSecrets)]);
+  const accounts = new FakeAccountList(Array.from({ length: profileCount }, (_, index) => new FakeProfileRow(
+    index === 0 ? profileName : new FakeInput(`google-account-${index + 1}`),
+    index === 0 ? description : new FakeInput(""),
+    index === 0 ? clientSecrets : new FakeInput(`/tmp/account-${index + 1}-client-secrets.json`)
+  )));
   runInNewContext(javascript, {
     document: {
       getElementById(id: string): unknown {
@@ -2872,6 +2909,10 @@ describe("local Console control server", () => {
       expect(javascript).toContain("Open Manage connection");
       expect(javascript).toContain("use the named account action");
       expect(javascript).toContain("A generated entry does not prove that a credential works");
+      expect(javascript.match(/setupCompletionHandoffText\(/gu)).toHaveLength(3);
+      expect(composeSetupCompletionHandoff(javascript)).toBe(
+        "Restart the selected client. Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+      );
       expect(javascript).toContain("async function refreshAfterSetup(completion)");
       expect(javascript.match(/await refreshAfterSetup\(completion\);/gu)).toHaveLength(3);
       expect(javascript).toContain("setupCompletionView.scrollIntoView");
@@ -3473,7 +3514,7 @@ describe("local Console control server", () => {
           description: { required: false, disabled: false },
           clientSecrets: { required: true, disabled: false },
           defaultProfile: { required: true, disabled: false },
-          activeProfileLifetime: { required: true, disabled: false }
+          activeProfileLifetime: { required: false, disabled: true }
         },
         genericAfterGoogleSearchConsole: {
           fieldHidden: true,
@@ -3483,6 +3524,9 @@ describe("local Console control server", () => {
           defaultProfile: { required: false, disabled: true },
           activeProfileLifetime: { required: false, disabled: true }
         }
+      });
+      expect(observePresetFieldConstraintState(javascript, 2).googleSearchConsole).toMatchObject({
+        activeProfileLifetime: { required: true, disabled: false }
       });
       expect(javascript).toContain("/api/v1/client-snippets");
       expect(javascript).toContain('byId("snippet-guidance")');

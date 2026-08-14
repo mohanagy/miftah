@@ -1035,7 +1035,7 @@ const script = `(() => {
     remove.textContent = "Remove account";
     remove.addEventListener("click", () => {
       row.remove();
-      syncGoogleSearchConsoleDefaultProfile();
+      updatePresetFields();
     });
 
     const action = document.createElement("div");
@@ -1100,6 +1100,7 @@ const script = `(() => {
     return { ...completion, setup: { name, defaultProfile, profileCount } };
   }
 
+  /** Resolves the client whose copy-only handoff is currently being rendered. */
   function selectedSetupCompletionClient() {
     const selected = setupCompletionClientSelect instanceof HTMLSelectElement
       ? setupCompletionClientSelect.value
@@ -1109,6 +1110,7 @@ const script = `(() => {
       : "claude-desktop";
   }
 
+  /** Renders the active-profile restart consequence for the selected client. */
   function renderSetupCompletionSwitch(setup, profileState = {}) {
     if (!setupCompletionSwitch) return;
     const client = selectedSetupCompletionClient();
@@ -1121,6 +1123,14 @@ const script = `(() => {
       catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
   }
 
+  /** Combines one client handoff with the configured profile-state consequence. */
+  function setupCompletionHandoffText(message, completion = setupCompletion) {
+    const profileState = record(record(completion).profileState);
+    const profileStateMessage = typeof profileState.message === "string" ? profileState.message : "";
+    return [message, profileStateMessage].filter(Boolean).join(" ");
+  }
+
+  /** Renders a completed setup without weakening provider or profile-state guidance. */
   function renderSetupCompletion(value) {
     const completion = record(value);
     const setup = record(completion.setup);
@@ -1133,7 +1143,6 @@ const script = `(() => {
     const environmentMessage = typeof environment.message === "string" ? environment.message : "";
     const environmentNextAction = typeof environment.nextAction === "string" ? environment.nextAction : "";
     const handoffMessage = typeof handoff.message === "string" ? handoff.message : "";
-    const profileStateMessage = typeof profileState.message === "string" ? profileState.message : "";
     const setupName = typeof setup.name === "string" ? setup.name : "";
     const defaultProfile = typeof setup.defaultProfile === "string" ? setup.defaultProfile : "";
     const profileCount = Number.isSafeInteger(setup.profileCount) ? setup.profileCount : 0;
@@ -1167,7 +1176,7 @@ const script = `(() => {
       setupCompletionEnvironment.hidden = !environmentMessage && !environmentNextAction;
     }
     if (setupCompletionHandoff) {
-      setupCompletionHandoff.textContent = [handoffMessage, profileStateMessage].filter(Boolean).join(" ");
+      setupCompletionHandoff.textContent = setupCompletionHandoffText(handoffMessage, completion);
     }
     if (setupCompletionSecondAccount) {
       setupCompletionSecondAccount.textContent =
@@ -1794,6 +1803,9 @@ const script = `(() => {
     const selection = byId("preset-selection");
     if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement)) return;
     const preset = selection.value;
+    const requiresActiveProfileLifetime = preset === "github" || (
+      preset === "google-search-console" && googleSearchConsoleAccountRows().length > 1
+    );
     form.querySelectorAll("[data-preset-field]").forEach((field) => {
       if (!(field instanceof HTMLElement)) return;
       const visible = (field.dataset.presetField || "").split(" ").includes(preset);
@@ -1804,7 +1816,7 @@ const script = `(() => {
           !(control instanceof HTMLSelectElement) &&
           !(control instanceof HTMLTextAreaElement)
         ) return;
-        control.disabled = !visible;
+        control.disabled = !visible || (control.id === "active-profile-lifetime" && !requiresActiveProfileLifetime);
         if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
           control.required = visible && (
             (control.name === "npmPackage" && preset === "generic-npx") ||
@@ -1820,7 +1832,7 @@ const script = `(() => {
         }
         control.required = visible && (
           (preset === "google-search-console" && control.id === "gsc-default-profile") ||
-          control.id === "active-profile-lifetime"
+          (control.id === "active-profile-lifetime" && requiresActiveProfileLifetime)
         );
       });
     });
@@ -1915,6 +1927,7 @@ const script = `(() => {
     if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = presetCreateInFlight;
   }
 
+  /** Renders the reviewed configuration and any multi-profile lifetime choice. */
   function renderPresetReview(value, request) {
     const review = record(value);
     const configuration = record(review.configuration);
@@ -2391,7 +2404,7 @@ const script = `(() => {
         if (!(list instanceof HTMLElement)) return;
         clearPresetReview();
         list.append(createGoogleSearchConsoleAccountRow(googleSearchConsoleAccountRows().length));
-        syncGoogleSearchConsoleDefaultProfile();
+        updatePresetFields();
       });
     }
     updatePresetFields();
@@ -2936,9 +2949,10 @@ const script = `(() => {
         if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = guidance;
         if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = false;
         if (setupCompletionHandoff) {
-          setupCompletionHandoff.textContent =
+          setupCompletionHandoff.textContent = setupCompletionHandoffText(
             "Review and merge the entry, then restart or reconnect " + catalogClientDisplayName(client) +
-            ". A generated entry does not prove that a credential works or belongs to the intended account.";
+            ". A generated entry does not prove that a credential works or belongs to the intended account."
+          );
         }
         message("Generated the copy-only client entry for " + catalogClientDisplayName(client) + ". Review it before merging.");
       } catch (error) {

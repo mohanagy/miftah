@@ -124,12 +124,13 @@ function validateCredentialEnv(credentialEnv: unknown): void {
   }
 }
 
-/** Builds fresh runtime defaults so generated configs never share mutable state. */
+/** Validates the optional lifetime accepted by generated multi-profile presets. */
 function requireActiveProfileLifetime(value: unknown): ActiveProfileLifetime | undefined {
   if (value === undefined || value === "process" || value === "workspace") return value;
   catalogError("Active profile lifetime must be 'process' or 'workspace'.");
 }
 
+/** Maps the setup choice to the exact profile-state configuration contract. */
 function activeProfileState(lifetime: ActiveProfileLifetime | undefined): CurrentMiftahConfig["state"] | undefined {
   if (lifetime === undefined) return undefined;
   return lifetime === "workspace"
@@ -137,6 +138,7 @@ function activeProfileState(lifetime: ActiveProfileLifetime | undefined): Curren
     : { persistActiveProfile: false, scope: "process" };
 }
 
+/** Builds fresh runtime defaults so generated configs never share mutable state. */
 function buildSharedDefaults(
   options: { multiProfile?: boolean; activeProfileLifetime?: ActiveProfileLifetime } = {}
 ): SharedDefaults {
@@ -389,7 +391,7 @@ function buildGoogleSearchConsolePreset(
   };
 }
 
-/** Builds the multi-profile GitHub preset and its referenced policies. */
+/** Builds the two-profile GitHub preset, referenced policies, and explicit state lifetime. */
 function buildGithubPreset(name: string, options: PresetBuildOptions): MiftahConfig {
   return {
     version: CURRENT_CONFIG_VERSION,

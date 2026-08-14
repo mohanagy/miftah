@@ -326,16 +326,19 @@ function parseAdditionalGoogleSearchConsoleAccount(value: string | undefined): b
   }
 }
 
+/** Validates one explicit active-profile lifetime supplied by CLI input. */
 function parseActiveProfileLifetime(value: string | undefined): ActiveProfileLifetime {
   if (value === "process" || value === "workspace") return value;
   usageError("Active profile lifetime must be 'process' or 'workspace'.");
 }
 
+/** Reports whether the selected preset will create more than one named profile. */
 function createsMultipleProfiles(preset: string, options: PresetBuildOptions): boolean {
   if (preset === "github") return true;
   return preset === "google-search-console" && (options.googleSearchConsoleProfiles?.length ?? 1) > 1;
 }
 
+/** Collects the restart lifetime only when setup creates multiple profiles. */
 async function collectActiveProfileLifetime(
   line: PromptInterface,
   cancellation: Cancellation,
@@ -507,6 +510,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   }
 }
 
+/** Normalizes scripted CLI options before the side-effect-free plan is built. */
 function nonInteractiveValues(options: InitCommandOptions): InitValues {
   const name = options.name ?? "miftah-wrapper";
   return {
@@ -554,6 +558,9 @@ function isExistingOutputError(error: unknown): boolean {
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
   validateClientSelection(values.client);
+  if (createsMultipleProfiles(values.preset, values) && values.activeProfileLifetime === undefined) {
+    usageError("Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'.");
+  }
 
   let config: MiftahConfig;
   try {
