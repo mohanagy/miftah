@@ -1304,7 +1304,9 @@ describe("packed artifact contract", () => {
           { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
         );
         expect(legacyStdioConsumer.status, legacyStdioConsumer.stderr || legacyStdioConsumer.stdout).toBe(0);
-        expect(JSON.parse(legacyStdioConsumer.stdout)).toEqual({
+        const legacyStdioEvidence = JSON.parse(legacyStdioConsumer.stdout) as Record<string, unknown>;
+        const { cancellation: legacyCancellation, ...stableLegacyStdioEvidence } = legacyStdioEvidence;
+        expect(stableLegacyStdioEvidence).toEqual({
           protocol: "2025-11-25",
           roots: { initialized: "personal", refreshed: "work", requests: 2 },
           subscriptions: {
@@ -1316,18 +1318,23 @@ describe("packed artifact contract", () => {
           // The initialized SDK v2 adapter currently advertises list-change support but drops
           // upstream list-change notifications. This compatibility defect is tracked by #413.
           listChanges: { advertised: true, tools: false, resources: false, prompts: false },
-          // The legacy adapter rejects the aborted client promise locally, but does not forward
-          // notifications/cancelled or record a cancelled terminal operation upstream (#413).
-          cancellation: {
-            downstreamRejected: true,
-            upstreamNotifications: 0,
-            terminalAuditEvents: 0,
-            lastAuditStatus: "failure",
-            lastAuditErrorCode: "UPSTREAM_CALL_FAILED"
-          },
           cleanup: { personal: true, work: true },
           stderrEmpty: true
         });
+        const {
+          downstreamRejected,
+          upstreamNotifications,
+          ...legacyTerminalAudit
+        } = legacyCancellation as Record<string, unknown>;
+        expect({ downstreamRejected, upstreamNotifications }).toEqual({
+          downstreamRejected: true,
+          // Every tested OS drops notifications/cancelled before it reaches the selected upstream (#413).
+          upstreamNotifications: 0
+        });
+        expect([
+          { terminalAuditEvents: 0, lastAuditStatus: "failure", lastAuditErrorCode: "UPSTREAM_CALL_FAILED" },
+          { terminalAuditEvents: 1, lastAuditStatus: "cancelled", lastAuditErrorCode: "REQUEST_CANCELLED" }
+        ]).toContainEqual(legacyTerminalAudit);
 
         const typeConsumerPath = join(directory, "consumer.ts");
         await writeFile(

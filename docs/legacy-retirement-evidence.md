@@ -142,7 +142,7 @@ Deidentified transcript:
 {"protocol":"2025-11-25","roots":{"initialized":"personal","refreshed":"work","requests":2},"subscriptions":{"advertised":true,"updateForwarded":true,"subscribeCount":1,"unsubscribeCount":1},"listChanges":{"advertised":true,"tools":false,"resources":false,"prompts":false},"cancellation":{"downstreamRejected":true,"upstreamNotifications":0,"terminalAuditEvents":0,"lastAuditStatus":"failure","lastAuditErrorCode":"UPSTREAM_CALL_FAILED"},"cleanup":{"personal":true,"work":true},"stderrEmpty":true}
 ```
 
-The same fixture also passes against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record.
+The same fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. Windows Node 20 produced the same zero-upstream-cancellation limitation but recorded the local terminal audit as `cancelled` / `REQUEST_CANCELLED`, so the package contract accepts that platform-specific audit improvement while continuing to require zero forwarded cancellations until #413 is repaired.
 
 ## Required evidence record
 
