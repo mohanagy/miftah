@@ -5,7 +5,11 @@ import type { Readable, Writable } from "node:stream";
 import type { FetchLike } from "@modelcontextprotocol/server";
 import { validateConfig } from "../config/validate-config.js";
 import { buildPresetConfig, PresetCatalogError } from "../config/presets.js";
-import type { GoogleSearchConsoleProfileOptions, PresetBuildOptions } from "../config/presets.js";
+import type {
+  ActiveProfileLifetime,
+  GoogleSearchConsoleProfileOptions,
+  PresetBuildOptions
+} from "../config/presets.js";
 import type { MiftahConfig } from "../config/types.js";
 import { getProviderAdapterForPreset } from "../config/provider-adapters.js";
 import type { ProviderAdapterDefinition } from "../config/provider-adapters.js";
@@ -52,11 +56,13 @@ export type InitCommandOptions = Pick<
   | "headerName"
   | "headerPrefix"
   | "oauthClientSecretsFile"
+  | "expectedAccountId"
+  | "identityProbeTool"
   | "localCommand"
   | "args"
   | "cwd"
   | "acceptLocalCommand"
-> & Pick<PresetBuildOptions, "googleSearchConsoleProfiles" | "defaultProfile">;
+> & Pick<PresetBuildOptions, "googleSearchConsoleProfiles" | "defaultProfile" | "activeProfileLifetime">;
 
 export interface InitCommandContext {
   readonly input: Readable & { readonly isTTY?: boolean };
@@ -322,6 +328,40 @@ function parseAdditionalGoogleSearchConsoleAccount(value: string | undefined): b
   }
 }
 
+/** Validates one explicit active-profile lifetime supplied by CLI input. */
+function parseActiveProfileLifetime(value: string | undefined): ActiveProfileLifetime {
+  if (value === "process" || value === "workspace") return value;
+  usageError("Active profile lifetime must be 'process' or 'workspace'.");
+}
+
+/** Reports whether the selected preset will create more than one named profile. */
+function createsMultipleProfiles(preset: string, options: PresetBuildOptions): boolean {
+  if (preset === "github") return true;
+  return preset === "google-search-console" && (options.googleSearchConsoleProfiles?.length ?? 1) > 1;
+}
+
+/** Collects the restart lifetime only when setup creates multiple profiles. */
+async function collectActiveProfileLifetime(
+  line: PromptInterface,
+  cancellation: Cancellation,
+  preset: string,
+  presetOptions: PresetBuildOptions,
+  options: InitCommandOptions,
+  output: Writable
+): Promise<ActiveProfileLifetime | undefined> {
+  if (!createsMultipleProfiles(preset, presetOptions)) return options.activeProfileLifetime;
+  if (options.activeProfileLifetime !== undefined) return parseActiveProfileLifetime(options.activeProfileLifetime);
+  output.write(
+    "Choose how live account switches behave after the MCP client reconnects: 'process' resets to the configured default; 'workspace' restores the last switch for this configuration.\n"
+  );
+  return parseActiveProfileLifetime(await prompt(
+    line,
+    cancellation,
+    "Active profile lifetime (process/workspace)",
+    "process"
+  ));
+}
+
 async function collectGoogleSearchConsoleOptions(
   line: PromptInterface,
   cancellation: Cancellation,
@@ -330,8 +370,10 @@ async function collectGoogleSearchConsoleOptions(
   if (options.googleSearchConsoleProfiles !== undefined) {
     return {
       oauthClientSecretsFile: options.oauthClientSecretsFile,
+      expectedAccountId: options.expectedAccountId,
       googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
-      defaultProfile: options.defaultProfile
+      defaultProfile: options.defaultProfile,
+      identityProbeTool: options.identityProbeTool
     };
   }
 
@@ -352,10 +394,22 @@ async function collectGoogleSearchConsoleOptions(
     if (name === undefined || oauthClientSecretsFile === undefined) {
       usageError("Google Search Console setup requires a profile name and OAuth client-secrets file.");
     }
+    const expectedAccountId = googleSearchConsoleProfiles.length === 0
+      ? options.expectedAccountId ?? (await prompt(
+          line,
+          cancellation,
+          "Expected opaque Google account ID (optional; never email or token)"
+        ))
+      : await prompt(
+          line,
+          cancellation,
+          "Expected opaque Google account ID (optional; never email or token)"
+        );
     googleSearchConsoleProfiles.push({
       name,
       ...(description === undefined ? {} : { description }),
-      oauthClientSecretsFile
+      oauthClientSecretsFile,
+      ...(expectedAccountId === undefined ? {} : { expectedAccountId })
     });
   } while (parseAdditionalGoogleSearchConsoleAccount(await prompt(
     line,
@@ -373,7 +427,20 @@ async function collectGoogleSearchConsoleOptions(
   if (defaultProfile === undefined) {
     usageError("Google Search Console setup requires an explicit default profile.");
   }
-  return { googleSearchConsoleProfiles, defaultProfile };
+  const hasExpectedAccountId = googleSearchConsoleProfiles.some((profile) => profile.expectedAccountId !== undefined);
+  const identityProbeTool = hasExpectedAccountId
+    ? options.identityProbeTool ?? await prompt(
+        line,
+        cancellation,
+        "Read-only no-input account identity tool",
+        "get_account_identity"
+      )
+    : options.identityProbeTool;
+  return {
+    googleSearchConsoleProfiles,
+    defaultProfile,
+    ...(identityProbeTool === undefined ? {} : { identityProbeTool })
+  };
 }
 
 async function collectPresetOptions(
@@ -409,6 +476,8 @@ async function collectPresetOptions(
         headerName: options.headerName,
         headerPrefix: options.headerPrefix,
         oauthClientSecretsFile: options.oauthClientSecretsFile,
+        expectedAccountId: options.expectedAccountId,
+        identityProbeTool: options.identityProbeTool,
         localCommand: options.localCommand,
         args: options.args,
         cwd: options.cwd,
@@ -437,6 +506,14 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
     ));
     await context.onSetupDraftIntent?.({ source: "connector", name, preset, stage: "connection" });
     const presetOptions = await collectPresetOptions(line, cancellation, preset, options, context.output);
+    const activeProfileLifetime = await collectActiveProfileLifetime(
+      line,
+      cancellation,
+      preset,
+      presetOptions,
+      options,
+      context.output
+    );
     const output = options.output ?? (await prompt(line, cancellation, "Output location", `${name}.miftah.json`));
     const client = options.client ?? (await prompt(
       line,
@@ -447,7 +524,14 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
     if (output === undefined) {
       usageError("Interactive init requires a name, preset, and output location.");
     }
-    return { name, preset, output, client, ...presetOptions };
+    return {
+      name,
+      preset,
+      output,
+      client,
+      ...presetOptions,
+      ...(activeProfileLifetime === undefined ? {} : { activeProfileLifetime })
+    };
   } catch (error) {
     if (error instanceof CliUsageError || error instanceof MiftahError) throw error;
     throw new CliUsageError("Interactive init was cancelled.");
@@ -457,6 +541,7 @@ async function collectInteractiveValues(options: InitCommandOptions, context: In
   }
 }
 
+/** Normalizes scripted CLI options before the side-effect-free plan is built. */
 function nonInteractiveValues(options: InitCommandOptions): InitValues {
   const name = options.name ?? "miftah-wrapper";
   return {
@@ -471,12 +556,15 @@ function nonInteractiveValues(options: InitCommandOptions): InitValues {
     headerName: options.headerName,
     headerPrefix: options.headerPrefix,
     oauthClientSecretsFile: options.oauthClientSecretsFile,
+    expectedAccountId: options.expectedAccountId,
+    identityProbeTool: options.identityProbeTool,
     localCommand: options.localCommand,
     args: options.args,
     cwd: options.cwd,
     acceptLocalCommand: options.acceptLocalCommand,
     googleSearchConsoleProfiles: options.googleSearchConsoleProfiles,
-    defaultProfile: options.defaultProfile
+    defaultProfile: options.defaultProfile,
+    activeProfileLifetime: options.activeProfileLifetime
   };
 }
 
@@ -503,6 +591,9 @@ function isExistingOutputError(error: unknown): boolean {
 function buildInitPlan(values: InitValues, context: InitCommandContext): InitPlan {
   const output = resolveOutputPath(values.output, context.cwd);
   validateClientSelection(values.client);
+  if (createsMultipleProfiles(values.preset, values) && values.activeProfileLifetime === undefined) {
+    usageError("Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'.");
+  }
 
   let config: MiftahConfig;
   try {
@@ -514,12 +605,15 @@ function buildInitPlan(values: InitValues, context: InitCommandContext): InitPla
       headerName: values.headerName,
       headerPrefix: values.headerPrefix,
       oauthClientSecretsFile: values.oauthClientSecretsFile,
+      expectedAccountId: values.expectedAccountId,
+      identityProbeTool: values.identityProbeTool,
       localCommand: values.localCommand,
       args: values.args,
       cwd: values.cwd,
       acceptLocalCommand: values.acceptLocalCommand,
       googleSearchConsoleProfiles: values.googleSearchConsoleProfiles,
-      defaultProfile: values.defaultProfile
+      defaultProfile: values.defaultProfile,
+      activeProfileLifetime: values.activeProfileLifetime
     }, {
       configurationPath: output
     });
@@ -588,6 +682,9 @@ function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapter
   const tokenCacheBoundary = adapter.authentication.tokenStore === "upstream-private"
     ? "Miftah will not read or manage the upstream token cache.\n"
     : "";
+  const identityCapabilityBoundary = adapter.identity.preferredProbe === undefined
+    ? ""
+    : `Preferred identity probe: '${adapter.identity.preferredProbe.name}' must be read-only, accept {}, and return only bounded '${adapter.identity.preferredProbe.fingerprintField}' evidence. Unsupported upstream versions remain unverified; property access is not account identity.\n`;
   output.write(
     `Provider adapter: ${adapter.displayName}\n` +
       `Credential ownership: ${adapter.authentication.credentialOwnership}\n` +
@@ -596,7 +693,8 @@ function writeProviderAdapterGuidance(output: Writable, adapter: ProviderAdapter
       `Identity evidence: ${adapter.identity.evidence}\n` +
       `Reauthentication: ${reauthDescription}\n` +
       `Disconnect/revocation: ${adapter.lifecycle.disconnect.owner}\n` +
-      tokenCacheBoundary
+      tokenCacheBoundary +
+      identityCapabilityBoundary
   );
 }
 

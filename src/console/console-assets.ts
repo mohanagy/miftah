@@ -182,11 +182,19 @@ const page = `<!doctype html>
           <label class="wide" data-preset-field="streamable-http" hidden>Remote MCP URL<input name="url" type="url" maxlength="2048" placeholder="https://mcp.example.com/mcp"></label>
           <fieldset class="wide gsc-accounts" data-preset-field="google-search-console" hidden>
             <legend>Google Search Console accounts</legend>
-            <p class="field-note">Add one named profile per Google account. Miftah gives each profile an isolated upstream token directory; it never reads that token cache.</p>
+            <p class="field-note">Add one named profile per Google account. Miftah gives each profile an isolated upstream token directory; it never reads that token cache. An optional opaque account ID can be checked only when the upstream exposes the reviewed identity probe; property access is never identity proof.</p>
             <div id="gsc-account-list" class="gsc-account-list"></div>
             <div class="form-action"><button id="add-gsc-account" type="button" class="secondary">Add another Google account</button></div>
+            <label>Identity probe tool (optional)<input name="identityProbeTool" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}" placeholder="get_account_identity"></label>
             <label>Default account profile<select id="gsc-default-profile" name="defaultProfile" required></select></label>
           </fieldset>
+          <label class="wide" data-preset-field="github google-search-console" hidden>Active profile lifetime
+            <select id="active-profile-lifetime" name="activeProfileLifetime" required>
+              <option value="process">Temporary — reset to the configured default after a fresh Miftah process</option>
+              <option value="workspace">Durable workspace — restore the last switch for this configuration</option>
+            </select>
+            <span class="field-note">This controls live account switches only. It does not change the configured default profile or prove account identity.</span>
+          </label>
           <label data-preset-field="generic generic-npx generic-docker local-stdio streamable-http">Secret environment variable name (optional)<input name="credentialEnv" maxlength="256" placeholder="MCP_TOKEN"></label>
           <label data-preset-field="streamable-http" hidden>Credential header (optional)<input name="headerName" maxlength="256" placeholder="Authorization"></label>
           <label data-preset-field="streamable-http" hidden>Header prefix (optional)<input name="headerPrefix" maxlength="256" placeholder="Bearer "></label>
@@ -386,8 +394,10 @@ const page = `<!doctype html>
               <label>New account profile name<input name="profile" required maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="personal"></label>
               <label class="wide">Account description<input name="description" maxlength="1024" placeholder="Personal provider account"></label>
               <label class="wide"><span id="provider-account-credential-label">Provider credential-file path</span><input id="provider-account-credential-file" name="credentialFile" required maxlength="4096" autocomplete="off"></label>
+              <label>Expected opaque account ID (optional)<input name="expectedAccountId" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,255}" autocomplete="off" placeholder="stable-non-email-id"></label>
+              <label>Identity probe tool (optional)<input name="identityProbeTool" maxlength="256" pattern="[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}" placeholder="get_account_identity"></label>
               <label class="wide checkbox"><input name="makeDefault" type="checkbox" value="true"> Make this the durable default profile</label>
-              <p class="field-note wide">Miftah stores only the configured credential-file reference and a separate profile. The provider owns browser login and its private token cache; Miftah never reads, copies, or removes that cache.</p>
+              <p class="field-note wide">Miftah stores only the configured credential-file reference and an optional opaque expected account ID. The provider owns browser login and its private token cache; Miftah never reads, copies, or removes that cache. Existing identity-enabled profiles require the new profile to use the same probe contract.</p>
               <div class="wide form-action"><button type="submit">Add provider account</button></div>
             </form>
           </details>
@@ -728,9 +738,9 @@ const script = `(() => {
   const discardSetupDraft = byId("discard-setup-draft");
   const presetInputNames = Object.freeze({
     generic: ["credentialEnv"],
-    "github": [],
+    "github": ["activeProfileLifetime"],
     "sentry": [],
-    "google-search-console": [],
+    "google-search-console": ["activeProfileLifetime"],
     "generic-npx": ["credentialEnv", "npmPackage"],
     "generic-docker": ["credentialEnv", "dockerImage"],
     "local-stdio": ["credentialEnv", "localCommand", "args", "cwd", "acceptLocalCommand"],
@@ -1022,13 +1032,21 @@ const script = `(() => {
     clientSecrets.placeholder = "/Users/you/gsc-client-secrets.json";
     clientSecrets.dataset.gscClientSecretsFile = "true";
 
+    const expectedAccountId = document.createElement("input");
+    expectedAccountId.type = "text";
+    expectedAccountId.maxLength = 256;
+    expectedAccountId.pattern = "[A-Za-z0-9][A-Za-z0-9._:-]{0,255}";
+    expectedAccountId.placeholder = "stable-non-email-id";
+    expectedAccountId.autocomplete = "off";
+    expectedAccountId.dataset.gscExpectedAccountId = "true";
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "secondary";
     remove.textContent = "Remove account";
     remove.addEventListener("click", () => {
       row.remove();
-      syncGoogleSearchConsoleDefaultProfile();
+      updatePresetFields();
     });
 
     const action = document.createElement("div");
@@ -1038,6 +1056,7 @@ const script = `(() => {
       googleSearchConsoleAccountLabel("Profile name", profileName),
       googleSearchConsoleAccountLabel("Description (optional)", description),
       googleSearchConsoleAccountLabel("Google OAuth client-secrets file", clientSecrets),
+      googleSearchConsoleAccountLabel("Expected opaque account ID (optional)", expectedAccountId),
       action
     );
     return row;
@@ -1057,6 +1076,7 @@ const script = `(() => {
       const name = googleSearchConsoleAccountInput(row, "[data-gsc-profile-name]")?.value.trim() || "";
       const description = googleSearchConsoleAccountInput(row, "[data-gsc-profile-description]")?.value.trim() || "";
       const oauthClientSecretsFile = googleSearchConsoleAccountInput(row, "[data-gsc-client-secrets-file]")?.value.trim() || "";
+      const expectedAccountId = googleSearchConsoleAccountInput(row, "[data-gsc-expected-account-id]")?.value.trim() || "";
       if (!/^[a-z0-9](?:[a-z0-9-]{0,63})$/u.test(name)) {
         throw new Error("Each Google Search Console profile name must use lowercase letters, digits, or hyphens.");
       }
@@ -1066,7 +1086,8 @@ const script = `(() => {
       return {
         name,
         ...(description ? { description } : {}),
-        oauthClientSecretsFile
+        oauthClientSecretsFile,
+        ...(expectedAccountId ? { expectedAccountId } : {})
       };
     });
     if (profiles.length === 0) throw new Error("Add at least one Google Search Console account.");
@@ -1093,6 +1114,7 @@ const script = `(() => {
     return { ...completion, setup: { name, defaultProfile, profileCount } };
   }
 
+  /** Resolves the client whose copy-only handoff is currently being rendered. */
   function selectedSetupCompletionClient() {
     const selected = setupCompletionClientSelect instanceof HTMLSelectElement
       ? setupCompletionClientSelect.value
@@ -1102,19 +1124,33 @@ const script = `(() => {
       : "claude-desktop";
   }
 
-  function renderSetupCompletionSwitch(setup) {
+  /** Renders the active-profile restart consequence for the selected client. */
+  function renderSetupCompletionSwitch(setup, profileState = {}) {
     if (!setupCompletionSwitch) return;
     const client = selectedSetupCompletionClient();
-    setupCompletionSwitch.textContent =
+    const scope = typeof profileState.scope === "string" ? profileState.scope : "process";
+    const restartCopy = profileState.survivesProcessRestart === true
+      ? "The configured " + scope + " scope restores a successful switch after a fresh Miftah process."
+      : "The configured " + scope + " scope does not restore a live switch; a fresh process starts from the configured default profile.";
+    setupCompletionSwitch.textContent = restartCopy + " " +
       "After adding another account, return to Your MCP connections and use the named account action for " +
       catalogClientDisplayName(client) + ". Paste it into that chat; Console does not switch the running client session.";
   }
 
+  /** Combines one client handoff with the configured profile-state consequence. */
+  function setupCompletionHandoffText(message, completion = setupCompletion) {
+    const profileState = record(record(completion).profileState);
+    const profileStateMessage = typeof profileState.message === "string" ? profileState.message : "";
+    return [message, profileStateMessage].filter(Boolean).join(" ");
+  }
+
+  /** Renders a completed setup without weakening provider or profile-state guidance. */
   function renderSetupCompletion(value) {
     const completion = record(value);
     const setup = record(completion.setup);
     const verification = record(completion.verification);
     const environment = record(completion.environment);
+    const profileState = record(completion.profileState);
     const handoff = record(completion.clientHandoff);
     const verificationMessage = typeof verification.message === "string" ? verification.message : "";
     const nextAction = typeof verification.nextAction === "string" ? verification.nextAction : "";
@@ -1153,12 +1189,14 @@ const script = `(() => {
         [environmentMessage, environmentNextAction].filter(Boolean).join(" ");
       setupCompletionEnvironment.hidden = !environmentMessage && !environmentNextAction;
     }
-    if (setupCompletionHandoff) setupCompletionHandoff.textContent = handoffMessage;
+    if (setupCompletionHandoff) {
+      setupCompletionHandoff.textContent = setupCompletionHandoffText(handoffMessage, completion);
+    }
     if (setupCompletionSecondAccount) {
       setupCompletionSecondAccount.textContent =
         "Open Manage connection, then choose Accounts or Authentication. Miftah shows only the supported way to add another named account for this connection.";
     }
-    renderSetupCompletionSwitch(setup);
+    renderSetupCompletionSwitch(setup, profileState);
     if (setupCompletionView) {
       setupCompletionView.hidden = false;
       if (typeof setupCompletionView.scrollIntoView === "function") {
@@ -1779,6 +1817,9 @@ const script = `(() => {
     const selection = byId("preset-selection");
     if (!(form instanceof HTMLFormElement) || !(selection instanceof HTMLSelectElement)) return;
     const preset = selection.value;
+    const requiresActiveProfileLifetime = preset === "github" || (
+      preset === "google-search-console" && googleSearchConsoleAccountRows().length > 1
+    );
     form.querySelectorAll("[data-preset-field]").forEach((field) => {
       if (!(field instanceof HTMLElement)) return;
       const visible = (field.dataset.presetField || "").split(" ").includes(preset);
@@ -1789,7 +1830,7 @@ const script = `(() => {
           !(control instanceof HTMLSelectElement) &&
           !(control instanceof HTMLTextAreaElement)
         ) return;
-        control.disabled = !visible;
+        control.disabled = !visible || (control.id === "active-profile-lifetime" && !requiresActiveProfileLifetime);
         if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
           control.required = visible && (
             (control.name === "npmPackage" && preset === "generic-npx") ||
@@ -1803,7 +1844,10 @@ const script = `(() => {
           );
           return;
         }
-        control.required = visible && preset === "google-search-console" && control.id === "gsc-default-profile";
+        control.required = visible && (
+          (preset === "google-search-console" && control.id === "gsc-default-profile") ||
+          (control.id === "active-profile-lifetime" && requiresActiveProfileLifetime)
+        );
       });
     });
     if (preset === "google-search-console") ensureGoogleSearchConsoleAccountRow();
@@ -1897,7 +1941,8 @@ const script = `(() => {
     if (presetReviewEdit instanceof HTMLButtonElement) presetReviewEdit.disabled = presetCreateInFlight;
   }
 
-  function renderPresetReview(value) {
+  /** Renders the reviewed configuration and any multi-profile lifetime choice. */
+  function renderPresetReview(value, request) {
     const review = record(value);
     const configuration = record(review.configuration);
     if (configuration.sensitiveValues !== "omitted" || configuration.publication !== "new-file-only") {
@@ -1913,13 +1958,19 @@ const script = `(() => {
     }
     const name = typeof configuration.name === "string" ? configuration.name : "this configuration";
     const defaultProfile = typeof configuration.defaultProfile === "string" ? configuration.defaultProfile : "not set";
+    const activeProfileLifetime = request.activeProfileLifetime === "workspace" ? "workspace" : "process";
     if (presetReviewSummary instanceof HTMLElement) {
       presetReviewSummary.textContent = "Miftah will create '" + name + "' with " + profileCount + " account profile(s).";
     }
     if (presetReviewDetails instanceof HTMLElement) {
       presetReviewDetails.replaceChildren();
       [
-        "Durable default profile: " + defaultProfile,
+        "Configured default profile: " + defaultProfile,
+        ...(profileCount > 1
+          ? ["Active profile lifetime: " + activeProfileLifetime + (activeProfileLifetime === "workspace"
+              ? " — live switches are restored by a fresh Miftah process for this configuration."
+              : " — live switches end with the current Miftah process; a fresh process starts from the configured default.")]
+          : []),
         "Profiles: " + (profiles.length > 0 ? profiles.join(", ") : "none"),
         "Upstreams: " + (upstreams.length > 0
           ? upstreams.map((upstream) => {
@@ -1956,6 +2007,14 @@ const script = `(() => {
       }
       request.googleSearchConsoleProfiles = googleSearchConsoleProfiles;
       request.defaultProfile = defaultProfile;
+      request.activeProfileLifetime = String(data.get("activeProfileLifetime") || "");
+      const configuredIdentityCount = googleSearchConsoleProfiles.filter((profile) => profile.expectedAccountId).length;
+      const identityProbeTool = String(data.get("identityProbeTool") || "").trim();
+      if (configuredIdentityCount > 0 && configuredIdentityCount !== googleSearchConsoleProfiles.length) {
+        throw new Error("Enter an expected opaque account ID for every Google Search Console profile, or leave all of them blank.");
+      }
+      if (configuredIdentityCount > 0) request.identityProbeTool = identityProbeTool || "get_account_identity";
+      else if (identityProbeTool) throw new Error("An identity probe tool requires an expected account ID for every profile.");
     } else if (preset === "local-stdio") {
       const localCommand = String(data.get("localCommand") || "").trim();
       const argumentText = String(data.get("args") || "");
@@ -1967,7 +2026,7 @@ const script = `(() => {
       if (cwd) request.cwd = cwd;
       if (credentialEnv) request.credentialEnv = credentialEnv;
     } else {
-      ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile"].forEach((name) => {
+      ["credentialEnv", "npmPackage", "dockerImage", "url", "headerName", "oauthClientSecretsFile", "activeProfileLifetime"].forEach((name) => {
         if (!allowedNames.includes(name)) return;
         const value = String(data.get(name) || "").trim();
         if (value) request[name] = value;
@@ -2366,7 +2425,7 @@ const script = `(() => {
         if (!(list instanceof HTMLElement)) return;
         clearPresetReview();
         list.append(createGoogleSearchConsoleAccountRow(googleSearchConsoleAccountRows().length));
-        syncGoogleSearchConsoleDefaultProfile();
+        updatePresetFields();
       });
     }
     updatePresetFields();
@@ -2385,7 +2444,7 @@ const script = `(() => {
         const request = presetOnboardingRequest(presetOnboardingForm);
         const review = record(await api("/api/v1/onboarding/preset/preview", { method: "POST", body: request }));
         if (reviewGeneration !== presetReviewGeneration) return;
-        renderPresetReview(review);
+        renderPresetReview(review, request);
         pendingPresetRequest = request;
         message("Review the structural summary, then create the configuration when it matches your intent.");
       } catch (error) {
@@ -2588,6 +2647,8 @@ const script = `(() => {
             profile: String(data.get("profile") || "").trim(),
             description: String(data.get("description") || "").trim() || undefined,
             credentialFile: String(data.get("credentialFile") || "").trim(),
+            expectedAccountId: String(data.get("expectedAccountId") || "").trim() || undefined,
+            identityProbeTool: String(data.get("identityProbeTool") || "").trim() || undefined,
             ...(data.get("makeDefault") === "true" ? { makeDefault: true } : {})
           }
         });
@@ -2877,7 +2938,10 @@ const script = `(() => {
   if (setupCompletionClientSelect instanceof HTMLSelectElement) {
     setupCompletionClientSelect.addEventListener("change", () => {
       setupCompletionGeneration += 1;
-      renderSetupCompletionSwitch(record(record(setupCompletion).setup));
+      renderSetupCompletionSwitch(
+        record(record(setupCompletion).setup),
+        record(record(setupCompletion).profileState)
+      );
       if (setupCompletionClientTarget) setupCompletionClientTarget.textContent = "";
       if (setupCompletionClientJson instanceof HTMLTextAreaElement) setupCompletionClientJson.value = "";
       if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = "";
@@ -2908,9 +2972,10 @@ const script = `(() => {
         if (setupCompletionClientGuidance) setupCompletionClientGuidance.textContent = guidance;
         if (setupCompletionCopyJson instanceof HTMLButtonElement) setupCompletionCopyJson.disabled = false;
         if (setupCompletionHandoff) {
-          setupCompletionHandoff.textContent =
+          setupCompletionHandoff.textContent = setupCompletionHandoffText(
             "Review and merge the entry, then restart or reconnect " + catalogClientDisplayName(client) +
-            ". A generated entry does not prove that a credential works or belongs to the intended account.";
+            ". A generated entry does not prove that a credential works or belongs to the intended account."
+          );
         }
         message("Generated the copy-only client entry for " + catalogClientDisplayName(client) + ". Review it before merging.");
       } catch (error) {

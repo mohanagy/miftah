@@ -122,6 +122,13 @@ function profileHandle(result: unknown): string {
   return handle;
 }
 
+/** Parses the safe JSON envelope returned by modern profile selection tools. */
+function profileSelectionResult(result: unknown): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(parseText(result));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Expected object.");
+  return parsed as Record<string, unknown>;
+}
+
 function inputProperties(tool: Tool | undefined): Record<string, unknown> {
   const properties = tool?.inputSchema.properties;
   if (typeof properties !== "object" || properties === null || Array.isArray(properties)) return {};
@@ -269,10 +276,21 @@ describe("modern stateless profile-context runtime", () => {
       await expect(firstClient.listTools()).rejects.toThrow(/PROFILE_CONTEXT_UNAVAILABLE/u);
       firstAuthentication = authInfo("chat-work");
 
-      const workHandle = profileHandle(await firstClient.callTool({
+      const workSelection = await firstClient.callTool({
         name: "miftah_use_profile",
         arguments: { profile: "work" }
-      }));
+      });
+      expect(profileSelectionResult(workSelection)).toMatchObject({
+        message: "Active profile changed from personal to work. Scope: session. This selection ends with the current MCP session; a fresh session starts from the configured default profile.",
+        profileState: {
+          activeProfile: "work",
+          scope: "session",
+          persistence: "temporary",
+          survivesProcessRestart: false,
+          restartBehavior: "configured-default"
+        }
+      });
+      const workHandle = profileHandle(workSelection);
       expect(firstProfiles.current().activeProfile).toBe("personal");
 
       const secondIdentity = await secondClient.callTool({
@@ -353,6 +371,23 @@ describe("modern stateless profile-context runtime", () => {
         arguments: { [PROFILE_CONTEXT_ARGUMENT]: personalHandle }
       }))).toContain("personal");
 
+      const resetSelection = await secondClient.callTool({
+        name: "miftah_reset_profile",
+        arguments: { [PROFILE_CONTEXT_ARGUMENT]: personalHandle }
+      });
+      expect(profileSelectionResult(resetSelection)).toMatchObject({
+        message: "Active profile reset from personal to personal. Scope: session. This selection ends with the current MCP session; a fresh session starts from the configured default profile.",
+        profileState: {
+          activeProfile: "personal",
+          scope: "session",
+          persistence: "temporary",
+          survivesProcessRestart: false,
+          restartBehavior: "configured-default"
+        }
+      });
+      const resetHandle = profileHandle(resetSelection);
+      expect(resetHandle).not.toBe(personalHandle);
+
       const toolsAfter = await secondClient.listTools();
       expect(toolsAfter.tools).toEqual(toolsBefore.tools);
       expect(firstProfiles.current().activeProfile).toBe("personal");
@@ -361,6 +396,7 @@ describe("modern stateless profile-context runtime", () => {
       const auditText = `${await readFile(firstAudit, "utf8")}\n${await readFile(secondAudit, "utf8")}`;
       expect(auditText).not.toContain(workHandle);
       expect(auditText).not.toContain(personalHandle);
+      expect(auditText).not.toContain(resetHandle);
       expect(auditText).toMatch(/"profileContextCorrelation":"mctxc1\.[A-Za-z0-9_-]{22}"/u);
       const auditEvents = auditText
         .trim()

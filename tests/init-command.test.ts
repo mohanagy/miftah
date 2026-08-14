@@ -104,6 +104,53 @@ describe("init command", () => {
     streams.input.end();
   });
 
+  it("writes the explicit workspace lifetime selected for a multi-profile preset", async () => {
+    const streams = createStreams();
+    const output = resolve(outputRoot, "github-workspace.json");
+
+    await runInitCommand({
+      name: "github-workspace",
+      preset: "github",
+      output: "github-workspace.json",
+      activeProfileLifetime: "workspace"
+    }, commandContext(streams));
+    streams.input.end();
+
+    const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
+    expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
+  });
+
+  it("rejects non-interactive multi-profile presets without an explicit lifetime", async () => {
+    const githubStreams = createStreams(false);
+    const githubOutput = resolve(outputRoot, "github-missing-lifetime.json");
+    await expect(runInitCommand({
+      name: "github-missing-lifetime",
+      preset: "github",
+      output: "github-missing-lifetime.json"
+    }, commandContext(githubStreams))).rejects.toThrow(
+      "Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'."
+    );
+    await expectNoPath(githubOutput);
+    githubStreams.input.end();
+
+    const gscStreams = createStreams(false);
+    const gscOutput = resolve(outputRoot, "gsc-missing-lifetime.json");
+    await expect(runInitCommand({
+      name: "gsc-missing-lifetime",
+      preset: "google-search-console",
+      output: "gsc-missing-lifetime.json",
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: "/tmp/work-client-secrets.json" },
+        { name: "personal", oauthClientSecretsFile: "/tmp/personal-client-secrets.json" }
+      ],
+      defaultProfile: "work"
+    }, commandContext(gscStreams))).rejects.toThrow(
+      "Multi-profile setup requires '--active-profile-lifetime process' or '--active-profile-lifetime workspace'."
+    );
+    await expectNoPath(gscOutput);
+    gscStreams.input.end();
+  });
+
   it("reports an existing output file as a usage error without changing it", async () => {
     const streams = createStreams();
     const output = resolve(outputRoot, "existing.json");
@@ -303,7 +350,8 @@ describe("init command", () => {
         name: "gsc",
         preset: "google-search-console",
         output: "gsc.json",
-        oauthClientSecretsFile: clientSecretsFile
+        oauthClientSecretsFile: clientSecretsFile,
+        expectedAccountId: "google-sub-work"
       },
       commandContext(streams)
     );
@@ -311,6 +359,10 @@ describe("init command", () => {
 
     const config = validateConfig(JSON.parse(await readFile(output, "utf8")));
     expect(config.upstream?.args).toEqual(["mcp-search-console@0.3.2"]);
+    expect(config.profiles.default?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-work" },
+      probe: { tool: "get_account_identity", resultFormat: "json" }
+    });
     expect(streams.transcript.contents).toContain("Provider adapter: Google Search Console");
     expect(streams.transcript.contents).toContain("Credential ownership: upstream");
     expect(streams.transcript.contents).toContain("Browser handoff: upstream");
@@ -319,6 +371,8 @@ describe("init command", () => {
     expect(streams.transcript.contents).toContain("Reauthentication: upstream MCP tool 'reauthenticate'");
     expect(streams.transcript.contents).toContain("Disconnect/revocation: manual-only");
     expect(streams.transcript.contents).toContain("Miftah will not read or manage the upstream token cache.");
+    expect(streams.transcript.contents).toContain("Preferred identity probe: 'get_account_identity'");
+    expect(streams.transcript.contents).toContain("property access is not account identity");
     expect(streams.transcript.contents).not.toContain(clientSecretsFile);
   });
 

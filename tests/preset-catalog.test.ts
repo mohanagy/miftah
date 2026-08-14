@@ -42,6 +42,10 @@ describe("preset catalog", () => {
     expect(PRESET_CATALOG.presets["local-stdio"].requirements.acceptLocalCommand).toBe("required");
     expect(PRESET_CATALOG.presets["streamable-http"].requirements.url).toBe("required");
     expect(PRESET_CATALOG.presets["google-search-console"].requirements.oauthClientSecretsFile).toBe("required");
+    expect(PRESET_CATALOG.presets["google-search-console"].requirements.expectedAccountId).toBe("optional");
+    expect(PRESET_CATALOG.presets["google-search-console"].requirements.identityProbeTool).toBe("optional");
+    expect(PRESET_CATALOG.presets.github.requirements.activeProfileLifetime).toBe("optional");
+    expect(PRESET_CATALOG.presets["google-search-console"].requirements.activeProfileLifetime).toBe("optional");
   });
 
   it("builds every catalog config as a valid strict Miftah config without literal secrets", () => {
@@ -103,6 +107,7 @@ describe("preset catalog", () => {
       work: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_WORK_TOKEN}" }, policy: "readonly" },
       personal: { env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_TOKEN}" }, policy: "readonly" }
     });
+    expect(github.state).toBeUndefined();
 
     if (process.platform === "win32") return;
 
@@ -114,6 +119,19 @@ describe("preset catalog", () => {
       env: { SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}" },
       policy: "readonly"
     });
+  });
+
+  it("maps explicit multi-profile lifetime choices to schema-valid state", () => {
+    const temporary = buildPresetConfig("github", "github", { activeProfileLifetime: "process" });
+    const durable = buildPresetConfig("github", "github", { activeProfileLifetime: "workspace" });
+
+    expect(temporary.state).toEqual({ persistActiveProfile: false, scope: "process" });
+    expect(durable.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
+    expect(() => validateConfig(temporary)).not.toThrow();
+    expect(() => validateConfig(durable)).not.toThrow();
+    expect(() => buildPresetConfig("github", "github", {
+      activeProfileLifetime: "global" as "workspace"
+    })).toThrow("Active profile lifetime must be 'process' or 'workspace'.");
   });
 
   it("builds the exact pinned GSC pilot without enabling destructive tools or Miftah native OAuth", () => {
@@ -153,10 +171,12 @@ describe("preset catalog", () => {
           oauthClientSecretsFile: gscClientSecretsFile
         }
       ],
-      defaultProfile: "google-govalidate"
+      defaultProfile: "google-govalidate",
+      activeProfileLifetime: "workspace"
     });
 
     expect(config.defaultProfile).toBe("google-govalidate");
+    expect(config.state).toEqual({ persistActiveProfile: true, scope: "workspace" });
     expect(config.profiles).toMatchObject({
       "google-govalidate": {
         description: "GoValidate Google account",
@@ -176,6 +196,75 @@ describe("preset catalog", () => {
     expect(config.profiles["google-govalidate"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
     expect(config.profiles["google-craftmyletter"]?.env).not.toHaveProperty("GSC_ALLOW_DESTRUCTIVE");
     expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("configures one bounded GSC account identity contract for every named profile", () => {
+    const config = buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        {
+          name: "google-work",
+          oauthClientSecretsFile: gscClientSecretsFile,
+          expectedAccountId: "google-sub-work"
+        },
+        {
+          name: "google-client",
+          oauthClientSecretsFile: gscClientSecretsFile,
+          expectedAccountId: "google-sub-client"
+        }
+      ],
+      identityProbeTool: "get_google_account_identity",
+      defaultProfile: "google-work",
+      activeProfileLifetime: "workspace"
+    });
+
+    expect(config.profiles["google-work"]?.identity).toEqual({
+      expected: { provider: "google", accountId: "google-sub-work" },
+      probe: { tool: "get_google_account_identity", resultFormat: "json" },
+      maxAgeMs: 3_600_000,
+      requiredForRisk: ["write", "destructive"]
+    });
+    expect(config.profiles["google-client"]?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-client" },
+      probe: { tool: "get_google_account_identity", resultFormat: "json" }
+    });
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("defaults a single GSC identity declaration to the preferred upstream contract", () => {
+    const config = buildPresetConfig("gsc", "google-search-console", {
+      oauthClientSecretsFile: gscClientSecretsFile,
+      expectedAccountId: "google-sub-work"
+    });
+
+    expect(config.profiles.default?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-work" },
+      probe: { tool: "get_account_identity", resultFormat: "json" }
+    });
+  });
+
+  it("rejects partial, duplicate, email-shaped, or probe-only GSC identity setup", () => {
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile, expectedAccountId: "google-sub-work" },
+        { name: "client", oauthClientSecretsFile: gscClientSecretsFile }
+      ],
+      defaultProfile: "work"
+    })).toThrow("expected account ID for every configured profile");
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      googleSearchConsoleProfiles: [
+        { name: "work", oauthClientSecretsFile: gscClientSecretsFile, expectedAccountId: "same-account" },
+        { name: "client", oauthClientSecretsFile: gscClientSecretsFile, expectedAccountId: "same-account" }
+      ],
+      defaultProfile: "work"
+    })).toThrow("distinct expected account ID");
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      oauthClientSecretsFile: gscClientSecretsFile,
+      expectedAccountId: "private@example.test"
+    })).toThrow("opaque non-email account ID");
+    expect(() => buildPresetConfig("gsc", "google-search-console", {
+      oauthClientSecretsFile: gscClientSecretsFile,
+      identityProbeTool: "get_account_identity"
+    })).toThrow("requires an expected account ID");
   });
 
   it("namespaces generated GSC OAuth state by configuration as well as profile", () => {

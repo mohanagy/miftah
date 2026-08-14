@@ -18,6 +18,21 @@ function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
 }
 
 describe("setup completion", () => {
+  it("adds scope-aware restart guidance to multi-profile handoff", () => {
+    expect(createSetupCompletion({
+      surface: "cli",
+      verification: "not-declared",
+      clientHandoff: "shown",
+      profileStateScope: "workspace"
+    }).profileState).toEqual({
+      scope: "workspace",
+      persistence: "durable",
+      survivesProcessRestart: true,
+      restartBehavior: "restore-selection",
+      message: "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+    });
+  });
+
   it("reports a missing generated environment reference before client handoff without exposing a value", () => {
     const environment = inspectSetupEnvironment(["SENTRY_ACCESS_TOKEN"], {});
     const completion = createSetupCompletion({

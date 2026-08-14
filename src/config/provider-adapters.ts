@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import type { MiftahConfig, ProfileConfig, ProfileUpstreamOverride, UpstreamConfig } from "./types.js";
+import type { IdentityConfig, MiftahConfig, ProfileConfig, ProfileUpstreamOverride, UpstreamConfig } from "./types.js";
 
 export type ProviderAdapterOwner = "miftah" | "upstream" | "manual-only";
 
@@ -38,15 +38,28 @@ export type ProviderIdentityContract =
   | {
       readonly evidence: "verified-probe";
       readonly assurance: "verified";
+      readonly preferredProbe?: ProviderIdentityProbeContract;
     }
   | {
       readonly evidence: "upstream-reported";
       readonly assurance: "informational";
+      readonly preferredProbe?: ProviderIdentityProbeContract;
     }
   | {
       readonly evidence: "unavailable";
       readonly assurance: "none";
+      /** Contract an upstream version may implement without granting Miftah token-cache access. */
+      readonly preferredProbe?: ProviderIdentityProbeContract;
     };
+
+/** Reviewed provider-specific shape for a bounded upstream identity assertion. */
+export interface ProviderIdentityProbeContract {
+  readonly name: string;
+  readonly input: "empty-object";
+  readonly resultFormat: "json";
+  readonly provider: string;
+  readonly fingerprintField: "accountId";
+}
 
 export interface ProviderAdapterDefinition {
   readonly displayName: string;
@@ -73,8 +86,9 @@ export interface ProviderAdapterDefinition {
   /**
    * A reviewed, non-secret account-profile shape the setup workflow may add
    * to an already trusted provider-adapter configuration. This deliberately
-   * models only provider-owned credential files and private adapter state;
-   * generic Miftah code never reads, copies, or manages the resulting cache.
+   * models provider-owned credential files, private adapter state, and an
+   * optional expected opaque account identifier; generic Miftah code never
+   * reads, copies, or manages the resulting cache.
    */
   readonly accountProvisioning?: {
     readonly credentialFile: {
@@ -170,7 +184,17 @@ export const PROVIDER_ADAPTER_CATALOG = {
         reauth: { owner: "upstream", mechanism: "mcp-tool", name: "reauthenticate" },
         disconnect: { owner: "manual-only", mechanism: "provider-console" }
       },
-      identity: { evidence: "unavailable", assurance: "none" },
+      identity: {
+        evidence: "unavailable",
+        assurance: "none",
+        preferredProbe: {
+          name: "get_account_identity",
+          input: "empty-object",
+          resultFormat: "json",
+          provider: "google",
+          fingerprintField: "accountId"
+        }
+      },
       diagnostics: {
         mode: "metadata-only",
         tokenCacheAccess: "forbidden",
@@ -203,17 +227,21 @@ export interface ProviderAdapterAccountProfileRequest {
   readonly profile: string;
   readonly description?: string;
   readonly credentialFile: string;
+  readonly expectedAccountId?: string;
+  readonly identityProbeTool?: string;
 }
 
 /** Bounded, non-secret input failure for a provider-owned account profile. */
 export class ProviderAdapterAccountProfileError extends Error {
   constructor(
-    readonly reason: "credential-file" | "profile" | "unsupported" = "credential-file"
+    readonly reason: "credential-file" | "profile" | "identity" | "unsupported" = "credential-file"
   ) {
     super(reason === "credential-file"
       ? "Provider account setup requires an absolute literal credential-file path."
       : reason === "profile"
         ? "Provider account setup requires a safe profile name."
+        : reason === "identity"
+          ? "Provider account setup requires an opaque account ID and safe identity probe."
         : "Provider account setup does not support adding provider-owned accounts.");
     this.name = "ProviderAdapterAccountProfileError";
   }
@@ -246,6 +274,38 @@ function requireCredentialFile(value: unknown): string {
 
 const reservedProviderAdapterProfileNames = new Set(["__proto__", "constructor", "prototype"]);
 const trailingWindowsPathSuffixPattern = /[. ]+$/u;
+const opaqueProviderAccountId = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u;
+const providerIdentityProbeTool = /^[A-Za-z0-9](?:[A-Za-z0-9_.:/-]{0,255})$/u;
+
+/** Builds only the reviewed bounded identity declaration; it never opens provider state. */
+export function buildProviderAdapterAccountIdentity(
+  adapter: ProviderAdapterDefinition,
+  expectedAccountId?: string,
+  identityProbeTool?: string
+): IdentityConfig | undefined {
+  if (expectedAccountId === undefined) {
+    if (identityProbeTool !== undefined) throw new ProviderAdapterAccountProfileError("identity");
+    return undefined;
+  }
+  const contract = adapter.identity.preferredProbe;
+  const probeTool = identityProbeTool ?? contract?.name;
+  if (
+    contract === undefined ||
+    typeof expectedAccountId !== "string" ||
+    !opaqueProviderAccountId.test(expectedAccountId) ||
+    (identityProbeTool !== undefined && typeof identityProbeTool !== "string") ||
+    typeof probeTool !== "string" ||
+    !providerIdentityProbeTool.test(probeTool)
+  ) {
+    throw new ProviderAdapterAccountProfileError("identity");
+  }
+  return {
+    expected: { provider: contract.provider, accountId: expectedAccountId },
+    probe: { tool: probeTool, resultFormat: contract.resultFormat },
+    maxAgeMs: 3_600_000,
+    requiredForRisk: ["write", "destructive"]
+  };
+}
 
 /**
  * Rejects profile names which would mutate an ordinary configuration object
@@ -296,8 +356,8 @@ function adapterStateDirectory(
 
 /**
  * Builds one reviewed profile from the adapter contract. It contains only a
- * credential-file path and an isolated adapter-state directory; no token or
- * provider cache is read or returned.
+ * credential-file path, an isolated adapter-state directory, and an optional
+ * expected opaque account identity; no token or provider cache is read or returned.
  */
 export function buildProviderAdapterAccountProfile(
   adapter: ProviderAdapterDefinition,
@@ -308,6 +368,11 @@ export function buildProviderAdapterAccountProfile(
     throw new ProviderAdapterAccountProfileError("unsupported");
   }
   const credentialFile = requireCredentialFile(request.credentialFile);
+  const identity = buildProviderAdapterAccountIdentity(
+    adapter,
+    request.expectedAccountId,
+    request.identityProbeTool
+  );
   return {
     description: request.description === undefined || request.description.length === 0
       ? provisioning.defaultProfile.description
@@ -321,7 +386,8 @@ export function buildProviderAdapterAccountProfile(
         request.profile
       )
     },
-    policy: provisioning.defaultProfile.policy
+    policy: provisioning.defaultProfile.policy,
+    ...(identity === undefined ? {} : { identity })
   };
 }
 

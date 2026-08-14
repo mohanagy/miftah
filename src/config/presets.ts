@@ -42,7 +42,12 @@ const windowsUnsupportedNpxPresets = new Set(["generic", "generic-npx", "sentry"
 
 type CurrentMiftahConfig = Extract<MiftahConfig, { version: "3" }>;
 type CurrentUpstreamConfig = NonNullable<CurrentMiftahConfig["upstream"]>;
-type SharedDefaults = Pick<CurrentMiftahConfig, "routing" | "security" | "secrets" | "process" | "audit" | "tooling">;
+type SharedDefaults = Pick<
+  CurrentMiftahConfig,
+  "routing" | "security" | "secrets" | "process" | "audit" | "tooling"
+> & Pick<Partial<CurrentMiftahConfig>, "state">;
+
+export type ActiveProfileLifetime = "process" | "workspace";
 
 export interface PresetBuildOptions {
   credentialEnv?: string;
@@ -52,8 +57,14 @@ export interface PresetBuildOptions {
   headerName?: string;
   headerPrefix?: string;
   oauthClientSecretsFile?: string;
+  /** Opaque non-email account identifier expected from a compatible GSC identity probe. */
+  expectedAccountId?: string;
+  /** Safe no-input GSC identity tool; defaults to the reviewed provider contract. */
+  identityProbeTool?: string;
   googleSearchConsoleProfiles?: readonly GoogleSearchConsoleProfileOptions[];
   defaultProfile?: string;
+  /** Explicit lifetime choice for active-profile switches in a generated multi-profile configuration. */
+  activeProfileLifetime?: ActiveProfileLifetime;
   /** One literal executable for the explicitly-reviewed local stdio setup path. */
   localCommand?: string;
   /** Each item is one literal argv element; Miftah never parses a command line. */
@@ -75,6 +86,8 @@ export interface GoogleSearchConsoleProfileOptions {
   readonly name: string;
   readonly description?: string;
   readonly oauthClientSecretsFile: string;
+  /** Opaque non-email account identifier; never an OAuth token or raw upstream response. */
+  readonly expectedAccountId?: string;
 }
 
 type PresetOptionRequirement = "required" | "optional" | "optional-with-credentialEnv" | "provider-managed";
@@ -117,8 +130,25 @@ function validateCredentialEnv(credentialEnv: unknown): void {
   }
 }
 
+/** Validates the optional lifetime accepted by generated multi-profile presets. */
+function requireActiveProfileLifetime(value: unknown): ActiveProfileLifetime | undefined {
+  if (value === undefined || value === "process" || value === "workspace") return value;
+  catalogError("Active profile lifetime must be 'process' or 'workspace'.");
+}
+
+/** Maps the setup choice to the exact profile-state configuration contract. */
+function activeProfileState(lifetime: ActiveProfileLifetime | undefined): CurrentMiftahConfig["state"] | undefined {
+  if (lifetime === undefined) return undefined;
+  return lifetime === "workspace"
+    ? { persistActiveProfile: true, scope: "workspace" }
+    : { persistActiveProfile: false, scope: "process" };
+}
+
 /** Builds fresh runtime defaults so generated configs never share mutable state. */
-function buildSharedDefaults(options: { multiProfile?: boolean } = {}): SharedDefaults {
+function buildSharedDefaults(
+  options: { multiProfile?: boolean; activeProfileLifetime?: ActiveProfileLifetime } = {}
+): SharedDefaults {
+  const state = activeProfileState(requireActiveProfileLifetime(options.activeProfileLifetime));
   return {
     routing: { mode: "hybrid", fallback: "activeProfile", rules: [] },
     security: {
@@ -140,7 +170,8 @@ function buildSharedDefaults(options: { multiProfile?: boolean } = {}): SharedDe
       includeArguments: false,
       failureMode: "fail-closed"
     },
-    tooling: { collisionStrategy: "prefix-upstream" }
+    tooling: { collisionStrategy: "prefix-upstream" },
+    ...(state === undefined ? {} : { state })
   };
 }
 
@@ -255,22 +286,29 @@ function buildGoogleSearchConsoleProfile(
   profile: string,
   description: string | undefined,
   oauthClientSecretsFile: string,
+  expectedAccountId: string | undefined,
+  identityProbeTool: string | undefined,
   context: PresetBuildContext
 ): ProfileConfig {
+  const adapter = PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"];
   try {
     return buildProviderAdapterAccountProfile(
-      PROVIDER_ADAPTER_CATALOG.adapters["google-search-console"],
+      adapter,
       {
         configurationName,
         ...(context.configurationPath === undefined ? {} : { configurationPath: context.configurationPath }),
         profile,
         ...(description === undefined ? {} : { description }),
-        credentialFile: oauthClientSecretsFile
+        credentialFile: oauthClientSecretsFile,
+        ...(expectedAccountId === undefined ? {} : { expectedAccountId }),
+        ...(identityProbeTool === undefined ? {} : { identityProbeTool })
       }
     );
   } catch (error) {
     if (error instanceof ProviderAdapterAccountProfileError) {
-      catalogError("Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
+      catalogError(error.reason === "identity"
+        ? "Google Search Console identity setup requires an opaque non-email account ID and a safe bounded MCP probe tool."
+        : "Preset 'google-search-console' requires an absolute literal OAuth client-secrets file path without environment references, controls, or surrounding whitespace.");
     }
     throw error;
   }
@@ -289,6 +327,10 @@ function buildGoogleSearchConsoleProfiles(
     if (options.defaultProfile !== undefined) {
       catalogError("Preset 'google-search-console' accepts defaultProfile only with googleSearchConsoleProfiles.");
     }
+    const expectedAccountId = options.expectedAccountId;
+    if (expectedAccountId === undefined && options.identityProbeTool !== undefined) {
+      catalogError("Google Search Console identityProbeTool requires an expected account ID.");
+    }
     const profile = "default";
     return {
       defaultProfile: profile,
@@ -298,6 +340,8 @@ function buildGoogleSearchConsoleProfiles(
           profile,
           undefined,
           requireOAuthClientSecretsFile(options.oauthClientSecretsFile),
+          expectedAccountId,
+          options.identityProbeTool,
           context
         )
       }
@@ -307,11 +351,16 @@ function buildGoogleSearchConsoleProfiles(
   if (options.oauthClientSecretsFile !== undefined) {
     catalogError("Preset 'google-search-console' accepts oauthClientSecretsFile or googleSearchConsoleProfiles, not both.");
   }
+  if (options.expectedAccountId !== undefined) {
+    catalogError("Preset 'google-search-console' accepts expectedAccountId only with the single-profile oauthClientSecretsFile shorthand.");
+  }
   if (!Array.isArray(configuredProfiles) || configuredProfiles.length === 0) {
     catalogError("Google Search Console setup requires at least one named profile.");
   }
 
   const profiles: Record<string, ProfileConfig> = Object.create(null) as Record<string, ProfileConfig>;
+  let configuredIdentityCount = 0;
+  const expectedAccountIds = new Set<string>();
   for (const configuredProfile of configuredProfiles) {
     if (typeof configuredProfile !== "object" || configuredProfile === null || Array.isArray(configuredProfile)) {
       catalogError("Google Search Console profiles must be objects with name and oauthClientSecretsFile.");
@@ -321,13 +370,30 @@ function buildGoogleSearchConsoleProfiles(
       catalogError(`Google Search Console profile '${profile}' is duplicated.`);
     }
     const description = requireGoogleSearchConsoleDescription(configuredProfile.description);
+    const expectedAccountId = configuredProfile.expectedAccountId;
+    if (expectedAccountId !== undefined) {
+      configuredIdentityCount += 1;
+      if (expectedAccountIds.has(expectedAccountId)) {
+        catalogError("Google Search Console identity setup requires a distinct expected account ID for every profile.");
+      }
+      expectedAccountIds.add(expectedAccountId);
+    }
     profiles[profile] = buildGoogleSearchConsoleProfile(
       configurationName,
       profile,
       description,
       requireOAuthClientSecretsFile(configuredProfile.oauthClientSecretsFile),
+      expectedAccountId,
+      options.identityProbeTool,
       context
     );
+  }
+
+  if (configuredIdentityCount > 0 && configuredIdentityCount !== configuredProfiles.length) {
+    catalogError("Google Search Console identity setup requires an expected account ID for every configured profile.");
+  }
+  if (configuredIdentityCount === 0 && options.identityProbeTool !== undefined) {
+    catalogError("Google Search Console identityProbeTool requires an expected account ID.");
   }
 
   if (configuredProfiles.length > 1 && options.defaultProfile === undefined) {
@@ -359,12 +425,15 @@ function buildGoogleSearchConsolePreset(
     },
     profiles: accounts.profiles,
     policies: buildReadonlyPolicies(),
-    ...buildSharedDefaults({ multiProfile: Object.keys(accounts.profiles).length > 1 })
+    ...buildSharedDefaults({
+      multiProfile: Object.keys(accounts.profiles).length > 1,
+      activeProfileLifetime: options.activeProfileLifetime
+    })
   };
 }
 
-/** Builds the multi-profile GitHub preset and its referenced policies. */
-function buildGithubPreset(name: string): MiftahConfig {
+/** Builds the two-profile GitHub preset, referenced policies, and explicit state lifetime. */
+function buildGithubPreset(name: string, options: PresetBuildOptions): MiftahConfig {
   return {
     version: CURRENT_CONFIG_VERSION,
     name,
@@ -398,7 +467,7 @@ function buildGithubPreset(name: string): MiftahConfig {
       }
     },
     policies: buildReadonlyPolicies(),
-    ...buildSharedDefaults({ multiProfile: true })
+    ...buildSharedDefaults({ multiProfile: true, activeProfileLifetime: options.activeProfileLifetime })
   };
 }
 
@@ -649,7 +718,7 @@ export const PRESET_CATALOG = {
       build: buildGenericPreset
     },
     github: {
-      requirements: { credentialEnv: "provider-managed" },
+      requirements: { credentialEnv: "provider-managed", activeProfileLifetime: "optional" },
       build: buildGithubPreset
     },
     sentry: {
@@ -659,8 +728,11 @@ export const PRESET_CATALOG = {
     "google-search-console": {
       requirements: {
         oauthClientSecretsFile: "required",
+        expectedAccountId: "optional",
+        identityProbeTool: "optional",
         googleSearchConsoleProfiles: "optional",
-        defaultProfile: "optional"
+        defaultProfile: "optional",
+        activeProfileLifetime: "optional"
       },
       build: (name, options) => buildGoogleSearchConsolePreset(name, options, {})
     },

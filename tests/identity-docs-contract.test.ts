@@ -56,7 +56,7 @@ describe("identity verification documentation contract", () => {
     expect(manager).toContain("content[0].text.length > maxIdentityResponseLength");
     expect(manager).toContain("JSON.parse(content[0].text)");
     expect(manager).toContain("if (!isRecord(parsed)) return undefined;");
-    expect(manager).toContain('for (const field of ["provider", "login", "organization", "host"] as const)');
+    expect(manager).toContain('for (const field of ["provider", "accountId", "login", "organization", "host"] as const)');
 
     expect(identityConfig).toContain(`maximum ${fieldLimit} JavaScript characters`);
     expect(identityConfig).toContain("trimmed and must be nonempty");
@@ -100,6 +100,7 @@ describe("identity verification documentation contract", () => {
       "bindingState",
       "bound",
       "boundAt",
+      "capability",
       "errorCode",
       "expected",
       "profile",

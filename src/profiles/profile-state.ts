@@ -5,6 +5,14 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export type ProfileStateScope = "process" | "session" | "workspace" | "global";
 export type ProfileStateDiagnostic = "PROFILE_STATE_INVALID" | "PROFILE_STATE_STALE" | "PROFILE_STATE_UNAVAILABLE";
+export type ProfileStatePersistence = "temporary" | "durable";
+export type ProfileStateRestartBehavior = "configured-default" | "restore-selection";
+
+export interface ProfileStateLifetime {
+  readonly persistence: ProfileStatePersistence;
+  readonly survivesProcessRestart: boolean;
+  readonly restartBehavior: ProfileStateRestartBehavior;
+}
 
 export interface ProfileStateOptions {
   readonly persistActiveProfile?: boolean;
@@ -35,6 +43,30 @@ export function profileStateScope(options: ProfileStateOptions): ProfileStateSco
 
 export function hasDurableProfileState(options: ProfileStateOptions): boolean {
   return options.persistActiveProfile === true && durableScopes.has(profileStateScope(options));
+}
+
+/** Returns the safe, user-visible consequence of one configured active-profile scope. */
+export function profileStateLifetime(scope: ProfileStateScope): ProfileStateLifetime {
+  const durable = durableScopes.has(scope);
+  return {
+    persistence: durable ? "durable" : "temporary",
+    survivesProcessRestart: durable,
+    restartBehavior: durable ? "restore-selection" : "configured-default"
+  };
+}
+
+/** Uses the same scope terminology in MCP results and first-run setup handoffs. */
+export function describeProfileStateLifetime(scope: ProfileStateScope): string {
+  switch (scope) {
+    case "process":
+      return "Scope: process. This selection ends with the current Miftah process; a fresh process starts from the configured default profile.";
+    case "session":
+      return "Scope: session. This selection ends with the current MCP session; a fresh session starts from the configured default profile.";
+    case "workspace":
+      return "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration.";
+    case "global":
+      return "Scope: global. This durable selection is restored by a fresh Miftah process for this configuration.";
+  }
 }
 
 export function resolveProfileStatePath(options: ProfileStateOptions): string {

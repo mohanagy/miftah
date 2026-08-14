@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.1.1";
+const releaseVersion = "1.1.2";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.1.1 release artifacts", () => {
+describe("v1.1.2 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.1.1] - 2026-8-12\n\n### Changed\n"
+      changelog: "## [1.1.2] - 2026-8-14\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.1.1] - 2026-08-12\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.2] - 2026-08-14\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,17 +71,19 @@ describe("v1.1.1 release artifacts", () => {
     }
   });
 
-  it("documents the v1.1.1 Claude compatibility patch and its evidence boundary", () => {
+  it("documents the v1.1.2 usability and identity fixes and their evidence boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(notes).toContain("### Changed");
     expect(notes).toContain("### Fixed");
-    for (const issue of [397, 399]) {
+    for (const issue of [404, 405, 409]) {
       expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("Claude Desktop tool-catalog compatibility");
-    expect(notes).toContain("schema-valued `true`");
+    expect(notes).toContain("active-profile lifetime");
+    expect(notes).toContain("account-identity contract");
+    expect(notes).toContain("stable evidence-collection baseline");
+    expect(notes).toContain("does not authorize removing any legacy behavior");
     expect(notes).toContain("protected OIDC trusted publishing");
     expect(notes).toContain("registry provenance");
 

@@ -22,6 +22,8 @@ type CurrentUpstreamConfig = Omit<UpstreamConfig, "transport"> & {
 /** Non-secret account attributes used to validate an upstream identity. */
 export interface IdentityFingerprint {
   provider?: string;
+  /** Stable opaque account identifier; it must not contain an email address or credential. */
+  accountId?: string;
   login?: string;
   organization?: string;
   host?: string;
@@ -45,6 +47,7 @@ export type IdentityProbeConfig = TextIdentityProbeConfig | JsonIdentityProbeCon
 type TextIdentityExpectedFingerprint = {
   login: string;
   provider?: never;
+  accountId?: never;
   organization?: never;
   host?: never;
 };
@@ -52,12 +55,14 @@ type TextIdentityExpectedFingerprint = {
 type TextIdentityExpectedFingerprintWithProvider = {
   login: string;
   provider: string;
+  accountId?: never;
   organization?: never;
   host?: never;
 };
 
 type NonEmptyIdentityFingerprint =
   | (IdentityFingerprint & { provider: string })
+  | (IdentityFingerprint & { accountId: string })
   | (IdentityFingerprint & { login: string })
   | (IdentityFingerprint & { organization: string })
   | (IdentityFingerprint & { host: string });

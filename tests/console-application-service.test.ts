@@ -85,7 +85,14 @@ const reviewedFirstRunCompletion = {
     message: "A provider-declared read-only check is available, but it has not run yet."
   },
   environment: manualFirstRunCompletion.environment,
-  clientHandoff: manualFirstRunCompletion.clientHandoff
+  clientHandoff: manualFirstRunCompletion.clientHandoff,
+  profileState: {
+    scope: "workspace",
+    persistence: "durable",
+    survivesProcessRestart: true,
+    restartBehavior: "restore-selection",
+    message: "Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+  }
 } as const;
 
 afterEach(async () => {
@@ -736,7 +743,8 @@ describe("Console application service", () => {
           oauthClientSecretsFile: craftmyletterSecrets
         }
       ],
-      defaultProfile: "google-craftmyletter"
+      defaultProfile: "google-craftmyletter",
+      activeProfileLifetime: "workspace"
     } as const;
 
     await expect(service.onboardPreset(request)).resolves.toEqual({

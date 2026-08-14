@@ -58,10 +58,14 @@ const discoveredNativeOAuthAccountSchema = z.object({
   makeDefault: z.literal(true).optional(),
   clientMetadataUrl: clientMetadataUrlSchema.optional()
 }).strict();
+const opaqueProviderAccountIdSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u);
+const providerIdentityProbeToolSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9_.:/-]{0,255})$/u);
 const providerAccountAdditionSchema = z.object({
   profile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
   description: z.string().max(1_024).optional(),
   credentialFile: z.string().min(1).max(4_096),
+  expectedAccountId: opaqueProviderAccountIdSchema.optional(),
+  identityProbeTool: providerIdentityProbeToolSchema.optional(),
   makeDefault: z.literal(true).optional()
 }).strict();
 const environmentProfileAdditionSchema = z.object({
@@ -124,7 +128,8 @@ const discoveredNativeOAuthOnboardingSchema = z.object({
 const googleSearchConsoleProfileSchema = z.object({
   name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u),
   description: z.string().min(1).max(1_024).optional(),
-  oauthClientSecretsFile: z.string().min(1).max(4_096)
+  oauthClientSecretsFile: z.string().min(1).max(4_096),
+  expectedAccountId: opaqueProviderAccountIdSchema.optional()
 }).strict();
 const presetOnboardingSchema = z.object({
   name: z.string().min(1).max(256),
@@ -141,8 +146,21 @@ const presetOnboardingSchema = z.object({
   cwd: z.string().min(1).max(4_096).optional(),
   acceptLocalCommand: z.literal(true).optional(),
   googleSearchConsoleProfiles: z.array(googleSearchConsoleProfileSchema).min(1).optional(),
-  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional()
+  identityProbeTool: providerIdentityProbeToolSchema.optional(),
+  defaultProfile: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,63})$/u).optional(),
+  activeProfileLifetime: z.enum(["process", "workspace"]).optional()
 }).strict().superRefine((request, context) => {
+  if (
+    (request.preset === "github" ||
+      (request.preset === "google-search-console" && (request.googleSearchConsoleProfiles?.length ?? 0) > 1)) &&
+    request.activeProfileLifetime === undefined
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["activeProfileLifetime"],
+      message: "Multi-profile setup requires an explicit active profile lifetime."
+    });
+  }
   if (
     request.preset === "google-search-console" &&
     (request.googleSearchConsoleProfiles?.length ?? 0) > 1 &&

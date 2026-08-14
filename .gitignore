@@ -3,3 +3,9 @@ dist/
 coverage/
 *.log
 .DS_Store
+out
+.mcp.json
+CLAUDE.md
+.worktrees
+.codex
+.claude

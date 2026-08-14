@@ -14,7 +14,10 @@ type ValueOptionName =
   | "url"
   | "headerName"
   | "headerPrefix"
+  | "activeProfileLifetime"
   | "oauthClientSecretsFile"
+  | "expectedAccountId"
+  | "identityProbeTool"
   | "oauthClientMetadataUrl"
   | "localCommand"
   | "args"
@@ -65,7 +68,13 @@ export interface CliOptions {
   readonly url?: string;
   readonly headerName?: string;
   readonly headerPrefix?: string;
+  /** Lifetime of live profile switches in newly generated multi-profile configurations. */
+  readonly activeProfileLifetime?: "process" | "workspace";
   readonly oauthClientSecretsFile?: string;
+  /** Opaque provider account ID expected from a compatible no-input identity probe. */
+  readonly expectedAccountId?: string;
+  /** Explicit MCP tool implementing the configured provider identity contract. */
+  readonly identityProbeTool?: string;
   /** Reviewed HTTPS Client ID Metadata Document URL for native OAuth discovery. */
   readonly oauthClientMetadataUrl?: string;
   /** One literal executable for the explicitly reviewed local stdio setup flow. */
@@ -158,7 +167,10 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
+      "activeProfileLifetime",
       "oauthClientSecretsFile",
+      "expectedAccountId",
+      "identityProbeTool",
       "localCommand",
       "args",
       "cwd",
@@ -185,7 +197,10 @@ export const CLI_COMMANDS = {
       "url",
       "headerName",
       "headerPrefix",
+      "activeProfileLifetime",
       "oauthClientSecretsFile",
+      "expectedAccountId",
+      "identityProbeTool",
       "oauthClientMetadataUrl",
       "localCommand",
       "args",
@@ -396,11 +411,29 @@ const OPTION_DEFINITIONS: Record<CliOptionName, CliOptionDefinition> = {
     usage: "--header-prefix <prefix>",
     description: "Credential header prefix for the streamable-http preset."
   },
+  activeProfileLifetime: {
+    name: "activeProfileLifetime",
+    takesValue: true,
+    usage: "--active-profile-lifetime <process|workspace>",
+    description: "Choose whether generated multi-profile switches reset with the process or persist for this workspace."
+  },
   oauthClientSecretsFile: {
     name: "oauthClientSecretsFile",
     takesValue: true,
     usage: "--oauth-client-secrets-file <file>",
     description: "Absolute Google OAuth client-secrets file for the GSC preset."
+  },
+  expectedAccountId: {
+    name: "expectedAccountId",
+    takesValue: true,
+    usage: "--expected-account-id <opaque-id>",
+    description: "Expected opaque non-email account ID for a compatible GSC identity probe."
+  },
+  identityProbeTool: {
+    name: "identityProbeTool",
+    takesValue: true,
+    usage: "--identity-probe-tool <tool>",
+    description: "Read-only no-input GSC account identity tool; defaults to get_account_identity."
   },
   oauthClientMetadataUrl: {
     name: "oauthClientMetadataUrl",
@@ -594,7 +627,10 @@ const FLAG_DEFINITIONS: Record<string, CliOptionDefinition | "help" | "version">
   "--url": OPTION_DEFINITIONS.url,
   "--header-name": OPTION_DEFINITIONS.headerName,
   "--header-prefix": OPTION_DEFINITIONS.headerPrefix,
+  "--active-profile-lifetime": OPTION_DEFINITIONS.activeProfileLifetime,
   "--oauth-client-secrets-file": OPTION_DEFINITIONS.oauthClientSecretsFile,
+  "--expected-account-id": OPTION_DEFINITIONS.expectedAccountId,
+  "--identity-probe-tool": OPTION_DEFINITIONS.identityProbeTool,
   "--oauth-client-metadata-url": OPTION_DEFINITIONS.oauthClientMetadataUrl,
   "--local-command": OPTION_DEFINITIONS.localCommand,
   "--arg": OPTION_DEFINITIONS.args,
@@ -720,6 +756,13 @@ function validateCommandOptions(command: CliCommand, options: CliOptions): void 
     options.transport !== "http"
   ) {
     usageError("Option '--transport' must be either 'stdio' or 'http'.");
+  }
+  if (
+    options.activeProfileLifetime !== undefined &&
+    options.activeProfileLifetime !== "process" &&
+    options.activeProfileLifetime !== "workspace"
+  ) {
+    usageError("Option '--active-profile-lifetime' must be either 'process' or 'workspace'.");
   }
 }
 

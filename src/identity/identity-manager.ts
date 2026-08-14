@@ -4,10 +4,11 @@ import type { IdentityConfig, IdentityFingerprint, MiftahConfig, RiskLevel, Tool
 import { classifyRisk } from "../policy/risk-classifier.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../upstream/upstream-session.js";
 import { MiftahError } from "../utils/errors.js";
-import type { IdentityStatus } from "./identity-types.js";
+import type { IdentityProbeCapabilityDiagnostic, IdentityStatus } from "./identity-types.js";
 
 const maxIdentityFieldLength = 256;
 const maxIdentityResponseLength = 4_096;
+const opaqueAccountIdPattern = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u;
 
 export interface IdentityBindingRecord {
   readonly version: 1;
@@ -178,7 +179,8 @@ export class IdentityManager {
       profile,
       upstream: status.upstream,
       ...(status.expected ? { expected: status.expected } : {}),
-      ...(status.actual ? { actual: status.actual } : {})
+      ...(status.actual ? { actual: status.actual } : {}),
+      ...(status.capability ? { capability: status.capability } : {})
     });
   }
 
@@ -430,8 +432,14 @@ export class IdentityManager {
 
     try {
       const tool = (await session.listTools(options)).tools.find((candidate) => candidate.name === identity.probe.tool);
-      if (!tool || !isSafeProbeTool(tool, identity.probe.tool, this.config.tooling?.toolRiskOverrides)) {
-        return { ...base, status: "unsupported", errorCode: "IDENTITY_PROBE_UNSUPPORTED" };
+      const unsupportedReason = probeUnsupportedReason(tool, identity.probe.tool, this.config.tooling?.toolRiskOverrides);
+      if (unsupportedReason !== undefined) {
+        return {
+          ...base,
+          status: "unsupported",
+          capability: unsupportedCapability(identity.probe.tool, unsupportedReason),
+          errorCode: "IDENTITY_PROBE_UNSUPPORTED"
+        };
       }
       const response = await session.callTool({ name: identity.probe.tool, arguments: {} }, options);
       if (response.isError === true) {
@@ -469,7 +477,7 @@ function storedUpstream(upstreamName: string | null): string | undefined {
 
 function configurationFingerprint(identity: IdentityConfig): string {
   const expected = Object.fromEntries(
-    (["provider", "login", "organization", "host"] as const)
+    (["provider", "accountId", "login", "organization", "host"] as const)
       .filter((field) => identity.expected[field] !== undefined)
       .map((field) => [field, identity.expected[field]])
   );
@@ -487,14 +495,14 @@ function parseStoredEvidence(
   value: Record<string, unknown>,
   expected: IdentityFingerprint
 ): IdentityFingerprint | undefined {
-  if (!Object.keys(value).every((field) => ["provider", "login", "organization", "host"].includes(field))) {
+  if (!Object.keys(value).every((field) => ["provider", "accountId", "login", "organization", "host"].includes(field))) {
     return undefined;
   }
   const evidence: IdentityFingerprint = {};
   for (const field of Object.keys(expected) as Array<keyof IdentityFingerprint>) {
     const stored = value[field];
     if (typeof stored !== "string") return undefined;
-    const normalized = boundedIdentityField(stored);
+    const normalized = boundedFingerprintField(field, stored);
     if (normalized === undefined || normalized !== stored) return undefined;
     evidence[field] = normalized;
   }
@@ -506,13 +514,26 @@ function validTimestamp(value: string): boolean {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
-function isSafeProbeTool(
-  tool: Tool,
+function probeUnsupportedReason(
+  tool: Tool | undefined,
   name: string,
   overrides?: ToolingConfig["toolRiskOverrides"]
-): boolean {
-  if (classifyRisk(name, overrides ?? {}) !== "read") return false;
-  return isEmptyObjectSafeSchema(tool.inputSchema);
+): IdentityProbeCapabilityDiagnostic["reason"] | undefined {
+  if (tool === undefined) return "tool-not-found";
+  if (classifyRisk(name, overrides ?? {}) !== "read") return "not-read-only";
+  return isEmptyObjectSafeSchema(tool.inputSchema) ? undefined : "input-schema-not-safe";
+}
+
+function unsupportedCapability(
+  tool: string,
+  reason: IdentityProbeCapabilityDiagnostic["reason"]
+): IdentityProbeCapabilityDiagnostic {
+  return {
+    status: "unsupported",
+    tool,
+    requirement: "read-only-no-required-input",
+    reason
+  };
 }
 
 function isEmptyObjectSafeSchema(schema: unknown): boolean {
@@ -547,9 +568,9 @@ function parseIdentityResponse(
   }
   if (!isRecord(parsed)) return undefined;
   const result: IdentityFingerprint = {};
-  for (const field of ["provider", "login", "organization", "host"] as const) {
+  for (const field of ["provider", "accountId", "login", "organization", "host"] as const) {
     const value = parsed[field];
-    const normalized = typeof value === "string" ? boundedIdentityField(value) : undefined;
+    const normalized = typeof value === "string" ? boundedFingerprintField(field, value) : undefined;
     if (normalized) result[field] = normalized;
   }
   return Object.keys(result).length > 0 ? result : undefined;
@@ -571,6 +592,11 @@ function matches(expected: IdentityFingerprint, actual: IdentityFingerprint): bo
 function boundedIdentityField(value: string): string | undefined {
   const normalized = value.trim();
   return normalized.length > 0 && normalized.length <= maxIdentityFieldLength ? normalized : undefined;
+}
+
+function boundedFingerprintField(field: keyof IdentityFingerprint, value: string): string | undefined {
+  if (field === "accountId") return opaqueAccountIdPattern.test(value) ? value : undefined;
+  return boundedIdentityField(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

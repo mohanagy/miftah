@@ -179,6 +179,20 @@ describe("CLI parser", () => {
     expectUsageError(["init", "example", "--name", "named-example"]);
   });
 
+  it("parses the explicit active-profile lifetime for multi-profile setup", () => {
+    expect(parseCli([
+      "setup",
+      "--preset", "github",
+      "--active-profile-lifetime", "workspace"
+    ])).toEqual({
+      kind: "run",
+      command: "setup",
+      options: { preset: "github", activeProfileLifetime: "workspace" }
+    });
+    expect(renderCommandHelp("setup")).toContain("--active-profile-lifetime <process|workspace>");
+    expectUsageError(["setup", "--active-profile-lifetime", "global"]);
+  });
+
   it("offers the opt-in provider readiness check only from guided setup", () => {
     expect(parseCli(["setup", "--verify"])).toEqual({
       kind: "run",
@@ -284,6 +298,8 @@ describe("CLI parser", () => {
       "--config", "gsc.json",
       "--profile", "google-third",
       "--oauth-client-secrets-file", "/Users/example/gsc-client-secrets.json",
+      "--expected-account-id", "google-sub-third",
+      "--identity-probe-tool", "get_account_identity",
       "--make-default",
       "--verify"
     ])).toEqual({
@@ -294,6 +310,8 @@ describe("CLI parser", () => {
         config: "gsc.json",
         profile: "google-third",
         oauthClientSecretsFile: "/Users/example/gsc-client-secrets.json",
+        expectedAccountId: "google-sub-third",
+        identityProbeTool: "get_account_identity",
         makeDefault: true,
         verify: true
       }
@@ -501,7 +519,9 @@ describe("CLI parser", () => {
         "init",
         "gsc",
         "--preset=google-search-console",
-        "--oauth-client-secrets-file=/Users/example/.config/gsc/client-secrets.json"
+        "--oauth-client-secrets-file=/Users/example/.config/gsc/client-secrets.json",
+        "--expected-account-id=google-sub-work",
+        "--identity-probe-tool=get_account_identity"
       ])
     ).toEqual({
       kind: "run",
@@ -509,7 +529,9 @@ describe("CLI parser", () => {
       options: {
         name: "gsc",
         preset: "google-search-console",
-        oauthClientSecretsFile: "/Users/example/.config/gsc/client-secrets.json"
+        oauthClientSecretsFile: "/Users/example/.config/gsc/client-secrets.json",
+        expectedAccountId: "google-sub-work",
+        identityProbeTool: "get_account_identity"
       }
     });
     expect(
@@ -590,6 +612,8 @@ describe("CLI parser", () => {
     expect(initHelp).toContain("--header-name <name>");
     expect(initHelp).toContain("--header-prefix <prefix>");
     expect(initHelp).toContain("--oauth-client-secrets-file <file>");
+    expect(initHelp).toContain("--expected-account-id <opaque-id>");
+    expect(initHelp).toContain("--identity-probe-tool <tool>");
     expect(renderCommandHelp("connection add")).toContain("miftah connection add");
     expect(renderCommandHelp("connection add")).toContain("--scope <scope>");
     expect(renderCommandHelp("auth reauth")).toContain("--non-interactive");

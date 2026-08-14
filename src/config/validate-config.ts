@@ -17,6 +17,7 @@ function isIdentityConfig(value: unknown): value is MiftahConfig["profiles"][str
     return (
       probe.provider === undefined &&
       (expected.provider !== undefined ||
+        expected.accountId !== undefined ||
         expected.login !== undefined ||
         expected.organization !== undefined ||
         expected.host !== undefined)
@@ -26,6 +27,7 @@ function isIdentityConfig(value: unknown): value is MiftahConfig["profiles"][str
   return (
     probe.resultFormat === "text" &&
     typeof expected.login === "string" &&
+    expected.accountId === undefined &&
     expected.organization === undefined &&
     expected.host === undefined &&
     (expected.provider === undefined || typeof probe.provider === "string")

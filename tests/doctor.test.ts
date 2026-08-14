@@ -357,7 +357,8 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
     expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
       status: "warning",
-      explanation: "Configured upstream identity verification did not complete."
+      explanation: "Configured upstream identity verification did not complete.",
+      remediation: "Upgrade or configure the upstream to expose the expected read-only, no-required-input identity probe. Property access is not account identity evidence."
     });
     expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
   });

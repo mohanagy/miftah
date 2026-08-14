@@ -650,6 +650,7 @@ describe("config foundation", () => {
   });
 
   it.each([
+    ["accountId", { accountId: "google-sub-work" }],
     ["organization", { organization: "github" }],
     ["host", { host: "github.com" }]
   ])("rejects a text identity probe that cannot verify %s", (field, expected) => {
@@ -671,6 +672,53 @@ describe("config foundation", () => {
       })
     ).toThrow(new RegExp(`profiles\\.work\\.identity\\.expected\\.${field}`, "u"));
   });
+
+  it("accepts an opaque account ID from a bounded JSON identity probe", () => {
+    const config = validateConfig({
+      version: "1",
+      name: "gsc",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+      profiles: {
+        work: {
+          identity: {
+            expected: { provider: "google", accountId: "google-sub-work" },
+            probe: { tool: "get_account_identity", resultFormat: "json" },
+            maxAgeMs: 60_000,
+            requiredForRisk: ["write", "destructive"]
+          }
+        }
+      }
+    });
+
+    expect(config.profiles.work?.identity).toMatchObject({
+      expected: { provider: "google", accountId: "google-sub-work" },
+      probe: { tool: "get_account_identity", resultFormat: "json" }
+    });
+  });
+
+  it.each(["person@example.test", "google sub work", " token", "google/sub/work"])(
+    "rejects a non-opaque account identity value %s",
+    (accountId) => {
+      expect(() =>
+        validateConfig({
+          version: "1",
+          name: "gsc",
+          defaultProfile: "work",
+          upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+          profiles: {
+            work: {
+              identity: {
+                expected: { provider: "google", accountId },
+                probe: { tool: "get_account_identity", resultFormat: "json" },
+                maxAgeMs: 60_000
+              }
+            }
+          }
+        })
+      ).toThrow(/opaque identifier/u);
+    }
+  );
 
   it("rejects a text identity probe whose static provider differs from the expected provider", () => {
     // This structurally type-checks; validateConfig must enforce provider equality at runtime.

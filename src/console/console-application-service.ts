@@ -173,6 +173,8 @@ export interface ConsoleProviderAccountAdditionRequest {
   readonly description?: string;
   /** Non-secret credential-file path; the adapter retains its own token cache. */
   readonly credentialFile: string;
+  readonly expectedAccountId?: string;
+  readonly identityProbeTool?: string;
   readonly makeDefault?: boolean;
 }
 
@@ -498,7 +500,10 @@ function firstRunSetupCompletion(config: MiftahConfig): SetupCompletion {
     surface: "console",
     verification: hasDeclaredSafeCheck ? "available" : "not-declared",
     clientHandoff: "available",
-    environment
+    environment,
+    ...(Object.keys(config.profiles).length > 1
+      ? { profileStateScope: config.state?.scope ?? "process" }
+      : {})
   });
 }
 
@@ -513,12 +518,15 @@ function buildConsolePresetConfiguration(request: ConsolePresetOnboardingRequest
       headerName: request.headerName,
       headerPrefix: request.headerPrefix,
       oauthClientSecretsFile: request.oauthClientSecretsFile,
+      expectedAccountId: request.expectedAccountId,
+      identityProbeTool: request.identityProbeTool,
       localCommand: request.localCommand,
       args: request.args,
       cwd: request.cwd,
       acceptLocalCommand: request.acceptLocalCommand,
       googleSearchConsoleProfiles: request.googleSearchConsoleProfiles,
-      defaultProfile: request.defaultProfile
+      defaultProfile: request.defaultProfile,
+      activeProfileLifetime: request.activeProfileLifetime
     }, {
       configurationPath: resolvePath(configPath)
     });
@@ -1099,6 +1107,8 @@ export class ConsoleApplicationService implements ConsoleControlApplication {
       profile: request.profile,
       ...(request.description === undefined ? {} : { description: request.description }),
       credentialFile: request.credentialFile,
+      ...(request.expectedAccountId === undefined ? {} : { expectedAccountId: request.expectedAccountId }),
+      ...(request.identityProbeTool === undefined ? {} : { identityProbeTool: request.identityProbeTool }),
       ...(request.makeDefault === true ? { makeDefault: true } : {})
     }, {
       trustedSource: source,

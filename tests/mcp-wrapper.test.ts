@@ -1140,6 +1140,12 @@ describe("Miftah MCP wrapper", () => {
             profile: "work",
             upstream: "default",
             expected: { provider: "github", login: "work" },
+            capability: {
+              status: "unsupported",
+              tool: "whoami",
+              requirement: "read-only-no-required-input",
+              reason: "input-schema-not-safe"
+            },
             errorCode: "IDENTITY_PROBE_UNSUPPORTED"
           }
         ]
@@ -1159,6 +1165,12 @@ describe("Miftah MCP wrapper", () => {
           {
             status: "unsupported",
             expected: { provider: "github", login: "work" },
+            capability: {
+              status: "unsupported",
+              tool: "whoami",
+              requirement: "read-only-no-required-input",
+              reason: "input-schema-not-safe"
+            },
             errorCode: "IDENTITY_PROBE_UNSUPPORTED"
           }
         ]
@@ -2813,7 +2825,10 @@ describe("Miftah MCP wrapper", () => {
       await expect.poll(async () => access(subscribeStartedPath).then(() => true, () => false)).toBe(true);
 
       await expect(client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).resolves.toMatchObject({
-        content: [{ type: "text", text: "Active profile changed from work to personal." }]
+        content: [{
+          type: "text",
+          text: "Active profile changed from work to personal. Scope: process. This selection ends with the current Miftah process; a fresh process starts from the configured default profile."
+        }]
       });
       await expect(pending).rejects.toThrow();
       await expect.poll(() => manager.listHealth().find((health) => health.profile === "work")?.processState).toBe("stopped");
@@ -3464,7 +3479,10 @@ describe("Miftah MCP wrapper", () => {
       await client.subscribeResource({ uri: "account://current" });
       const switchedAt = Date.now();
       expect(await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
-        content: [{ type: "text", text: "Active profile changed from work to personal." }]
+        content: [{
+          type: "text",
+          text: "Active profile changed from work to personal. Scope: process. This selection ends with the current Miftah process; a fresh process starts from the configured default profile."
+        }]
       });
 
       expect(Date.now() - switchedAt).toBeLessThan(500);
@@ -4955,11 +4973,19 @@ describe("Miftah MCP wrapper", () => {
       firstClient = new Client({ name: "profile-state-first", version: "1.0.0" });
       await Promise.all([firstRuntime.connect(firstServerTransport), firstClient.connect(firstClientTransport)]);
 
-      await firstClient.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(await firstClient.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } })).toMatchObject({
+        content: [{
+          type: "text",
+          text: "Active profile changed from work to personal. Scope: workspace. This durable selection is restored by a fresh Miftah process for this configuration."
+        }]
+      });
       expect(parseJsonToolResult(await firstClient.callTool({ name: "miftah_current_profile", arguments: {} }))).toMatchObject({
         activeProfile: "personal",
         selectionSource: "mcp-switch",
         scope: "workspace",
+        persistence: "durable",
+        survivesProcessRestart: true,
+        restartBehavior: "restore-selection",
         selectedAt: expect.any(String)
       });
       await firstClient.close();
@@ -4976,6 +5002,9 @@ describe("Miftah MCP wrapper", () => {
         activeProfile: "personal",
         selectionSource: "persisted-workspace",
         scope: "workspace",
+        persistence: "durable",
+        survivesProcessRestart: true,
+        restartBehavior: "restore-selection",
         selectedAt: expect.any(String)
       });
     } finally {
@@ -5019,6 +5048,13 @@ describe("Miftah MCP wrapper", () => {
       expect(parseJsonToolResult(await client.callTool({ name: "miftah_route_preview", arguments: { toolName: "whoami" } }))).toMatchObject({
         profile: "work",
         reason: "active-profile"
+      });
+      await client.callTool({ name: "miftah_use_profile", arguments: { profile: "personal" } });
+      expect(await client.callTool({ name: "miftah_reset_profile", arguments: {} })).toMatchObject({
+        content: [{
+          type: "text",
+          text: "Active profile reset from personal to work. Scope: session. This selection ends with the current MCP session; a fresh session starts from the configured default profile."
+        }]
       });
     } finally {
       await client.close();
