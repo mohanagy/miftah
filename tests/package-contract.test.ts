@@ -58,6 +58,9 @@ const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream
 const legacyStdioArtifactConsumerFixture = fileURLToPath(
   new URL("./fixtures/legacy-stdio-artifact-consumer.mjs", import.meta.url)
 );
+const legacyHttpArtifactConsumerFixture = fileURLToPath(
+  new URL("./fixtures/legacy-http-artifact-consumer.mjs", import.meta.url)
+);
 const publicRuntimeExports = [
   "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
@@ -1332,6 +1335,36 @@ describe("packed artifact contract", () => {
           terminalAuditEvents: 1,
           lastAuditStatus: "cancelled",
           lastAuditErrorCode: "REQUEST_CANCELLED"
+        });
+
+        const legacyHttpConsumerPath = join(directory, "legacy-http-artifact-consumer.mjs");
+        await copyFile(legacyHttpArtifactConsumerFixture, legacyHttpConsumerPath);
+        const legacyHttpConsumer = spawnSync(
+          process.execPath,
+          [legacyHttpConsumerPath, fakeStdioUpstreamFixture],
+          { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
+        );
+        expect(legacyHttpConsumer.status, legacyHttpConsumer.stderr || legacyHttpConsumer.stdout).toBe(0);
+        expect(JSON.parse(legacyHttpConsumer.stdout)).toEqual({
+          protocol: "2025-11-25",
+          session: { mcpSessionIdAssigned: true, closed: true },
+          approval: {
+            elicitationCount: 1,
+            actions: ["requested", "approved", "consumed"],
+            toolExecutions: 1,
+            terminalAuditStatus: "success",
+            terminalAuditErrorCode: null,
+            sensitiveArgumentRedacted: true
+          },
+          cancellation: {
+            downstreamRejected: true,
+            upstreamNotifications: 1,
+            terminalAuditEvents: 1,
+            lastAuditStatus: "cancelled",
+            lastAuditErrorCode: "REQUEST_CANCELLED"
+          },
+          cleanup: { work: true },
+          stderrEmpty: true
         });
 
         const typeConsumerPath = join(directory, "consumer.ts");
