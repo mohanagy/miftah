@@ -42,9 +42,9 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 
 - **Shipped contract:** the SDK v2 serving entry selects the frozen legacy adapter, performs `initialize` and `notifications/initialized`, and owns one Miftah runtime for the client connection. Roots and resource subscriptions remain capability-gated.
 - **Owners:** `src/cli/main.ts`, `src/runtime/create-miftah-runtime.ts`, and the `@modelcontextprotocol/server-legacy` dependency.
-- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` negotiates `2025-11-25`, exposes tools, and distinguishes legacy subscription and cache behavior from the modern STDIO path. The exact published-v1.1.2 `packaged-test` below drives the installed CLI process and proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, and cleanup with the official client. It also records the advertised-but-undelivered list-change and unpropagated-cancellation limitations tracked by [#413](https://github.com/mohanagy/miftah/issues/413).
+- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` negotiates `2025-11-25`, exposes tools, distinguishes legacy subscription and cache behavior from the modern STDIO path, and forwards list changes plus cancellation through the SDK v2 initialized boundary. The corrected exact published-v1.1.2 `packaged-test` below drives the installed CLI process and proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup with the official client.
 - **Migration required:** the exact client must negotiate `2026-07-28` through the SDK v2 entry. A future failure must name the retained revision and give an actionable client-upgrade or pinned-baseline path.
-- **Missing evidence:** named-host STDIO transcripts, usage evidence for initialized-only clients, a packaged approval transcript, repair evidence for #413, and proof that real profile, Roots, confirmation, resource, notification, and cancellation workflows survive migration.
+- **Missing evidence:** named-host STDIO transcripts, usage evidence for initialized-only clients, a packaged approval transcript, and proof that real profile, Roots, confirmation, resource, notification, and cancellation workflows survive migration.
 - **Decision:** defer.
 
 ### Initialized `2025-11-25` Streamable HTTP sessions
@@ -67,9 +67,9 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 
 ### Resource subscriptions and list-changed notifications
 
-- **Shipped contract:** initialized runtimes advertise resource subscriptions only when every selectable upstream supports them. Resource updates are forwarded, and profile transitions, upstream lifecycle changes, restarts, session termination, and shutdown invalidate or unsubscribe retained state. Direct-runtime source tests forward tools/resources/prompts list changes after bounded refresh, but the published-v1.1.2 initialized SDK v2 adapter currently advertises and drops those three notifications; see #413.
+- **Shipped contract:** initialized runtimes advertise resource subscriptions only when every selectable upstream supports them. Resource updates are forwarded, and profile transitions, upstream lifecycle changes, restarts, session termination, and shutdown invalidate or unsubscribe retained state. Direct-runtime source tests and the corrected exact published-v1.1.2 transcript forward tools/resources/prompts list changes from the active catalog profile.
 - **Owners:** `src/mcp/server/miftah-server.ts`, `src/mcp/server/resource-prompt-registry.ts`, and `src/upstream/upstream-session.ts`.
-- **Current evidence:** `source-test` covers capability-gated subscribe/unsubscribe, update forwarding, list invalidation, cleanup, and the stable `RESOURCE_SUBSCRIPTION_UNSUPPORTED` failure. The published-v1.1.2 `packaged-test` proves exactly one initialized subscribe, one namespaced update, one unsubscribe, and clean shutdown for both routed upstreams. It receives zero advertised tools/resources/prompts list-change notifications; #413 owns that discrepancy. Modern request-scoped HTTP explicitly does not probe or advertise connection-bound subscriptions.
+- **Current evidence:** `source-test` covers capability-gated subscribe/unsubscribe, update forwarding, list invalidation, cleanup, and the stable `RESOURCE_SUBSCRIPTION_UNSUPPORTED` failure. The corrected published-v1.1.2 `packaged-test` proves exactly one initialized subscribe, one namespaced update, one unsubscribe, all three advertised active-profile list changes, and clean shutdown for both routed upstreams. Modern request-scoped HTTP explicitly does not probe or advertise connection-bound subscriptions.
 - **Migration required:** each subscriber needs an exact re-list, polling, or future extension workflow with bounded frequency, cache invalidation, and an actionable compatibility diagnostic.
 - **Missing evidence:** real subscriber inventory, acceptable polling behavior, named-host notification transcripts, and proof that no retained upstream or cross-profile event leaks after migration.
 - **Decision:** defer.
@@ -111,7 +111,7 @@ Sampling, MCP Logging, standalone downstream HTTP+SSE, Tasks, MCP Apps, and Ente
 
 | Client or artifact | Version and evidence | Proven operations | Boundary |
 | --- | --- | --- | --- |
-| Official MCP TypeScript packages | `2.0.0`; broad `source-test` coverage, clean-tarball contracts, and the exact published-v1.1.2 STDIO record below | Source tests cover modern and initialized STDIO/HTTP negotiation, tools, MRTR, headers, caching, cancellation, and session lifecycle. Published-package proof covers initialized Roots refresh, subscribe/update/unsubscribe, and shutdown | Reference client only; no named-host or usage evidence. Published v1.1.2 delivered zero advertised list changes and zero upstream cancellation notifications; see #413 |
+| Official MCP TypeScript packages | `2.0.0`; broad `source-test` coverage, clean-tarball contracts, and the corrected exact published-v1.1.2 STDIO record below | Source tests cover modern and initialized STDIO/HTTP negotiation, tools, MRTR, headers, caching, cancellation, and session lifecycle. Published-package proof covers initialized Roots refresh, subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and shutdown | Reference client only; no named-host or usage evidence |
 | MCP Inspector | `2.1.0`; `packaged-test` on Linux Node 22 | `tools/list` over installed-package STDIO and modern Streamable HTTP | No UI, OAuth, legacy HTTP, Roots, subscription, or notification claim |
 | Claude Code `2.1.228` observed on macOS | `configuration-shape` | Generated project STDIO configuration and permission guidance | No packaged runtime transcript |
 | Claude Desktop `1.26832.0` observed on macOS | `configuration-shape` | Generated `mcpServers` STDIO configuration | No headless packaged runtime transcript |
@@ -131,18 +131,18 @@ This matrix inherits the named-host observation date and claim boundaries from [
 | Environment | macOS 26.3 arm64 (`Darwin 25.3.0`), Node 22.9.0, npm 11.12.1; exact npm install with lifecycle scripts disabled |
 | Downstream | Official `@modelcontextprotocol/client@2.0.0`, process STDIO, negotiated `2025-11-25` |
 | Upstream | Deterministic fake STDIO upstream `1.0.0`; no provider or named-host claim |
-| Reviewed fixture | `tests/fixtures/legacy-stdio-artifact-consumer.mjs`, SHA-256 `8a0943f1e2c3f9a4891d74cc17c25f8fd5727c605251d9acbca7610c628db835`; embeds the redacted two-profile configuration shape |
-| Positive result | One initial Roots request selected `personal`; one list-changed Roots refresh selected `work`; one subscribe produced one update; one unsubscribe completed; both routed upstreams shut down; stderr was empty |
-| Limitation | Although all three list-change capabilities were advertised, the client received zero tools/resources/prompts list changes. A locally aborted request produced zero upstream cancellation notifications and zero cancelled audit events; the terminal audit result was `failure` / `UPSTREAM_CALL_FAILED`. Tracked by [#413](https://github.com/mohanagy/miftah/issues/413) |
+| Reviewed fixture | `tests/fixtures/legacy-stdio-artifact-consumer.mjs`, SHA-256 `fe99b4aefc50101a174a905b00ab8c1f4e38f998fc1e59d57d8153bcfdb09fd2`; embeds the redacted two-profile configuration shape |
+| Positive result | One initial Roots request selected `personal`; one list-changed Roots refresh selected `work`; one subscribe produced one update; one unsubscribe completed; all three active-profile list changes arrived; one downstream abort produced one upstream cancellation and one `cancelled` / `REQUEST_CANCELLED` audit terminal; both routed upstreams shut down; stderr was empty |
+| Evidence correction | The prior fixture emitted list changes from a Roots-routed non-active profile and reused a stale call-start marker, allowing abort before the cancellable call reached the upstream. The corrected causal barriers prove the published runtime behavior without a runtime code change; tracked by [#413](https://github.com/mohanagy/miftah/issues/413). |
 | Claim boundary | Reference-client packaged evidence only. Not a desktop-host transcript, usage attestation, approval/UI result, Streamable HTTP result, or migration proof |
 
 Deidentified transcript:
 
 ```json
-{"protocol":"2025-11-25","roots":{"initialized":"personal","refreshed":"work","requests":2},"subscriptions":{"advertised":true,"updateForwarded":true,"subscribeCount":1,"unsubscribeCount":1},"listChanges":{"advertised":true,"tools":false,"resources":false,"prompts":false},"cancellation":{"downstreamRejected":true,"upstreamNotifications":0,"terminalAuditEvents":0,"lastAuditStatus":"failure","lastAuditErrorCode":"UPSTREAM_CALL_FAILED"},"cleanup":{"personal":true,"work":true},"stderrEmpty":true}
+{"protocol":"2025-11-25","roots":{"initialized":"personal","refreshed":"work","requests":2},"subscriptions":{"advertised":true,"updateForwarded":true,"subscribeCount":1,"unsubscribeCount":1},"listChanges":{"advertised":true,"tools":true,"resources":true,"prompts":true},"cancellation":{"downstreamRejected":true,"upstreamNotifications":1,"terminalAuditEvents":1,"lastAuditStatus":"cancelled","lastAuditErrorCode":"REQUEST_CANCELLED"},"cleanup":{"personal":true,"work":true},"stderrEmpty":true}
 ```
 
-The same fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. Windows Node 20 produced the same zero-upstream-cancellation limitation but recorded the local terminal audit as `cancelled` / `REQUEST_CANCELLED`, so the package contract accepts that platform-specific audit improvement while continuing to require zero forwarded cancellations until #413 is repaired.
+The same corrected fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. The package contract requires the same exact positive list-change, cancellation, and audit outcome across supported CI operating systems and Node versions.
 
 ## Required evidence record
 
@@ -191,16 +191,15 @@ The current evidence supports **keep and collect**, not retire:
 
 - internal source and deterministic tests describe the shipped behavior;
 - the exact v1.1.2 artifact is published, reproducible, and signature/provenance verified;
-- exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, and cleanup while exposing the merge-blocking list-change and cancellation defects in #413;
+- corrected exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup;
 - named desktop-host runtime evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
 
 Next evidence work:
 
-1. Repair and re-run the packaged initialized STDIO list-change and cancellation boundary under #413.
-2. Add exact published-package legacy Streamable HTTP evidence beyond `tools/list`, including approval, cancellation, session cleanup, and known limitations.
-3. Collect deidentified exact-version transcripts for the named hosts that actually exercise Miftah, without upgrading a configuration-shape row into a runtime claim prematurely.
-4. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
-5. Write and test one exact migration per observed workflow.
-6. Run the rollback contract against a future incompatible candidate.
-7. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.
-8. Only then create a separate bounded retirement implementation issue and major-version release plan.
+1. Add exact published-package legacy Streamable HTTP evidence beyond `tools/list`, including approval, cancellation, session cleanup, and known limitations.
+2. Collect deidentified exact-version transcripts for the named hosts that actually exercise Miftah, without upgrading a configuration-shape row into a runtime claim prematurely.
+3. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
+4. Write and test one exact migration per observed workflow.
+5. Run the rollback contract against a future incompatible candidate.
+6. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.
+7. Only then create a separate bounded retirement implementation issue and major-version release plan.

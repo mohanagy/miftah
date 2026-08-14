@@ -1315,9 +1315,7 @@ describe("packed artifact contract", () => {
             subscribeCount: 1,
             unsubscribeCount: 1
           },
-          // The initialized SDK v2 adapter currently advertises list-change support but drops
-          // upstream list-change notifications. This compatibility defect is tracked by #413.
-          listChanges: { advertised: true, tools: false, resources: false, prompts: false },
+          listChanges: { advertised: true, tools: true, resources: true, prompts: true },
           cleanup: { personal: true, work: true },
           stderrEmpty: true
         });
@@ -1328,13 +1326,13 @@ describe("packed artifact contract", () => {
         } = legacyCancellation as Record<string, unknown>;
         expect({ downstreamRejected, upstreamNotifications }).toEqual({
           downstreamRejected: true,
-          // Every tested OS drops notifications/cancelled before it reaches the selected upstream (#413).
-          upstreamNotifications: 0
+          upstreamNotifications: 1
         });
-        expect([
-          { terminalAuditEvents: 0, lastAuditStatus: "failure", lastAuditErrorCode: "UPSTREAM_CALL_FAILED" },
-          { terminalAuditEvents: 1, lastAuditStatus: "cancelled", lastAuditErrorCode: "REQUEST_CANCELLED" }
-        ]).toContainEqual(legacyTerminalAudit);
+        expect(legacyTerminalAudit).toEqual({
+          terminalAuditEvents: 1,
+          lastAuditStatus: "cancelled",
+          lastAuditErrorCode: "REQUEST_CANCELLED"
+        });
 
         const typeConsumerPath = join(directory, "consumer.ts");
         await writeFile(
