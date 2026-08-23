@@ -1,0 +1,288 @@
+{
+  "issue": 430,
+  "recordedAt": "2026-08-23",
+  "sampledAt": "2026-08-23T18:31:09Z",
+  "author": "Miftah maintainer",
+  "classification": "usage-sampling-record",
+  "evidenceStrength": "no qualifying usage-attestation",
+  "sampleKind": "bounded-public-source-snapshot",
+  "decision": "keep-and-collect",
+  "repeatNotBefore": "2026-09-22",
+  "package": {
+    "name": "@lubab/miftah",
+    "latestVersion": "1.1.3",
+    "publishedAt": "2026-08-23T13:20:24.632Z",
+    "observationWindow": "under 6 hours after publication"
+  },
+  "methodology": {
+    "sources": [
+      {
+        "name": "GitHub code search REST API",
+        "documentation": "https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28#search-code",
+        "visibility": "authenticated search; only public repository results retained",
+        "resultLimitPerQuery": 100,
+        "exactTotalCountRecorded": true
+      },
+      {
+        "name": "GitHub issues and pull requests search REST API",
+        "documentation": "https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28#search-issues-and-pull-requests",
+        "visibility": "authenticated search; only public repository results retained",
+        "resultLimitPerQuery": 100,
+        "exactTotalCountRecorded": true
+      },
+      {
+        "name": "npm downloads API",
+        "documentation": "https://github.com/npm/registry/blob/main/docs/download-counts.md",
+        "visibility": "public aggregate package downloads",
+        "resultLimitPerQuery": null,
+        "exactTotalCountRecorded": true
+      }
+    ],
+    "queryLimit": "GitHub code search was kept within its authenticated search-rate window; each recorded query reports incompleteResults=false.",
+    "inclusionRules": [
+      "Require a direct product anchor: @lubab/miftah, miftah-mcp, MIFTAH_CONFIG, createMiftahRuntime, createMiftahServerFactory, or @lubab/miftah/plugin-api.",
+      "Include public evidence only.",
+      "Exclude the Miftah repository, forks, mirrors, generated examples, and lexical matches for unrelated uses of the word miftah.",
+      "Deduplicate included and excluded samples by stable GitHub URL.",
+      "Treat npm counts as indirect activity, not as users, active configurations, or feature usage."
+    ]
+  },
+  "github": {
+    "codeSearch": {
+      "queries": [
+        {
+          "query": "\"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "package import",
+            "initialized 2025-11-25",
+            "Roots",
+            "resource subscriptions and list-change",
+            "upstream sse",
+            "SDK v1"
+          ]
+        },
+        {
+          "query": "miftah-mcp -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "CLI configuration"
+          ]
+        },
+        {
+          "query": "MIFTAH_CONFIG -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "CLI configuration"
+          ]
+        },
+        {
+          "query": "\"2025-11-25\" \"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "initialized 2025-11-25"
+          ]
+        },
+        {
+          "query": "roots \"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "Roots"
+          ]
+        },
+        {
+          "query": "\"resources/subscribe\" \"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "resource subscriptions and list-change"
+          ]
+        },
+        {
+          "query": "transport sse \"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "upstream sse"
+          ]
+        },
+        {
+          "query": "createMiftahRuntime -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "SDK v1"
+          ]
+        },
+        {
+          "query": "createMiftahServerFactory -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "SDK v1"
+          ]
+        },
+        {
+          "query": "\"@lubab/miftah/plugin-api\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "SDK v1"
+          ]
+        },
+        {
+          "query": "defaultProfile filename:miftah.json -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "qualifyingSamples": 0,
+          "surfaces": [
+            "CLI configuration"
+          ]
+        }
+      ]
+    },
+    "issueAndPullRequestSearch": {
+      "queries": [
+        {
+          "query": "\"@lubab/miftah\" -repo:mohanagy/miftah",
+          "totalCount": 0,
+          "incompleteResults": false,
+          "privateResultsOmitted": 0,
+          "publicCandidateCount": 0,
+          "includedPublicSamples": 0,
+          "excludedPublicSamples": 0
+        },
+        {
+          "query": "miftah-mcp -repo:mohanagy/miftah",
+          "totalCount": 2,
+          "incompleteResults": false,
+          "privateResultsOmitted": 1,
+          "publicCandidateCount": 1,
+          "includedPublicSamples": 0,
+          "excludedPublicSamples": 1
+        }
+      ],
+      "privateResultDetailsRecorded": false,
+      "includedPublicSamples": [],
+      "excludedPublicSamples": [
+        {
+          "url": "https://github.com/chaishillomnitech1/Infinite-Nexus-ScrollVerse/pull/26",
+          "reason": "Lexical false positive: Miftah is a personal name and MCP appears only in generic coding-agent guidance; the Miftah package and CLI are not referenced."
+        }
+      ]
+    }
+  },
+  "npm": {
+    "packageRange": {
+      "url": "https://api.npmjs.org/downloads/range/2026-08-14:2026-08-23/@lubab%2Fmiftah",
+      "start": "2026-08-14",
+      "end": "2026-08-23",
+      "totalDownloads": 147,
+      "daily": [
+        {
+          "day": "2026-08-14",
+          "downloads": 0
+        },
+        {
+          "day": "2026-08-15",
+          "downloads": 16
+        },
+        {
+          "day": "2026-08-16",
+          "downloads": 44
+        },
+        {
+          "day": "2026-08-17",
+          "downloads": 13
+        },
+        {
+          "day": "2026-08-18",
+          "downloads": 10
+        },
+        {
+          "day": "2026-08-19",
+          "downloads": 38
+        },
+        {
+          "day": "2026-08-20",
+          "downloads": 12
+        },
+        {
+          "day": "2026-08-21",
+          "downloads": 5
+        },
+        {
+          "day": "2026-08-22",
+          "downloads": 9
+        },
+        {
+          "day": "2026-08-23",
+          "downloads": 0
+        }
+      ]
+    },
+    "versionWindow": {
+      "url": "https://api.npmjs.org/versions/@lubab%2Fmiftah/last-week",
+      "period": "last-week",
+      "observedVersionDownloads": {
+        "1.1.2": 58
+      },
+      "latestVersion": "1.1.3",
+      "latestVersionPresent": false,
+      "latestVersionCountUsable": false,
+      "reason": "The sample was taken on the same UTC day as publication, before npm's next daily download-data processing window."
+    },
+    "claimBoundary": "Download counts can include CI, bots, caches, repeated installs, and maintainer activity. They do not count unique users, active configurations, or any legacy surface."
+  },
+  "surfaceResults": {
+    "initialized2025_11_25": {
+      "qualifyingPublicSamples": 0,
+      "resultMeaning": "not observed in this bounded sample"
+    },
+    "roots": {
+      "qualifyingPublicSamples": 0,
+      "resultMeaning": "not observed in this bounded sample"
+    },
+    "resourceSubscriptionsOrListChange": {
+      "qualifyingPublicSamples": 0,
+      "resultMeaning": "not observed in this bounded sample"
+    },
+    "upstreamSse": {
+      "qualifyingPublicSamples": 0,
+      "resultMeaning": "not observed in this bounded sample"
+    },
+    "sdkV1": {
+      "qualifyingPublicSamples": 0,
+      "resultMeaning": "not observed in this bounded sample"
+    },
+    "realProviderConfiguration": {
+      "qualifyingPublicSamples": 0,
+      "independentExternalSamples": 0,
+      "resultMeaning": "not observed in this bounded public sample"
+    }
+  },
+  "limitations": [
+    "Version 1.1.3 had been public for under six hours when sampled, so this is not a meaningful post-release adoption window.",
+    "GitHub search is limited to indexed public content, query semantics, repository visibility, and the result limits recorded above.",
+    "Broad unanchored miftah queries produced unrelated name and language matches and were excluded rather than treated as product evidence.",
+    "npm processes download data once per day after UTC midnight; the current-day zero and missing 1.1.3 per-version row are not usable as zero-download evidence.",
+    "npm downloads are indirect activity and cannot attribute a protocol, transport, API surface, configuration, or operator.",
+    "One authenticated-search result was private and was omitted without recording its URL or contents. Other private repositories, local configurations, credentials, account metadata, and private telemetry were outside the sample.",
+    "Zero qualifying samples means not observed in this bounded sample; it is not evidence that usage does not exist."
+  ]
+}

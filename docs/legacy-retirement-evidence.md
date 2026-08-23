@@ -239,6 +239,34 @@ Normalized primary result:
 
 The native **Allow once** approval was observed manually in the Desktop UI; it was not a recorder-persisted transcript field. Desktop also started one independently isolated `local-agent-mode-miftah-evidence-425/1.0.0` session. It negotiated initialized `2025-11-25`, completed one `tools/list`, made no tool call, and exited cleanly. The primary transcript proves only the listed discovery operations and one approved fake-upstream call; the internal `claude-ai/0.1.0` metadata is not the Desktop application version.
 
+### Public usage sampling — 2026-08-23
+
+Issue #430 records a bounded public-source snapshot in `tests/fixtures/public-usage-sample-2026-08-23.json`. The sample was completed at 2026-08-23T18:31:09Z, under six hours after `@lubab/miftah@1.1.3` was published. It is a `usage-sampling-record` with no qualifying `usage-attestation`, not a representative adoption study or retirement authorization.
+
+Method:
+
+- GitHub code search used eleven direct product-anchored queries covering the package, CLI/configuration markers, initialized `2025-11-25`, Roots, resource subscription/list-change, upstream `sse`, and SDK v1 entry points. Every query excluded `mohanagy/miftah`, returned `incomplete_results: false`, and recorded the exact total count.
+- GitHub issue and pull-request search used the package and CLI anchors. Included and excluded candidates were deduplicated by stable URL.
+- Inclusion required a direct Miftah product anchor and public evidence. The Miftah repository, forks, mirrors, generated examples, and unrelated uses of the word “miftah” were excluded.
+- npm activity came only from the public downloads API. Those aggregate counts were kept separate from direct configuration evidence.
+
+Results:
+
+| Surface | Qualifying public samples | Claim boundary |
+| --- | ---: | --- |
+| Initialized `2025-11-25` | 0 | Not observed in this bounded sample; not evidence of absence |
+| Roots | 0 | Not observed in this bounded sample; not evidence of absence |
+| Resource subscriptions or list-change | 0 | Not observed in this bounded sample; not evidence of absence |
+| Upstream `sse` | 0 | Not observed in this bounded sample; not evidence of absence |
+| SDK v1 | 0 | Not observed in this bounded sample; not evidence of absence |
+| Real-provider configuration | 0 | Not observed in this bounded public sample; not evidence of absence |
+
+All direct external GitHub code queries returned zero results. The issue/PR queries produced one private result, which was omitted without recording its URL or contents, and one unrelated public lexical false positive. The retained public sample therefore contains zero qualifying public usage samples.
+
+The npm range API reported 147 package downloads from 2026-08-14 through 2026-08-23, and the per-version last-week API reported 58 downloads for 1.1.2. These counts can include CI, bots, caches, repeat installs, and maintainer activity. They are not unique users and cannot identify any protocol, transport, API, configuration, or operator. Version 1.1.3 had no per-version row yet; npm processes download data once per day after UTC midnight, so the same-day zero and missing row are not usable as zero-download evidence.
+
+Only indexed public content was sampled. Private repositories, local configurations, credentials, account metadata, and private telemetry were excluded. GitHub indexing/query semantics and the same-day release window further limit the result. The decision remains **keep and collect**. Repeat no earlier than 2026-09-22, or when an incompatible retirement candidate is next considered, and preserve zero observations literally.
+
 ## Required evidence record
 
 Every new compatibility record must include:
@@ -289,12 +317,13 @@ The current evidence supports **keep and collect**, not retire:
 - corrected exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup;
 - exact published-package Streamable HTTP reference-client evidence proves one initialized session, redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup;
 - exact published-v1.1.3 named-host evidence proves one initialized Codex CLI list/call exchange, one modern Claude Code prompt/resource/tool discovery plus call exchange, and one initialized Claude Desktop prompt/resource/tool discovery plus natively approved call, each with deterministic cleanup;
-- broader named-host feature evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
+- bounded public sampling found no qualifying public usage samples; that zero is not evidence of absence;
+- broader named-host feature evidence, independently-owned real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
 
 Next evidence work:
 
 1. Collect deeper feature-specific named-host transcripts without extending any row beyond the exact operations observed.
-2. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
+2. Repeat the bounded public sample no earlier than 2026-09-22 and collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
 3. Write and test one exact migration per observed workflow.
 4. Run the rollback contract against a future incompatible candidate.
 5. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.
