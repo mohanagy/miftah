@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -19,10 +19,126 @@ const fakeUpstreamPath = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", i
 const fakeUpstreamBundlePath = fileURLToPath(
   new URL("./fixtures/fake-upstream-bundled.mjs", import.meta.url)
 );
+const desktopLauncherPath = fileURLToPath(
+  new URL("./fixtures/named-host-desktop-launcher.mjs", import.meta.url)
+);
 
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 describe("v1.1.3 named-host evidence", () => {
+  it("isolates concurrent Desktop host sessions into separate evidence directories", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "miftah-named-host-desktop-"));
+    try {
+      const recorderStubPath = join(directory, "recorder-stub.mjs");
+      const fakeMiftahCliPath = join(directory, "miftah-cli.js");
+      const fakeUpstreamPath = join(directory, "fake-upstream.mjs");
+      await writeFile(
+        recorderStubPath,
+        `
+          import { readFile, writeFile } from "node:fs/promises";
+          const [outputPath, command, cliPath, configFlag, configPath] = process.argv.slice(2);
+          const config = JSON.parse(await readFile(configPath, "utf8"));
+          await writeFile(outputPath, JSON.stringify({
+            command,
+            cliPath,
+            configFlag,
+            configPath,
+            config,
+            environment: {
+              secret: process.env.DESKTOP_EVIDENCE_SECRET ?? null,
+              home: process.env.HOME,
+              xdgConfigHome: process.env.XDG_CONFIG_HOME,
+              xdgRuntimeDir: process.env.XDG_RUNTIME_DIR
+            }
+          }));
+        `
+      );
+
+      const launch = () =>
+        new Promise<void>((resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            [
+              desktopLauncherPath,
+              directory,
+              process.execPath,
+              recorderStubPath,
+              fakeMiftahCliPath,
+              fakeUpstreamPath
+            ],
+            {
+              env: { ...process.env, DESKTOP_EVIDENCE_SECRET: "must-not-pass" },
+              stdio: ["ignore", "ignore", "pipe"]
+            }
+          );
+          let stderr = "";
+          child.stderr.setEncoding("utf8");
+          child.stderr.on("data", (chunk) => {
+            stderr += chunk;
+          });
+          child.once("error", reject);
+          child.once("close", (exitCode) => {
+            if (exitCode === 0) resolve();
+            else reject(new Error(`Desktop launcher exited ${String(exitCode)}: ${stderr}`));
+          });
+        });
+
+      await Promise.all([launch(), launch()]);
+
+      const instanceDirectories = (await readdir(directory, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith("instance-"))
+        .map((entry) => join(directory, entry.name));
+      expect(instanceDirectories).toHaveLength(2);
+
+      const records = await Promise.all(
+        instanceDirectories.map(async (instanceDirectory) =>
+          JSON.parse(await readFile(join(instanceDirectory, "record.json"), "utf8"))
+        )
+      );
+      for (const record of records) {
+        expect(record).toMatchObject({
+          command: process.execPath,
+          cliPath: fakeMiftahCliPath,
+          configFlag: "--config",
+          config: {
+            version: "1",
+            name: "desktop-evidence-425",
+            defaultProfile: "work",
+            upstream: {
+              transport: "stdio",
+              command: process.execPath,
+              args: [fakeUpstreamPath]
+            },
+            profiles: {
+              work: { env: { TEST_ACCOUNT_NAME: "desktop-evidence-fixture" } }
+            }
+          }
+        });
+        const normalizedConfigPath = record.configPath.replaceAll("\\", "/");
+        const normalizedAuditPath = record.config.audit.path.replaceAll("\\", "/");
+        const normalizedInitializedPath =
+          record.config.profiles.work.env.TEST_INITIALIZED_PATH.replaceAll("\\", "/");
+        expect(normalizedConfigPath).toMatch(/\/instance-[^/]+\/miftah\.json$/);
+        expect(normalizedAuditPath).toMatch(/\/instance-[^/]+\/audit\.jsonl$/);
+        expect(normalizedInitializedPath).toMatch(
+          /\/instance-[^/]+\/upstream-initialized$/
+        );
+        expect(record.environment).toMatchObject({ secret: null });
+        expect(record.environment.home.replaceAll("\\", "/")).toMatch(/\/instance-[^/]+$/);
+        expect(record.environment.xdgConfigHome.replaceAll("\\", "/")).toMatch(
+          /\/instance-[^/]+\/xdg-config$/
+        );
+        expect(record.environment.xdgRuntimeDir.replaceAll("\\", "/")).toMatch(
+          /\/instance-[^/]+\/xdg-runtime$/
+        );
+      }
+      expect(records[0].configPath).not.toBe(records[1].configPath);
+      expect(records[0].config.audit.path).not.toBe(records[1].config.audit.path);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("preserves UTF-8 metadata split across arbitrary input chunks", async () => {
     const { createLineRecorder } = await import(
       new URL("./fixtures/named-host-recorder-parser.mjs", import.meta.url).href
@@ -141,7 +257,7 @@ describe("v1.1.3 named-host evidence", () => {
     const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
 
     expect(evidence).toMatchObject({
-      issue: 423,
+      issues: [423, 425],
       recordedAt: "2026-08-23",
       classification: "named-host-runtime",
       package: {
@@ -194,18 +310,62 @@ describe("v1.1.3 named-host evidence", () => {
           },
           serverProcess: { exitCode: 0, signal: null, spawnError: null },
           toolResultMatchedFixture: true
+        },
+        {
+          host: "Claude Desktop",
+          hostVersion: "1.34493.1",
+          hostBuild: "1.34493.1",
+          bundleId: "com.anthropic.claudefordesktop",
+          clientInfo: { name: "claude-ai", version: "0.1.0" },
+          era: "initialized",
+          protocol: "2025-11-25",
+          initializedNotification: true,
+          operations: {
+            "prompts/list": { requests: 1, success: 1, error: 0 },
+            "resources/list": { requests: 1, success: 1, error: 0 },
+            "tools/list": { requests: 1, success: 1, error: 0 },
+            "tools/call": { requests: 1, success: 1, error: 0 }
+          },
+          markers: {
+            upstreamInitialized: true,
+            toolList: true,
+            toolCall: true,
+            upstreamShutdown: true
+          },
+          serverProcess: { exitCode: null, signal: "SIGTERM", spawnError: null },
+          toolResultMatchedFixture: true,
+          companionSessions: [
+            {
+              clientInfo: {
+                name: "local-agent-mode-miftah-evidence-425",
+                version: "1.0.0"
+              },
+              protocol: "2025-11-25",
+              operations: {
+                "tools/list": { requests: 1, success: 1, error: 0 }
+              }
+            }
+          ]
         }
       ]
     });
   });
 
   it("binds the normalized record to the reviewed fixtures and excludes raw host data", async () => {
-    const [evidenceText, recorder, recorderParser, fakeUpstream, fakeUpstreamBundle] = await Promise.all([
+    const [
+      evidenceText,
+      recorder,
+      recorderParser,
+      fakeUpstream,
+      fakeUpstreamBundle,
+      desktopLauncher
+    ] = await Promise.all([
       readFile(evidencePath, "utf8"),
       readFile(recorderPath),
       readFile(recorderParserPath),
       readFile(fakeUpstreamPath),
-      readFile(fakeUpstreamBundlePath)
+      readFile(fakeUpstreamBundlePath),
+      readFile(desktopLauncherPath)
     ]);
     const evidence = JSON.parse(evidenceText);
 
@@ -213,6 +373,7 @@ describe("v1.1.3 named-host evidence", () => {
     expect(sha256(recorderParser)).toBe(evidence.recorder.parserSha256);
     expect(sha256(fakeUpstream)).toBe(evidence.upstream.entrySha256);
     expect(sha256(fakeUpstreamBundle)).toBe(evidence.upstream.bundleSha256);
+    expect(sha256(desktopLauncher)).toBe(evidence.recorder.desktopLauncherSha256);
     expect(evidence.privacy).toMatchObject({
       rawHostTranscriptCommitted: false,
       rawAuditCommitted: false

@@ -115,11 +115,11 @@ Sampling, MCP Logging, standalone downstream HTTP+SSE, Tasks, MCP Apps, and Ente
 | MCP Inspector | `2.1.0`; `packaged-test` on Linux Node 22 | `tools/list` over installed-package STDIO and modern Streamable HTTP | No UI, OAuth, legacy HTTP, Roots, subscription, or notification claim |
 | Codex CLI `0.148.0` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Initialized STDIO `2025-06-18`, one successful `tools/list`, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no broader legacy-feature, provider, usage, migration, or rollback claim |
 | Claude Code `2.1.235` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Modern STDIO `2026-07-28`, successful prompt/resource/tool discovery, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no approval, OAuth, HTTP, provider, usage, migration, or rollback claim |
-| Claude Desktop `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23 | `configuration-shape`; runtime attempt blocked before an exchange | Generated `mcpServers` STDIO configuration; exact Miftah 1.1.3 registry artifact verified | Existing user-owned Desktop state was not inspected or changed; no supported isolated profile/configuration mechanism was verified |
+| Claude Desktop `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23 | `named-host-runtime` against exact published Miftah 1.1.3 after a blocked first attempt | Initialized STDIO `2025-11-25`, successful prompt/resource/tool discovery, one successful `tools/call`, matching audits, native **Allow once** approval, initialization, and upstream shutdown | One fake-upstream call only; Desktop also started one isolated list-only companion session; no broader legacy-feature, provider, usage, migration, or rollback claim |
 | VS Code `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64) observed on macOS | `configuration-shape` | Generated STDIO configuration | No packaged runtime transcript |
 | Cursor | Not installed in the 2026-08-12 audit environment; `configuration-shape` only | Generated STDIO configuration | No version or runtime claim |
 
-This matrix inherits the named-host observation date and claim boundaries from [MCP protocol and client compatibility](mcp-compatibility.md). Codex CLI and Claude Code have the bounded exact-package runtime evidence stated above; every other version-only observation remains configuration-shape evidence.
+This matrix inherits the named-host observation date and claim boundaries from [MCP protocol and client compatibility](mcp-compatibility.md). Codex CLI, Claude Code, and Claude Desktop have the bounded exact-package runtime evidence stated above; every other version-only observation remains configuration-shape evidence.
 
 ### Claude Desktop runtime attempt — 2026-08-23
 
@@ -142,6 +142,8 @@ Required handoff for a valid retry:
 5. In a new Desktop conversation, confirm the test connector is available and invoke the deterministic upstream's `whoami` tool once with `{}`. Do not use a real provider or account profile.
 6. Exit Desktop cleanly, then verify the recorder, redacted Miftah audit entries, upstream initialization, list/call counts, expected non-secret fixture result, shutdown marker, and process exit state.
 7. Persist only the same bounded fields as `tests/fixtures/named-host-v1.1.3-evidence.json`. Do not commit the raw host transcript, prompts, arguments, tool content, local paths, session identifiers, account metadata, audit file, or marker files.
+
+The later retry used the maintainer-approved alternative of a byte-for-byte backup, temporary one-connector replacement, and byte-for-byte restoration in the existing macOS account. Desktop launched two MCP sessions, so the shared-file first retry was rejected as evidence. `tests/fixtures/named-host-desktop-launcher.mjs` then assigned each Desktop session its own Miftah configuration, recorder output, audit journal, and marker files. This kept the primary `claude-ai` call transcript distinct from the list-only `local-agent-mode` companion session.
 
 ## Published package evidence records
 
@@ -217,6 +219,26 @@ Claude Code normalized result:
 
 Claude Code used a strict isolated MCP configuration, empty setting sources, no session persistence, and an allowlist containing only the named Miftah tool. This proves only the listed discovery calls and one tool call; it does not prove Roots, subscriptions, cancellation, approval continuation, OAuth, Streamable HTTP, real provider usage, migration, or rollback.
 
+### Claude Desktop named host — 2026-08-23
+
+| Field | Recorded value |
+| --- | --- |
+| Author and evidence class | `Miftah maintainer`; `named-host-runtime` |
+| Host | Claude Desktop `1.34493.1` (`com.anthropic.claudefordesktop`) on macOS 26.3 arm64 |
+| Package | Exact published `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
+| Environment | Node 22.22.3, npm 12.0.2; isolated exact install; no real provider or account profile |
+| Recorder | Existing recorder and parser hashes above, plus per-session launcher `tests/fixtures/named-host-desktop-launcher.mjs`, SHA-256 `04d037ea8b1f581022bff297d711b6cdb0bb6e25330fa50bf05c5eeed19d3e2d`; the launcher passes only a bounded non-secret environment and gives each Desktop session isolated HOME/XDG directories |
+| Reviewed configuration | One non-secret `work` profile; each Desktop session received unique fixed marker/audit paths and isolated HOME/XDG directories. The primary executed Miftah configuration SHA-256 was `8026fcb36afba52b831d2fc634c797b414473207bb4687b324e47a4a22288b33`. |
+| Privacy boundary | The original Desktop configuration was backed up and restored byte-for-byte. Raw host JSON, audit JSONL, prompts, arguments, tool content, local paths, session identifiers, account metadata, and marker files are not committed. |
+
+Normalized primary result:
+
+```json
+{"host":"Claude Desktop","version":"1.34493.1","clientInfo":"claude-ai/0.1.0","transport":"stdio","era":"initialized","protocol":"2025-11-25","initializedNotification":true,"operations":{"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["prompts/list:success","resources/list:success","tools/list:success","tools/call:success"],"approval":"Allow once","upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":null,"signal":"SIGTERM","spawnError":null},"toolResultMatchedFixture":true}
+```
+
+Desktop also started one independently isolated `local-agent-mode-miftah-evidence-425/1.0.0` session. It negotiated initialized `2025-11-25`, completed one `tools/list`, made no tool call, and exited cleanly. The primary transcript proves only the listed discovery operations and one approved fake-upstream call; the internal `claude-ai/0.1.0` metadata is not the Desktop application version.
+
 ## Required evidence record
 
 Every new compatibility record must include:
@@ -266,12 +288,12 @@ The current evidence supports **keep and collect**, not retire:
 - the exact v1.1.2 artifact is published, reproducible, and signature/provenance verified;
 - corrected exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup;
 - exact published-package Streamable HTTP reference-client evidence proves one initialized session, redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup;
-- exact published-v1.1.3 named-host evidence proves one initialized Codex CLI list/call exchange and one modern Claude Code prompt/resource/tool discovery plus call exchange with deterministic cleanup;
-- Claude Desktop runtime evidence, broader named-host feature evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
+- exact published-v1.1.3 named-host evidence proves one initialized Codex CLI list/call exchange, one modern Claude Code prompt/resource/tool discovery plus call exchange, and one initialized Claude Desktop prompt/resource/tool discovery plus natively approved call, each with deterministic cleanup;
+- broader named-host feature evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
 
 Next evidence work:
 
-1. Collect a deidentified exact-version Claude Desktop transcript and deeper feature-specific CLI-host transcripts without extending any row beyond the exact operations observed.
+1. Collect deeper feature-specific named-host transcripts without extending any row beyond the exact operations observed.
 2. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
 3. Write and test one exact migration per observed workflow.
 4. Run the rollback contract against a future incompatible candidate.
