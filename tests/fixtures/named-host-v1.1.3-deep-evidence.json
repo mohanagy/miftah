@@ -39,6 +39,17 @@
     "era": "initialized",
     "transport": "stdio"
   },
+  "codexHost": {
+    "name": "Codex CLI",
+    "hostVersion": "0.149.0",
+    "clientInfo": {
+      "name": "codex-mcp-client",
+      "version": "0.149.0"
+    },
+    "protocol": "2025-06-18",
+    "era": "initialized",
+    "transport": "stdio"
+  },
   "upstream": {
     "name": "deterministic fake STDIO server",
     "version": "1.0.0",
@@ -49,7 +60,10 @@
   },
   "recorder": {
     "path": "tests/fixtures/named-host-deep-stdio-recorder.mjs",
-    "sha256": "f7c531399b3d51658f7785cd1dadc4d7c16d4accb3e44ca01c6ed6cb91a99606",
+    "sha256": "e50e7f0417d79a184c16c19b088e8fffae009693e4ca2bd5492eb9299a2b663a",
+    "desktopExecutedSha256": "f7c531399b3d51658f7785cd1dadc4d7c16d4accb3e44ca01c6ed6cb91a99606",
+    "codexExecutedSha256": "e50e7f0417d79a184c16c19b088e8fffae009693e4ca2bd5492eb9299a2b663a",
+    "postDesktopHardening": "handles closed child stdin without losing the normalized record",
     "parserPath": "tests/fixtures/named-host-recorder-parser.mjs",
     "parserSha256": "96d9fa6f1c6622c7a5765d7f3784cceb0f2d2b55df0f60086102510b455c4795",
     "launcherPath": "tests/fixtures/named-host-deep-desktop-launcher.mjs",
@@ -78,7 +92,9 @@
     "featuresPrimaryConfigSha256": "6fc133871b31da96937811df71cd5af8ee901713208819b0a151aacff4a6cab7",
     "featuresCompanionConfigSha256": "3ac078a0697b489741de876f42b0d3e3d0bd9f4170f57c1ed555a837260fd8ff",
     "cancellationPrimaryConfigSha256": "1af90a8624b66e9af368d40ce6e200e7233e5f0442d94245dbe613f9622e7b26",
-    "cancellationCompanionConfigSha256": "e4b47e1823423818cd31fcc6862b90576368006664ad564e16bc4fdf1be9f55d"
+    "cancellationCompanionConfigSha256": "e4b47e1823423818cd31fcc6862b90576368006664ad564e16bc4fdf1be9f55d",
+    "codexFeaturesConfigSha256": "3f130d79df1216f7c75c47c30421c29828a1c8db87d50f6ccacf7272a635a8d0",
+    "codexCancellationConfigSha256": "9f60dc99d5f109662ca7f4e8cb3516d7209fb08612b05646067bb8e58bab3244"
   },
   "attempts": [
     {
@@ -253,16 +269,127 @@
       }
     }
   ],
+  "codexAttempts": [
+    {
+      "name": "feature-call-and-list-changes",
+      "initializedNotification": true,
+      "operations": {
+        "tools/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/call": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "roots/list": {
+          "requests": 0,
+          "success": 0,
+          "error": 0
+        }
+      },
+      "clientNotifications": {
+        "notifications/initialized": 1,
+        "notifications/roots/list_changed": 0,
+        "notifications/cancelled": 0
+      },
+      "serverNotifications": {
+        "notifications/tools/list_changed": 1,
+        "notifications/resources/list_changed": 1,
+        "notifications/prompts/list_changed": 1,
+        "notifications/resources/updated": 0
+      },
+      "resourceSubscriptions": {
+        "subscribeRequests": 0,
+        "unsubscribeRequests": 0
+      },
+      "audit": [
+        "tools/list:success",
+        "tools/call:success"
+      ],
+      "markers": {
+        "upstreamInitialized": true,
+        "toolCallStarted": true,
+        "toolCallCompleted": true,
+        "upstreamCancellation": false,
+        "upstreamShutdown": true
+      },
+      "process": {
+        "exitCode": null,
+        "signal": "SIGTERM",
+        "spawnError": null
+      },
+      "host": {
+        "existingAccountAuthenticationReused": true,
+        "newAccountCreated": false,
+        "ephemeral": true,
+        "isolatedHome": true,
+        "userConfigIgnored": true,
+        "projectRulesIgnored": true,
+        "appsAndPluginsDisabled": true,
+        "approvalMode": "approve-for-me",
+        "toolResultMatchedFixture": true
+      }
+    },
+    {
+      "name": "sigint-during-long-tool-call",
+      "initializedNotification": true,
+      "operations": {
+        "tools/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/call": {
+          "requests": 1,
+          "success": 0,
+          "error": 0
+        }
+      },
+      "clientNotifications": {
+        "notifications/initialized": 1,
+        "notifications/cancelled": 0
+      },
+      "serverNotifications": {
+        "notifications/tools/list_changed": 1,
+        "notifications/resources/list_changed": 1,
+        "notifications/prompts/list_changed": 1
+      },
+      "cancellation": {
+        "toolStartedBeforeSigint": true,
+        "hostExitCode": 1,
+        "clientCancellationNotifications": 0,
+        "upstreamCancellationMarker": false,
+        "terminalAuditObserved": false
+      },
+      "markers": {
+        "upstreamInitialized": true,
+        "toolCallStarted": true,
+        "upstreamCancellation": false,
+        "upstreamShutdown": true
+      },
+      "process": {
+        "exitCode": null,
+        "signal": "SIGTERM",
+        "spawnError": null
+      }
+    }
+  ],
   "claimBoundary": [
     "Roots list was observed only in Desktop's isolated local-agent-mode companion session.",
     "No roots list-changed notification, resource subscribe, resource unsubscribe, or resource-updated notification was observed in these bounded attempts.",
     "Desktop forwarded tools, resources, and prompts list-changed notifications after the fake tool call.",
     "Desktop native allow-once approval continued to one successful deterministic tool result.",
     "Stopping the Desktop response did not emit an MCP cancellation within the observation window; the upstream cancellation marker appeared only after host shutdown and the terminal audit was failure, not cancelled.",
+    "Codex CLI 0.149.0 forwarded all three list-change notifications during one successful call but emitted no Roots request, Roots refresh, resource subscription, or resource update in the bounded feature attempt.",
+    "Interrupting noninteractive Codex with SIGINT after the long tool call started terminated the MCP process without a downstream cancellation, upstream cancellation marker, tool response, or terminal tool-call audit.",
     "Zero means not observed in these exact attempts, not unsupported by every Desktop version or workflow."
   ],
   "privacy": {
     "existingDesktopAccountUsed": true,
+    "existingCodexAccountUsed": true,
     "newAccountCreated": false,
     "originalConfigBackedUp": true,
     "originalConfigRestoredByteForByte": true,
@@ -273,6 +400,7 @@
     "argumentsOrToolContentCommitted": false,
     "localPathsCommitted": false,
     "sessionOrRequestIdsCommitted": false,
-    "accountMetadataCommitted": false
+    "accountMetadataCommitted": false,
+    "authenticationMaterialCommitted": false
   }
 }

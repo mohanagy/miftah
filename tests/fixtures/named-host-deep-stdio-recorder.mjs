@@ -195,6 +195,11 @@ const child = spawn(command, args, {
   stdio: ["pipe", "pipe", "pipe"]
 });
 
+child.stdin.on("error", (error) => {
+  if (!["EPIPE", "ERR_STREAM_DESTROYED"].includes(error.code)) {
+    process.stderr.write(`named-host recorder input failed: ${error.code ?? "UNKNOWN"}\n`);
+  }
+});
 process.stdin.on("data", (chunk) => recordLines("client", chunk, recordClientMessage));
 process.stdin.pipe(child.stdin);
 child.stdout.on("data", (chunk) => {

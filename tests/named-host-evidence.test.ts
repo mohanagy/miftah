@@ -385,6 +385,7 @@ describe("v1.1.3 named-host evidence", () => {
 
   it("records bounded requests and notifications in both protocol directions", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-named-host-bidirectional-"));
+    let recorder: ReturnType<typeof spawn> | undefined;
     try {
       const outputPath = join(directory, "record.json");
       const server = String.raw`
@@ -419,19 +420,20 @@ describe("v1.1.3 named-host evidence", () => {
           }
         });
       `;
-      const recorder = spawn(
+      const spawnedRecorder = spawn(
         process.execPath,
         [deepRecorderPath, outputPath, process.execPath, "-e", server],
         { stdio: ["pipe", "pipe", "pipe"] }
       );
+      recorder = spawnedRecorder;
       let stderr = "";
       let stdout = "";
-      recorder.stderr.setEncoding("utf8");
-      recorder.stderr.on("data", (chunk) => {
+      spawnedRecorder.stderr.setEncoding("utf8");
+      spawnedRecorder.stderr.on("data", (chunk) => {
         stderr += chunk;
       });
-      recorder.stdout.setEncoding("utf8");
-      recorder.stdout.on("data", (chunk) => {
+      spawnedRecorder.stdout.setEncoding("utf8");
+      spawnedRecorder.stdout.on("data", (chunk) => {
         stdout += chunk;
       });
 
@@ -443,11 +445,11 @@ describe("v1.1.3 named-host evidence", () => {
         const inspect = () => {
           if (!stdout.includes('"method":"roots/list"')) return;
           clearTimeout(timeout);
-          recorder.stdout.off("data", inspect);
+          spawnedRecorder.stdout.off("data", inspect);
           resolve();
         };
-        recorder.stdout.on("data", inspect);
-        recorder.once("error", reject);
+        spawnedRecorder.stdout.on("data", inspect);
+        spawnedRecorder.once("error", reject);
       });
 
       const clientMessages = [
@@ -469,8 +471,12 @@ describe("v1.1.3 named-host evidence", () => {
         { jsonrpc: "2.0", method: "notifications/roots/list_changed", params: {} },
         { jsonrpc: "2.0", method: "notifications/cancelled", params: {} }
       ];
-      recorder.stdin.end(clientMessages.map((message) => JSON.stringify(message)).join("\n") + "\n");
-      const exitCode = await new Promise<number | null>((resolve) => recorder.once("close", resolve));
+      spawnedRecorder.stdin.end(
+        clientMessages.map((message) => JSON.stringify(message)).join("\n") + "\n"
+      );
+      const exitCode = await new Promise<number | null>((resolve) =>
+        spawnedRecorder.once("close", resolve)
+      );
 
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
@@ -495,6 +501,10 @@ describe("v1.1.3 named-host evidence", () => {
         }
       });
     } finally {
+      if (recorder !== undefined && recorder.exitCode === null && recorder.signalCode === null) {
+        recorder.kill("SIGTERM");
+        await new Promise((resolve) => recorder?.once("close", resolve));
+      }
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -518,6 +528,13 @@ describe("v1.1.3 named-host evidence", () => {
         hostVersion: "1.34493.1",
         clientInfo: { name: "claude-ai", version: "0.1.0" },
         protocol: "2025-11-25",
+        era: "initialized"
+      },
+      codexHost: {
+        name: "Codex CLI",
+        hostVersion: "0.149.0",
+        clientInfo: { name: "codex-mcp-client", version: "0.149.0" },
+        protocol: "2025-06-18",
         era: "initialized"
       },
       attempts: [
@@ -588,8 +605,63 @@ describe("v1.1.3 named-host evidence", () => {
           }
         }
       ],
+      codexAttempts: [
+        {
+          name: "feature-call-and-list-changes",
+          operations: {
+            "tools/list": { requests: 1, success: 1, error: 0 },
+            "tools/call": { requests: 1, success: 1, error: 0 },
+            "roots/list": { requests: 0, success: 0, error: 0 }
+          },
+          clientNotifications: {
+            "notifications/roots/list_changed": 0,
+            "notifications/cancelled": 0
+          },
+          serverNotifications: {
+            "notifications/tools/list_changed": 1,
+            "notifications/resources/list_changed": 1,
+            "notifications/prompts/list_changed": 1,
+            "notifications/resources/updated": 0
+          },
+          resourceSubscriptions: {
+            subscribeRequests: 0,
+            unsubscribeRequests: 0
+          },
+          host: {
+            existingAccountAuthenticationReused: true,
+            newAccountCreated: false,
+            ephemeral: true,
+            isolatedHome: true,
+            appsAndPluginsDisabled: true,
+            approvalMode: "approve-for-me",
+            toolResultMatchedFixture: true
+          }
+        },
+        {
+          name: "sigint-during-long-tool-call",
+          operations: {
+            "tools/call": { requests: 1, success: 0, error: 0 }
+          },
+          clientNotifications: {
+            "notifications/cancelled": 0
+          },
+          cancellation: {
+            toolStartedBeforeSigint: true,
+            hostExitCode: 1,
+            clientCancellationNotifications: 0,
+            upstreamCancellationMarker: false,
+            terminalAuditObserved: false
+          },
+          process: {
+            exitCode: null,
+            signal: "SIGTERM",
+            spawnError: null
+          }
+        }
+      ],
       privacy: {
         existingDesktopAccountUsed: true,
+        existingCodexAccountUsed: true,
         newAccountCreated: false,
         originalConfigRestoredByteForByte: true,
         rawHostTranscriptCommitted: false,
@@ -611,11 +683,17 @@ describe("v1.1.3 named-host evidence", () => {
     const evidence = JSON.parse(evidenceText);
 
     expect(sha256(recorder)).toBe(evidence.recorder.sha256);
+    expect(evidence.recorder.desktopExecutedSha256).toBe(
+      "f7c531399b3d51658f7785cd1dadc4d7c16d4accb3e44ca01c6ed6cb91a99606"
+    );
+    expect(evidence.recorder.codexExecutedSha256).toBe(evidence.recorder.sha256);
     expect(sha256(recorderParser)).toBe(evidence.recorder.parserSha256);
     expect(sha256(launcher)).toBe(evidence.recorder.launcherSha256);
     expect(sha256(fakeUpstream)).toBe(evidence.upstream.entrySha256);
     expect(sha256(fakeUpstreamBundle)).toBe(evidence.upstream.bundleSha256);
-    expect(evidenceText).not.toMatch(/\/Users\/|\/private\/tmp\/|\/tmp\//);
+    expect(evidenceText).not.toMatch(
+      /\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+|\/private\/tmp\/|\/tmp\//
+    );
     expect(evidenceText).not.toMatch(
       /"(?:session_id|session-id|request_id|request-id|total_cost|api_key|api-key)"/i
     );
@@ -746,7 +824,9 @@ describe("v1.1.3 named-host evidence", () => {
       rawHostTranscriptCommitted: false,
       rawAuditCommitted: false
     });
-    expect(evidenceText).not.toMatch(/\/Users\/|\/private\/tmp\/|\/tmp\//);
+    expect(evidenceText).not.toMatch(
+      /\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+|\/private\/tmp\/|\/tmp\//
+    );
     expect(evidenceText).not.toMatch(
       /"(?:session_id|session-id|request_id|request-id|total_cost|api_key|api-key)"/i
     );
