@@ -49,11 +49,32 @@ describe("MCP compatibility documentation contract", () => {
     expect(documentation).toContain("initialized STDIO `2025-06-18`");
     expect(documentation).toContain("Claude Code | `2.1.235` on macOS 26.3 arm64");
     expect(documentation).toContain("modern STDIO `2026-07-28`");
-    expect(documentation).toContain("Claude Desktop | `1.26832.0` observed on macOS");
+    expect(documentation).toContain(
+      "Claude Desktop | `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23"
+    );
+    const claudeDesktopRow = documentation
+      .split("\n")
+      .find((line) => line.startsWith("| Claude Desktop |"));
+    expect(claudeDesktopRow).toContain("No Desktop protocol exchange was executed.");
+    expect(claudeDesktopRow).not.toContain("named-host-runtime");
     expect(documentation).toContain("VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64)");
     expect(documentation).toContain("Cursor | Not installed in the audit environment");
     expect(documentation).toContain("configuration-shape destinations");
     expect(documentation).toContain("No version or runtime compatibility claim");
+  });
+
+  it("keeps the blocked Claude Desktop attempt out of runtime evidence", async () => {
+    const [documentation, retirementEvidence] = await Promise.all([
+      readFile(compatibilityUrl, "utf8"),
+      readFile(retirementEvidenceUrl, "utf8")
+    ]);
+
+    expect(documentation).toContain("Runtime compatibility remains unverified");
+    expect(retirementEvidence).toContain(
+      "This attempt stopped before a Desktop protocol exchange, so it is **not** `named-host-runtime` evidence."
+    );
+    expect(retirementEvidence).toContain("Use a separate macOS test user");
+    expect(retirementEvidence).toContain("Do not commit the raw host transcript");
   });
 
   it("pins the packaged Inspector gate and keeps retirement outside v1.1", async () => {
