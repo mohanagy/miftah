@@ -385,7 +385,7 @@
     "Stopping the Desktop response did not emit an MCP cancellation within the observation window; the upstream cancellation marker appeared only after host shutdown and the terminal audit was failure, not cancelled.",
     "Codex CLI 0.149.0 forwarded all three list-change notifications during one successful call but emitted no Roots request, Roots refresh, resource subscription, or resource update in the bounded feature attempt.",
     "Interrupting noninteractive Codex with SIGINT after the long tool call started terminated the MCP process without a downstream cancellation, upstream cancellation marker, tool response, or terminal tool-call audit.",
-    "Zero means not observed in these exact Claude Desktop 1.34493.1 and Codex CLI 0.149.0 attempts, not that the operation is unsupported by every version or workflow of either host."
+    "Zero-valued Roots, notification, subscription, and resource-update fields mean not observed in these exact Claude Desktop 1.34493.1 and Codex CLI 0.149.0 attempts, not that the operation is unsupported by every version or workflow of either host."
   ],
   "privacy": {
     "existingDesktopAccountUsed": true,
