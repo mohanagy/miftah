@@ -115,11 +115,33 @@ Sampling, MCP Logging, standalone downstream HTTP+SSE, Tasks, MCP Apps, and Ente
 | MCP Inspector | `2.1.0`; `packaged-test` on Linux Node 22 | `tools/list` over installed-package STDIO and modern Streamable HTTP | No UI, OAuth, legacy HTTP, Roots, subscription, or notification claim |
 | Codex CLI `0.148.0` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Initialized STDIO `2025-06-18`, one successful `tools/list`, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no broader legacy-feature, provider, usage, migration, or rollback claim |
 | Claude Code `2.1.235` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Modern STDIO `2026-07-28`, successful prompt/resource/tool discovery, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no approval, OAuth, HTTP, provider, usage, migration, or rollback claim |
-| Claude Desktop `1.26832.0` observed on macOS | `configuration-shape` | Generated `mcpServers` STDIO configuration | No headless packaged runtime transcript |
+| Claude Desktop `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23 | `configuration-shape`; runtime attempt blocked before an exchange | Generated `mcpServers` STDIO configuration; exact Miftah 1.1.3 registry artifact verified | Existing user-owned Desktop state was not inspected or changed; no supported isolated profile/configuration mechanism was verified |
 | VS Code `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64) observed on macOS | `configuration-shape` | Generated STDIO configuration | No packaged runtime transcript |
 | Cursor | Not installed in the 2026-08-12 audit environment; `configuration-shape` only | Generated STDIO configuration | No version or runtime claim |
 
 This matrix inherits the named-host observation date and claim boundaries from [MCP protocol and client compatibility](mcp-compatibility.md). Codex CLI and Claude Code have the bounded exact-package runtime evidence stated above; every other version-only observation remains configuration-shape evidence.
+
+### Claude Desktop runtime attempt — 2026-08-23
+
+This attempt stopped before a Desktop protocol exchange, so it is **not** `named-host-runtime` evidence.
+
+| Field | Recorded value |
+| --- | --- |
+| Observed host | Claude Desktop `1.34493.1`; macOS 26.3 arm64 |
+| Intended package | Exact published `@lubab/miftah@1.1.3`; npm shasum `b78879cd67541ea73796d242e0498e26e2f17002`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==` |
+| Existing state | Claude Desktop was running with an existing user-owned configuration, and its launched Miftah executable reported `1.1.2`. No configuration content, credential, account metadata, prompt, response, or session identifier was read or copied. |
+| Isolation result | Anthropic's documented local-server flow uses the current user's Desktop settings or `claude_desktop_config.json`. No documented supported isolated profile/configuration switch was verified in [the local MCP setup guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) or [the local-versus-remote connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp). Undocumented application strings were not treated as a supported isolation contract. |
+| Outcome | The maintainer declined to read, copy, overwrite, or restart the live Desktop setup. Generated configuration remains `configuration-shape` evidence only. |
+
+Required handoff for a valid retry:
+
+1. Use a separate macOS test user with fresh Claude Desktop state; the maintainer signs in through the app without sharing credentials or session material.
+2. In an isolated working directory, install exact `@lubab/miftah@1.1.3` and verify the version, npm integrity, provenance, and installed CLI hash. Use the deterministic fake upstream and recorder from source commit `22d997379573bb812d9d5f89c84613f238e3bb9c`.
+3. Create one non-secret Miftah profile whose STDIO upstream is the absolute Node executable plus `tests/fixtures/fake-upstream.mjs`. Use only fixed marker and audit files inside that isolated directory.
+4. Add one entry only to the test user's Desktop `mcpServers`. Its absolute command and argument array must launch Node, then `named-host-stdio-recorder.mjs`, then the exact installed Miftah CLI with `--config` pointing to the fixture configuration. Restart Desktop in that test user.
+5. In a new Desktop conversation, confirm the test connector is available and invoke the deterministic upstream's `whoami` tool once with `{}`. Do not use a real provider or account profile.
+6. Exit Desktop cleanly, then verify the recorder, redacted Miftah audit entries, upstream initialization, list/call counts, expected non-secret fixture result, shutdown marker, and process exit state.
+7. Persist only the same bounded fields as `tests/fixtures/named-host-v1.1.3-evidence.json`. Do not commit the raw host transcript, prompts, arguments, tool content, local paths, session identifiers, account metadata, audit file, or marker files.
 
 ## Published package evidence records
 
