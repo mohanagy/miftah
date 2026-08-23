@@ -12,6 +12,9 @@ const evidencePath = fileURLToPath(
 const recorderPath = fileURLToPath(
   new URL("./fixtures/named-host-stdio-recorder.mjs", import.meta.url)
 );
+const recorderParserPath = fileURLToPath(
+  new URL("./fixtures/named-host-recorder-parser.mjs", import.meta.url)
+);
 const fakeUpstreamPath = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
 const fakeUpstreamBundlePath = fileURLToPath(
   new URL("./fixtures/fake-upstream-bundled.mjs", import.meta.url)
@@ -20,6 +23,27 @@ const fakeUpstreamBundlePath = fileURLToPath(
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 describe("v1.1.3 named-host evidence", () => {
+  it("preserves UTF-8 metadata split across arbitrary input chunks", async () => {
+    const { createLineRecorder } = await import(
+      new URL("./fixtures/named-host-recorder-parser.mjs", import.meta.url).href
+    );
+    const messages: unknown[] = [];
+    const recordLines = createLineRecorder();
+    const message = Buffer.from(
+      `${JSON.stringify({ serverInfo: { name: "fixture-sérver", version: "1.0.0" } })}\n`,
+      "utf8"
+    );
+    const splitAt = message.indexOf(Buffer.from([0xc3])) + 1;
+
+    recordLines("server", message.subarray(0, splitAt), (value: unknown) => messages.push(value));
+    expect(messages).toEqual([]);
+    recordLines("server", message.subarray(splitAt), (value: unknown) => messages.push(value));
+
+    expect(messages).toEqual([
+      { serverInfo: { name: "fixture-sérver", version: "1.0.0" } }
+    ]);
+  });
+
   it("preserves discovered server metadata when later responses omit it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-named-host-recorder-"));
     try {
@@ -154,15 +178,17 @@ describe("v1.1.3 named-host evidence", () => {
   });
 
   it("binds the normalized record to the reviewed fixtures and excludes raw host data", async () => {
-    const [evidenceText, recorder, fakeUpstream, fakeUpstreamBundle] = await Promise.all([
+    const [evidenceText, recorder, recorderParser, fakeUpstream, fakeUpstreamBundle] = await Promise.all([
       readFile(evidencePath, "utf8"),
       readFile(recorderPath),
+      readFile(recorderParserPath),
       readFile(fakeUpstreamPath),
       readFile(fakeUpstreamBundlePath)
     ]);
     const evidence = JSON.parse(evidenceText);
 
     expect(sha256(recorder)).toBe(evidence.recorder.sha256);
+    expect(sha256(recorderParser)).toBe(evidence.recorder.parserSha256);
     expect(sha256(fakeUpstream)).toBe(evidence.upstream.entrySha256);
     expect(sha256(fakeUpstreamBundle)).toBe(evidence.upstream.bundleSha256);
     expect(evidence.privacy).toMatchObject({

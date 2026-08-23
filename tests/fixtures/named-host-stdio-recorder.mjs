@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
+import { createLineRecorder } from "./named-host-recorder-parser.mjs";
 
 const [outputPath, command, ...args] = process.argv.slice(2);
 if (outputPath === undefined || command === undefined) {
@@ -13,7 +13,6 @@ if (outputPath === undefined || command === undefined) {
 const requestMethods = new Map();
 const requestProtocols = new Map();
 const maxPendingRequests = 1_024;
-const maxParseBufferBytes = 1024 * 1024;
 const protocolVersionMetaKey = "io.modelcontextprotocol/protocolVersion";
 const clientInfoMetaKey = "io.modelcontextprotocol/clientInfo";
 const serverInfoMetaKey = "io.modelcontextprotocol/serverInfo";
@@ -26,7 +25,6 @@ const observations = {
   operations: {},
   process: null
 };
-const buffers = { client: Buffer.alloc(0), server: Buffer.alloc(0) };
 
 const requestKey = (id) => JSON.stringify(id);
 
@@ -128,28 +126,7 @@ const recordServerMessage = (message) => {
   }
 };
 
-const recordLines = (direction, chunk, recordMessage) => {
-  if (chunk.length > maxParseBufferBytes || buffers[direction].length + chunk.length > maxParseBufferBytes) {
-    buffers[direction] = Buffer.alloc(0);
-    return;
-  }
-  buffers[direction] =
-    buffers[direction].length === 0
-      ? chunk
-      : Buffer.concat([buffers[direction], chunk], buffers[direction].length + chunk.length);
-  for (;;) {
-    const newline = buffers[direction].indexOf(0x0a);
-    if (newline === -1) return;
-    const line = buffers[direction].subarray(0, newline).toString("utf8").trim();
-    buffers[direction] = buffers[direction].subarray(newline + 1);
-    if (line === "") continue;
-    try {
-      recordMessage(JSON.parse(line));
-    } catch {
-      // Preserve the byte stream for the real client and server, but never persist unparsed content.
-    }
-  }
-};
+const recordLines = createLineRecorder();
 
 const child = spawn(command, args, {
   env: process.env,
