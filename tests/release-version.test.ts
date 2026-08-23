@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.1.2";
+const releaseVersion = "1.1.3";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.1.2 release artifacts", () => {
+describe("v1.1.3 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.1.2] - 2026-8-14\n\n### Changed\n"
+      changelog: "## [1.1.3] - 2026-8-23\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.1.2] - 2026-08-14\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.3] - 2026-08-23\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,19 +71,19 @@ describe("v1.1.2 release artifacts", () => {
     }
   });
 
-  it("documents the v1.1.2 usability and identity fixes and their evidence boundary", () => {
+  it("documents the v1.1.3 compatibility evidence and its retirement boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
     expect(notes).toContain("### Changed");
-    expect(notes).toContain("### Fixed");
-    for (const issue of [404, 405, 409]) {
+    for (const issue of [388, 413, 416, 420]) {
       expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("active-profile lifetime");
-    expect(notes).toContain("account-identity contract");
-    expect(notes).toContain("stable evidence-collection baseline");
-    expect(notes).toContain("does not authorize removing any legacy behavior");
+    expect(notes).toContain("exact-package initialized STDIO and Streamable HTTP harnesses");
+    expect(notes).toContain("nanoid");
+    expect(notes).toContain("GHSA-2v37-7h3g-55p8");
+    expect(notes).toContain("zero-known-vulnerability audit");
+    expect(notes).toContain("does not authorize removal of any legacy behavior");
     expect(notes).toContain("protected OIDC trusted publishing");
     expect(notes).toContain("registry provenance");
 
@@ -99,7 +99,8 @@ describe("v1.1.2 release artifacts", () => {
     expect(readme).toContain(`npm install -g @lubab/miftah@${releaseVersion}`);
     expect(compatibilityGuide).toContain(`Miftah package version: \`${releaseVersion}\``);
     expect(protocolCompatibilityGuide).toContain(`Miftah baseline: \`${releaseVersion}\``);
-    expect(protocolCompatibilityGuide).toContain("No packaged runtime exchange was completed for this audit");
+    expect(protocolCompatibilityGuide).toContain("The exact published-v1.1.2 transcripts prove initialized STDIO");
+    expect(protocolCompatibilityGuide).toContain("initialized Streamable HTTP session assignment");
     expect(libraryGuide).toContain("Starting with Miftah 1.0, these public surfaces follow Semantic Versioning");
     expect(libraryGuide).toContain("requires a new major release");
   });

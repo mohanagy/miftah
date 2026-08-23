@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -55,6 +55,12 @@ const npmTerminationGraceMs = 250;
 const npmCliPath = process.env.npm_execpath;
 const typescriptCliPath = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const fakeStdioUpstreamFixture = fileURLToPath(new URL("./fixtures/fake-upstream.mjs", import.meta.url));
+const legacyStdioArtifactConsumerFixture = fileURLToPath(
+  new URL("./fixtures/legacy-stdio-artifact-consumer.mjs", import.meta.url)
+);
+const legacyHttpArtifactConsumerFixture = fileURLToPath(
+  new URL("./fixtures/legacy-http-artifact-consumer.mjs", import.meta.url)
+);
 const publicRuntimeExports = [
   "AuthenticatedRequestContextError",
   "CURRENT_CONFIG_VERSION",
@@ -774,13 +780,13 @@ describe("package metadata contract", () => {
     assertPatchedFastUriLockEntries(lock);
   });
 
-  it("locks the patched transitive security releases tracked by #373", () => {
+  it("locks the patched transitive security releases tracked by #373 and #420", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
     const expectedOverrides = {
       "brace-expansion": "5.0.9",
       "ip-address": "10.3.1",
-      nanoid: "3.3.17"
+      nanoid: "3.3.18"
     } as const;
 
     for (const [packageName, expectedVersion] of Object.entries(expectedOverrides)) {
@@ -1291,6 +1297,75 @@ describe("packed artifact contract", () => {
         expect(JSON.parse(protocolConsumer.stdout)).toEqual({
           modern: { era: ["modern"], protocol: "2026-07-28", hasWhoami: true },
           legacy: { era: ["legacy"], protocol: "2025-11-25", hasWhoami: true }
+        });
+
+        const legacyStdioConsumerPath = join(directory, "legacy-stdio-artifact-consumer.mjs");
+        await copyFile(legacyStdioArtifactConsumerFixture, legacyStdioConsumerPath);
+        const legacyStdioConsumer = spawnSync(
+          process.execPath,
+          [legacyStdioConsumerPath, fakeStdioUpstreamFixture],
+          { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
+        );
+        expect(legacyStdioConsumer.status, legacyStdioConsumer.stderr || legacyStdioConsumer.stdout).toBe(0);
+        const legacyStdioEvidence = JSON.parse(legacyStdioConsumer.stdout) as Record<string, unknown>;
+        const { cancellation: legacyCancellation, ...stableLegacyStdioEvidence } = legacyStdioEvidence;
+        expect(stableLegacyStdioEvidence).toEqual({
+          protocol: "2025-11-25",
+          roots: { initialized: "personal", refreshed: "work", requests: 2 },
+          subscriptions: {
+            advertised: true,
+            updateForwarded: true,
+            subscribeCount: 1,
+            unsubscribeCount: 1
+          },
+          listChanges: { advertised: true, tools: true, resources: true, prompts: true },
+          cleanup: { personal: true, work: true },
+          stderrEmpty: true
+        });
+        const {
+          downstreamRejected,
+          upstreamNotifications,
+          ...legacyTerminalAudit
+        } = legacyCancellation as Record<string, unknown>;
+        expect({ downstreamRejected, upstreamNotifications }).toEqual({
+          downstreamRejected: true,
+          upstreamNotifications: 1
+        });
+        expect(legacyTerminalAudit).toEqual({
+          terminalAuditEvents: 1,
+          lastAuditStatus: "cancelled",
+          lastAuditErrorCode: "REQUEST_CANCELLED"
+        });
+
+        const legacyHttpConsumerPath = join(directory, "legacy-http-artifact-consumer.mjs");
+        await copyFile(legacyHttpArtifactConsumerFixture, legacyHttpConsumerPath);
+        const legacyHttpConsumer = spawnSync(
+          process.execPath,
+          [legacyHttpConsumerPath, fakeStdioUpstreamFixture],
+          { cwd: directory, encoding: "utf8", timeout: npmCommandTimeoutMs }
+        );
+        expect(legacyHttpConsumer.error, String(legacyHttpConsumer.error)).toBeUndefined();
+        expect(legacyHttpConsumer.status, legacyHttpConsumer.stderr || legacyHttpConsumer.stdout).toBe(0);
+        expect(JSON.parse(legacyHttpConsumer.stdout)).toEqual({
+          protocol: "2025-11-25",
+          session: { mcpSessionIdAssigned: true, terminationProbeStatus: 404, closed: true },
+          approval: {
+            elicitationCount: 1,
+            actions: ["requested", "approved", "consumed"],
+            toolExecutions: 1,
+            terminalAuditStatus: "success",
+            terminalAuditErrorCode: null,
+            sensitiveArgumentRedacted: true
+          },
+          cancellation: {
+            downstreamRejected: true,
+            upstreamNotifications: 1,
+            terminalAuditEvents: 1,
+            lastAuditStatus: "cancelled",
+            lastAuditErrorCode: "REQUEST_CANCELLED"
+          },
+          cleanup: { work: true },
+          stderrEmpty: true
         });
 
         const typeConsumerPath = join(directory, "consumer.ts");

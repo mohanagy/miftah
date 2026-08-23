@@ -173,7 +173,7 @@ describe("continuous integration workflow contract", () => {
       "brace-expansion": "5.0.9",
       "fast-uri": "3.1.5",
       "ip-address": "10.3.1",
-      nanoid: "3.3.17",
+      nanoid: "3.3.18",
       "@vitest/coverage-v8": {
         "test-exclude": {
           glob: {
@@ -205,7 +205,7 @@ describe("continuous integration workflow contract", () => {
     expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
     expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.12.34" });
     expect(lockedPackages["node_modules/ip-address"]).toMatchObject({ version: "10.3.1" });
-    expect(lockedPackages["node_modules/nanoid"]).toMatchObject({ version: "3.3.17", dev: true });
+    expect(lockedPackages["node_modules/nanoid"]).toMatchObject({ version: "3.3.18", dev: true });
     expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });
   });
 
