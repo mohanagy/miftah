@@ -1,0 +1,278 @@
+{
+  "issues": [
+    432
+  ],
+  "recordedAt": "2026-08-23",
+  "author": "Miftah maintainer",
+  "classification": "named-host-runtime",
+  "package": {
+    "name": "@lubab/miftah",
+    "version": "1.1.3",
+    "installation": "npm install --ignore-scripts --save-exact @lubab/miftah@1.1.3",
+    "integrity": "sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==",
+    "shasum": "b78879cd67541ea73796d242e0498e26e2f17002",
+    "provenancePredicate": "https://slsa.dev/provenance/v1",
+    "installedCliSha256": "1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541",
+    "verifiedRegistrySignatures": 101,
+    "verifiedAttestations": 15
+  },
+  "environment": {
+    "os": "macOS 26.3",
+    "architecture": "arm64",
+    "node": "22.22.3",
+    "npm": "11.12.1"
+  },
+  "host": {
+    "name": "Claude Desktop",
+    "hostVersion": "1.34493.1",
+    "hostBuild": "1.34493.1",
+    "bundleId": "com.anthropic.claudefordesktop",
+    "clientInfo": {
+      "name": "claude-ai",
+      "version": "0.1.0"
+    },
+    "companionClientInfo": {
+      "name": "local-agent-mode-miftah-evidence-432",
+      "version": "1.0.0"
+    },
+    "protocol": "2025-11-25",
+    "era": "initialized",
+    "transport": "stdio"
+  },
+  "upstream": {
+    "name": "deterministic fake STDIO server",
+    "version": "1.0.0",
+    "entry": "tests/fixtures/fake-upstream.mjs",
+    "entrySha256": "ded19a9fae8c1d0b89adb75db88742346ed3206a280833709ba80f4686535135",
+    "bundle": "tests/fixtures/fake-upstream-bundled.mjs",
+    "bundleSha256": "ec6a8e56de03194d0c607d26f6c4098348a0afd2e2d2d894eed46fed50bd7029"
+  },
+  "recorder": {
+    "path": "tests/fixtures/named-host-deep-stdio-recorder.mjs",
+    "sha256": "f7c531399b3d51658f7785cd1dadc4d7c16d4accb3e44ca01c6ed6cb91a99606",
+    "parserPath": "tests/fixtures/named-host-recorder-parser.mjs",
+    "parserSha256": "96d9fa6f1c6622c7a5765d7f3784cceb0f2d2b55df0f60086102510b455c4795",
+    "launcherPath": "tests/fixtures/named-host-deep-desktop-launcher.mjs",
+    "launcherSha256": "32398adf5d849a1e5535d67733af02d4cf9e6843d42e2600ff61895dd74ee755",
+    "persistedFields": [
+      "client and server name and version",
+      "protocol era and version",
+      "request method counts and transport status",
+      "notification method counts by direction",
+      "initialized notification",
+      "process exit state"
+    ]
+  },
+  "configuration": {
+    "profile": "work",
+    "accountValue": "desktop-evidence-fixture",
+    "sessionIsolation": [
+      "recorder output",
+      "Miftah configuration",
+      "audit journal",
+      "upstream markers",
+      "HOME and XDG directories"
+    ],
+    "featuresModeCallDelayMs": 0,
+    "cancellationModeCallDelayMs": 60000,
+    "featuresPrimaryConfigSha256": "6fc133871b31da96937811df71cd5af8ee901713208819b0a151aacff4a6cab7",
+    "featuresCompanionConfigSha256": "3ac078a0697b489741de876f42b0d3e3d0bd9f4170f57c1ed555a837260fd8ff",
+    "cancellationPrimaryConfigSha256": "1af90a8624b66e9af368d40ce6e200e7233e5f0442d94245dbe613f9622e7b26",
+    "cancellationCompanionConfigSha256": "e4b47e1823423818cd31fcc6862b90576368006664ad564e16bc4fdf1be9f55d"
+  },
+  "attempts": [
+    {
+      "name": "feature-continuation",
+      "primary": {
+        "initializedNotification": true,
+        "operations": {
+          "tools/list": {
+            "requests": 2,
+            "success": 2,
+            "error": 0
+          },
+          "prompts/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "resources/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "tools/call": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          }
+        },
+        "clientNotifications": {
+          "notifications/initialized": 1,
+          "notifications/roots/list_changed": 0,
+          "notifications/cancelled": 0
+        },
+        "serverNotifications": {
+          "notifications/tools/list_changed": 1,
+          "notifications/resources/list_changed": 1,
+          "notifications/prompts/list_changed": 1,
+          "notifications/resources/updated": 0
+        },
+        "resourceSubscriptions": {
+          "subscribeRequests": 0,
+          "unsubscribeRequests": 0,
+          "upstreamSubscribeMarker": false,
+          "upstreamUnsubscribeMarker": false
+        },
+        "audit": [
+          "tools/list:success",
+          "prompts/list:success",
+          "resources/list:success",
+          "tools/call:success",
+          "tools/list:success"
+        ],
+        "markers": {
+          "upstreamInitialized": true,
+          "toolList": true,
+          "toolCallStarted": true,
+          "toolCallCompleted": true,
+          "upstreamShutdown": true
+        },
+        "process": {
+          "exitCode": null,
+          "signal": "SIGTERM",
+          "spawnError": null
+        }
+      },
+      "companion": {
+        "operations": {
+          "tools/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "roots/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          }
+        },
+        "clientNotifications": {
+          "notifications/initialized": 1,
+          "notifications/roots/list_changed": 0
+        },
+        "process": {
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null
+        }
+      },
+      "manualUi": {
+        "nativeApprovalObserved": "allow-once",
+        "continuedAfterApproval": true,
+        "resultMatchedFixture": true,
+        "resourceReadAvailableToModel": false
+      }
+    },
+    {
+      "name": "host-stop-during-long-tool-call",
+      "primary": {
+        "initializedNotification": true,
+        "operations": {
+          "tools/list": {
+            "requests": 2,
+            "success": 2,
+            "error": 0
+          },
+          "prompts/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "resources/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "tools/call": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          }
+        },
+        "clientNotifications": {
+          "notifications/initialized": 1,
+          "notifications/cancelled": 0
+        },
+        "serverNotifications": {
+          "notifications/tools/list_changed": 1,
+          "notifications/resources/list_changed": 1,
+          "notifications/prompts/list_changed": 1
+        },
+        "auditTerminal": {
+          "operation": "tools/call",
+          "status": "failure",
+          "errorCode": "UPSTREAM_CALL_FAILED"
+        },
+        "cancellation": {
+          "toolStartedBeforeHostStop": true,
+          "hostUiReportedInterrupted": true,
+          "clientCancellationNotifications": 0,
+          "upstreamCancellationMarkerWithinTenSecondsOfHostStop": false,
+          "upstreamCancellationMarkerAfterHostShutdown": true,
+          "cancelledAuditTerminalObserved": false
+        },
+        "process": {
+          "exitCode": null,
+          "signal": "SIGTERM",
+          "spawnError": null
+        }
+      },
+      "companion": {
+        "operations": {
+          "tools/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          },
+          "roots/list": {
+            "requests": 1,
+            "success": 1,
+            "error": 0
+          }
+        },
+        "process": {
+          "exitCode": null,
+          "signal": "SIGTERM",
+          "spawnError": null
+        }
+      },
+      "manualUi": {
+        "nativeApprovalObserved": "allow-once",
+        "stopControlUsedAfterToolStart": true
+      }
+    }
+  ],
+  "claimBoundary": [
+    "Roots list was observed only in Desktop's isolated local-agent-mode companion session.",
+    "No roots list-changed notification, resource subscribe, resource unsubscribe, or resource-updated notification was observed in these bounded attempts.",
+    "Desktop forwarded tools, resources, and prompts list-changed notifications after the fake tool call.",
+    "Desktop native allow-once approval continued to one successful deterministic tool result.",
+    "Stopping the Desktop response did not emit an MCP cancellation within the observation window; the upstream cancellation marker appeared only after host shutdown and the terminal audit was failure, not cancelled.",
+    "Zero means not observed in these exact attempts, not unsupported by every Desktop version or workflow."
+  ],
+  "privacy": {
+    "existingDesktopAccountUsed": true,
+    "newAccountCreated": false,
+    "originalConfigBackedUp": true,
+    "originalConfigRestoredByteForByte": true,
+    "backupRetained": true,
+    "rawHostTranscriptCommitted": false,
+    "rawAuditCommitted": false,
+    "promptsCommitted": false,
+    "argumentsOrToolContentCommitted": false,
+    "localPathsCommitted": false,
+    "sessionOrRequestIdsCommitted": false,
+    "accountMetadataCommitted": false
+  }
+}
