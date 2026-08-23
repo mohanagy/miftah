@@ -271,7 +271,16 @@ These zeros mean **not observed in these exact attempts**. They do not prove tha
 
 ### Codex CLI deep named-host attempts — 2026-08-23
 
-Codex CLI `0.149.0` ran noninteractively against the same exact published package, fake upstream, expanded recorder, and per-process isolation launcher. It reused the maintainer's existing Codex authentication in a mode-0700 temporary home; no account was created. User configuration and project rules were ignored, the run was ephemeral, and app/plugin surfaces were disabled so the named Miftah server was the only permitted MCP target. Authentication material and raw Codex output are not committed.
+Codex CLI `0.149.0` ran noninteractively against the same published package, fake upstream, expanded recorder, and per-process isolation launcher. It reused the maintainer's existing Codex authentication in a mode-0700 temporary home; no account was created. User configuration and project rules were ignored, the run was ephemeral, and app/plugin surfaces were disabled so the named Miftah server was the only permitted MCP target. Authentication material and raw Codex output are not committed.
+
+| Field | Recorded value |
+| --- | --- |
+| Host | Codex CLI `0.149.0` (`codex-mcp-client/0.149.0`) on macOS 26.3 arm64; initialized STDIO `2025-06-18` |
+| Environment | Node 22.22.3; npm 11.12.1; existing authentication copied into a mode-0700 temporary home; no new account |
+| Package | Exact published `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
+| Recorder | Executed `tests/fixtures/named-host-deep-stdio-recorder.mjs`, SHA-256 `e50e7f0417d79a184c16c19b088e8fffae009693e4ca2bd5492eb9299a2b663a` |
+| Reviewed configurations | Feature configuration SHA-256 `3f130d79df1216f7c75c47c30421c29828a1c8db87d50f6ccacf7272a635a8d0`; cancellation configuration SHA-256 `9f60dc99d5f109662ca7f4e8cb3516d7209fb08612b05646067bb8e58bab3244` |
+| Privacy boundary | Authentication material, raw Codex output, prompts, arguments, tool content, local paths, session identifiers, account metadata, and user configuration are not committed |
 
 Feature result:
 
