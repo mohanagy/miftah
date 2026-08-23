@@ -171,12 +171,12 @@ The same reviewed fixture runs against a clean tarball from current `development
 
 | Field | Recorded value |
 | --- | --- |
-| Author and evidence class | `@mohanagy`; `named-host-runtime` |
+| Author and evidence class | `Miftah maintainer`; `named-host-runtime` |
 | Package | Exact `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; npm SLSA provenance predicate v1; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
 | Environment | macOS 26.3 arm64 (`Darwin 25.3.0`), Node 22.22.3, npm 11.12.1; fresh exact npm install |
 | Upstream | Deterministic fake STDIO upstream `1.0.0`; entry SHA-256 `ded19a9fae8c1d0b89adb75db88742346ed3206a280833709ba80f4686535135`; bundle SHA-256 `ec6a8e56de03194d0c607d26f6c4098348a0afd2e2d2d894eed46fed50bd7029` |
-| Recorder | `tests/fixtures/named-host-stdio-recorder.mjs`, SHA-256 `bc8a3cf340d35a91f228a196d0b2e9b00f8e353d4bd6c5c3a8aeb5fb43a8989e`; persists only client/server version, protocol, operation name/count/status, initialized notification, and process exit state |
-| Reviewed configuration | One non-secret `work` profile and fixed marker/audit paths. Executed SHA-256 values: Codex Miftah `48eb40c023936da31aefa5a3db9cf3220affd8196ebc24685b90adac9f1b0003`; Claude Miftah `86b19c483f0eb270e96356ddcb1b8c0f68309bf246973fa2dff2850c194a8062`; Claude host `66cb9a7023c9cee228c069d9b194734428b3a56dfc3dabd416e3e6ade9e3fd32`. The redacted shape is retained in `tests/fixtures/named-host-v1.1.3-evidence.json`. |
+| Recorder | `tests/fixtures/named-host-stdio-recorder.mjs`, SHA-256 `ca00d3f1a9da9bcaaad6b4906293733df653ecbdf7eb40f7e1e39ab04b3465a4`; persists only client/server version, protocol, operation name/count/status, initialized notification, and process exit state |
+| Reviewed configuration | One non-secret `work` profile and fixed marker/audit paths. Executed SHA-256 values: Codex Miftah `5d6426878d55518ded1bfdc8eab5e5ad82acd4c61cd9edb0ed3b4d74a24d95d8`; Claude Miftah `58f1a054b6011d7a1febffe656a8c97140e83980ee9eb24ad1dd568cdf39dc9b`; Claude host `047e27701b75a4b451dc0d2890c800615d038121d56334ebcbb5791992e0e649`. The redacted shape is retained in `tests/fixtures/named-host-v1.1.3-evidence.json`. |
 | Privacy boundary | Raw host JSON and audit JSONL are not committed. The normalized record excludes prompts, arguments, content, session/request identifiers, paths, environment secrets, account metadata, and model usage/cost. |
 
 Codex CLI normalized result:

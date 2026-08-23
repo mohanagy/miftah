@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 
@@ -11,6 +12,8 @@ if (outputPath === undefined || command === undefined) {
 
 const requestMethods = new Map();
 const requestProtocols = new Map();
+const maxPendingRequests = 1_024;
+const maxParseBufferBytes = 1024 * 1024;
 const protocolVersionMetaKey = "io.modelcontextprotocol/protocolVersion";
 const clientInfoMetaKey = "io.modelcontextprotocol/clientInfo";
 const serverInfoMetaKey = "io.modelcontextprotocol/serverInfo";
@@ -32,6 +35,19 @@ const safeImplementation = (value) => ({
   version: typeof value?.version === "string" ? value.version : null
 });
 
+const hasImplementationMetadata = (value) =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  (typeof value.name === "string" || typeof value.version === "string");
+
+const makeRoomForRequest = (key) => {
+  if (requestMethods.has(key) || requestMethods.size < maxPendingRequests) return;
+  const oldestKey = requestMethods.keys().next().value;
+  requestMethods.delete(oldestKey);
+  requestProtocols.delete(oldestKey);
+};
+
 const incrementOperation = (method, status) => {
   const current = observations.operations[method] ?? { requests: 0, success: 0, error: 0 };
   current[status] += 1;
@@ -43,7 +59,9 @@ const recordClientMessage = (message) => {
   if (typeof message.method !== "string") return;
 
   if (message.id !== undefined) {
-    requestMethods.set(requestKey(message.id), message.method);
+    const key = requestKey(message.id);
+    makeRoomForRequest(key);
+    requestMethods.set(key, message.method);
     if (["server/discover", "tools/list", "tools/call", "prompts/list", "resources/list"].includes(message.method)) {
       incrementOperation(message.method, "requests");
     }
@@ -95,10 +113,13 @@ const recordServerMessage = (message) => {
         typeof message.result.protocolVersion === "string" ? message.result.protocolVersion : null
     };
   } else if (message.result !== undefined && typeof requestProtocol === "string") {
-    observations.server = {
-      ...safeImplementation(message.result?._meta?.[serverInfoMetaKey]),
-      negotiatedProtocol: requestProtocol
-    };
+    const serverInfo = message.result?._meta?.[serverInfoMetaKey];
+    if (hasImplementationMetadata(serverInfo)) {
+      observations.server = {
+        ...safeImplementation(serverInfo),
+        negotiatedProtocol: requestProtocol
+      };
+    }
     if (method === "server/discover" && Array.isArray(message.result.supportedVersions)) {
       observations.supportedVersions = message.result.supportedVersions.filter(
         (version) => typeof version === "string"
@@ -108,7 +129,16 @@ const recordServerMessage = (message) => {
 };
 
 const recordLines = (direction, chunk, recordMessage) => {
-  buffers[direction] += chunk.toString("utf8");
+  const decoded = chunk.toString("utf8");
+  if (
+    Buffer.byteLength(decoded, "utf8") > maxParseBufferBytes ||
+    Buffer.byteLength(buffers[direction], "utf8") + Buffer.byteLength(decoded, "utf8") >
+      maxParseBufferBytes
+  ) {
+    buffers[direction] = "";
+    return;
+  }
+  buffers[direction] += decoded;
   for (;;) {
     const newline = buffers[direction].indexOf("\n");
     if (newline === -1) return;

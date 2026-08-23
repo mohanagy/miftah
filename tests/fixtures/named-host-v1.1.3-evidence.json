@@ -1,7 +1,7 @@
 {
   "issue": 423,
   "recordedAt": "2026-08-23",
-  "author": "@mohanagy",
+  "author": "Miftah maintainer",
   "classification": "named-host-runtime",
   "package": {
     "name": "@lubab/miftah",
@@ -28,7 +28,7 @@
   },
   "recorder": {
     "path": "tests/fixtures/named-host-stdio-recorder.mjs",
-    "sha256": "bc8a3cf340d35a91f228a196d0b2e9b00f8e353d4bd6c5c3a8aeb5fb43a8989e",
+    "sha256": "ca00d3f1a9da9bcaaad6b4906293733df653ecbdf7eb40f7e1e39ab04b3465a4",
     "persistedFields": [
       "client name and version",
       "server name and version",
@@ -70,9 +70,9 @@
       }
     },
     "executedSha256": {
-      "codexMiftah": "48eb40c023936da31aefa5a3db9cf3220affd8196ebc24685b90adac9f1b0003",
-      "claudeMiftah": "86b19c483f0eb270e96356ddcb1b8c0f68309bf246973fa2dff2850c194a8062",
-      "claudeHost": "66cb9a7023c9cee228c069d9b194734428b3a56dfc3dabd416e3e6ade9e3fd32"
+      "codexMiftah": "5d6426878d55518ded1bfdc8eab5e5ad82acd4c61cd9edb0ed3b4d74a24d95d8",
+      "claudeMiftah": "58f1a054b6011d7a1febffe656a8c97140e83980ee9eb24ad1dd568cdf39dc9b",
+      "claudeHost": "047e27701b75a4b451dc0d2890c800615d038121d56334ebcbb5791992e0e649"
     }
   },
   "clients": [
