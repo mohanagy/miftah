@@ -52,6 +52,11 @@ describe("MCP compatibility documentation contract", () => {
     expect(documentation).toContain(
       "Claude Desktop | `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23"
     );
+    const claudeDesktopRow = documentation
+      .split("\n")
+      .find((line) => line.startsWith("| Claude Desktop |"));
+    expect(claudeDesktopRow).toContain("No Desktop protocol exchange was executed.");
+    expect(claudeDesktopRow).not.toContain("named-host-runtime");
     expect(documentation).toContain("VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64)");
     expect(documentation).toContain("Cursor | Not installed in the audit environment");
     expect(documentation).toContain("configuration-shape destinations");
