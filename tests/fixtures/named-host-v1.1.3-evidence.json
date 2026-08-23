@@ -1,0 +1,240 @@
+{
+  "issue": 423,
+  "recordedAt": "2026-08-23",
+  "author": "@mohanagy",
+  "classification": "named-host-runtime",
+  "package": {
+    "name": "@lubab/miftah",
+    "version": "1.1.3",
+    "installation": "npm install @lubab/miftah@1.1.3",
+    "integrity": "sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==",
+    "shasum": "b78879cd67541ea73796d242e0498e26e2f17002",
+    "provenancePredicate": "https://slsa.dev/provenance/v1",
+    "installedCliSha256": "1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541"
+  },
+  "environment": {
+    "os": "macOS 26.3",
+    "architecture": "arm64",
+    "node": "22.22.3"
+  },
+  "upstream": {
+    "name": "deterministic fake STDIO server",
+    "version": "1.0.0",
+    "transport": "stdio",
+    "entry": "tests/fixtures/fake-upstream.mjs",
+    "entrySha256": "ded19a9fae8c1d0b89adb75db88742346ed3206a280833709ba80f4686535135",
+    "bundle": "tests/fixtures/fake-upstream-bundled.mjs",
+    "bundleSha256": "ec6a8e56de03194d0c607d26f6c4098348a0afd2e2d2d894eed46fed50bd7029"
+  },
+  "recorder": {
+    "path": "tests/fixtures/named-host-stdio-recorder.mjs",
+    "sha256": "bc8a3cf340d35a91f228a196d0b2e9b00f8e353d4bd6c5c3a8aeb5fb43a8989e",
+    "persistedFields": [
+      "client name and version",
+      "server name and version",
+      "protocol era and version",
+      "operation names and counts",
+      "operation status",
+      "initialized notification",
+      "process exit state"
+    ]
+  },
+  "configuration": {
+    "shape": {
+      "version": "1",
+      "defaultProfile": "work",
+      "upstream": {
+        "transport": "stdio",
+        "command": "<node-22.22.3>",
+        "args": [
+          "<deterministic-fake-upstream>"
+        ]
+      },
+      "profiles": {
+        "work": {
+          "env": {
+            "TEST_ACCOUNT_NAME": "<non-secret-fixture-value>",
+            "TEST_INITIALIZED_PATH": "<isolated-marker>",
+            "TEST_LIST_TOOLS_COUNT_PATH": "<isolated-marker>",
+            "TEST_CALL_TOOL_COUNT_PATH": "<isolated-marker>",
+            "TEST_SHUTDOWN_END_PATH": "<isolated-marker>"
+          }
+        }
+      },
+      "audit": {
+        "path": "<isolated-audit>"
+      },
+      "process": {
+        "startupTimeoutMs": 5000,
+        "shutdownTimeoutMs": 5000
+      }
+    },
+    "executedSha256": {
+      "codexMiftah": "48eb40c023936da31aefa5a3db9cf3220affd8196ebc24685b90adac9f1b0003",
+      "claudeMiftah": "86b19c483f0eb270e96356ddcb1b8c0f68309bf246973fa2dff2850c194a8062",
+      "claudeHost": "66cb9a7023c9cee228c069d9b194734428b3a56dfc3dabd416e3e6ade9e3fd32"
+    }
+  },
+  "clients": [
+    {
+      "host": "Codex CLI",
+      "hostVersion": "0.148.0",
+      "clientInfo": {
+        "name": "codex-mcp-client",
+        "version": "0.148.0"
+      },
+      "downstreamTransport": "stdio",
+      "era": "initialized",
+      "protocol": "2025-06-18",
+      "initializedNotification": true,
+      "operations": {
+        "tools/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/call": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        }
+      },
+      "audit": [
+        {
+          "operation": "tools/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "tools/call",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        }
+      ],
+      "markers": {
+        "upstreamInitialized": true,
+        "toolList": true,
+        "toolCall": true,
+        "upstreamShutdown": true
+      },
+      "serverProcess": {
+        "exitCode": null,
+        "signal": "SIGTERM",
+        "spawnError": null
+      },
+      "toolResultMatchedFixture": true,
+      "isolation": [
+        "ephemeral session",
+        "ignored user config",
+        "ignored project rules",
+        "isolated working directory",
+        "automatic approval review"
+      ],
+      "knownLimitations": [
+        "The transcript proves one tools/list and one tools/call only.",
+        "Approval policy never rejected the call before upstream execution; the successful run used Codex approve-for-me.",
+        "The host ended the MCP process with SIGTERM; Miftah still produced the deterministic upstream shutdown marker.",
+        "The observed 2025-06-18 negotiation is not a blanket compatibility claim for every older initialized revision."
+      ]
+    },
+    {
+      "host": "Claude Code",
+      "hostVersion": "2.1.235",
+      "clientInfo": {
+        "name": "claude-code",
+        "version": "2.1.235"
+      },
+      "downstreamTransport": "stdio",
+      "era": "modern",
+      "protocol": "2026-07-28",
+      "initializedNotification": false,
+      "operations": {
+        "prompts/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "resources/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/call": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        }
+      },
+      "audit": [
+        {
+          "operation": "prompts/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "resources/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "tools/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "tools/call",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        }
+      ],
+      "markers": {
+        "upstreamInitialized": true,
+        "toolList": true,
+        "toolCall": true,
+        "upstreamShutdown": true
+      },
+      "serverProcess": {
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null
+      },
+      "toolResultMatchedFixture": true,
+      "isolation": [
+        "strict MCP config",
+        "empty setting sources",
+        "no session persistence",
+        "only the named MCP tool allowed"
+      ],
+      "knownLimitations": [
+        "The transcript proves prompts/list, resources/list, tools/list, and one tools/call only.",
+        "It does not prove Roots, subscriptions, cancellation, approval continuation, OAuth, or Streamable HTTP in Claude Code.",
+        "It is named-host compatibility evidence, not real provider usage or a usage attestation."
+      ]
+    }
+  ],
+  "privacy": {
+    "rawHostTranscriptCommitted": false,
+    "rawAuditCommitted": false,
+    "excluded": [
+      "prompts",
+      "arguments",
+      "tool content",
+      "session identifiers",
+      "local paths",
+      "environment secrets",
+      "account metadata",
+      "model usage and cost"
+    ]
+  }
+}

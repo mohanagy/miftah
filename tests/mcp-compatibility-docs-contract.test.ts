@@ -45,11 +45,14 @@ describe("MCP compatibility documentation contract", () => {
       expect(lockfile.packages[`node_modules/@modelcontextprotocol/${name}`]?.version).toBe("2.0.0");
     }
     expect(documentation).toContain("MCP Inspector | `2.1.0`");
-    expect(documentation).toContain("Claude Code | `2.1.228` observed on macOS");
+    expect(documentation).toContain("Codex CLI | `0.148.0` on macOS 26.3 arm64");
+    expect(documentation).toContain("initialized STDIO `2025-06-18`");
+    expect(documentation).toContain("Claude Code | `2.1.235` on macOS 26.3 arm64");
+    expect(documentation).toContain("modern STDIO `2026-07-28`");
     expect(documentation).toContain("Claude Desktop | `1.26832.0` observed on macOS");
     expect(documentation).toContain("VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64)");
     expect(documentation).toContain("Cursor | Not installed in the audit environment");
-    expect(documentation).toContain("protocol compatibility remains unclaimed");
+    expect(documentation).toContain("configuration-shape destinations");
     expect(documentation).toContain("No version or runtime compatibility claim");
   });
 
@@ -75,6 +78,7 @@ describe("MCP compatibility documentation contract", () => {
     expect(documentation).toContain("major-version release plan");
     expect(changelog).toContain("[#368]");
     expect(changelog).toContain("[#388]");
+    expect(changelog).toContain("[#423]");
   });
 
   it("keeps the retirement decision evidence-backed and explicitly deferred", async () => {
@@ -87,7 +91,7 @@ describe("MCP compatibility documentation contract", () => {
     for (const contract of [
       "No removal is authorized",
       "@lubab/miftah@1.1.2",
-      "Initialized `2025-11-25` serving over STDIO",
+      "Initialized legacy serving over STDIO",
       "Initialized `2025-11-25` Streamable HTTP sessions",
       "Roots-derived routing context",
       "Resource subscriptions and list-changed notifications",
