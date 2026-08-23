@@ -241,7 +241,7 @@ The native **Allow once** approval was observed manually in the Desktop UI; it w
 
 ### Public usage sampling — 2026-08-23
 
-Issue #430 records a bounded public-source snapshot in `tests/fixtures/public-usage-sample-2026-08-23.json`. The sample was completed at 2026-08-23T18:31:09Z, under six hours after `@lubab/miftah@1.1.3` was published. It is a `usage-sampling-record` with no qualifying `usage-attestation`, not a representative adoption study or retirement authorization.
+Issue #430 records a bounded public-source snapshot in `tests/fixtures/public-usage-sample-2026-08-23.json`. The sample was completed at 2026-08-23T18:43:19Z, under six hours after `@lubab/miftah@1.1.3` was published. It is a `usage-sampling-record` with no qualifying `usage-attestation`, not a representative adoption study or retirement authorization.
 
 Method:
 

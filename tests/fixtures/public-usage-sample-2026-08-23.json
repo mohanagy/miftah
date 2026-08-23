@@ -1,7 +1,7 @@
 {
   "issue": 430,
   "recordedAt": "2026-08-23",
-  "sampledAt": "2026-08-23T18:31:09Z",
+  "sampledAt": "2026-08-23T18:43:19Z",
   "author": "Miftah maintainer",
   "classification": "usage-sampling-record",
   "evidenceStrength": "no qualifying usage-attestation",
@@ -146,7 +146,7 @@
           ]
         },
         {
-          "query": "defaultProfile filename:miftah.json -repo:mohanagy/miftah",
+          "query": "defaultProfile \"@lubab/miftah\" filename:miftah.json -repo:mohanagy/miftah",
           "totalCount": 0,
           "incompleteResults": false,
           "qualifyingSamples": 0,

@@ -31,11 +31,32 @@ describe("bounded public usage evidence", () => {
       "GitHub issues and pull requests search REST API",
       "npm downloads API"
     ]);
-    expect(
-      evidence.github.codeSearch.queries.every(
-        (query: { incompleteResults: boolean }) => query.incompleteResults === false
-      )
-    ).toBe(true);
+    const codeQueries = evidence.github.codeSearch.queries as Array<{
+      query: string;
+      totalCount: number;
+      incompleteResults: boolean;
+      qualifyingSamples: number;
+    }>;
+    expect(codeQueries.map((query) => query.query)).toEqual([
+      '"@lubab/miftah" -repo:mohanagy/miftah',
+      "miftah-mcp -repo:mohanagy/miftah",
+      "MIFTAH_CONFIG -repo:mohanagy/miftah",
+      '"2025-11-25" "@lubab/miftah" -repo:mohanagy/miftah',
+      'roots "@lubab/miftah" -repo:mohanagy/miftah',
+      '"resources/subscribe" "@lubab/miftah" -repo:mohanagy/miftah',
+      'transport sse "@lubab/miftah" -repo:mohanagy/miftah',
+      "createMiftahRuntime -repo:mohanagy/miftah",
+      "createMiftahServerFactory -repo:mohanagy/miftah",
+      '"@lubab/miftah/plugin-api" -repo:mohanagy/miftah',
+      'defaultProfile "@lubab/miftah" filename:miftah.json -repo:mohanagy/miftah'
+    ]);
+    for (const query of codeQueries) {
+      expect(query).toMatchObject({
+        totalCount: 0,
+        incompleteResults: false,
+        qualifyingSamples: 0
+      });
+    }
 
     const surfaceResults = Object.entries(evidence.surfaceResults).filter(
       ([name]) => name !== "realProviderConfiguration"
