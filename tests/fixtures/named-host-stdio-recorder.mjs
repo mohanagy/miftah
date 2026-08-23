@@ -26,7 +26,7 @@ const observations = {
   operations: {},
   process: null
 };
-const buffers = { client: "", server: "" };
+const buffers = { client: Buffer.alloc(0), server: Buffer.alloc(0) };
 
 const requestKey = (id) => JSON.stringify(id);
 
@@ -129,21 +129,19 @@ const recordServerMessage = (message) => {
 };
 
 const recordLines = (direction, chunk, recordMessage) => {
-  const decoded = chunk.toString("utf8");
-  if (
-    Buffer.byteLength(decoded, "utf8") > maxParseBufferBytes ||
-    Buffer.byteLength(buffers[direction], "utf8") + Buffer.byteLength(decoded, "utf8") >
-      maxParseBufferBytes
-  ) {
-    buffers[direction] = "";
+  if (chunk.length > maxParseBufferBytes || buffers[direction].length + chunk.length > maxParseBufferBytes) {
+    buffers[direction] = Buffer.alloc(0);
     return;
   }
-  buffers[direction] += decoded;
+  buffers[direction] =
+    buffers[direction].length === 0
+      ? chunk
+      : Buffer.concat([buffers[direction], chunk], buffers[direction].length + chunk.length);
   for (;;) {
-    const newline = buffers[direction].indexOf("\n");
+    const newline = buffers[direction].indexOf(0x0a);
     if (newline === -1) return;
-    const line = buffers[direction].slice(0, newline).trim();
-    buffers[direction] = buffers[direction].slice(newline + 1);
+    const line = buffers[direction].subarray(0, newline).toString("utf8").trim();
+    buffers[direction] = buffers[direction].subarray(newline + 1);
     if (line === "") continue;
     try {
       recordMessage(JSON.parse(line));

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -22,56 +22,73 @@ const sha256 = (value: string | Buffer) => createHash("sha256").update(value).di
 describe("v1.1.3 named-host evidence", () => {
   it("preserves discovered server metadata when later responses omit it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-named-host-recorder-"));
-    const outputPath = join(directory, "record.json");
-    const server = String.raw`
-      let buffer = "";
-      process.stdin.setEncoding("utf8");
-      process.stdin.on("data", (chunk) => {
-        buffer += chunk;
-        for (;;) {
-          const newline = buffer.indexOf("\n");
-          if (newline === -1) return;
-          const request = JSON.parse(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          const result = request.method === "server/discover"
-            ? { supportedVersions: ["2026-07-28"], _meta: { "io.modelcontextprotocol/serverInfo": { name: "fixture-server", version: "1.0.0" } } }
-            : { tools: [] };
-          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n");
-        }
+    try {
+      const outputPath = join(directory, "record.json");
+      const server = String.raw`
+        let buffer = "";
+        let pendingWrite = Promise.resolve();
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (chunk) => {
+          buffer += chunk;
+          for (;;) {
+            const newline = buffer.indexOf("\n");
+            if (newline === -1) return;
+            const request = JSON.parse(buffer.slice(0, newline));
+            buffer = buffer.slice(newline + 1);
+            const result = request.method === "server/discover"
+              ? { supportedVersions: ["2026-07-28"], _meta: { "io.modelcontextprotocol/serverInfo": { name: "fixture-sérver", version: "1.0.0" } } }
+              : { tools: [] };
+            const response = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n", "utf8");
+            pendingWrite = pendingWrite.then(() => new Promise((resolve) => {
+              if (request.method === "server/discover") {
+                const splitAt = response.indexOf(Buffer.from([0xc3])) + 1;
+                process.stdout.write(response.subarray(0, splitAt));
+                setTimeout(() => {
+                  process.stdout.write(response.subarray(splitAt));
+                  resolve();
+                }, 10);
+              } else {
+                process.stdout.write(response);
+                resolve();
+              }
+            }));
+          }
+        });
+      `;
+      const recorder = spawn(
+        process.execPath,
+        [recorderPath, outputPath, process.execPath, "-e", server],
+        { stdio: ["pipe", "ignore", "pipe"] }
+      );
+      let stderr = "";
+      recorder.stderr.setEncoding("utf8");
+      recorder.stderr.on("data", (chunk) => {
+        stderr += chunk;
       });
-    `;
-    const recorder = spawn(
-      process.execPath,
-      [recorderPath, outputPath, process.execPath, "-e", server],
-      { stdio: ["pipe", "ignore", "pipe"] }
-    );
-    let stderr = "";
-    recorder.stderr.setEncoding("utf8");
-    recorder.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    const meta = {
-      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-      "io.modelcontextprotocol/clientInfo": { name: "fixture-client", version: "1.0.0" }
-    };
-    recorder.stdin.end(
-      [
-        { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: meta } },
-        { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } }
-      ]
-        .map((message) => JSON.stringify(message))
-        .join("\n") + "\n"
-    );
-    const exitCode = await new Promise<number | null>((resolve) => recorder.once("close", resolve));
+      const meta = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "fixture-client", version: "1.0.0" }
+      };
+      recorder.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: meta } })}\n`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      recorder.stdin.end(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } })}\n`
+      );
+      const exitCode = await new Promise<number | null>((resolve) => recorder.once("close", resolve));
 
-    expect(stderr).toBe("");
-    expect(exitCode).toBe(0);
-    const record = JSON.parse(await readFile(outputPath, "utf8"));
-    expect(record.server).toEqual({
-      name: "fixture-server",
-      version: "1.0.0",
-      negotiatedProtocol: "2026-07-28"
-    });
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const record = JSON.parse(await readFile(outputPath, "utf8"));
+      expect(record.server).toEqual({
+        name: "fixture-sérver",
+        version: "1.0.0",
+        negotiatedProtocol: "2026-07-28"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("records exact bounded Codex CLI and Claude Code outcomes", async () => {

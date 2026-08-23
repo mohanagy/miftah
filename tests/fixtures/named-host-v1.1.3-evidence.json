@@ -28,7 +28,7 @@
   },
   "recorder": {
     "path": "tests/fixtures/named-host-stdio-recorder.mjs",
-    "sha256": "ca00d3f1a9da9bcaaad6b4906293733df653ecbdf7eb40f7e1e39ab04b3465a4",
+    "sha256": "3764fce9814a44475f49fa81f904c553a6947b6e85b6692f5798c8e3759a5994",
     "persistedFields": [
       "client name and version",
       "server name and version",
