@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- [#423](https://github.com/mohanagy/miftah/issues/423) Added deidentified exact-package `@lubab/miftah@1.1.3` named-host STDIO evidence for Codex CLI 0.148.0 and Claude Code 2.1.235. Codex completed initialized `2025-06-18` discovery and one tool call; Claude Code completed modern `2026-07-28` prompt, resource, and tool discovery plus one tool call. A redacting recorder and deterministic contract retain only version, protocol, operation, status, and cleanup fields. These bounded transcripts do not establish real provider usage, migration, rollback, broader feature compatibility, or retirement approval.
+
 ## [1.1.3] - 2026-08-23
 
 ### Changed
