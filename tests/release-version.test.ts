@@ -99,7 +99,8 @@ describe("v1.1.3 release artifacts", () => {
     expect(readme).toContain(`npm install -g @lubab/miftah@${releaseVersion}`);
     expect(compatibilityGuide).toContain(`Miftah package version: \`${releaseVersion}\``);
     expect(protocolCompatibilityGuide).toContain(`Miftah baseline: \`${releaseVersion}\``);
-    expect(protocolCompatibilityGuide).toContain("exact published-v1.1.2 STDIO and Streamable HTTP transcripts");
+    expect(protocolCompatibilityGuide).toContain("The exact published-v1.1.2 transcripts prove initialized STDIO");
+    expect(protocolCompatibilityGuide).toContain("initialized Streamable HTTP session assignment");
     expect(libraryGuide).toContain("Starting with Miftah 1.0, these public surfaces follow Semantic Versioning");
     expect(libraryGuide).toContain("requires a new major release");
   });
