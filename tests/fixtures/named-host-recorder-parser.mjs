@@ -1,22 +1,30 @@
 import { Buffer } from "node:buffer";
 
 export const createLineRecorder = ({ maxBufferBytes = 1024 * 1024 } = {}) => {
-  const buffers = { client: Buffer.alloc(0), server: Buffer.alloc(0) };
+  const pending = {
+    client: { chunks: [], bytes: 0 },
+    server: { chunks: [], bytes: 0 }
+  };
 
   return (direction, chunk, recordMessage) => {
-    if (chunk.length > maxBufferBytes || buffers[direction].length + chunk.length > maxBufferBytes) {
-      buffers[direction] = Buffer.alloc(0);
+    const state = pending[direction];
+    if (chunk.length > maxBufferBytes || state.bytes + chunk.length > maxBufferBytes) {
+      state.chunks = [];
+      state.bytes = 0;
       return;
     }
-    buffers[direction] =
-      buffers[direction].length === 0
-        ? chunk
-        : Buffer.concat([buffers[direction], chunk], buffers[direction].length + chunk.length);
+    state.chunks.push(chunk);
+    state.bytes += chunk.length;
+    if (chunk.indexOf(0x0a) === -1) return;
+
+    const buffered =
+      state.chunks.length === 1 ? state.chunks[0] : Buffer.concat(state.chunks, state.bytes);
+    let start = 0;
     for (;;) {
-      const newline = buffers[direction].indexOf(0x0a);
-      if (newline === -1) return;
-      const line = buffers[direction].subarray(0, newline).toString("utf8").trim();
-      buffers[direction] = buffers[direction].subarray(newline + 1);
+      const newline = buffered.indexOf(0x0a, start);
+      if (newline === -1) break;
+      const line = buffered.subarray(start, newline).toString("utf8").trim();
+      start = newline + 1;
       if (line === "") continue;
       try {
         recordMessage(JSON.parse(line));
@@ -24,5 +32,8 @@ export const createLineRecorder = ({ maxBufferBytes = 1024 * 1024 } = {}) => {
         // Preserve the proxied byte stream, but never persist unparsed content.
       }
     }
+    const remainder = buffered.subarray(start);
+    state.chunks = remainder.length === 0 ? [] : [remainder];
+    state.bytes = remainder.length;
   };
 };

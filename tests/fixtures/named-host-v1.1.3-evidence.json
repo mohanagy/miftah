@@ -30,7 +30,7 @@
     "path": "tests/fixtures/named-host-stdio-recorder.mjs",
     "sha256": "8cf6ac0df8d75691a5b8e6633f0185e75f40c2f3e77eac401d7b1bd92db7004a",
     "parserPath": "tests/fixtures/named-host-recorder-parser.mjs",
-    "parserSha256": "96c4ae007135c3599400cfc141b863405c2cb51c1e7e5066aaf0341a22b72c42",
+    "parserSha256": "96d9fa6f1c6622c7a5765d7f3784cceb0f2d2b55df0f60086102510b455c4795",
     "persistedFields": [
       "client name and version",
       "server name and version",

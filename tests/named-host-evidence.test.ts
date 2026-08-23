@@ -44,6 +44,28 @@ describe("v1.1.3 named-host evidence", () => {
     ]);
   });
 
+  it("buffers tiny incomplete chunks until a complete line arrives", async () => {
+    const { createLineRecorder } = await import(
+      new URL("./fixtures/named-host-recorder-parser.mjs", import.meta.url).href
+    );
+    const messages: unknown[] = [];
+    const recordLines = createLineRecorder();
+    const message = Buffer.from(
+      `${JSON.stringify({ serverInfo: { name: "chunked-server", version: "1.0.0" } })}\n`,
+      "utf8"
+    );
+
+    for (const byte of message.subarray(0, -1)) {
+      recordLines("server", Buffer.from([byte]), (value: unknown) => messages.push(value));
+    }
+    expect(messages).toEqual([]);
+    recordLines("server", message.subarray(-1), (value: unknown) => messages.push(value));
+
+    expect(messages).toEqual([
+      { serverInfo: { name: "chunked-server", version: "1.0.0" } }
+    ]);
+  });
+
   it("preserves discovered server metadata when later responses omit it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "miftah-named-host-recorder-"));
     try {
