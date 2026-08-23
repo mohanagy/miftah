@@ -780,13 +780,13 @@ describe("package metadata contract", () => {
     assertPatchedFastUriLockEntries(lock);
   });
 
-  it("locks the patched transitive security releases tracked by #373", () => {
+  it("locks the patched transitive security releases tracked by #373 and #420", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
     const expectedOverrides = {
       "brace-expansion": "5.0.9",
       "ip-address": "10.3.1",
-      nanoid: "3.3.17"
+      nanoid: "3.3.18"
     } as const;
 
     for (const [packageName, expectedVersion] of Object.entries(expectedOverrides)) {
