@@ -1,5 +1,8 @@
 {
-  "issue": 423,
+  "issues": [
+    423,
+    425
+  ],
   "recordedAt": "2026-08-23",
   "author": "Miftah maintainer",
   "classification": "named-host-runtime",
@@ -31,6 +34,8 @@
     "sha256": "8cf6ac0df8d75691a5b8e6633f0185e75f40c2f3e77eac401d7b1bd92db7004a",
     "parserPath": "tests/fixtures/named-host-recorder-parser.mjs",
     "parserSha256": "96d9fa6f1c6622c7a5765d7f3784cceb0f2d2b55df0f60086102510b455c4795",
+    "desktopLauncherPath": "tests/fixtures/named-host-desktop-launcher.mjs",
+    "desktopLauncherSha256": "04d037ea8b1f581022bff297d711b6cdb0bb6e25330fa50bf05c5eeed19d3e2d",
     "persistedFields": [
       "client name and version",
       "server name and version",
@@ -74,7 +79,58 @@
     "executedSha256": {
       "codexMiftah": "5d6426878d55518ded1bfdc8eab5e5ad82acd4c61cd9edb0ed3b4d74a24d95d8",
       "claudeMiftah": "58f1a054b6011d7a1febffe656a8c97140e83980ee9eb24ad1dd568cdf39dc9b",
-      "claudeHost": "047e27701b75a4b451dc0d2890c800615d038121d56334ebcbb5791992e0e649"
+      "claudeHost": "047e27701b75a4b451dc0d2890c800615d038121d56334ebcbb5791992e0e649",
+      "claudeDesktopMiftah": "8026fcb36afba52b831d2fc634c797b414473207bb4687b324e47a4a22288b33"
+    },
+    "desktop": {
+      "hostEntryShape": {
+        "command": "<node-22.22.3>",
+        "args": [
+          "<desktop-launcher>",
+          "<isolated-output-root>",
+          "<node-22.22.3>",
+          "<named-host-recorder>",
+          "<installed-miftah-cli>",
+          "<deterministic-fake-upstream>"
+        ]
+      },
+      "miftahShape": {
+        "version": "1",
+        "defaultProfile": "work",
+        "upstream": {
+          "transport": "stdio",
+          "command": "<node-22.22.3>",
+          "args": [
+            "<deterministic-fake-upstream>"
+          ]
+        },
+        "profiles": {
+          "work": {
+            "env": {
+              "TEST_ACCOUNT_NAME": "<non-secret-fixture-value>",
+              "TEST_INITIALIZED_PATH": "<per-session-marker>",
+              "TEST_LIST_TOOLS_COUNT_PATH": "<per-session-marker>",
+              "TEST_CALL_TOOL_COUNT_PATH": "<per-session-marker>",
+              "TEST_SHUTDOWN_END_PATH": "<per-session-marker>",
+              "TEST_START_COUNT_PATH": "<per-session-marker>"
+            }
+          }
+        },
+        "audit": {
+          "path": "<per-session-audit>"
+        },
+        "process": {
+          "startupTimeoutMs": 10000,
+          "shutdownTimeoutMs": 5000,
+          "maxConcurrentProfiles": 1
+        }
+      },
+      "perSessionIsolation": [
+        "recorder output",
+        "Miftah configuration",
+        "audit journal",
+        "upstream markers"
+      ]
     }
   },
   "clients": [
@@ -222,6 +278,120 @@
         "The transcript proves prompts/list, resources/list, tools/list, and one tools/call only.",
         "It does not prove Roots, subscriptions, cancellation, approval continuation, OAuth, or Streamable HTTP in Claude Code.",
         "It is named-host compatibility evidence, not real provider usage or a usage attestation."
+      ]
+    },
+    {
+      "host": "Claude Desktop",
+      "hostVersion": "1.34493.1",
+      "hostBuild": "1.34493.1",
+      "bundleId": "com.anthropic.claudefordesktop",
+      "clientInfo": {
+        "name": "claude-ai",
+        "version": "0.1.0"
+      },
+      "environment": {
+        "os": "macOS 26.3",
+        "architecture": "arm64",
+        "node": "22.22.3",
+        "npm": "12.0.2"
+      },
+      "downstreamTransport": "stdio",
+      "era": "initialized",
+      "protocol": "2025-11-25",
+      "initializedNotification": true,
+      "operations": {
+        "prompts/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "resources/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/list": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        },
+        "tools/call": {
+          "requests": 1,
+          "success": 1,
+          "error": 0
+        }
+      },
+      "audit": [
+        {
+          "operation": "prompts/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "resources/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "tools/list",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        },
+        {
+          "operation": "tools/call",
+          "status": "success",
+          "errorCode": null,
+          "profile": "work"
+        }
+      ],
+      "markers": {
+        "upstreamInitialized": true,
+        "toolList": true,
+        "toolCall": true,
+        "upstreamShutdown": true
+      },
+      "serverProcess": {
+        "exitCode": null,
+        "signal": "SIGTERM",
+        "spawnError": null
+      },
+      "toolResultMatchedFixture": true,
+      "isolation": [
+        "temporary one-connector Desktop configuration",
+        "byte-for-byte original configuration backup and restore",
+        "per-Desktop-session recorder, audit, and markers",
+        "native Allow once approval"
+      ],
+      "companionSessions": [
+        {
+          "clientInfo": {
+            "name": "local-agent-mode-miftah-evidence-425",
+            "version": "1.0.0"
+          },
+          "protocol": "2025-11-25",
+          "initializedNotification": true,
+          "operations": {
+            "tools/list": {
+              "requests": 1,
+              "success": 1,
+              "error": 0
+            }
+          },
+          "serverProcess": {
+            "exitCode": 0,
+            "signal": null,
+            "spawnError": null
+          }
+        }
+      ],
+      "knownLimitations": [
+        "The primary transcript proves prompts/list, resources/list, tools/list, and one tools/call only.",
+        "Claude Desktop also started one isolated local-agent-mode session that listed tools but did not call one.",
+        "The internal claude-ai/0.1.0 client metadata is not the Desktop application version.",
+        "It does not prove Roots, subscriptions, cancellation, approval continuation, OAuth, Streamable HTTP, real provider usage, migration, or rollback."
       ]
     }
   ],

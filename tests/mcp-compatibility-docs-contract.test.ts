@@ -55,25 +55,29 @@ describe("MCP compatibility documentation contract", () => {
     const claudeDesktopRow = documentation
       .split("\n")
       .find((line) => line.startsWith("| Claude Desktop |"));
-    expect(claudeDesktopRow).toContain("No Desktop protocol exchange was executed.");
-    expect(claudeDesktopRow).not.toContain("named-host-runtime");
+    expect(claudeDesktopRow).toContain("`named-host-runtime`");
+    expect(claudeDesktopRow).toContain("initialized STDIO `2025-11-25`");
+    expect(claudeDesktopRow).toContain("one successful `tools/call`");
     expect(documentation).toContain("VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64)");
     expect(documentation).toContain("Cursor | Not installed in the audit environment");
     expect(documentation).toContain("configuration-shape destinations");
     expect(documentation).toContain("No version or runtime compatibility claim");
   });
 
-  it("keeps the blocked Claude Desktop attempt out of runtime evidence", async () => {
+  it("keeps the blocked Claude Desktop attempt separate from the successful retry", async () => {
     const [documentation, retirementEvidence] = await Promise.all([
       readFile(compatibilityUrl, "utf8"),
       readFile(retirementEvidenceUrl, "utf8")
     ]);
 
-    expect(documentation).toContain("Runtime compatibility remains unverified");
+    expect(documentation).toContain("Claude Desktop now have bounded named-host runtime rows");
     expect(retirementEvidence).toContain(
       "This attempt stopped before a Desktop protocol exchange, so it is **not** `named-host-runtime` evidence."
     );
     expect(retirementEvidence).toContain("Use a separate macOS test user");
+    expect(retirementEvidence).toContain("Claude Desktop named host — 2026-08-23");
+    expect(retirementEvidence).toContain("each Desktop session its own Miftah configuration");
+    expect(retirementEvidence).toContain("local-agent-mode-miftah-evidence-425/1.0.0");
     expect(retirementEvidence).toContain("Do not commit the raw host transcript");
   });
 
