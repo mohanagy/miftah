@@ -31,7 +31,7 @@ describe("v1.1.3 named-host evidence", () => {
     try {
       const recorderStubPath = join(directory, "recorder-stub.mjs");
       const fakeMiftahCliPath = join(directory, "miftah-cli.js");
-      const fakeUpstreamPath = join(directory, "fake-upstream.mjs");
+      const stubUpstreamPath = join(directory, "fake-upstream.mjs");
       await writeFile(
         recorderStubPath,
         `
@@ -64,7 +64,7 @@ describe("v1.1.3 named-host evidence", () => {
               process.execPath,
               recorderStubPath,
               fakeMiftahCliPath,
-              fakeUpstreamPath
+              stubUpstreamPath
             ],
             {
               env: { ...process.env, DESKTOP_EVIDENCE_SECRET: "must-not-pass" },
@@ -107,7 +107,7 @@ describe("v1.1.3 named-host evidence", () => {
             upstream: {
               transport: "stdio",
               command: process.execPath,
-              args: [fakeUpstreamPath]
+              args: [stubUpstreamPath]
             },
             profiles: {
               work: { env: { TEST_ACCOUNT_NAME: "desktop-evidence-fixture" } }

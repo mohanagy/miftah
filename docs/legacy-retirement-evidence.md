@@ -234,10 +234,10 @@ Claude Code used a strict isolated MCP configuration, empty setting sources, no 
 Normalized primary result:
 
 ```json
-{"host":"Claude Desktop","version":"1.34493.1","clientInfo":"claude-ai/0.1.0","transport":"stdio","era":"initialized","protocol":"2025-11-25","initializedNotification":true,"operations":{"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["prompts/list:success","resources/list:success","tools/list:success","tools/call:success"],"approval":"Allow once","upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":null,"signal":"SIGTERM","spawnError":null},"toolResultMatchedFixture":true}
+{"host":"Claude Desktop","version":"1.34493.1","clientInfo":"claude-ai/0.1.0","transport":"stdio","era":"initialized","protocol":"2025-11-25","initializedNotification":true,"operations":{"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["prompts/list:success","resources/list:success","tools/list:success","tools/call:success"],"upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":null,"signal":"SIGTERM","spawnError":null},"toolResultMatchedFixture":true}
 ```
 
-Desktop also started one independently isolated `local-agent-mode-miftah-evidence-425/1.0.0` session. It negotiated initialized `2025-11-25`, completed one `tools/list`, made no tool call, and exited cleanly. The primary transcript proves only the listed discovery operations and one approved fake-upstream call; the internal `claude-ai/0.1.0` metadata is not the Desktop application version.
+The native **Allow once** approval was observed manually in the Desktop UI; it was not a recorder-persisted transcript field. Desktop also started one independently isolated `local-agent-mode-miftah-evidence-425/1.0.0` session. It negotiated initialized `2025-11-25`, completed one `tools/list`, made no tool call, and exited cleanly. The primary transcript proves only the listed discovery operations and one approved fake-upstream call; the internal `claude-ai/0.1.0` metadata is not the Desktop application version.
 
 ## Required evidence record
 
