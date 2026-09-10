@@ -2,10 +2,12 @@ import type { Tool } from "@modelcontextprotocol/server";
 
 type SchemaObject = { readonly [keyword: string]: unknown };
 
-const supportedDialects = new Set([
-  "https://json-schema.org/draft/2020-12/schema",
-  "http://json-schema.org/draft/2020-12/schema"
-]);
+/**
+ * The canonical 2020-12 dialect id. JSON Schema moved to `https` from 2019-09 onward, so the plain-HTTP
+ * spelling is deliberately not accepted: a client that only recognizes the canonical id would still
+ * reject a schema declaring it, and dropping the declaration is safe either way.
+ */
+const supportedDialect = "https://json-schema.org/draft/2020-12/schema";
 
 /**
  * MCP pins tool schemas to JSON Schema 2020-12, but servers built on the SDK's Zod path emit
@@ -37,5 +39,5 @@ function normalizeSchema<Schema extends SchemaObject>(schema: Schema): Schema {
 
 function declaresUnsupportedDialect(schema: SchemaObject): boolean {
   const dialect = schema.$schema;
-  return typeof dialect === "string" && !supportedDialects.has(dialect.replace(/#$/, ""));
+  return typeof dialect === "string" && dialect.replace(/#$/, "") !== supportedDialect;
 }

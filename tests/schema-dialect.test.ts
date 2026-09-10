@@ -77,6 +77,17 @@ describe("tool schema dialect normalization", () => {
     expect(tool).toEqual(before);
   });
 
+  it("does not treat the non-canonical plain-HTTP 2020-12 id as supported", () => {
+    // JSON Schema moved to `https` from 2019-09 onward. A client that only recognizes the canonical
+    // id would still reject this declaration, so it must be dropped rather than preserved.
+    const normalized = normalizeToolSchemaDialect({
+      name: "http_2020_12",
+      inputSchema: { $schema: "http://json-schema.org/draft/2020-12/schema", type: "object" }
+    });
+
+    expect(normalized.inputSchema).toEqual({ type: "object" });
+  });
+
   it("drops other unsupported dialects, not just draft-07", () => {
     for (const dialect of [
       "http://json-schema.org/draft-04/schema#",
