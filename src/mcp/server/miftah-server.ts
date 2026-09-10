@@ -86,6 +86,7 @@ import {
 } from "./operation-pipeline.js";
 import { ResourcePromptRegistry } from "./resource-prompt-registry.js";
 import { isManagementToolName, managementTools } from "./management-tools.js";
+import { normalizeToolSchemaDialect } from "./schema-dialect.js";
 import {
   canonicalJson,
   ToolRegistry,
@@ -2567,7 +2568,7 @@ export class MiftahServer {
     )) {
       for (const tool of [...tools].sort((left, right) => left.name.localeCompare(right.name))) {
         const exposedName = this.exposedToolName(tool.name, upstreamName);
-        const fingerprint = canonicalJson({ ...structuredClone(tool), name: exposedName });
+        const fingerprint = canonicalJson({ ...normalizeToolSchemaDialect(structuredClone(tool)), name: exposedName });
         const existing = fingerprints.get(exposedName);
         if (existing !== undefined) {
           throw new MiftahError(

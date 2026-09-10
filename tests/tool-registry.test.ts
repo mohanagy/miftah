@@ -57,3 +57,40 @@ describe("tool registry risk metadata", () => {
     expect(snapshot.resolve("annotated")?.annotations?.readOnlyHint).toBe(true);
   });
 });
+
+describe("tool registry schema dialect", () => {
+  const draft07 = "http://json-schema.org/draft-07/schema#";
+
+  it("exposes upstream tools without an unsupported dialect declaration", async () => {
+    const tools: Tool[] = [
+      {
+        name: "aggregate",
+        inputSchema: { $schema: draft07, type: "object", properties: { database: { type: "string" } } },
+        outputSchema: { $schema: draft07, type: "object", properties: { documents: { type: "array" } } }
+      }
+    ];
+    const registry = new ToolRegistry(
+      async () => ({ discovered: [{ tools }], incomplete: false }),
+      (name) => name
+    );
+
+    const [exposed] = (await registry.get("work")).getTools();
+
+    expect(exposed?.inputSchema).toEqual({ type: "object", properties: { database: { type: "string" } } });
+    expect(exposed?.outputSchema).toEqual({ type: "object", properties: { documents: { type: "array" } } });
+  });
+
+  it("fingerprints the normalized schema so dialect churn alone is not a tool change", async () => {
+    const withDialect: Tool = { name: "find", inputSchema: { $schema: draft07, type: "object" } };
+    const withoutDialect: Tool = { name: "find", inputSchema: { type: "object" } };
+    const fingerprint = async (tool: Tool): Promise<string | undefined> => {
+      const registry = new ToolRegistry(
+        async () => ({ discovered: [{ tools: [tool] }], incomplete: false }),
+        (name) => name
+      );
+      return (await registry.get("work")).resolve("find")?.fingerprint;
+    };
+
+    expect(await fingerprint(withDialect)).toBe(await fingerprint(withoutDialect));
+  });
+});

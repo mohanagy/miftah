@@ -2,6 +2,7 @@ import type { Tool } from "@modelcontextprotocol/server";
 import type { ToolRiskAnnotations } from "../../policy/policy-types.js";
 import type { UpstreamRequestOptions } from "../../upstream/upstream-session.js";
 import { MiftahError } from "../../utils/errors.js";
+import { normalizeToolSchemaDialect } from "./schema-dialect.js";
 
 export interface DiscoveredTools {
   upstreamName?: string;
@@ -196,7 +197,7 @@ export class ToolRegistry {
             `TOOL_COLLISION: multiple upstream tools resolve to '${exposedName}' for profile '${profile}'`
           );
         }
-        const exposedTool = { ...cloneTool(tool), name: exposedName };
+        const exposedTool = { ...normalizeToolSchemaDialect(cloneTool(tool)), name: exposedName };
         routes.set(exposedName, {
           exposedName,
           originalName: tool.name,
