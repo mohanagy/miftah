@@ -4101,6 +4101,42 @@ describe("Miftah MCP wrapper", () => {
     }
   });
 
+  it("strips an unsupported schema dialect before advertising upstream tools", async () => {
+    const dialectFixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "draft-07-schema-upstream.mjs");
+    const config = validateConfig({
+      version: "1",
+      name: "accounts",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [dialectFixture] },
+      profiles: { work: { env: { TEST_ACCOUNT_NAME: "work" } } }
+    });
+    const manager = new UpstreamProcessManager(config.upstream!, config.profiles, { startupTimeoutMs: 5_000 });
+    const wrapper = new MiftahServer(config, new ProfileManager(config), manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+
+    try {
+      await Promise.all([wrapper.connect(serverTransport), client.connect(clientTransport)]);
+
+      const validate = (await client.listTools()).tools.find((tool) => tool.name === "validate");
+
+      // The root dialect declaration is dropped; the property that is genuinely named `$schema` is not.
+      expect(validate?.inputSchema).toEqual({
+        type: "object",
+        properties: { $schema: { type: "string", description: "Dialect of the document" } },
+        required: ["$schema"]
+      });
+      expect(validate?.outputSchema).toEqual({
+        type: "object",
+        properties: { valid: { type: "boolean" } },
+        required: ["valid"]
+      });
+    } finally {
+      await client.close();
+      await wrapper.close();
+    }
+  });
+
   it("fails strict discovery when configured profiles expose different tool schemas", async () => {
     const config = validateConfig({
       version: "1",
