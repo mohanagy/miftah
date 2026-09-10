@@ -80,7 +80,7 @@
     "@modelcontextprotocol/server-legacy": "^2.0.0",
     "@types/node": "^22.15.30",
     "@vitest/coverage-v8": "^3.2.7",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "eslint": "^10.8.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
@@ -103,7 +103,7 @@
       }
     },
     "brace-expansion": "5.0.9",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "eslint": {
       "minimatch": {
         "brace-expansion": "5.0.9"
