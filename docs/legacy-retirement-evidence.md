@@ -38,13 +38,13 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 
 ## Retirement candidate inventory
 
-### Initialized `2025-11-25` serving over STDIO
+### Initialized legacy serving over STDIO
 
-- **Shipped contract:** the SDK v2 serving entry selects the frozen legacy adapter, performs `initialize` and `notifications/initialized`, and owns one Miftah runtime for the client connection. Roots and resource subscriptions remain capability-gated.
+- **Shipped contract:** the SDK v2 serving entry selects the frozen legacy adapter, performs `initialize` and `notifications/initialized`, and owns one Miftah runtime for the client connection. Reference and release gates pin `2025-11-25`; the pinned adapter retains its compatibility revision set, and the exact Codex CLI transcript below observed `2025-06-18`. That observation is not a blanket compatibility guarantee for every older revision. Roots and resource subscriptions remain capability-gated.
 - **Owners:** `src/cli/main.ts`, `src/runtime/create-miftah-runtime.ts`, and the `@modelcontextprotocol/server-legacy` dependency.
-- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` negotiates `2025-11-25`, exposes tools, distinguishes legacy subscription and cache behavior from the modern STDIO path, and forwards list changes plus cancellation through the SDK v2 initialized boundary. The corrected exact published-v1.1.2 `packaged-test` below drives the installed CLI process and proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup with the official client.
+- **Current evidence:** `source-test` in `tests/mcp-v2-serving.test.ts` negotiates `2025-11-25`, exposes tools, distinguishes legacy subscription and cache behavior from the modern STDIO path, and forwards list changes plus cancellation through the SDK v2 initialized boundary. The corrected exact published-v1.1.2 `packaged-test` below drives the installed CLI process and proves initialized Roots routing and refresh, resource subscribe/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup with the official client. The exact published-v1.1.3 Codex CLI 0.148.0 `named-host-runtime` record negotiates initialized `2025-06-18`, lists tools once, calls one tool once, records successful audits, and shuts down the deterministic upstream. A second exact published-v1.1.3 Codex CLI 0.149.0 attempt forwards all three list-change notifications during one successful call; SIGINT during a separate confirmed in-flight call terminates the MCP process without downstream cancellation or a terminal tool-call audit. The exact published-v1.1.3 Claude Desktop deep record below observes initialized `2025-11-25`, one successful companion-session Roots request, all three primary-session list-change notifications, and host-native approval continuing to a successful fake tool result. Its stop-control attempt did not emit downstream MCP cancellation or a `cancelled` audit terminal.
 - **Migration required:** the exact client must negotiate `2026-07-28` through the SDK v2 entry. A future failure must name the retained revision and give an actionable client-upgrade or pinned-baseline path.
-- **Missing evidence:** named-host STDIO transcripts, usage evidence for initialized-only clients, a packaged STDIO approval transcript, and proof that real profile, Roots, confirmation, resource, notification, and cancellation workflows survive migration.
+- **Missing evidence:** positive named-host resource-subscription and cancellation transcripts, usage evidence for initialized-only clients, a packaged STDIO Miftah approval-continuation transcript, and proof that real profile, Roots refresh, confirmation, resource, notification, and cancellation workflows survive migration.
 - **Decision:** defer.
 
 ### Initialized `2025-11-25` Streamable HTTP sessions
@@ -60,25 +60,25 @@ Absence of reports is not `usage-attestation`. Generated configuration is not `n
 
 - **Shipped contract:** initialized clients may advertise Roots and send `notifications/roots/list_changed`. Only normalized `file:` roots are accepted. The deepest root containing the working directory bounds project-marker, package, workspace, and Git-origin discovery; environment and strict project markers may contribute profile hints.
 - **Owners:** `src/mcp/server/miftah-server.ts`, `src/routing/context-collector.ts`, and the routing engine.
-- **Current evidence:** `source-contract` shows bounded 64 KiB metadata reads, real-path boundary checks, symlink-swap checks, local Git config without includes, stripped `GIT_*` process input, URI redaction, ignored malformed/non-file Roots, and `ROUTING_PROFILE_NOT_FOUND` for an unknown hinted profile. The published-v1.1.2 `packaged-test` performs one initialized Roots request, routes to `personal`, sends `notifications/roots/list_changed`, performs one refresh, and routes the next call to `work`.
+- **Current evidence:** `source-contract` shows bounded 64 KiB metadata reads, real-path boundary checks, symlink-swap checks, local Git config without includes, stripped `GIT_*` process input, URI redaction, ignored malformed/non-file Roots, and `ROUTING_PROFILE_NOT_FOUND` for an unknown hinted profile. The published-v1.1.2 `packaged-test` performs one initialized Roots request, routes to `personal`, sends `notifications/roots/list_changed`, performs one refresh, and routes the next call to `work`. In the exact published-v1.1.3 Desktop attempts, the isolated `local-agent-mode` companion answered one `roots/list`; the primary `claude-ai` session did not receive a Roots request, and neither session emitted `notifications/roots/list_changed`.
 - **Migration required:** every affected workflow needs an explicit replacement using reviewed configuration, environment, project marker, or a separately approved modern context extension. The replacement must retain boundary and redaction properties and must not infer trusted identity from a path.
-- **Missing evidence:** which real clients send Roots, which routing rules depend on them, and whether users can migrate without ambiguous or incorrect profile selection.
+- **Missing evidence:** whether Desktop's companion Roots affect a real routing decision, named-host Roots refresh behavior, which other real clients send Roots, which routing rules depend on them, and whether users can migrate without ambiguous or incorrect profile selection.
 - **Decision:** defer.
 
 ### Resource subscriptions and list-changed notifications
 
 - **Shipped contract:** initialized runtimes advertise resource subscriptions only when every selectable upstream supports them. Resource updates are forwarded, and profile transitions, upstream lifecycle changes, restarts, session termination, and shutdown invalidate or unsubscribe retained state. Direct-runtime source tests and the corrected exact published-v1.1.2 transcript forward tools/resources/prompts list changes from the active catalog profile.
 - **Owners:** `src/mcp/server/miftah-server.ts`, `src/mcp/server/resource-prompt-registry.ts`, and `src/upstream/upstream-session.ts`.
-- **Current evidence:** `source-test` covers capability-gated subscribe/unsubscribe, update forwarding, list invalidation, cleanup, and the stable `RESOURCE_SUBSCRIPTION_UNSUPPORTED` failure. The corrected published-v1.1.2 `packaged-test` proves exactly one initialized subscribe, one namespaced update, one unsubscribe, all three advertised active-profile list changes, and clean shutdown for both routed upstreams. Modern request-scoped HTTP explicitly does not probe or advertise connection-bound subscriptions.
+- **Current evidence:** `source-test` covers capability-gated subscribe/unsubscribe, update forwarding, list invalidation, cleanup, and the stable `RESOURCE_SUBSCRIPTION_UNSUPPORTED` failure. The corrected published-v1.1.2 `packaged-test` proves exactly one initialized subscribe, one namespaced update, one unsubscribe, all three advertised active-profile list changes, and clean shutdown for both routed upstreams. Modern request-scoped HTTP explicitly does not probe or advertise connection-bound subscriptions. The exact published-v1.1.3 Desktop primary session received one tools, resources, and prompts list-change notification after a tool call. Desktop discovered resources but exposed no resource-read surface to the model in the bounded prompt attempt; it sent zero subscribe and unsubscribe requests, and no resource-updated notification was observed.
 - **Migration required:** each subscriber needs an exact re-list, polling, or future extension workflow with bounded frequency, cache invalidation, and an actionable compatibility diagnostic.
-- **Missing evidence:** real subscriber inventory, acceptable polling behavior, named-host notification transcripts, and proof that no retained upstream or cross-profile event leaks after migration.
+- **Missing evidence:** real subscriber inventory, a positive named-host subscription/update/unsubscribe transcript, acceptable polling behavior, and proof that no retained upstream or cross-profile event leaks after migration.
 - **Decision:** defer.
 
 ### Legacy form-elicitation bridge for approvals
 
 - **Shipped contract:** the legacy SDK shim exposes Miftah's integrity-bound, one-time approval continuation as form elicitation; the modern path uses `input_required`, `requestState`, and `inputResponses`.
 - **Owners:** `src/runtime/create-miftah-runtime.ts`, the approval continuation store, and the MCP server operation pipeline.
-- **Current evidence:** `source-test` proves modern continuation across request-scoped server instances and legacy fallback behavior. The exact published-v1.1.2 initialized HTTP `packaged-test` records one form elicitation, the `requested` / `approved` / `consumed` lifecycle, exactly one upstream execution, a redacted `success` terminal audit, and no terminal error code. Cross-process continuation is not claimed.
+- **Current evidence:** `source-test` proves modern continuation across request-scoped server instances and legacy fallback behavior. The exact published-v1.1.2 initialized HTTP `packaged-test` records one form elicitation, the `requested` / `approved` / `consumed` lifecycle, exactly one upstream execution, a redacted `success` terminal audit, and no terminal error code. Cross-process continuation is not claimed. Claude Desktop's native **Allow once** gate continued to a successful fake tool call in the published-v1.1.3 deep attempt, but that host-side gate did not exercise Miftah's form-elicitation continuation bridge.
 - **Migration required:** exact initialized clients must demonstrate the modern input-required flow, cancellation, expiry, replay rejection, and redacted audit results.
 - **Missing evidence:** packaged named-host UI/runtime transcripts and user recovery behavior when a host cannot render the modern flow.
 - **Decision:** defer with the initialized era; do not remove it independently without its own evidence.
@@ -113,12 +113,38 @@ Sampling, MCP Logging, standalone downstream HTTP+SSE, Tasks, MCP Apps, and Ente
 | --- | --- | --- | --- |
 | Official MCP TypeScript packages | `2.0.0`; broad `source-test` coverage, clean-tarball contracts, and exact published-v1.1.2 STDIO and Streamable HTTP records below | Source tests cover modern and initialized STDIO/HTTP negotiation, tools, MRTR, headers, caching, cancellation, and session lifecycle. Published-package proof covers initialized STDIO Roots, subscriptions, active-profile list changes, cancellation, and shutdown plus initialized HTTP session assignment, one redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup | Reference client only; no named-host, usage, migration, or rollback evidence |
 | MCP Inspector | `2.1.0`; `packaged-test` on Linux Node 22 | `tools/list` over installed-package STDIO and modern Streamable HTTP | No UI, OAuth, legacy HTTP, Roots, subscription, or notification claim |
-| Claude Code `2.1.228` observed on macOS | `configuration-shape` | Generated project STDIO configuration and permission guidance | No packaged runtime transcript |
-| Claude Desktop `1.26832.0` observed on macOS | `configuration-shape` | Generated `mcpServers` STDIO configuration | No headless packaged runtime transcript |
+| Codex CLI `0.148.0` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Initialized STDIO `2025-06-18`, one successful `tools/list`, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no broader legacy-feature, provider, usage, migration, or rollback claim |
+| Codex CLI `0.149.0` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Initialized STDIO `2025-06-18`; one successful list/call; tools/resources/prompts list changes; a separate SIGINT attempt after a long call started | No Roots, subscription, resource update, or downstream cancellation observed. SIGINT terminated the MCP process without a call response or terminal call audit. Fake upstream only; no provider, usage, migration, or rollback claim |
+| Claude Code `2.1.235` on macOS 26.3 arm64 | `named-host-runtime` against exact published Miftah 1.1.3 | Modern STDIO `2026-07-28`, successful prompt/resource/tool discovery, one successful `tools/call`, matching audits, initialization, and upstream shutdown | One fake-upstream tool only; no approval, OAuth, HTTP, provider, usage, migration, or rollback claim |
+| Claude Desktop `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23 | `named-host-runtime` against exact published Miftah 1.1.3 after a blocked first attempt | Initialized STDIO `2025-11-25`; prompt/resource/tool discovery; host-native approval and continuation; companion `roots/list`; primary tools/resources/prompts list changes; one successful call; one bounded host-stop attempt | No Roots refresh or resource subscriptions observed. Desktop stop did not emit downstream MCP cancellation within the bounded window; shutdown ended with `UPSTREAM_CALL_FAILED`, not `cancelled`. Fake upstream only; no provider, usage, migration, or rollback claim |
 | VS Code `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64) observed on macOS | `configuration-shape` | Generated STDIO configuration | No packaged runtime transcript |
 | Cursor | Not installed in the 2026-08-12 audit environment; `configuration-shape` only | Generated STDIO configuration | No version or runtime claim |
 
-This matrix inherits the named-host observation date and claim boundaries from [MCP protocol and client compatibility](mcp-compatibility.md). A version observation is not evidence that the host used Miftah.
+This matrix inherits the named-host observation date and claim boundaries from [MCP protocol and client compatibility](mcp-compatibility.md). Codex CLI, Claude Code, and Claude Desktop have the bounded exact-package runtime evidence stated above; every other version-only observation remains configuration-shape evidence.
+
+### Claude Desktop runtime attempt — 2026-08-23
+
+This attempt stopped before a Desktop protocol exchange, so it is **not** `named-host-runtime` evidence.
+
+| Field | Recorded value |
+| --- | --- |
+| Observed host | Claude Desktop `1.34493.1`; macOS 26.3 arm64 |
+| Intended package | Exact published `@lubab/miftah@1.1.3`; npm shasum `b78879cd67541ea73796d242e0498e26e2f17002`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==` |
+| Existing state | Claude Desktop was running with an existing user-owned configuration, and its launched Miftah executable reported `1.1.2`. No configuration content, credential, account metadata, prompt, response, or session identifier was read or copied. |
+| Isolation result | Anthropic's [local MCP setup guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) documents Desktop Extensions through the app's Extensions settings. Its [local-versus-remote connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp) identifies local servers configured through `claude_desktop_config.json` as a separate mechanism. Neither source documents a supported isolated Desktop profile/configuration switch. Undocumented application strings were not treated as a supported isolation contract. |
+| Outcome | The maintainer declined to read, copy, overwrite, or restart the live Desktop setup. Generated configuration remains `configuration-shape` evidence only. |
+
+Required handoff for a valid retry:
+
+1. Use a separate macOS test user with fresh Claude Desktop state; the maintainer signs in through the app without sharing credentials or session material.
+2. In an isolated working directory, install exact `@lubab/miftah@1.1.3` and verify the version, npm integrity, provenance, and installed CLI hash. Use the deterministic fake upstream and recorder from source commit `22d997379573bb812d9d5f89c84613f238e3bb9c`.
+3. Create one non-secret Miftah profile whose STDIO upstream is the absolute Node executable plus `tests/fixtures/fake-upstream.mjs`. Use only fixed marker and audit files inside that isolated directory.
+4. Add one entry only to the test user's Desktop `mcpServers`. Its absolute command and argument array must launch Node, then `named-host-stdio-recorder.mjs`, then the exact installed Miftah CLI with `--config` pointing to the fixture configuration. Restart Desktop in that test user.
+5. In a new Desktop conversation, confirm the test connector is available and invoke the deterministic upstream's `whoami` tool once with `{}`. Do not use a real provider or account profile.
+6. Exit Desktop cleanly, then verify the recorder, redacted Miftah audit entries, upstream initialization, list/call counts, expected non-secret fixture result, shutdown marker, and process exit state.
+7. Persist only the same bounded fields as `tests/fixtures/named-host-v1.1.3-evidence.json`. Do not commit the raw host transcript, prompts, arguments, tool content, local paths, session identifiers, account metadata, audit file, or marker files.
+
+The later retry used the maintainer-approved alternative of a byte-for-byte backup, temporary one-connector replacement, and byte-for-byte restoration in the existing macOS account. Desktop launched two MCP sessions, so the shared-file first retry was rejected as evidence. `tests/fixtures/named-host-desktop-launcher.mjs` then assigned each Desktop session its own Miftah configuration, recorder output, audit journal, and marker files. This kept the primary `claude-ai` call transcript distinct from the list-only `local-agent-mode` companion session.
 
 ## Published package evidence records
 
@@ -165,6 +191,138 @@ Deidentified transcript:
 ```
 
 The same reviewed fixture runs against a clean tarball from current `development`; that reproducibility check is not a substitute for the exact published-package record. The package contract requires this exact approval, cancellation, audit, session-close, cleanup, redaction, and stderr outcome across supported CI operating systems and Node versions.
+
+### Codex CLI and Claude Code named hosts — 2026-08-23
+
+| Field | Recorded value |
+| --- | --- |
+| Author and evidence class | `Miftah maintainer`; `named-host-runtime` |
+| Package | Exact `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; npm SLSA provenance predicate v1; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
+| Environment | macOS 26.3 arm64 (`Darwin 25.3.0`), Node 22.22.3, npm 11.12.1; fresh exact npm install |
+| Upstream | Deterministic fake STDIO upstream `1.0.0`; entry SHA-256 `ded19a9fae8c1d0b89adb75db88742346ed3206a280833709ba80f4686535135`; bundle SHA-256 `ec6a8e56de03194d0c607d26f6c4098348a0afd2e2d2d894eed46fed50bd7029` |
+| Recorder | `tests/fixtures/named-host-stdio-recorder.mjs`, SHA-256 `8cf6ac0df8d75691a5b8e6633f0185e75f40c2f3e77eac401d7b1bd92db7004a`; byte parser `tests/fixtures/named-host-recorder-parser.mjs`, SHA-256 `96d9fa6f1c6622c7a5765d7f3784cceb0f2d2b55df0f60086102510b455c4795`; persists only client/server name and version, protocol, operation name/count/status, initialized notification, and process exit state |
+| Reviewed configuration | One non-secret `work` profile and fixed marker/audit paths. Executed SHA-256 values: Codex Miftah `5d6426878d55518ded1bfdc8eab5e5ad82acd4c61cd9edb0ed3b4d74a24d95d8`; Claude Miftah `58f1a054b6011d7a1febffe656a8c97140e83980ee9eb24ad1dd568cdf39dc9b`; Claude host `047e27701b75a4b451dc0d2890c800615d038121d56334ebcbb5791992e0e649`. The redacted shape is retained in `tests/fixtures/named-host-v1.1.3-evidence.json`. |
+| Privacy boundary | Raw host JSON and audit JSONL are not committed. The normalized record excludes prompts, arguments, content, session/request identifiers, paths, environment secrets, account metadata, and model usage/cost. |
+
+Codex CLI normalized result:
+
+```json
+{"host":"Codex CLI","version":"0.148.0","clientInfo":"codex-mcp-client/0.148.0","transport":"stdio","era":"initialized","protocol":"2025-06-18","initializedNotification":true,"operations":{"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["tools/list:success","tools/call:success"],"upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":null,"signal":"SIGTERM","spawnError":null},"toolResultMatchedFixture":true}
+```
+
+Codex approval policy `never` rejected the MCP tool call before upstream execution; the successful evidence run used Codex `--approve-for-me`. The host ended the MCP process with `SIGTERM`, while Miftah still produced the deterministic upstream shutdown marker. This proves only one list and one call; the observed `2025-06-18` revision does not declare every older initialized revision compatible.
+
+Claude Code normalized result:
+
+```json
+{"host":"Claude Code","version":"2.1.235","clientInfo":"claude-code/2.1.235","transport":"stdio","era":"modern","protocol":"2026-07-28","initializedNotification":false,"operations":{"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["prompts/list:success","resources/list:success","tools/list:success","tools/call:success"],"upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":0,"signal":null,"spawnError":null},"toolResultMatchedFixture":true}
+```
+
+Claude Code used a strict isolated MCP configuration, empty setting sources, no session persistence, and an allowlist containing only the named Miftah tool. This proves only the listed discovery calls and one tool call; it does not prove Roots, subscriptions, cancellation, approval continuation, OAuth, Streamable HTTP, real provider usage, migration, or rollback.
+
+### Claude Desktop named host — 2026-08-23
+
+| Field | Recorded value |
+| --- | --- |
+| Author and evidence class | `Miftah maintainer`; `named-host-runtime` |
+| Host | Claude Desktop `1.34493.1` (`com.anthropic.claudefordesktop`) on macOS 26.3 arm64 |
+| Package | Exact published `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
+| Environment | Node 22.22.3, npm 12.0.2; isolated exact install; no real provider or account profile |
+| Recorder | Existing recorder and parser hashes above, plus per-session launcher `tests/fixtures/named-host-desktop-launcher.mjs`, SHA-256 `04d037ea8b1f581022bff297d711b6cdb0bb6e25330fa50bf05c5eeed19d3e2d`; the launcher passes only a bounded non-secret environment and gives each Desktop session isolated HOME/XDG directories |
+| Reviewed configuration | One non-secret `work` profile; each Desktop session received unique fixed marker/audit paths and isolated HOME/XDG directories. The primary executed Miftah configuration SHA-256 was `8026fcb36afba52b831d2fc634c797b414473207bb4687b324e47a4a22288b33`. |
+| Privacy boundary | The original Desktop configuration was backed up and restored byte-for-byte. Raw host JSON, audit JSONL, prompts, arguments, tool content, local paths, session identifiers, account metadata, and marker files are not committed. |
+
+Normalized primary result:
+
+```json
+{"host":"Claude Desktop","version":"1.34493.1","clientInfo":"claude-ai/0.1.0","transport":"stdio","era":"initialized","protocol":"2025-11-25","initializedNotification":true,"operations":{"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"auditStatuses":["prompts/list:success","resources/list:success","tools/list:success","tools/call:success"],"upstream":{"initialized":true,"shutdown":true},"process":{"exitCode":null,"signal":"SIGTERM","spawnError":null},"toolResultMatchedFixture":true}
+```
+
+The native **Allow once** approval was observed manually in the Desktop UI; it was not a recorder-persisted transcript field. Desktop also started one independently isolated `local-agent-mode-miftah-evidence-425/1.0.0` session. It negotiated initialized `2025-11-25`, completed one `tools/list`, made no tool call, and exited cleanly. The primary transcript proves only the listed discovery operations and one approved fake-upstream call; the internal `claude-ai/0.1.0` metadata is not the Desktop application version.
+
+### Claude Desktop deep named-host attempts — 2026-08-23
+
+Issue #432 extended the recorder with separate bounded counters for downstream and upstream requests plus notifications in each direction. The earlier #425 recorder and launcher remain byte-identical at their recorded hashes; the new fixtures are `tests/fixtures/named-host-deep-stdio-recorder.mjs` and `tests/fixtures/named-host-deep-desktop-launcher.mjs`. The machine-checkable normalized record is `tests/fixtures/named-host-v1.1.3-deep-evidence.json`.
+
+| Field | Recorded value |
+| --- | --- |
+| Host and package | Claude Desktop `1.34493.1` (`com.anthropic.claudefordesktop`) on macOS 26.3 arm64; exact published `@lubab/miftah@1.1.3`; initialized STDIO `2025-11-25` |
+| Artifact verification | Registry integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; shasum `b78879cd67541ea73796d242e0498e26e2f17002`; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541`; 101 registry signatures and 15 attestations verified |
+| Isolation | Existing Desktop account; temporary one-connector configuration; separate Miftah config, audit, recorder, marker, HOME, and XDG paths for every spawned session; original user configuration restored byte-for-byte; timestamped backup retained |
+| Feature attempt | Primary `claude-ai` session completed discovery and one approved `whoami` call. Desktop forwarded exactly one tools, resources, and prompts list-change notification. The isolated `local-agent-mode` companion completed one `tools/list` and one server-originated `roots/list`. |
+| Resource attempt | Desktop completed `resources/list`, but the bounded model prompt reported no resource-read interface. Recorder and upstream markers observed zero subscribe, zero unsubscribe, zero resource-updated notifications, and zero Roots list-changed notifications. |
+| Approval boundary | Desktop showed its native **Allow once** gate. After approval, the same tool request continued and returned the deterministic fixture value. This is host approval evidence, not a Miftah form-elicitation or modern input-required continuation transcript. |
+| Cancellation attempt | A 60-second fake `whoami` call reached the upstream before Desktop's **Stop response** control was used. The UI reported interruption, but zero downstream `notifications/cancelled` arrived and no upstream cancellation marker appeared in the next ten seconds. The marker appeared only after Desktop shutdown; the Miftah terminal audit was `failure` / `UPSTREAM_CALL_FAILED`, not `cancelled`. |
+| Privacy boundary | No raw host transcript, audit JSONL, prompt, argument, tool content, local path, request/session identifier, private account metadata, or user configuration hash is committed. |
+
+Normalized feature result:
+
+```json
+{"host":"Claude Desktop","version":"1.34493.1","clientInfo":"claude-ai/0.1.0","protocol":"2025-11-25","operations":{"tools/list":{"requests":2,"success":2,"error":0},"prompts/list":{"requests":1,"success":1,"error":0},"resources/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0}},"serverNotifications":{"toolsListChanged":1,"resourcesListChanged":1,"promptsListChanged":1,"resourceUpdated":0},"subscriptions":{"subscribe":0,"unsubscribe":0},"roots":{"primaryRequests":0,"companionRequests":1,"listChanged":0},"approval":{"hostNative":"allow-once","continued":true,"resultMatchedFixture":true}}
+```
+
+Normalized cancellation result:
+
+```json
+{"attempt":"host-stop-during-long-tool-call","toolStartedBeforeStop":true,"hostUiReportedInterrupted":true,"clientCancellationNotifications":0,"upstreamCancellationWithinTenSeconds":false,"upstreamCancellationAfterHostShutdown":true,"terminalAudit":{"status":"failure","errorCode":"UPSTREAM_CALL_FAILED"},"cancelledAuditTerminalObserved":false}
+```
+
+These zeros mean **not observed in these exact attempts**. They do not prove that every Desktop version or UI workflow lacks Roots refresh, subscriptions, resource reads, or cancellation. The negative cancellation result is particularly important: visible host interruption must not be promoted into an MCP cancellation claim without downstream notification and terminal-audit evidence.
+
+### Codex CLI deep named-host attempts — 2026-08-23
+
+Codex CLI `0.149.0` ran noninteractively against the same published package, fake upstream, expanded recorder, and per-process isolation launcher. It reused the maintainer's existing Codex authentication in a mode-0700 temporary home; no account was created. User configuration and project rules were ignored, the run was ephemeral, and app/plugin surfaces were disabled so the named Miftah server was the only permitted MCP target. Authentication material and raw Codex output are not committed.
+
+| Field | Recorded value |
+| --- | --- |
+| Host | Codex CLI `0.149.0` (`codex-mcp-client/0.149.0`) on macOS 26.3 arm64; initialized STDIO `2025-06-18` |
+| Environment | Node 22.22.3; npm 11.12.1; existing authentication copied into a mode-0700 temporary home; no new account |
+| Package | Exact published `@lubab/miftah@1.1.3`; integrity `sha512-kqA/x/bUlS8wDN3MMd7H2RJyyELSrADDg3IiubUOSX3uAc2NeZ1TYavzVNj+H2LUhlFE2lZ54FTpEb/5w7pK2g==`; installed CLI SHA-256 `1770a7e7efcad12f8ed8f59665d654a9f94bacf96fe8c6fdb48ddb3d31337541` |
+| Recorder | Executed `tests/fixtures/named-host-deep-stdio-recorder.mjs`, SHA-256 `e50e7f0417d79a184c16c19b088e8fffae009693e4ca2bd5492eb9299a2b663a` |
+| Reviewed configurations | Feature configuration SHA-256 `3f130d79df1216f7c75c47c30421c29828a1c8db87d50f6ccacf7272a635a8d0`; cancellation configuration SHA-256 `9f60dc99d5f109662ca7f4e8cb3516d7209fb08612b05646067bb8e58bab3244` |
+| Privacy boundary | Authentication material, raw Codex output, prompts, arguments, tool content, local paths, session identifiers, account metadata, and user configuration are not committed |
+
+Feature result:
+
+```json
+{"host":"Codex CLI","version":"0.149.0","clientInfo":"codex-mcp-client/0.149.0","protocol":"2025-06-18","operations":{"tools/list":{"requests":1,"success":1,"error":0},"tools/call":{"requests":1,"success":1,"error":0},"roots/list":{"requests":0,"success":0,"error":0}},"serverNotifications":{"toolsListChanged":1,"resourcesListChanged":1,"promptsListChanged":1,"resourceUpdated":0},"subscriptions":{"subscribe":0,"unsubscribe":0},"auditStatuses":["tools/list:success","tools/call:success"],"toolResultMatchedFixture":true,"upstreamShutdown":true}
+```
+
+For cancellation, the fake tool delay was 60 seconds. The upstream call-start marker existed before SIGINT was sent to the noninteractive Codex process. Codex exited with status 1; the recorder persisted an unanswered `tools/call`, zero downstream cancellation notifications, zero upstream cancellation marker, clean upstream shutdown, and no terminal tool-call audit.
+
+```json
+{"attempt":"sigint-during-long-tool-call","toolStartedBeforeSigint":true,"hostExitCode":1,"toolsCall":{"requests":1,"success":0,"error":0},"clientCancellationNotifications":0,"upstreamCancellationMarker":false,"terminalAuditObserved":false,"serverProcess":{"signal":"SIGTERM"}}
+```
+
+This is a bounded negative result for noninteractive Codex `exec`; it does not describe the interactive TUI or every host shutdown path. It also does not satisfy the retirement contract, which requires a forwarded cancellation and one truthful terminal `cancelled` audit.
+
+### Public usage sampling — 2026-08-23
+
+Issue #430 records a bounded public-source snapshot in `tests/fixtures/public-usage-sample-2026-08-23.json`. The sample was completed at 2026-08-23T18:43:19Z, under six hours after `@lubab/miftah@1.1.3` was published. It is a `usage-sampling-record` with no qualifying `usage-attestation`, not a representative adoption study or retirement authorization.
+
+Method:
+
+- GitHub code search used eleven direct product-anchored queries covering the package, CLI/configuration markers, initialized `2025-11-25`, Roots, resource subscription/list-change, upstream `sse`, and SDK v1 entry points. Every query excluded `mohanagy/miftah`, returned `incomplete_results: false`, and recorded the exact total count.
+- GitHub issue and pull-request search used the package and CLI anchors. Included and excluded candidates were deduplicated by stable URL.
+- Inclusion required a direct Miftah product anchor and public evidence. The Miftah repository, forks, mirrors, generated examples, and unrelated uses of the word “miftah” were excluded.
+- npm activity came only from the public downloads API. Those aggregate counts were kept separate from direct configuration evidence.
+
+Results:
+
+| Surface | Qualifying public samples | Claim boundary |
+| --- | ---: | --- |
+| Initialized `2025-11-25` | 0 | Not observed in this bounded sample; not evidence of absence |
+| Roots | 0 | Not observed in this bounded sample; not evidence of absence |
+| Resource subscriptions or list-change | 0 | Not observed in this bounded sample; not evidence of absence |
+| Upstream `sse` | 0 | Not observed in this bounded sample; not evidence of absence |
+| SDK v1 | 0 | Not observed in this bounded sample; not evidence of absence |
+| Real-provider configuration | 0 | Not observed in this bounded public sample; not evidence of absence |
+
+All direct external GitHub code queries returned zero results. The issue/PR queries produced one private result, which was omitted without recording its URL or contents, and one unrelated public lexical false positive. The retained public sample therefore contains zero qualifying public usage samples.
+
+The npm range API reported 147 package downloads from 2026-08-14 through 2026-08-23, and the per-version last-week API reported 58 downloads for 1.1.2. These counts can include CI, bots, caches, repeat installs, and maintainer activity. They are not unique users and cannot identify any protocol, transport, API, configuration, or operator. Version 1.1.3 had no per-version row yet; npm processes download data once per day after UTC midnight, so the same-day zero and missing row are not usable as zero-download evidence.
+
+Only indexed public content was sampled. Private repositories, local configurations, credentials, account metadata, and private telemetry were excluded. GitHub indexing/query semantics and the same-day release window further limit the result. The decision remains **keep and collect**. Repeat no earlier than 2026-09-22, or when an incompatible retirement candidate is next considered, and preserve zero observations literally.
 
 ## Required evidence record
 
@@ -215,12 +373,16 @@ The current evidence supports **keep and collect**, not retire:
 - the exact v1.1.2 artifact is published, reproducible, and signature/provenance verified;
 - corrected exact published-package STDIO evidence proves Roots, resource subscription/update/unsubscribe, active-profile list changes, cancellation, terminal audit outcome, and cleanup;
 - exact published-package Streamable HTTP reference-client evidence proves one initialized session, redacted approval, cancellation, terminal audits, explicit termination with a 404 probe, and retained-upstream cleanup;
-- named desktop-host runtime evidence, real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
+- exact published-v1.1.3 named-host evidence proves initialized Codex CLI 0.148.0 and 0.149.0 list/call exchanges, all three list-change notifications in the 0.149.0 feature run, one modern Claude Code prompt/resource/tool discovery plus call exchange, and initialized Claude Desktop discovery, native approval continuation, one companion Roots request, and all three primary list-change notifications;
+- interrupting the noninteractive Codex 0.149.0 host after a long call started emitted no downstream cancellation and left no terminal tool-call audit, so it does not establish cancellation compatibility;
+- the Desktop resource attempt observed no model resource-read surface, subscription, unsubscribe, resource update, or Roots refresh; the host-stop attempt observed no downstream cancellation and ended at shutdown with `UPSTREAM_CALL_FAILED`, so neither result supports retiring the retained feature;
+- bounded public sampling found no qualifying public usage samples; that zero is not evidence of absence;
+- positive named-host subscription and cancellation evidence, independently-owned real configuration usage, exact per-surface migration proof, and candidate rollback proof are still missing.
 
 Next evidence work:
 
-1. Collect deidentified exact-version transcripts for the named hosts that actually exercise Miftah, without upgrading a configuration-shape row into a runtime claim prematurely.
-2. Collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
+1. Collect positive named-host resource-subscription and cancellation transcripts without extending any row beyond the exact operations observed; investigate whether Desktop has a supported UI workflow for those operations before retrying.
+2. Repeat the bounded public sample no earlier than 2026-09-22 and collect maintainer-reviewed samples of real initialized, Roots, subscription, upstream `sse`, and SDK v1 library usage. Record zero observations as sample results, not proof of no usage.
 3. Write and test one exact migration per observed workflow.
 4. Run the rollback contract against a future incompatible candidate.
 5. Obtain explicit maintainer approval on the evidence-backed keep/defer/retire decision.

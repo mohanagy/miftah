@@ -126,7 +126,7 @@ function assertPatchedFastUriLockEntries(lock: PackageLock): void {
   );
 
   for (const [packagePath, packageEntry] of entries) {
-    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.5");
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("3.1.7");
   }
 }
 
@@ -776,7 +776,7 @@ describe("package metadata contract", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
-    expect(manifest.overrides?.["fast-uri"]).toBe("3.1.5");
+    expect(manifest.overrides?.["fast-uri"]).toBe("3.1.7");
     assertPatchedFastUriLockEntries(lock);
   });
 
@@ -786,16 +786,17 @@ describe("package metadata contract", () => {
     const expectedOverrides = {
       "brace-expansion": "5.0.9",
       "ip-address": "10.3.1",
-      nanoid: "3.3.18"
+      nanoid: "3.3.18",
+      qs: "6.16.0"
     } as const;
 
     for (const [packageName, expectedVersion] of Object.entries(expectedOverrides)) {
       expect(manifest.overrides?.[packageName]).toBe(expectedVersion);
       assertPatchedTransitiveLockEntries(lock, packageName, expectedVersion);
     }
-    expect(manifest.dependencies?.hono).toBe("4.12.34");
+    expect(manifest.dependencies?.hono).toBe("4.13.7");
     expect(manifest.overrides).not.toHaveProperty("hono");
-    assertPatchedTransitiveLockEntries(lock, "hono", "4.12.34");
+    assertPatchedTransitiveLockEntries(lock, "hono", "4.13.7");
   });
 
   it("locks the patched MCP SDK and Hono Node server releases for GHSA-frvp-7c67-39w9", () => {
@@ -808,7 +809,7 @@ describe("package metadata contract", () => {
       "@modelcontextprotocol/core": "^2.0.0",
       "@modelcontextprotocol/server": "^2.0.0",
       "@modelcontextprotocol/sdk": "^1.30.0",
-      hono: "4.12.34"
+      hono: "4.13.7"
     });
     expect(manifest.dependencies).not.toHaveProperty("@modelcontextprotocol/node");
     expect(manifest.devDependencies).toMatchObject({
@@ -833,7 +834,7 @@ describe("package metadata contract", () => {
   it("rejects stale nested fast-uri lock entries", () => {
     const lock: PackageLock = {
       packages: {
-        "node_modules/fast-uri": { version: "3.1.5" },
+        "node_modules/fast-uri": { version: "3.1.7" },
         "node_modules/ajv/node_modules/fast-uri": { version: "3.1.4" }
       }
     };
@@ -842,7 +843,7 @@ describe("package metadata contract", () => {
   });
 
   it.each([
-    ["hono", "4.12.34", "4.12.33"],
+    ["hono", "4.13.7", "4.12.34"],
     ["ip-address", "10.3.1", "10.3.0"],
     ["brace-expansion", "5.0.9", "5.0.8"],
     ["nanoid", "3.3.17", "3.3.16"]
@@ -1111,7 +1112,7 @@ describe("packed artifact contract", () => {
           await readFile(join(directory, "node_modules", "hono", "package.json"), "utf8")
         ) as PackageManifest;
         expect(installedHonoNodeServer.version).toBe("2.0.10");
-        expect(installedHono.version).toBe("4.12.34");
+        expect(installedHono.version).toBe("4.13.7");
 
         const consumerPath = join(directory, "consumer.mjs");
         const configPath = join(directory, "miftah.json");

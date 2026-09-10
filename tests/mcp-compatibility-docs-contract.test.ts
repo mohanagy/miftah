@@ -45,12 +45,40 @@ describe("MCP compatibility documentation contract", () => {
       expect(lockfile.packages[`node_modules/@modelcontextprotocol/${name}`]?.version).toBe("2.0.0");
     }
     expect(documentation).toContain("MCP Inspector | `2.1.0`");
-    expect(documentation).toContain("Claude Code | `2.1.228` observed on macOS");
-    expect(documentation).toContain("Claude Desktop | `1.26832.0` observed on macOS");
+    expect(documentation).toContain("Codex CLI | `0.148.0` on macOS 26.3 arm64");
+    expect(documentation).toContain("initialized STDIO `2025-06-18`");
+    expect(documentation).toContain("Claude Code | `2.1.235` on macOS 26.3 arm64");
+    expect(documentation).toContain("modern STDIO `2026-07-28`");
+    expect(documentation).toContain(
+      "Claude Desktop | `1.34493.1` on macOS 26.3 arm64, observed 2026-08-23"
+    );
+    const claudeDesktopRow = documentation
+      .split("\n")
+      .find((line) => line.startsWith("| Claude Desktop |"));
+    expect(claudeDesktopRow).toContain("`named-host-runtime`");
+    expect(claudeDesktopRow).toContain("initialized STDIO `2025-11-25`");
+    expect(claudeDesktopRow).toContain("one successful `tools/call`");
     expect(documentation).toContain("VS Code | `1.132.0` (`df53daabb18cd157bdb08c7f01c34df936cf12f4`, arm64)");
     expect(documentation).toContain("Cursor | Not installed in the audit environment");
-    expect(documentation).toContain("protocol compatibility remains unclaimed");
+    expect(documentation).toContain("configuration-shape destinations");
     expect(documentation).toContain("No version or runtime compatibility claim");
+  });
+
+  it("keeps the blocked Claude Desktop attempt separate from the successful retry", async () => {
+    const [documentation, retirementEvidence] = await Promise.all([
+      readFile(compatibilityUrl, "utf8"),
+      readFile(retirementEvidenceUrl, "utf8")
+    ]);
+
+    expect(documentation).toContain("Claude Desktop now have bounded named-host runtime rows");
+    expect(retirementEvidence).toContain(
+      "This attempt stopped before a Desktop protocol exchange, so it is **not** `named-host-runtime` evidence."
+    );
+    expect(retirementEvidence).toContain("Use a separate macOS test user");
+    expect(retirementEvidence).toContain("Claude Desktop named host — 2026-08-23");
+    expect(retirementEvidence).toContain("each Desktop session its own Miftah configuration");
+    expect(retirementEvidence).toContain("local-agent-mode-miftah-evidence-425/1.0.0");
+    expect(retirementEvidence).toContain("Do not commit the raw host transcript");
   });
 
   it("pins the packaged Inspector gate and keeps retirement outside v1.1", async () => {
@@ -75,6 +103,7 @@ describe("MCP compatibility documentation contract", () => {
     expect(documentation).toContain("major-version release plan");
     expect(changelog).toContain("[#368]");
     expect(changelog).toContain("[#388]");
+    expect(changelog).toContain("[#423]");
   });
 
   it("keeps the retirement decision evidence-backed and explicitly deferred", async () => {
@@ -87,7 +116,7 @@ describe("MCP compatibility documentation contract", () => {
     for (const contract of [
       "No removal is authorized",
       "@lubab/miftah@1.1.2",
-      "Initialized `2025-11-25` serving over STDIO",
+      "Initialized legacy serving over STDIO",
       "Initialized `2025-11-25` Streamable HTTP sessions",
       "Roots-derived routing context",
       "Resource subscriptions and list-changed notifications",
