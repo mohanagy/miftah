@@ -79,7 +79,7 @@
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server-legacy": "^2.0.0",
     "@types/node": "^22.15.30",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "0.28.1",
     "eslint": "^10.8.0",
     "tsup": "^8.5.0",
