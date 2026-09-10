@@ -19,7 +19,7 @@ describe("MCP TypeScript SDK v2 migration contract", () => {
       "@modelcontextprotocol/core": "^2.0.0",
       "@modelcontextprotocol/server": "^2.0.0",
       "@modelcontextprotocol/sdk": "^1.30.0",
-      hono: "4.12.34",
+      hono: "4.13.7",
       zod: "^4.2.0"
     });
     expect(manifest.devDependencies).toMatchObject({
