@@ -171,9 +171,10 @@ describe("continuous integration workflow contract", () => {
     expect(overrides).toMatchObject({
       "@hono/node-server": "2.0.10",
       "brace-expansion": "5.0.9",
-      "fast-uri": "3.1.5",
+      "fast-uri": "3.1.7",
       "ip-address": "10.3.1",
       nanoid: "3.3.18",
+      qs: "6.16.0",
       "@vitest/coverage-v8": {
         "test-exclude": {
           glob: {
@@ -192,7 +193,7 @@ describe("continuous integration workflow contract", () => {
     }
     expect(dependencies).toMatchObject({
       "@hono/node-server": "2.0.10",
-      hono: "4.12.34"
+      hono: "4.13.7"
     });
     expect(developmentDependencies).not.toHaveProperty("@hono/node-server");
     expect(developmentDependencies).not.toHaveProperty("hono");
@@ -201,9 +202,10 @@ describe("continuous integration workflow contract", () => {
       dev: true
     });
     const fastUri = lockedPackages["node_modules/fast-uri"];
-    if (fastUri !== undefined) expect(fastUri).toMatchObject({ version: "3.1.5" });
+    if (fastUri !== undefined) expect(fastUri).toMatchObject({ version: "3.1.7" });
     expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
-    expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.12.34" });
+    expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.13.7" });
+    expect(lockedPackages["node_modules/qs"]).toMatchObject({ version: "6.16.0" });
     expect(lockedPackages["node_modules/ip-address"]).toMatchObject({ version: "10.3.1" });
     expect(lockedPackages["node_modules/nanoid"]).toMatchObject({ version: "3.3.18", dev: true });
     expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });

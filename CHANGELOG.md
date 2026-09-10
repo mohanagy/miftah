@@ -4,12 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-09-11
+
 ### Fixed
 
 - [#439](https://github.com/mohanagy/miftah/issues/439) Normalized the client-visible tool schema dialect so a strict client no longer rejects a wrapped upstream's structured output. MCP pins tool schemas to JSON Schema 2020-12, but upstreams built on the MCP SDK's Zod path emit `zod-to-json-schema` output that declares draft-07, and Miftah forwarded that declaration verbatim; clients then refused the entire `outputSchema` and the affected tools silently lost their structured-output contract while remaining listed and callable. A root `$schema` declaring anything other than 2020-12 is now dropped from `inputSchema` and `outputSchema` before a tool is advertised or fingerprinted. The declaration is dropped rather than rewritten to the 2020-12 URI, so no draft-specific keyword semantics are asserted on the upstream's behalf, and only the schema root is inspected, so a property genuinely named `$schema` is forwarded untouched. This changes no tool name, argument, annotation, or routing behavior.
 
 ### Changed
 
+- [#441](https://github.com/mohanagy/miftah/issues/441) Prepared the compatible v1.1.4 patch release delivering the client-visible tool schema dialect fix, and advanced the exact transitive security resolutions to `fast-uri` 3.1.7, `hono` 4.13.7, and `qs` 6.16.0 after newly disclosed host-confusion, SSRF, path-traversal, and denial-of-service advisories. `fast-uri` stays on the patched 3.x line that `ajv` declares and that a consumer of the published package actually resolves, because npm `overrides` bind only this repository and cannot protect installers. Package contracts reject stale nested copies, and the production-only npm audit reports zero known vulnerabilities without changing Miftah's runtime API; two development-only Vitest advisories remain, fixed only in a Vitest major that is tracked separately. Publication remains gated on exact `development`-to-`main` promotion and protected OIDC trusted publishing, registry provenance, a fresh install, and package-signature verification; this release does not authorize removal of any legacy behavior.
 - [#423](https://github.com/mohanagy/miftah/issues/423) Added deidentified exact-package `@lubab/miftah@1.1.3` named-host STDIO evidence for Codex CLI 0.148.0 and Claude Code 2.1.235. Codex completed initialized `2025-06-18` discovery and one tool call; Claude Code completed modern `2026-07-28` prompt, resource, and tool discovery plus one tool call. A redacting recorder and deterministic contract retain only version, protocol, operation, status, and cleanup fields. These bounded transcripts do not establish real provider usage, migration, rollback, broader feature compatibility, or retirement approval.
 
 ## [1.1.3] - 2026-08-23
