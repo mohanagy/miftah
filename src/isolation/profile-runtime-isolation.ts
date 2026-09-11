@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { chmod, lstat, mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { ProfileIsolationConfig, ProfileIsolationContainerVolume, TransportType } from "../config/types.js";
@@ -211,7 +212,7 @@ export class ProfileRuntimeIsolation {
   private async readSource(configDirectory: string, value: string): Promise<{ content: Buffer; text: string }> {
     const segments = safeRelativeSegments(value);
     let path = configDirectory;
-    let sourceEntry: Awaited<ReturnType<typeof lstat>> | undefined;
+    let sourceEntry: Stats | undefined;
     for (const [index, segment] of segments.entries()) {
       path = join(path, segment);
       const entry = await lstat(path);
@@ -269,7 +270,7 @@ export class ProfileRuntimeIsolation {
     await assertSafeReplacementTarget(destination, root, this.ownerUid);
     const temporary = join(directory, `.${basename(fileName)}.${randomUUID()}.tmp`);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
-    let temporaryEntry: Awaited<ReturnType<typeof stat>> | undefined;
+    let temporaryEntry: Stats | undefined;
     try {
       handle = await open(temporary, "wx", 0o600);
       await setHandleRestrictiveMode(handle, 0o600);
@@ -322,7 +323,7 @@ export async function buildContainerIsolationArguments(
   const destinations = new Set<string>();
   const generatedVolumes: Array<{
     mount: string;
-    source: { path: string; entry: Awaited<ReturnType<typeof stat>> };
+    source: { path: string; entry: Stats };
     sourceValue: string;
     bindings: Array<{ name: string; destination: string }>;
   }> = [];
@@ -442,8 +443,8 @@ function environmentValue(environment: Readonly<Record<string, string | undefine
 
 async function verifyContainerRuntimeRoot(
   root: string,
-  expected?: Awaited<ReturnType<typeof lstat>>
-): Promise<{ path: string; entry: Awaited<ReturnType<typeof lstat>> }> {
+  expected?: Stats
+): Promise<{ path: string; entry: Stats }> {
   const entry = await lstat(root);
   if (!entry.isDirectory() || entry.isSymbolicLink() || (expected !== undefined && !sameEntry(expected, entry))) {
     throw isolationFailure();
@@ -460,11 +461,11 @@ async function verifyContainerRuntimeRoot(
 async function resolveContainerVolumeSource(
   root: string,
   value: string,
-  expected?: Awaited<ReturnType<typeof stat>>
-): Promise<{ path: string; entry: Awaited<ReturnType<typeof stat>> }> {
+  expected?: Stats
+): Promise<{ path: string; entry: Stats }> {
   const segments = safeContainerRelativeSegments(value);
   let path = root;
-  let sourceEntry: Awaited<ReturnType<typeof lstat>> | undefined;
+  let sourceEntry: Stats | undefined;
   for (const [index, segment] of segments.entries()) {
     path = join(path, segment);
     const entry = await lstat(path);
@@ -735,7 +736,7 @@ async function verifyOwnedDirectory(
   directory: string,
   boundary: string,
   ownerUid: number | undefined
-): Promise<{ path: string; entry: Awaited<ReturnType<typeof lstat>> }> {
+): Promise<{ path: string; entry: Stats }> {
   const entry = await lstat(directory);
   if (!entry.isDirectory() || entry.isSymbolicLink() || !hasExpectedOwner(entry, ownerUid)) throw isolationFailure();
   const canonicalDirectory = await realpath(directory);
@@ -755,9 +756,9 @@ async function verifyOwnedDirectory(
 async function verifyRegularFile(
   path: string,
   boundary: string,
-  expected: Awaited<ReturnType<typeof stat>> | undefined,
+  expected: Stats | undefined,
   ownerUid: number | undefined
-): Promise<{ path: string; entry: Awaited<ReturnType<typeof stat>> }> {
+): Promise<{ path: string; entry: Stats }> {
   const entry = await lstat(path);
   if (!entry.isFile() || entry.isSymbolicLink() || !hasExpectedOwner(entry, ownerUid)) throw isolationFailure();
   const canonicalPath = await realpath(path);
@@ -779,8 +780,8 @@ async function verifyOpenedRegularFile(
   path: string,
   boundary: string,
   ownerUid: number | undefined,
-  expected?: Awaited<ReturnType<typeof stat>>
-): Promise<{ path: string; entry: Awaited<ReturnType<typeof stat>> }> {
+  expected?: Stats
+): Promise<{ path: string; entry: Stats }> {
   const opened = await handle.stat();
   if (
     !opened.isFile() ||
@@ -795,7 +796,7 @@ async function verifyOpenedRegularFile(
 async function removeVerifiedTemporary(
   path: string,
   boundary: string,
-  expected: Awaited<ReturnType<typeof stat>>,
+  expected: Stats,
   ownerUid: number | undefined
 ): Promise<void> {
   try {
@@ -824,25 +825,25 @@ function isWithinOrSame(parent: string, child: string): boolean {
 }
 
 function sameEntry(
-  first: Pick<Awaited<ReturnType<typeof stat>>, "dev" | "ino">,
-  second: Pick<Awaited<ReturnType<typeof stat>>, "dev" | "ino">
+  first: Pick<Stats, "dev" | "ino">,
+  second: Pick<Stats, "dev" | "ino">
 ): boolean {
   return first.dev === second.dev && first.ino === second.ino;
 }
 
-function hasExpectedOwner(entry: Pick<Awaited<ReturnType<typeof stat>>, "uid">, ownerUid: number | undefined): boolean {
+function hasExpectedOwner(entry: Pick<Stats, "uid">, ownerUid: number | undefined): boolean {
   return ownerUid === undefined || entry.uid === ownerUid;
 }
 
 function isTrustedSourceFile(
-  entry: Pick<Awaited<ReturnType<typeof stat>>, "isFile" | "mode" | "uid">,
+  entry: Pick<Stats, "isFile" | "mode" | "uid">,
   ownerUid: number | undefined
 ): boolean {
   return entry.isFile() && hasExpectedOwner(entry, ownerUid) && (Number(entry.mode) & 0o022) === 0;
 }
 
 function isTrustedSourceDirectory(
-  entry: Pick<Awaited<ReturnType<typeof stat>>, "isDirectory" | "mode" | "uid">,
+  entry: Pick<Stats, "isDirectory" | "mode" | "uid">,
   ownerUid: number | undefined
 ): boolean {
   return entry.isDirectory() && hasExpectedOwner(entry, ownerUid) && (Number(entry.mode) & 0o022) === 0;

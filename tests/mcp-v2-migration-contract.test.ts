@@ -14,7 +14,7 @@ describe("MCP TypeScript SDK v2 migration contract", () => {
     expect(dependencies).not.toHaveProperty("@modelcontextprotocol/node");
     expect(dependencies).not.toHaveProperty("@modelcontextprotocol/server-legacy");
     expect(dependencies).toMatchObject({
-      "@hono/node-server": "2.0.10",
+      "@hono/node-server": "2.1.1",
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",
       "@modelcontextprotocol/server": "^2.0.0",
