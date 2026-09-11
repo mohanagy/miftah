@@ -115,7 +115,7 @@ function assertPatchedEsbuildLockEntries(lock: PackageLock): void {
 
   expect(esbuildEntries).not.toHaveLength(0);
   for (const [packagePath, packageEntry] of esbuildEntries) {
-    expect(packageEntry["version"], `${packagePath} must resolve to the patched esbuild release`).toBe("0.28.1");
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched esbuild release`).toBe("0.28.2");
   }
 }
 
@@ -154,7 +154,7 @@ function assertPatchedHonoNodeServerLockEntries(lock: PackageLock): void {
 
   expect(entries, "@hono/node-server must exist in the package lock").not.toHaveLength(0);
   for (const [packagePath, packageEntry] of entries) {
-    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("2.0.10");
+    expect(packageEntry["version"], `${packagePath} must resolve to the patched release`).toBe("2.1.1");
   }
 }
 
@@ -768,7 +768,7 @@ describe("package metadata contract", () => {
     const manifest = readPackageManifest();
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
-    expect(manifest.overrides?.esbuild).toBe("0.28.1");
+    expect(manifest.overrides?.esbuild).toBe("0.28.2");
     assertPatchedEsbuildLockEntries(lock);
   });
 
@@ -804,7 +804,7 @@ describe("package metadata contract", () => {
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as PackageLock;
 
     expect(manifest.dependencies).toMatchObject({
-      "@hono/node-server": "2.0.10",
+      "@hono/node-server": "2.1.1",
       "@modelcontextprotocol/client": "^2.0.0",
       "@modelcontextprotocol/core": "^2.0.0",
       "@modelcontextprotocol/server": "^2.0.0",
@@ -816,14 +816,14 @@ describe("package metadata contract", () => {
       "@modelcontextprotocol/node": "^2.0.0",
       "@modelcontextprotocol/server-legacy": "^2.0.0"
     });
-    expect(manifest.overrides?.["@hono/node-server"]).toBe("2.0.10");
+    expect(manifest.overrides?.["@hono/node-server"]).toBe("2.1.1");
     assertPatchedHonoNodeServerLockEntries(lock);
   });
 
   it("rejects stale nested esbuild lock entries", () => {
     const lock: PackageLock = {
       packages: {
-        "node_modules/esbuild": { version: "0.28.1" },
+        "node_modules/esbuild": { version: "0.28.2" },
         "node_modules/vite/node_modules/esbuild": { version: "0.27.0" }
       }
     };
@@ -863,7 +863,7 @@ describe("package metadata contract", () => {
   it("rejects stale nested Hono Node server lock entries", () => {
     const lock: PackageLock = {
       packages: {
-        "node_modules/@hono/node-server": { version: "2.0.10" },
+        "node_modules/@hono/node-server": { version: "2.1.1" },
         "node_modules/@modelcontextprotocol/node/node_modules/@hono/node-server": { version: "1.19.9" }
       }
     };
@@ -1111,7 +1111,7 @@ describe("packed artifact contract", () => {
         const installedHono = JSON.parse(
           await readFile(join(directory, "node_modules", "hono", "package.json"), "utf8")
         ) as PackageManifest;
-        expect(installedHonoNodeServer.version).toBe("2.0.10");
+        expect(installedHonoNodeServer.version).toBe("2.1.1");
         expect(installedHono.version).toBe("4.13.7");
 
         const consumerPath = join(directory, "consumer.mjs");

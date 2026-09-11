@@ -16,9 +16,11 @@ export default defineConfig({
     testTimeout: process.env.GITHUB_ACTIONS === "true" ? 10_000 : 5_000,
     // Real upstream fixtures have one-second startup limits; run files serially to prevent contention.
     fileParallelism: false,
-    // Replace the fork between serial files so process-backed tests cannot retain
-    // handles or lifecycle state from an earlier file; module isolation remains enabled.
-    poolOptions: { forks: { singleFork: false, isolate: true } },
+    // Replace the worker between serial files so process-backed tests cannot retain
+    // handles or lifecycle state from an earlier file. Vitest 4 removed `poolOptions`
+    // and promoted its contents to top-level options; `isolate` already spawns a fresh
+    // worker per test file, which is what the former `singleFork: false` expressed.
+    isolate: true,
     coverage: {
       provider: "v8",
       include: [
