@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { stat } from "node:fs/promises";
 import { SecretRedactor } from "../secrets/redact.js";
 import type { UpstreamStartupDiagnostic } from "../upstream/startup-diagnostic.js";
@@ -297,7 +298,7 @@ export async function diagnosePathPermissions(target: PermissionTarget, path: st
     };
   }
 
-  let metadata: Awaited<ReturnType<typeof stat>>;
+  let metadata: Stats;
   try {
     metadata = await stat(path);
   } catch {

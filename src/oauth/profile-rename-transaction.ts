@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import {
@@ -338,7 +339,7 @@ export function oauthProfileRenameJournalPath(configPath: string): string {
 export class FileOAuthProfileRenameJournalStore implements OAuthProfileRenameJournalStore {
   async load(configPath: string): Promise<OAuthProfileRenameJournal | undefined> {
     const path = journalPath(configPath);
-    let stats: Awaited<ReturnType<typeof lstat>>;
+    let stats: Stats;
     try {
       stats = await lstat(path);
     } catch (error) {

@@ -169,30 +169,25 @@ describe("continuous integration workflow contract", () => {
     const lockedPackages = readLockedPackages();
 
     expect(overrides).toMatchObject({
-      "@hono/node-server": "2.0.10",
+      "@hono/node-server": "2.1.1",
       "brace-expansion": "5.0.9",
       "fast-uri": "3.1.7",
       "ip-address": "10.3.1",
       nanoid: "3.3.18",
       qs: "6.16.0",
-      "@vitest/coverage-v8": {
-        "test-exclude": {
-          glob: {
-            ".": "13.0.6",
-            minimatch: { "brace-expansion": "5.0.9" }
-          },
-          minimatch: { "brace-expansion": "5.0.9" }
-        }
-      },
       eslint: { minimatch: { "brace-expansion": "5.0.9" } },
-      "typescript-eslint": { minimatch: { "brace-expansion": "5.0.9" } },
-      vitest: { vite: { postcss: "8.5.23" } }
+      "typescript-eslint": { minimatch: { "brace-expansion": "5.0.9" } }
     });
+    // Vitest 5 dropped the test-exclude/glob chain and takes vite as a direct peer,
+    // so the former nested override paths no longer resolve to anything.
+    for (const name of ["@vitest/coverage-v8", "vitest"]) {
+      expect(overrides).not.toHaveProperty(name);
+    }
     for (const name of ["glob", "postcss"]) {
       expect(overrides).not.toHaveProperty(name);
     }
     expect(dependencies).toMatchObject({
-      "@hono/node-server": "2.0.10",
+      "@hono/node-server": "2.1.1",
       hono: "4.13.7"
     });
     expect(developmentDependencies).not.toHaveProperty("@hono/node-server");
@@ -203,21 +198,23 @@ describe("continuous integration workflow contract", () => {
     });
     const fastUri = lockedPackages["node_modules/fast-uri"];
     if (fastUri !== undefined) expect(fastUri).toMatchObject({ version: "3.1.7" });
-    expect(lockedPackages["node_modules/glob"]).toMatchObject({ version: "13.0.6", dev: true });
+    expect(lockedPackages["node_modules/glob"]).toBeUndefined();
+    expect(lockedPackages["node_modules/test-exclude"]).toBeUndefined();
     expect(lockedPackages["node_modules/hono"]).toMatchObject({ version: "4.13.7" });
     expect(lockedPackages["node_modules/qs"]).toMatchObject({ version: "6.16.0" });
     expect(lockedPackages["node_modules/ip-address"]).toMatchObject({ version: "10.3.1" });
     expect(lockedPackages["node_modules/nanoid"]).toMatchObject({ version: "3.3.18", dev: true });
-    expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.23", dev: true });
+    expect(lockedPackages["node_modules/postcss"]).toMatchObject({ version: "8.5.28", dev: true });
+    expect(developmentDependencies).toHaveProperty("vite");
   });
 
-  it("keeps process-backed files serial while replacing their isolated fork", () => {
+  it("keeps process-backed files serial while replacing their isolated worker", () => {
     const config = readRepositoryFile("vitest.config.ts");
 
     expect(config).toContain("fileParallelism: false");
-    expect(config).toMatch(
-      /poolOptions:\s*\{\s*forks:\s*\{\s*singleFork:\s*false,\s*isolate:\s*true\s*\}\s*\}/u
-    );
+    // Vitest 4 removed `test.poolOptions` and promoted its contents to top-level options.
+    expect(config).toMatch(/^\s*isolate: true,$/mu);
+    expect(config).not.toMatch(/^\s*poolOptions:/mu);
   });
 });
 
