@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.1.4";
+const releaseVersion = "1.1.5";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.1.4 release artifacts", () => {
+describe("v1.1.5 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.1.4] - 2026-9-11\n\n### Changed\n"
+      changelog: "## [1.1.5] - 2026-9-11\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.1.4] - 2026-09-11\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.5] - 2026-09-11\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,20 +71,17 @@ describe("v1.1.4 release artifacts", () => {
     }
   });
 
-  it("documents the v1.1.4 dialect fix and its dependency remediation", () => {
+  it("documents the v1.1.5 dependency refresh and its published boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
-    expect(notes).toContain("### Fixed");
     expect(notes).toContain("### Changed");
-    for (const issue of [423, 439, 441]) {
+    for (const issue of [446, 447]) {
       expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("client-visible tool schema dialect");
-    expect(notes).toContain("JSON Schema 2020-12");
-    expect(notes).toContain("forwarded untouched");
-    expect(notes).toContain("fast-uri");
-    expect(notes).toContain("production-only npm audit");
+    expect(notes).toContain("@hono/node-server");
+    expect(notes).toContain("dependency refresh rather than a security release");
+    expect(notes).toContain("This toolchain work is not published");
     expect(notes).toContain("protected OIDC trusted publishing");
     expect(notes).toContain("registry provenance");
     expect(notes).toContain("does not authorize removal of any legacy behavior");
@@ -104,7 +101,6 @@ describe("v1.1.4 release artifacts", () => {
     expect(protocolCompatibilityGuide).toContain("The exact published-v1.1.2 transcripts prove initialized STDIO");
     expect(protocolCompatibilityGuide).toContain("initialized Streamable HTTP session assignment");
     expect(libraryGuide).toContain("Starting with Miftah 1.0, these public surfaces follow Semantic Versioning");
-    expect(libraryGuide).toContain("requires a new major release");
     expect(libraryGuide).toContain("requires a new major release");
   });
 });

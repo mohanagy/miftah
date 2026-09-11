@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-09-11
+
+### Changed
+
+- [#447](https://github.com/mohanagy/miftah/issues/447) Prepared the compatible v1.1.5 patch release. The only change that reaches installers is the `@hono/node-server` runtime dependency, refreshed from 2.0.10 to 2.1.1; neither version carries a security advisory, so this is a dependency refresh rather than a security release. No runtime behavior and no public API changed. Publication remains gated on exact `development`-to-`main` promotion and protected OIDC trusted publishing, registry provenance, a fresh install, and package-signature verification; this release does not authorize removal of any legacy behavior.
+- [#446](https://github.com/mohanagy/miftah/issues/446) Landed the Dependabot backlog and modernized the development toolchain, superseding five pull requests that could not pass on their own: the Vitest pair was split across separate PRs so each broke the other's peer requirement, two bumped packages pinned by the security-override contract tests, and one needed source work. Vitest moved 3.2.7 to 5.0.0 with `@vitest/coverage-v8` and an explicit `vite` peer, alongside `@types/node` 22 to 26, `esbuild` 0.28.1 to 0.28.2, `eslint` 10.8.0 to 10.10.0, and `typescript-eslint` 8.65.0 to 8.70.0. `@types/node` 26 added a `throwIfNoEntry` overload to `stat()`, so `Awaited<ReturnType<typeof stat>>` resolves to a union including `undefined` whose `keyof` is `never`; the affected type derivations were replaced with the concrete `Stats` type, which is erased at compile time and changes no runtime behavior. Vitest 4 removed `test.poolOptions` in favour of top-level options, and Vitest 5 applies AST-aware remapping unconditionally, so function and branch coverage figures are not comparable across the migration and were recalibrated to measured actuals with line thresholds unchanged. This toolchain work is not published. It does clear the two development-only advisories that v1.1.4 explicitly did not claim, so both the production-only and full npm audits now report zero for this repository. `zod` was deliberately held at 4.2.0 in the lockfile only, leaving the declared `^4.2.0` range untouched, because the evidence-pinned bundled test fixture embeds `zod` and bumping it would invalidate the recorded fixture hash that the named-host compatibility evidence depends on.
+
 ## [1.1.4] - 2026-09-11
 
 ### Fixed
