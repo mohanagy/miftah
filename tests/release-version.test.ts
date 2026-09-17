@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const releaseVersion = "1.1.5";
+const releaseVersion = "1.1.6";
 
 function readRepositoryFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -21,15 +21,15 @@ function releaseNotes(changelog: string, version: string): string {
   return changelog.slice(match.index, end < 0 ? undefined : end);
 }
 
-describe("v1.1.5 release artifacts", () => {
+describe("v1.1.6 release artifacts", () => {
   it.each([
     {
       name: "a non-zero-padded date",
-      changelog: "## [1.1.5] - 2026-9-11\n\n### Changed\n"
+      changelog: "## [1.1.6] - 2026-9-18\n\n### Changed\n"
     },
     {
       name: "a heading that does not start its line",
-      changelog: "Release candidate: ## [1.1.5] - 2026-09-11\n\n### Changed\n"
+      changelog: "Release candidate: ## [1.1.6] - 2026-09-18\n\n### Changed\n"
     }
   ])("rejects $name", ({ changelog }) => {
     expect(() => releaseNotes(changelog, releaseVersion)).toThrow(
@@ -71,17 +71,18 @@ describe("v1.1.5 release artifacts", () => {
     }
   });
 
-  it("documents the v1.1.5 dependency refresh and its published boundary", () => {
+  it("documents the v1.1.6 identity fingerprint fix and its published boundary", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
     const notes = releaseNotes(changelog, releaseVersion);
 
+    expect(notes).toContain("### Fixed");
     expect(notes).toContain("### Changed");
-    for (const issue of [446, 447]) {
+    for (const issue of [451, 453]) {
       expect(notes).toContain(`[#${issue}](https://github.com/mohanagy/miftah/issues/${issue})`);
     }
-    expect(notes).toContain("@hono/node-server");
-    expect(notes).toContain("dependency refresh rather than a security release");
-    expect(notes).toContain("This toolchain work is not published");
+    expect(notes).toContain("control character");
+    expect(notes).toContain("refused at configuration time with its exact path");
+    expect(notes).toContain("fail-closed behavior on a genuine binding-storage outage is unchanged");
     expect(notes).toContain("protected OIDC trusted publishing");
     expect(notes).toContain("registry provenance");
     expect(notes).toContain("does not authorize removal of any legacy behavior");
