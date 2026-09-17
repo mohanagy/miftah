@@ -686,7 +686,9 @@ export async function runDoctor(configPath: string): Promise<DoctorReport> {
                 : identityCheck(
                     required ? "error" : "warning",
                     targetText,
-                    "Configured upstream identity verification did not complete.",
+                    `Configured upstream identity verification did not complete${
+                      identity.errorCode === undefined ? "" : ` (${identity.errorCode})`
+                    }.`,
                     identity.status === "unsupported"
                       ? "Upgrade or configure the upstream to expose the expected read-only, no-required-input identity probe. Property access is not account identity evidence."
                       : "Review the configured expected fingerprint and identity probe before relying on risky operations."

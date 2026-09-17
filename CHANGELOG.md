@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-09-18
+
+### Fixed
+
+- [#451](https://github.com/mohanagy/miftah/issues/451) Stopped a configured identity fingerprint containing a control character from validating, verifying, and then being silently converted into a verification failure. Three layers disagreed about what a storable identity field is: the configuration schema and the probe parser both accepted control characters, while the durable binding store rejected any code point below `0x20` or equal to `0x7f`. A fingerprint that genuinely matched its probe therefore returned `verified` and was then rewritten to `failed` / `IDENTITY_BINDING_UNAVAILABLE`, because the store's record rejection is raised outside `save()`'s own error handling, is caught as a bare failure, and sets a process-sticky unavailable flag that downgraded identity verification for every profile in that process. The single shared predicate is now used by all three layers, so an unstorable fingerprint is refused at configuration time with its exact path and unstorable probe evidence can never reach the store. `doctor` now appends the `IDENTITY_*` code to its explanation, so the cause is recoverable from its output rather than requiring a patched build. Fail-closed behavior on a genuine binding-storage outage is unchanged. Probe tools whose response spans multiple lines remain unusable for identity verification; that limitation is now reported by `miftah validate` instead of surfacing as an unexplained runtime failure.
+
+### Changed
+
+- [#453](https://github.com/mohanagy/miftah/issues/453) Prepared the compatible v1.1.6 patch release delivering the identity-fingerprint fix. No public API, dependency, credential, routing, redaction, or audit behavior changed, and fail-closed behavior on a genuine binding-storage outage is unchanged. Two boundaries tighten deliberately: a configuration carrying a control character in an identity fingerprint is now rejected at validation with its exact path, and probe output containing control characters is no longer accepted as an identity field. Neither could previously produce a durable binding, so no working configuration is invalidated. Publication remains gated on exact `development`-to-`main` promotion and protected OIDC trusted publishing, registry provenance, a fresh install, and package-signature verification; this release does not authorize removal of any legacy behavior.
+
 ## [1.1.5] - 2026-09-11
 
 ### Changed

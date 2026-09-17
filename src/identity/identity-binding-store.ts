@@ -3,6 +3,7 @@ import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { OAuthLocalLockUnavailableError, withOAuthLocalLock } from "../oauth/local-lock.js";
+import { containsControlCharacter } from "../utils/control-characters.js";
 import { MiftahError } from "../utils/errors.js";
 import type { IdentityBindingRecord, IdentityBindingStore } from "./identity-manager.js";
 
@@ -36,10 +37,7 @@ function boundedIdentifier(value: unknown): value is string {
     value.length > 0 &&
     value.length <= 256 &&
     value.trim() === value &&
-    ![...value].some((character) => {
-      const code = character.codePointAt(0);
-      return code === undefined || code < 0x20 || code === 0x7f;
-    })
+    !containsControlCharacter(value)
   );
 }
 

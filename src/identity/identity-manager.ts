@@ -3,6 +3,7 @@ import type { Tool } from "@modelcontextprotocol/server";
 import type { IdentityConfig, IdentityFingerprint, MiftahConfig, RiskLevel, ToolingConfig } from "../config/types.js";
 import { classifyRisk } from "../policy/risk-classifier.js";
 import type { UpstreamRequestOptions, UpstreamSession } from "../upstream/upstream-session.js";
+import { containsControlCharacter } from "../utils/control-characters.js";
 import { MiftahError } from "../utils/errors.js";
 import type { IdentityProbeCapabilityDiagnostic, IdentityStatus } from "./identity-types.js";
 
@@ -591,7 +592,8 @@ function matches(expected: IdentityFingerprint, actual: IdentityFingerprint): bo
 
 function boundedIdentityField(value: string): string | undefined {
   const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= maxIdentityFieldLength ? normalized : undefined;
+  if (normalized.length === 0 || normalized.length > maxIdentityFieldLength) return undefined;
+  return containsControlCharacter(normalized) ? undefined : normalized;
 }
 
 function boundedFingerprintField(field: keyof IdentityFingerprint, value: string): string | undefined {

@@ -4,6 +4,7 @@ import { canonicalizeOAuthResource } from "../oauth/canonical-resource.js";
 import { parseOAuthConnectionRef, validateOAuthIssuer } from "../oauth/connection-types.js";
 import { isSafeOAuthHttpsUrl } from "../oauth/url-safety.js";
 import { hasMergedHeader } from "../upstream/headers.js";
+import { containsControlCharacter } from "../utils/control-characters.js";
 import { SUPPORTED_CONFIG_VERSIONS } from "./versions.js";
 
 const recordSchema = z.record(z.string(), z.unknown());
@@ -153,7 +154,14 @@ function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
-const identityFieldSchema = z.string().trim().min(1).max(256);
+const identityFieldSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .refine((value) => !containsControlCharacter(value), {
+    message: "identity fields cannot contain control characters"
+  });
 const opaqueIdentityAccountIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/u, {
