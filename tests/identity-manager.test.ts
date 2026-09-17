@@ -1117,6 +1117,42 @@ describe("identity verifier", () => {
     });
   });
 
+  it("refuses probe evidence containing control characters instead of binding unstorable evidence", async () => {
+    const config = validateConfig({
+      version: "1",
+      name: "identity-test",
+      defaultProfile: "work",
+      upstream: { transport: "stdio", command: process.execPath, args: [fixture] },
+      profiles: {
+        work: {
+          env: { TEST_ACCOUNT_NAME: "mona\nextra" },
+          identity: {
+            expected: { login: "mona" },
+            probe: { tool: "whoami", resultFormat: "text" },
+            maxAgeMs: 60_000
+          }
+        }
+      }
+    });
+    const upstreams = new UpstreamProcessManager(config.upstream!, config.profiles);
+    managers.push(upstreams);
+    let saves = 0;
+    const verifier = new IdentityManager(config, {
+      bindingStore: {
+        load: async () => [],
+        save: async () => {
+          saves += 1;
+        }
+      }
+    });
+
+    const result = await verifier.verify("work", undefined, await upstreams.get("work"));
+
+    expect(result).toMatchObject({ status: "failed", errorCode: "IDENTITY_VERIFICATION_FAILED" });
+    expect(saves).toBe(0);
+    expect(verifier.status("work", undefined)).not.toMatchObject({ errorCode: "IDENTITY_BINDING_UNAVAILABLE" });
+  });
+
   it("reports persisted evidence as expired without using it as a live result", async () => {
     const config = validateConfig({
       version: "1",

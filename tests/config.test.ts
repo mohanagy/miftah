@@ -650,6 +650,30 @@ describe("config foundation", () => {
   });
 
   it.each([
+    ["a newline", "mona\nextra"],
+    ["a tab", "mona\textra"],
+    ["a delete character", "mona\u007fextra"]
+  ])("rejects an identity fingerprint containing %s", (_label, login) => {
+    expect(() =>
+      validateConfig({
+        version: "1",
+        name: "github",
+        defaultProfile: "work",
+        upstream: { transport: "stdio", command: "node", args: ["server.js"] },
+        profiles: {
+          work: {
+            identity: {
+              expected: { login },
+              probe: { tool: "whoami", resultFormat: "text" },
+              maxAgeMs: 60_000
+            }
+          }
+        }
+      })
+    ).toThrow(identityExpectedLoginPattern);
+  });
+
+  it.each([
     ["accountId", { accountId: "google-sub-work" }],
     ["organization", { organization: "github" }],
     ["host", { host: "github.com" }]

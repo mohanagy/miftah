@@ -287,7 +287,7 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
     expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
       status: "error",
-      explanation: "Configured upstream identity verification did not complete."
+      explanation: "Configured upstream identity verification did not complete (IDENTITY_MISMATCH)."
     });
     expect(report).toMatchObject({ overallStatus: "failed", ok: false });
     expect(codes.indexOf(DOCTOR_CODES.TOOLS_DISCOVERY)).toBeLessThan(codes.indexOf(DOCTOR_CODES.IDENTITY));
@@ -327,7 +327,7 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
     expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
       status: "warning",
-      explanation: "Configured upstream identity verification did not complete."
+      explanation: "Configured upstream identity verification did not complete (IDENTITY_VERIFICATION_FAILED)."
     });
     expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
     for (const sensitiveValue of [configPath, rawIdentityResponse, expectedAccount, "whoami", "miftah_verify_identity"]) {
@@ -357,7 +357,7 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.TOOLS_DISCOVERY).status).toBe("pass");
     expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
       status: "warning",
-      explanation: "Configured upstream identity verification did not complete.",
+      explanation: "Configured upstream identity verification did not complete (IDENTITY_PROBE_UNSUPPORTED).",
       remediation: "Upgrade or configure the upstream to expose the expected read-only, no-required-input identity probe. Property access is not account identity evidence."
     });
     expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
@@ -388,7 +388,7 @@ describe("doctor readiness runner", () => {
     expect(check(report, DOCTOR_CODES.PROMPTS_DISCOVERY).status).toBe("pass");
     expect(check(report, DOCTOR_CODES.IDENTITY)).toMatchObject({
       status: "warning",
-      explanation: "Configured upstream identity verification did not complete."
+      explanation: "Configured upstream identity verification did not complete (IDENTITY_PROBE_UNSUPPORTED)."
     });
     expect(report).toMatchObject({ overallStatus: "degraded", ok: true });
   });
